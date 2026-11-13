@@ -18,6 +18,70 @@ export const TOOL_KEYS: Record<string, Tool> = { l: "laser", p: "pen", h: "highl
 export const INK_COLORS = [SWATCHES.red, SWATCHES.yellow, SWATCHES.green, SWATCHES.blue, SWATCHES.white];
 export const DEFAULT_COLORS: Record<InkTool, string> = { pen: SWATCHES.red, highlighter: SWATCHES.yellow };
 
+/** What an ink color is called, for its swatch: "Red". A color that is none of the swatches is named by its value. */
+export function inkColorName(color: string): string {
+  const name = Object.entries(SWATCHES).find(([, value]) => value === color)?.[0];
+  return name ? name[0]!.toUpperCase() + name.slice(1) : color;
+}
+
+/**
+ * The ink of one slide as it was and as it was again: the states before each change (`past`,
+ * oldest first) and those undone (`future`, the next to redo last). `at` is the strokes they
+ * belong to: ink that changed some other way (sketches sent off, say) has no history.
+ */
+export interface InkHistory {
+  past: readonly Stroke[][];
+  future: readonly Stroke[][];
+  at: readonly Stroke[];
+}
+
+/** How many changes of a slide's ink can be undone. */
+export const INK_HISTORY = 100;
+
+const historyOf = (history: InkHistory | undefined, strokes: readonly Stroke[]): InkHistory =>
+  history && history.at === strokes ? history : { past: [], future: [], at: strokes };
+
+/** The history once `before` became `after` by drawing, erasing or clearing: that can be undone, and nothing redone. */
+export function inkChanged(history: InkHistory | undefined, before: Stroke[], after: Stroke[]): InkHistory {
+  const { past } = historyOf(history, before);
+  return { past: [...past, before].slice(-INK_HISTORY), future: [], at: after };
+}
+
+/** Whether a slide's `strokes` have a change to undo: one in their history, or else a stroke to drop. */
+export function canUndoInk(history: InkHistory | undefined, strokes: readonly Stroke[]): boolean {
+  return historyOf(history, strokes).past.length > 0 || strokes.length > 0;
+}
+
+/** Whether a slide's `strokes` have an undone change to redo. */
+export function canRedoInk(history: InkHistory | undefined, strokes: readonly Stroke[]): boolean {
+  return historyOf(history, strokes).future.length > 0;
+}
+
+/**
+ * The strokes as they were before the last change, with the history after going back; null with
+ * nothing to undo. Ink without a history (drawn before it was kept) loses its last stroke.
+ */
+export function undoInk(
+  history: InkHistory | undefined,
+  strokes: Stroke[],
+): { strokes: Stroke[]; history: InkHistory } | null {
+  const { past, future } = historyOf(history, strokes);
+  const before = past.at(-1) ?? (strokes.length > 0 ? strokes.slice(0, -1) : null);
+  if (!before) return null;
+  return { strokes: before, history: { past: past.slice(0, -1), future: [...future, strokes], at: before } };
+}
+
+/** The strokes with the change undone last made again, and the history after; null with nothing to redo. */
+export function redoInk(
+  history: InkHistory | undefined,
+  strokes: Stroke[],
+): { strokes: Stroke[]; history: InkHistory } | null {
+  const { past, future } = historyOf(history, strokes);
+  const again = future.at(-1);
+  if (!again) return null;
+  return { strokes: again, history: { past: [...past, strokes], future: future.slice(0, -1), at: again } };
+}
+
 /** Stroke width in screen pixels, and opacity, per tool. */
 export const INK_STYLE: Record<InkTool, { width: number; opacity: number }> = {
   pen: { width: 4, opacity: 1 },

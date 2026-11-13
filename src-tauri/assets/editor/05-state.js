@@ -599,6 +599,15 @@
   var create = null;
   // The look the format painter took, until it is clicked onto an element.
   var painting = null;
+  // Drags and resizes snap to the guides ({ type: "slop:edit-snap", on }); ⌘ / Ctrl does the opposite while held.
+  var snapping = true;
+  // What a restyle being previewed changed, as it was before ({ el, attrs }), until it is applied or cancelled.
+  var preview = null;
+  // The font sizes ⌘⇧. and ⌘⇧, step through, as the toolbar's buttons do (see FONT_SIZES in src/lib/editTools.ts).
+  var FONT_STEPS = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 200, 240];
+  // What "Clear formatting" takes off text: everything inline but its links.
+  var CLEARED = { color: null, fontSize: null, fontFamily: null, bold: null, italic: null, underline: null, strike: null, script: null, letterSpacing: null };
+  var CLEARED_PROPS = ["color", "font-size", "font-family", "font-weight", "font-style", "text-decoration-line", "text-decoration", "letter-spacing"];
   // The handles keep to the selection as the view pans and zooms.
   pasteboard.onChange(placeHandles);
   // Space and 0 are text while typing, and Space+drag selects it.

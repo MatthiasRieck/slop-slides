@@ -1,4 +1,4 @@
-import { Loader2, Mic, Square } from "lucide-react";
+import { Check, Loader2, Mic } from "lucide-react";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { useTauriEvent } from "../hooks/useTauriEvent";
@@ -104,7 +104,7 @@ function Waveform(props: { level: number; live: boolean }) {
 
 /**
  * A microphone button for a text field: click to dictate (the text shows up as you speak), click
- * again to keep it. The first use offers to download the speech model, which then runs locally.
+ * again (it shows a check meanwhile) to keep it. The first use offers to download the speech model, which then runs locally.
  *
  * - `label`: what the button does while idle, "Dictate a message" by default.
  * - `portal`: puts the download offer in the body (the default). Off, it stays inside the
@@ -248,7 +248,8 @@ export function VoiceInput(
         {phase === "transcribing" || phase === "starting" || phase === "downloading" ? (
           <Loader2 className="size-4 animate-spin" />
         ) : phase === "recording" ? (
-          <Square className="size-3 fill-current" />
+          // A check, not a square: it keeps what was said, where a square would look like stopping the agent.
+          <Check className="size-4" />
         ) : (
           <Mic className="size-4" />
         )}

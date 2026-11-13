@@ -85,3 +85,34 @@ describe("review", () => {
     });
   });
 });
+
+describe("the list of comments", () => {
+  const comment = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5 });
+
+  it("goes to a comment's slide with the review on show, and asks the stage to open it once", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro", comments: { outro: [comment("c", "Thanks")] } });
+    useApp.getState().setReviewVisible(false);
+    useApp.getState().showComment("outro", "c");
+    expect(useApp.getState()).toMatchObject({
+      selected: "outro",
+      reviewVisible: true,
+      commentAsked: { slide: "outro", id: "c" },
+    });
+    useApp.getState().commentShown();
+    expect(useApp.getState().commentAsked).toBeNull();
+  });
+
+  it("has the next message take every comment of the deck, those left out before too", async () => {
+    const useApp = await freshStore();
+    useApp.setState({
+      deck: DECK,
+      selected: "intro",
+      comments: { intro: [comment("a", "One")], outro: [comment("b", "Two")] },
+      commentsHeld: { b: "Two" },
+      commentScope: "slide",
+    });
+    useApp.getState().takeAllComments();
+    expect(useApp.getState()).toMatchObject({ commentScope: "deck", commentsHeld: {}, reviewVisible: true });
+  });
+});

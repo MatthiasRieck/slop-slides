@@ -145,6 +145,34 @@ export function settleInterrupted(message: ChatMessage): ChatMessage {
   };
 }
 
+/**
+ * The user's message a retry sends again: the one the chat's last reply answered, when that reply
+ * failed or was stopped. Null when there is nothing to retry.
+ */
+export function retryTarget(messages: readonly ChatMessage[]): UserMessage | null {
+  const reply = messages.at(-1);
+  const asked = messages.at(-2);
+  if (reply?.role !== "assistant" || asked?.role !== "user") return null;
+  return reply.status === "error" || reply.status === "interrupted" ? asked : null;
+}
+
+/** What went along with `message`, to send it again as it was. */
+export function sendOptionsOf(message: UserMessage): SendOptions {
+  return {
+    includeSlide: message.slide !== null,
+    slide: message.slide,
+    attachments: message.attachments,
+    ...(message.screenshot && { screenshot: message.screenshot }),
+    ...(message.element && { element: message.element }),
+  };
+}
+
+/** The text of the user's newest message that was not a command; null when there is none. */
+export function lastSentText(messages: readonly ChatMessage[]): string | null {
+  const last = messages.findLast((m) => m.role === "user" && !m.command);
+  return last?.role === "user" ? last.text : null;
+}
+
 /** Saves the chat as it is now to its session. */
 export function persistChat(app: AppStore) {
   const { chatKey, messages } = app.getState();

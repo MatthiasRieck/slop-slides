@@ -20,7 +20,8 @@ export function TimelineTools({ collapsed }: { collapsed: boolean }) {
           onClick={() => useApp.getState().setTimelineOpen(!open)}
         >
           <Film />
-          {open ? "Shown" : "Hidden"}
+          {/* Its name; pressed in, the timeline shows. */}
+          Timeline
         </RibbonToggle>
       </RibbonRow>
     </RibbonSection>

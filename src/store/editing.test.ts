@@ -465,3 +465,101 @@ describe("editing slides on the stage", () => {
     });
   });
 });
+
+describe("the edit toolbar's own state", () => {
+  const A = { path: "#intro > h1:nth-child(1)", markup: "<h1>A</h1>", name: '<h1> "A"', added: true };
+  const B = { path: "#intro > p:nth-child(2)", markup: "<p>B</p>", name: '<p> "B"', added: true };
+
+  // What a screenshot of the slide is taken of.
+  const target = document.createElement("div");
+  target.setAttribute("data-sketch-target", "");
+  beforeEach(() => void document.body.appendChild(target));
+  afterEach(() => {
+    target.remove();
+    localStorage.clear();
+  });
+
+  it("snaps to the guides unless turned off, and remembers that between launches", async () => {
+    localStorage.clear();
+    const first = await freshModule();
+    expect(first.useApp.getState().editSnap).toBe(true);
+    first.useApp.getState().setEditSnap(false);
+    expect(first.useApp.getState().editSnap).toBe(false);
+    const next = await freshModule();
+    expect(next.useApp.getState().editSnap).toBe(false);
+    next.useApp.getState().setEditSnap(true);
+    expect((await freshModule()).useApp.getState().editSnap).toBe(true);
+  });
+
+  it("keeps the colors picked last, the latest first", async () => {
+    const { useApp } = await freshModule();
+    for (const color of ["#111111", "#222222", "#111111"]) useApp.getState().noteColor(color);
+    expect(useApp.getState().recentColors).toEqual(["#111111", "#222222"]);
+  });
+
+  it("asks for a toolbar popover, again each time", async () => {
+    const { useApp } = await freshModule();
+    useApp.getState().askForEditPanel("link");
+    const first = useApp.getState().editPanelAsk;
+    useApp.getState().askForEditPanel("link");
+    expect(first).toMatchObject({ panel: "link" });
+    expect(useApp.getState().editPanelAsk!.rev).toBeGreaterThan(first!.rev);
+    useApp.getState().askForEditPanel("background");
+    expect(useApp.getState().editPanelAsk!.panel).toBe("background");
+  });
+
+  it("keeps a copied look until another is copied", async () => {
+    const { useApp } = await freshModule();
+    expect(useApp.getState().copiedStyle).toBeNull();
+    useApp.getState().setCopiedStyle({ shared: { opacity: 0.5 } });
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().copiedStyle).toEqual({ shared: { opacity: 0.5 } });
+  });
+
+  it("readies a question about every selected element together", async () => {
+    const { useApp } = await freshModule();
+    backend({ capture_sketch: () => "/shots/1.png" });
+    useApp.setState({ deck: DECK, selected: "intro", composerFill: null, editing: true });
+    await useApp.getState().askAboutElements([A, B]);
+    expect(useApp.getState().composerFill).toMatchObject({
+      text: "",
+      screenshot: "/shots/1.png",
+      element: { path: `${A.path}, ${B.path}`, markup: "<h1>A</h1>\n<p>B</p>", name: "2 elements" },
+    });
+    await useApp.getState().askAboutElements([A]);
+    expect(useApp.getState().composerFill!.element).toEqual(A);
+    const rev = useApp.getState().composerFill!.rev;
+    await useApp.getState().askAboutElements([]);
+    expect(useApp.getState().composerFill!.rev).toBe(rev);
+  });
+
+  it("starts a request for a table, chart or icon in the chat, with the slide, staying in edit mode", async () => {
+    const { useApp } = await freshModule();
+    backend({ capture_sketch: () => "/shots/2.png" });
+    useApp.setState({ deck: DECK, selected: "intro", composerFill: null, editing: true, sidebarOpen: false });
+    await useApp.getState().askForInsert("table");
+    expect(useApp.getState()).toMatchObject({
+      editing: true,
+      sidebarOpen: true,
+      sidebarTab: "chat",
+      composerFill: { text: "Add a table to this slide: ", screenshot: "/shots/2.png" },
+    });
+    expect(calls("send_message")).toHaveLength(0);
+    await useApp.getState().askForInsert("chart");
+    expect(useApp.getState().composerFill!.text).toBe("Add a chart to this slide: ");
+    await useApp.getState().askForInsert("icon");
+    expect(useApp.getState().composerFill!.text).toBe("Add an icon to this slide: ");
+  });
+
+  it("asks for nothing on a locked slide", async () => {
+    const { useApp } = await freshModule();
+    useApp.setState({
+      deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
+      selected: "intro",
+      composerFill: null,
+    });
+    await useApp.getState().askForInsert("table");
+    await useApp.getState().askAboutElements([A, B]);
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+});

@@ -184,6 +184,33 @@ export function useSlideComments(
     setOpen({ key: crypto.randomUUID(), slide, id: null, x: left, y: top, target: null, area, shot, time, text: "" });
   };
 
+  const openComment = (comment: SlideComment) => {
+    if (!selected) return;
+    keepOpen.current?.();
+    setOpen({
+      key: crypto.randomUUID(),
+      slide: selected,
+      id: comment.id,
+      x: comment.x,
+      y: comment.y,
+      target: comment.target ?? null,
+      area: comment.area ?? null,
+      shot: null,
+      time: comment.time ?? null,
+      text: comment.text,
+    });
+  };
+
+  // The list of comments (see `CommentsOverview`) asks for one to be opened, on its slide.
+  const asked = useApp((s) => s.commentAsked);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opens once per ask, when its slide and its comments are there
+  useEffect(() => {
+    if (!asked || asked.slide !== selected || !shown) return;
+    const comment = comments.find((c) => c.id === asked.id);
+    useApp.getState().commentShown();
+    if (comment) openComment(comment);
+  }, [asked, selected, shown, comments]);
+
   const spots = found?.slide === selected ? found.spots : null;
   return {
     /** A click on the slide starts a comment on what is under it. */
@@ -203,22 +230,7 @@ export function useSlideComments(
     open,
     /** Where a comment's pin goes. */
     spotOf: (comment: SlideComment): CommentSpot => spots?.[comment.id] ?? { ...comment, found: true },
-    openComment: (comment: SlideComment) => {
-      if (!selected) return;
-      keepOpen.current?.();
-      setOpen({
-        key: crypto.randomUUID(),
-        slide: selected,
-        id: comment.id,
-        x: comment.x,
-        y: comment.y,
-        target: comment.target ?? null,
-        area: comment.area ?? null,
-        shot: null,
-        time: comment.time ?? null,
-        text: comment.text,
-      });
-    },
+    openComment,
     close: useCallback(() => setOpen(null), []),
     keepOpen,
     onFrameReady: () => {

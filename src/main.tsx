@@ -4,14 +4,12 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { PresenterWindow } from "./components/PresenterWindow";
 import "./index.css";
+import { followAppearance } from "./lib/theme";
 import { initNarrationEvents } from "./narrationStore";
 import { initEventBridge } from "./store";
 
-// Follow the OS appearance.
-const dark = window.matchMedia("(prefers-color-scheme: dark)");
-const applyTheme = () => document.documentElement.classList.toggle("dark", dark.matches);
-applyTheme();
-dark.addEventListener("change", applyTheme);
+// Light, dark, or as the system shows, as chosen in the app's settings; every window follows the choice.
+followAppearance();
 
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   const { installBrowserMock } = await import("./lib/browserMock");

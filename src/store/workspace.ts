@@ -1,15 +1,15 @@
 import { api, type Deck, type OpenedFile, type WorkspaceInfo } from "../lib/api";
 import { loadText, saveText } from "../lib/storage";
-import { basename } from "../lib/utils";
+import { basename, dirname } from "../lib/utils";
 import { leaveChat, loadChat } from "./chat";
-import { confirmDiscard, confirmStopAgent } from "./confirm";
+import { askUnsaved, confirmStopAgent } from "./confirm";
 import { NO_EDIT_STATE } from "./editing";
 import { showErrorIn, showInfoIn } from "./errors";
 import { refreshHistory } from "./history";
-import { workspaceName } from "./paths";
+import { relativePath, workspaceName } from "./paths";
 import { flushReview, reviewLoaded } from "./review";
 import { NO_SEARCH } from "./search";
-import { NO_RAIL_STATE } from "./slides";
+import { NO_RAIL_STATE, railStateOf } from "./slides";
 import type { AppStore, Slice } from "./types";
 
 /** Files changed on disk in the open workspace, as the watcher reported them last. */
@@ -36,6 +36,11 @@ export interface WorkspaceSlice {
 
   /** Opens a folder in the file tree, reopening the file last open in it. */
   openWorkspace: (path: string) => Promise<void>;
+  /**
+   * Opens the deck file at the absolute path `file` in `folder` (the folder the file is in,
+   * unless given), which becomes the workspace: how a deck opens from outside a workspace.
+   */
+  openDeckFile: (file: string, folder?: string) => Promise<void>;
   /** Back to the start screen; false when the user kept unsaved edits, or the agent's running turn, instead. */
   closeWorkspace: () => Promise<boolean>;
   /**
@@ -58,6 +63,8 @@ export interface WorkspaceSlice {
    * user kept unsaved edits or the agent's running turn, or another window shows that chat.
    */
   closeDeck: () => Promise<boolean>;
+  /** Gives the open deck the title `title`; false when it is empty or the deck could not be renamed. */
+  renameDeck: (title: string) => Promise<boolean>;
   setCodeDirty: (dirty: boolean) => void;
 }
 
@@ -72,10 +79,42 @@ export interface OpenDeckOptions {
 /** The file last open in each workspace, reopened with it: `slopslide.lastFile:<root>`. */
 const LAST_FILE_KEY = "slopslide.lastFile:";
 
-/** Whether the user gives up the unsaved edits in the sidebar's HTML tab. */
-export function confirmDiscardEdits(app: AppStore): Promise<boolean> {
-  const name = basename(app.getState().deck?.id ?? "") || "the deck";
-  return confirmDiscard(`You have unsaved changes to ${name}. Discard them?`);
+/** Saves what the sidebar's HTML tab holds to the deck file, while the tab's editor is there to. */
+type CodeSave = () => Promise<void>;
+let codeSave: CodeSave | null = null;
+
+/**
+ * Lets the store save the HTML tab's edits: the editor (components/CodeView.tsx) gives its own
+ * save while it is mounted. Returns what takes it back.
+ */
+export function provideCodeSave(save: CodeSave): () => void {
+  codeSave = save;
+  return () => {
+    if (codeSave === save) codeSave = null;
+  };
+}
+
+/**
+ * Saves the HTML tab's edits to the deck file. False when they are still unsaved after it (the
+ * file changed on disk meanwhile, say): the tab then shows, where the editor says why.
+ */
+async function saveCodeEdits(app: AppStore): Promise<boolean> {
+  await codeSave?.();
+  if (!app.getState().codeDirty) return true;
+  app.getState().setSidebarTab("code");
+  return false;
+}
+
+/**
+ * Settles the unsaved edits in the sidebar's HTML tab before what would lose them: the user
+ * saves them, gives them up, or stays. True when nothing unsaved is left to lose.
+ */
+export async function settleUnsavedEdits(app: AppStore): Promise<boolean> {
+  const { deck, codeDirty } = app.getState();
+  if (!deck || !codeDirty) return true;
+  const answer = await askUnsaved(basename(deck.id) || "the deck");
+  if (answer === "cancel") return false;
+  return answer === "discard" || saveCodeEdits(app);
 }
 
 /** What leaving what is open is for, and what else stands in its way. */
@@ -88,12 +127,12 @@ interface LeaveOptions {
 
 /**
  * Gets what is open ready to give way, the chat about `next` coming on show (null: none). False
- * when the user stays: for unsaved edits, for what `alsoAsk` asks about, or for the agent's
- * turn, which ends with its chat leaving.
+ * when the user stays: for unsaved edits (which they can save or give up instead), for what
+ * `alsoAsk` asks about, or for the agent's turn, which ends with its chat leaving.
  */
 async function leaveFile(app: AppStore, next: string | null, options: LeaveOptions = {}): Promise<boolean> {
-  const { deck, codeDirty, running, chatKey, workspace } = app.getState();
-  if (deck && codeDirty && !(await confirmDiscardEdits(app))) return false;
+  if (!(await settleUnsavedEdits(app))) return false;
+  const { deck, running, chatKey, workspace } = app.getState();
   if (options.alsoAsk && !(await options.alsoAsk())) return false;
   const leaving = chatKey !== next;
   if (leaving && running) {
@@ -198,7 +237,7 @@ async function loadDeckState(app: AppStore, deck: Deck) {
     slideMode: "view",
     editTool: "select",
     ...NO_EDIT_STATE,
-    ...NO_RAIL_STATE,
+    ...railStateOf(deck.id),
   });
   void refreshHistory(app);
 }
@@ -235,6 +274,14 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       saveText(LAST_FILE_KEY + workspacePath, null);
     }
     if (!opened) get().setSidebarTab("files");
+  },
+
+  openDeckFile: async (file, folder = dirname(file)) => {
+    await get().openWorkspace(folder);
+    const { workspace } = get();
+    // The folder may not have opened: it is open, without a deck, in another window.
+    if (!workspace) return;
+    await get().openPath(relativePath(workspace, file) ?? basename(file));
   },
 
   closeWorkspace: async () => {
@@ -318,6 +365,21 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     set(NO_DECK);
     if (workspace && get().chatKey !== workspace.path) await loadChat(app, workspace.path);
     return true;
+  },
+
+  renameDeck: async (title) => {
+    const { deck } = get();
+    const next = title.trim();
+    if (!deck || !next) return false;
+    if (next === deck.title) return true;
+    try {
+      const renamed = await api.renameDeck(deck.id, next);
+      if (get().deck?.id === deck.id) get().setDeck(renamed);
+      return true;
+    } catch (error) {
+      showErrorIn(app, error);
+      return false;
+    }
   },
 
   setCodeDirty: (codeDirty) => set({ codeDirty }),

@@ -72,3 +72,40 @@ export function rehypePieces(pieces: Piece[], className: (piece: Piece) => strin
     });
   };
 }
+
+/** Stretches of a sentence, those written between backticks marked as code. */
+export function codeSpans(text: string): { text: string; code: boolean }[] {
+  return text
+    .split("`")
+    .map((part, index) => ({ text: part, code: index % 2 === 1 }))
+    .filter((part) => part.text !== "");
+}
+
+/** Where a link in a chat message leads: a page for the browser, a file of the workspace, or nowhere the app goes. */
+export type LinkTarget = { kind: "url"; url: string } | { kind: "file"; path: string } | null;
+
+/**
+ * Where the link `href` of a chat message leads. Web and mail addresses are for the system's
+ * browser; a path is a file, relative to the `workspace` folder unless it is inside it already.
+ * Anything else (a place on the page, a script, a file outside the workspace) leads nowhere.
+ */
+export function linkTarget(href: string | undefined, workspace: string | null): LinkTarget {
+  const link = href?.trim();
+  if (!link || link.startsWith("#")) return null;
+  if (/^(https?:|mailto:)/i.test(link)) return { kind: "url", url: link };
+  if (!workspace) return null;
+  const root = workspace.replaceAll("\\", "/").replace(/\/+$/, "");
+  let path = link.replace(/^file:\/\//i, "").replace(/[?#].*$/, "");
+  // Any other scheme is not a path; a Windows drive letter is.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) return null;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Not encoded after all: the path is as written.
+  }
+  path = path.replaceAll("\\", "/");
+  const absolute = path.startsWith("/") || /^[a-z]:\//i.test(path);
+  if (!absolute) path = `${root}/${path.replace(/^\.\//, "")}`;
+  if (path.split("/").includes("..") || !path.startsWith(`${root}/`)) return null;
+  return { kind: "file", path };
+}

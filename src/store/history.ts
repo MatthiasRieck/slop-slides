@@ -1,5 +1,5 @@
 import { api, type DeckHistory } from "../lib/api";
-import { queueEdit } from "./editQueue";
+import { editsSaved, queueEdit } from "./editQueue";
 import { showErrorIn } from "./errors";
 import { adoptReview, flushReview } from "./review";
 import { turnRedone, turnUndone } from "./rewind";
@@ -69,6 +69,25 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       showErrorIn(app, error);
     }
   });
+}
+
+/**
+ * Takes back the change the deck's history labels `label`, for the Undo offered right after it
+ * (in a toast, say), as long as it still is the deck's newest change: undoing whatever came after
+ * it instead would not be what the button said. `what` names the change in the message shown when
+ * it cannot. Resolves to whether it was undone.
+ */
+export async function undoNewest(app: AppStore, label: string, what: string): Promise<boolean> {
+  await editsSaved();
+  await refreshHistory(app);
+  const { deck, history } = app.getState();
+  if (!deck) return false;
+  if (history?.undo?.label !== label) {
+    showErrorIn(app, `The ${what} cannot be undone: the deck changed since.`);
+    return false;
+  }
+  await app.getState().undo();
+  return true;
 }
 
 export const createHistorySlice: Slice<HistorySlice> = (_set, _get, app) => ({

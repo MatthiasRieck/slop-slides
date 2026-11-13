@@ -2,15 +2,15 @@ import { Lock, LockOpen, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useContentSize } from "../hooks/useContentSize";
-import { api } from "../lib/api";
 import { defaultsFrom, type EditStyle, familyOf, familyOfKind } from "../lib/editTools";
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
-import { deckMode, editingSlide, reportingErrors, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { deckMode, editingSlide, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
 import { Button } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
+import { FindBar, useDeckSearch, useFindShortcut } from "./FindReplace";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { CurrentSlide } from "./stage/CurrentSlide";
 import { DiscardButton } from "./stage/DiscardButton";
@@ -68,6 +68,9 @@ export function Stage() {
     : 0;
 
   useSlideKeyboard();
+  // The search is the stage's in View and in Edit; View's ribbon and Edit's bar are where it shows.
+  useFindShortcut();
+  useDeckSearch();
   useSketchKeyboard(annotations.tool !== "pointer" || commentPins.commenting || drawingArea, () => {
     annotations.setTool("pointer");
     setCommenting(false);
@@ -131,6 +134,7 @@ export function Stage() {
             onLink={(href) => postToEditor({ type: "slop:edit-link", href })}
             onBackground={(color) => postToEditor({ type: "slop:edit-background", color })}
             onPickImage={editFrames.pickImage}
+            onInsertAsk={editFrames.askForInsert}
             onReturnFocus={editFrames.focus}
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
             onDelete={editFrames.deleteSelection}
@@ -142,7 +146,7 @@ export function Stage() {
       )}
       {slide && mode === "edit" && locked && (
         <ModeBar>
-          <LockedNote deck={deck.id} slide={slide.id} />
+          <LockedNote slide={slide.id} />
           {/* The timeline is Edit mode's on a locked slide too, to play the deck and time the others. */}
           <TimelineTools collapsed={false} />
         </ModeBar>
@@ -212,6 +216,7 @@ export function Stage() {
           <EmptyStage />
         )}
         {slide && editing && <DiscardButton />}
+        {mode === "edit" && <FindBar />}
         {commentPins.open && (
           <CommentEditor
             key={commentPins.open.key}
@@ -240,7 +245,10 @@ export function Stage() {
           count={deck.slides.length}
           slide={slide}
           view={pasteboard.view}
+          fitScale={canvas.width ? width / canvas.width : 0}
           onResetView={pasteboard.resetView}
+          onZoomBy={pasteboard.zoomBy}
+          onZoomTo={pasteboard.zoomTo}
           overflow={editFrames.overflow}
           running={running}
           onClearSelection={editFrames.clearSelection}
@@ -260,11 +268,8 @@ function ModeBar({ children }: { children: ReactNode }) {
 }
 
 /** Edit mode on a locked slide: why nothing on it can be changed, and the way to change that. */
-function LockedNote({ deck, slide }: { deck: string; slide: string }) {
-  const unlock = async () => {
-    const next = await reportingErrors(() => api.setSlideLocked(deck, slide, false));
-    if (next) useApp.getState().setDeck(next);
-  };
+function LockedNote({ slide }: { slide: string }) {
+  const unlock = () => useApp.getState().setSlidesLocked([slide], false);
   return (
     <div role="status" className="flex flex-1 items-center gap-2 [&_svg]:size-3.5">
       <Lock />

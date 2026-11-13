@@ -126,6 +126,17 @@ pub fn forget_workspace(path: String) -> Result<()> {
     workspace::forget(&files::app_home()?, &path)
 }
 
+/// The decks opened before, newest first, for the start screen.
+#[tauri::command]
+pub fn recent_decks() -> Result<Vec<workspace::RecentDeck>> {
+    Ok(workspace::recent_decks(&files::app_home()?))
+}
+
+#[tauri::command]
+pub fn forget_deck(path: String) -> Result<()> {
+    workspace::forget_deck(&files::app_home()?, &path)
+}
+
 /// `~/Documents/SlopSlide`, where decks lived before workspaces.
 #[tauri::command]
 pub fn library_folder(app: AppHandle) -> Result<String> {

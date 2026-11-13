@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn closing_the_presenter_view_ends_the_show_as_the_frontend_listens_for() {
-        let presenter = include_str!("../../src/components/Presenter.tsx");
+        let presenter = include_str!("../../src/components/presenter/usePresenterFeed.ts");
         assert!(presenter.contains(&format!("\"{EXIT_EVENT}\"")));
     }
 

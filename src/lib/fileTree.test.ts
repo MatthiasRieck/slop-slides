@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceEntry } from "./api";
-import { ancestorsOf, foldersToReload, parentOf, toggleFolder, visibleRows } from "./fileTree";
+import { absolutePath, ancestorsOf, foldersToReload, parentOf, toggleFolder, treeMove, visibleRows } from "./fileTree";
 
 const dir = (path: string): WorkspaceEntry => ({ name: path.split("/").pop()!, path, kind: "directory" });
 const file = (path: string, kind: WorkspaceEntry["kind"] = "file"): WorkspaceEntry => ({
@@ -66,5 +66,61 @@ describe("toggleFolder", () => {
     expect([...open].sort()).toEqual(["notes", "talks"]);
     const closed = toggleFolder(new Set(["talks", "talks/q3", "talks-old", "notes"]), "talks");
     expect([...closed].sort()).toEqual(["notes", "talks-old"]);
+  });
+});
+
+describe("treeMove", () => {
+  const folders = new Map([
+    ["", [dir("talks"), dir("empty"), file("index.html", "webpage")]],
+    ["talks", [dir("talks/q3"), file("talks/intro.html", "deck")]],
+    ["empty", []],
+  ]);
+  const expanded = new Set(["talks", "empty"]);
+  const rows = visibleRows(folders, expanded);
+  const move = (current: string, key: string) => treeMove(rows, expanded, current, key);
+
+  it("goes to the row before and after, and to the ends", () => {
+    expect(move("talks", "ArrowDown")).toEqual({ focus: "talks/q3" });
+    expect(move("talks/q3", "ArrowUp")).toEqual({ focus: "talks" });
+    expect(move("talks/intro.html", "Home")).toEqual({ focus: "talks" });
+    expect(move("talks", "End")).toEqual({ focus: "index.html" });
+  });
+
+  it("stays at the ends of the tree", () => {
+    expect(move("talks", "ArrowUp")).toBeNull();
+    expect(move("talks", "Home")).toBeNull();
+    expect(move("index.html", "ArrowDown")).toBeNull();
+    expect(move("index.html", "End")).toBeNull();
+  });
+
+  it("opens a closed folder with →, and goes into an open one that has entries", () => {
+    expect(move("talks/q3", "ArrowRight")).toEqual({ toggle: "talks/q3" });
+    expect(move("talks", "ArrowRight")).toEqual({ focus: "talks/q3" });
+    // An open folder with nothing in it (or nothing loaded yet) has nowhere to go.
+    expect(move("empty", "ArrowRight")).toBeNull();
+    expect(move("index.html", "ArrowRight")).toBeNull();
+  });
+
+  it("closes an open folder with ←, and goes to the folder above from anything else", () => {
+    expect(move("talks", "ArrowLeft")).toEqual({ toggle: "talks" });
+    expect(move("talks/intro.html", "ArrowLeft")).toEqual({ focus: "talks" });
+    expect(move("talks/q3", "ArrowLeft")).toEqual({ focus: "talks" });
+    // At the root there is no folder above.
+    expect(move("index.html", "ArrowLeft")).toBeNull();
+  });
+
+  it("moves nothing for other keys, or from a row that is gone", () => {
+    expect(move("talks", "Enter")).toBeNull();
+    expect(move("talks", "a")).toBeNull();
+    expect(move("gone.html", "ArrowDown")).toBeNull();
+  });
+});
+
+describe("absolutePath", () => {
+  it("joins the workspace folder and a path in it the way the folder is written", () => {
+    expect(absolutePath("/ws", "talks/q3/deck.html")).toBe("/ws/talks/q3/deck.html");
+    expect(absolutePath("/ws/", "notes.md")).toBe("/ws/notes.md");
+    expect(absolutePath("C:\\Users\\me\\decks", "talks/q3.html")).toBe("C:\\Users\\me\\decks\\talks\\q3.html");
+    expect(absolutePath("/ws", "")).toBe("/ws");
   });
 });

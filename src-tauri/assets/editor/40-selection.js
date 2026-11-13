@@ -337,8 +337,12 @@
     commit();
   }
 
-  /** Pastes several copied elements, keeping how they lie to each other, centered where pastes go. */
-  function pasteGroup(clip) {
+  /**
+   * Pastes several copied elements, keeping how they lie to each other: where they were on the
+   * slide they came from (a step away while an original still sits there), or with `at`, or
+   * when they do not say where they were, centered on that point or where pastes go.
+   */
+  function pasteGroup(clip, at) {
     var boxes = clip.header.group.map(function (item) {
       return item.box && typeof item.box === "object" ? item.box : {};
     });
@@ -349,21 +353,26 @@
     var top = Math.min.apply(null, boxes.map(function (b) { return num(b.y); }));
     var right = Math.max.apply(null, boxes.map(function (b) { return num(b.x) + num(b.w); }));
     var bottom = Math.max.apply(null, boxes.map(function (b) { return num(b.y) + num(b.h); }));
-    var at = pastePoint();
-    var center = slidePoint(at.x, at.y);
+    var inPlace = !at && clip.header.group.every(hasPlace);
+    var corner = { x: left, y: top };
+    if (!inPlace) {
+      var point = at || pastePoint();
+      var center = slidePoint(point.x, point.y);
+      corner = { x: center.x - (right - left) / 2, y: center.y - (bottom - top) / 2 };
+    }
     var els = clip.els.map(function (source) {
       return document.importNode(source, true);
     });
     restickCopies(els, idTaken);
     els.forEach(function (el, i) {
       slide.appendChild(el);
-      placeFree(el, clip.header.group[i], {
-        x: center.x - (right - left) / 2 + num(boxes[i].x) - left,
-        y: center.y - (bottom - top) / 2 + num(boxes[i].y) - top,
-      });
+      placeFree(el, clip.header.group[i], { x: corner.x + num(boxes[i].x) - left, y: corner.y + num(boxes[i].y) - top });
     });
-    // The group shifts as one when a copy already sits at one of its spots.
-    var shift = 0;
+    // The group shifts as one when an original or a copy already sits at one of its spots.
+    var beside = inPlace && els.some(function (el, i) {
+      return originalInPlace(clip.header.group[i], el);
+    });
+    var shift = beside ? DROP_CASCADE : 0;
     var taken = function () {
       return els.some(function (el) {
         return spotTaken(el, shift, shift, els);
@@ -620,10 +629,18 @@
     readout.style.display = "none";
   }
 
+  /**
+   * Whether a drag snaps to the guides just now: as the toolbar's "Snap to guides" says, or with
+   * ⌘ / Ctrl held, the opposite.
+   */
+  function snaps(event) {
+    return snapping !== !!(event.metaKey || event.ctrlKey);
+  }
+
   /** The (dx, dy) in slide pixels a move ends up with once its bounds snapped, with guide lines. */
   function snapMove(dx, dy, event) {
     var box = drag.box;
-    if (event.metaKey || event.ctrlKey || box.right <= box.left || box.bottom <= box.top) {
+    if (!snaps(event) || box.right <= box.left || box.bottom <= box.top) {
       guides.textContent = "";
       return { x: dx, y: dy };
     }
@@ -645,7 +662,7 @@
       drag.targets = snapTargets([drag.el]);
     }
     var box = drag.box;
-    if (event.metaKey || event.ctrlKey || keepsRatio(event) || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
+    if (!snaps(event) || keepsRatio(event) || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
       guides.textContent = "";
       return { x: dx, y: dy };
     }

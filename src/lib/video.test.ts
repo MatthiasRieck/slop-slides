@@ -6,11 +6,15 @@ import {
   MAX_PAUSE,
   MAX_SECONDS,
   MIN_SECONDS,
+  onVideoOptions,
   pauseProblem,
   saveVideoOptions,
   secondsProblem,
   slideFrames,
   type VideoOptions,
+  videoPercent,
+  videoPhase,
+  videoPhaseShort,
 } from "./video";
 
 const options = (overrides: Partial<VideoOptions> = {}): VideoOptions => ({ ...DEFAULT_VIDEO_OPTIONS, ...overrides });
@@ -90,5 +94,46 @@ describe("video options", () => {
     expect(loadVideoOptions()).toEqual(DEFAULT_VIDEO_OPTIONS);
     localStorage.setItem("slopslide.video", "not json");
     expect(loadVideoOptions()).toEqual(DEFAULT_VIDEO_OPTIONS);
+  });
+});
+
+describe("video options, shared", () => {
+  beforeEach(() => localStorage.removeItem("slopslide.video"));
+
+  it("are the same object until they change", () => {
+    expect(loadVideoOptions()).toBe(loadVideoOptions());
+    const before = loadVideoOptions();
+    saveVideoOptions({ ...DEFAULT_VIDEO_OPTIONS, secondsPerSlide: 9 });
+    expect(loadVideoOptions()).not.toBe(before);
+    expect(loadVideoOptions()).toBe(loadVideoOptions());
+    expect(loadVideoOptions().secondsPerSlide).toBe(9);
+  });
+
+  it("tell whoever listens when they are saved, until it stops listening", () => {
+    let told = 0;
+    const stop = onVideoOptions(() => told++);
+    saveVideoOptions({ ...DEFAULT_VIDEO_OPTIONS, pauseAfter: 2 });
+    expect(told).toBe(1);
+    stop();
+    saveVideoOptions(DEFAULT_VIDEO_OPTIONS);
+    expect(told).toBe(1);
+  });
+});
+
+describe("video export progress", () => {
+  it("says what it is doing in full and in short", () => {
+    const speaking = { phase: "narration", frame: 1, frames: 4 } as const;
+    expect(videoPhase(speaking)).toBe("Generating narration 2 of 4");
+    expect(videoPhaseShort(speaking)).toBe("Narration 2/4");
+    const rendering = { phase: "video", frame: 45, frames: 100 } as const;
+    expect(videoPhase(rendering)).toBe("Rendering video 45%");
+    expect(videoPhaseShort(rendering)).toBe("45%");
+  });
+
+  it("never counts past the last slide or over 100%", () => {
+    expect(videoPhase({ phase: "narration", frame: 4, frames: 4 })).toBe("Generating narration 4 of 4");
+    expect(videoPercent({ phase: "video", frame: 300, frames: 100 })).toBe(100);
+    expect(videoPercent({ phase: "video", frame: 0, frames: 0 })).toBe(0);
+    expect(videoPercent({ phase: "video", frame: 199, frames: 200 })).toBe(99);
   });
 });

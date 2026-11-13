@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Screen } from "./api";
-import { arrange, choose, defaultChoice, hasPresenterWindow } from "./screens";
+import { arrange, choose, defaultChoice, hasPresenterWindow, screensKey, swap } from "./screens";
 
 const screen = (index: number, x: number, y: number, width = 1920, height = 1080): Screen => ({
   index,
@@ -45,6 +45,37 @@ describe("arrange", () => {
 describe("choose", () => {
   it("starts with the show on the last screen and the presenter view on the first", () => {
     expect(defaultChoice([screen(0, 0, 0), screen(1, 1920, 0)])).toEqual({ audience: 1, presenter: 0 });
+  });
+
+  it("starts with the slides on a screen that is not the main one, wherever that is listed", () => {
+    const main = { ...screen(1, 1920, 0), primary: true };
+    const projector = { ...screen(0, 0, 0), primary: false };
+    expect(defaultChoice([projector, main])).toEqual({ audience: 0, presenter: 1 });
+    // Of several, the last; the presenter view stays on the main screen.
+    const side = { ...screen(2, 3840, 0), primary: false };
+    expect(defaultChoice([projector, main, side])).toEqual({ audience: 2, presenter: 1 });
+  });
+
+  it("starts with the last screen for the slides when none is marked as main", () => {
+    const screens = [screen(0, 0, 0), screen(1, 1920, 0)].map((s) => ({ ...s, primary: false }));
+    expect(defaultChoice(screens)).toEqual({ audience: 1, presenter: 0 });
+  });
+
+  it("has no presenter view on a single screen", () => {
+    expect(defaultChoice([screen(0, 0, 0)])).toEqual({ audience: 0, presenter: null });
+  });
+
+  it("swaps the slides and the presenter view, when there is one", () => {
+    expect(swap({ audience: 1, presenter: 0 })).toEqual({ audience: 0, presenter: 1 });
+    expect(swap({ audience: 1, presenter: null })).toEqual({ audience: 1, presenter: null });
+  });
+
+  it("tells one set of screens from another by their names, sizes and places", () => {
+    const desk = [screen(0, 0, 0), screen(1, 1920, 0)];
+    expect(screensKey(desk)).toBe(screensKey([screen(0, 0, 0), screen(1, 1920, 0)]));
+    expect(screensKey(desk)).not.toBe(screensKey([screen(0, 0, 0), screen(1, 0, 1080)]));
+    expect(screensKey(desk)).not.toBe(screensKey([screen(0, 0, 0), screen(1, 1920, 0, 3840, 2160)]));
+    expect(screensKey(desk)).not.toBe(screensKey([screen(0, 0, 0)]));
   });
 
   it("drops the presenter view when the slides take its screen", () => {

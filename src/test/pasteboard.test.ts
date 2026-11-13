@@ -599,6 +599,54 @@ describe("pasteboard", () => {
     expect(p.keys()).toEqual([expect.objectContaining({ type: "slop:key", key: "ArrowRight" })]);
   });
 
+  it("zooms by a factor or to a level around the middle of the view, as the app's zoom buttons ask", () => {
+    const p = pasteboard();
+    p.fromParent({ type: "slop:camera", zoomBy: 1.25 });
+    // The slide's middle is the view's: it stays there.
+    expect(p.views().at(-1)).toMatchObject({ x: -240, y: -135, k: 1.25 });
+    p.fromParent({ type: "slop:camera", zoomTo: 2 });
+    expect(p.views().at(-1)).toMatchObject({ x: -960, y: -540, k: 2 });
+    // Panned, what is in the middle of the view stays in the middle.
+    p.fromParent({ type: "slop:camera", x: 100, y: 0, k: 1 });
+    p.fromParent({ type: "slop:camera", zoomTo: 0.5 });
+    expect(p.views().at(-1)).toMatchObject({ x: 530, y: 270, k: 0.5 });
+    // Never past the limits, and nothing for what is no zoom.
+    p.fromParent({ type: "slop:camera", zoomTo: 100 });
+    expect(p.views().at(-1)!.k).toBe(8);
+    const before = p.views().length;
+    p.fromParent({ type: "slop:camera", zoomBy: 0 });
+    p.fromParent({ type: "slop:camera", zoomTo: -1 });
+    p.fromParent({ type: "slop:camera", zoomBy: "2" });
+    expect(p.views()).toHaveLength(before);
+    p.fromParent({ type: "slop:camera", home: true });
+    expect(p.views().at(-1)).toMatchObject({ x: 0, y: 0, k: 1 });
+  });
+
+  it("zooms in, out and back with Ctrl or ⌘ and + - 0, keeping the keys from the app and the webview", () => {
+    const p = pasteboard();
+    const mod = (key: string, init: KeyboardEventInit = { ctrlKey: true }) => {
+      const event = new p.window.KeyboardEvent("keydown", { key, cancelable: true, bubbles: true, ...init });
+      p.doc.body.dispatchEvent(event);
+      return event;
+    };
+    expect(mod("=").defaultPrevented).toBe(true);
+    expect(p.views().at(-1)).toMatchObject({ x: -240, y: -135, k: 1.25 });
+    mod("+", { metaKey: true, shiftKey: true });
+    expect(p.views().at(-1)!.k).toBeCloseTo(1.5625, 5);
+    mod("-");
+    mod("-");
+    expect(p.views().at(-1)!.k).toBeCloseTo(1, 5);
+    mod("-");
+    expect(p.views().at(-1)!.k).toBeCloseTo(0.8, 5);
+    expect(mod("0", { metaKey: true }).defaultPrevented).toBe(true);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    expect(p.keys()).toEqual([]);
+    // With Alt too, or another key, they are not the pasteboard's.
+    const views = p.views().length;
+    expect(mod("=", { ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);
+    expect(p.views()).toHaveLength(views);
+  });
+
   it("restores the view and takes the app's colors", () => {
     const p = pasteboard();
     p.fromParent({ type: "slop:camera", x: -200, y: 50, k: 0.5 });
@@ -669,6 +717,19 @@ describe("pasteboard", () => {
       // What lay under the pointer still does, so ink drawn there moves along with the slide.
       expect(x + 1000 * k).toBeCloseTo(1000, 5);
       expect(y + 500 * k).toBeCloseTo(500, 5);
+    });
+
+    it("leaves 0 to the player while the slide is fitted, as a digit of a slide number", () => {
+      const p = pasteboard({ show: true });
+      const reached: string[] = [];
+      p.doc.addEventListener("keydown", (event) => reached.push((event as KeyboardEvent).key));
+      p.key("0");
+      expect(reached).toEqual(["0"]);
+      p.wheel({ ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 }, 1000);
+      // Zoomed in, it fits the slide again and goes no further.
+      expect(p.key("0").defaultPrevented).toBe(true);
+      expect(reached).toEqual(["0"]);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 0, y: 0, k: 1 });
     });
 
     it("zooms with a mouse notch and a pinch, pans with a swipe, and follows the window's size", () => {

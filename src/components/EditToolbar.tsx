@@ -1,5 +1,6 @@
 import {
   AlignCenter,
+  AlignJustify,
   AlignLeft,
   AlignRight,
   AlignVerticalJustifyCenter,
@@ -9,14 +10,15 @@ import {
   ArrowDown,
   ArrowLeftRight,
   ArrowUp,
-  Ban,
   Baseline,
   Bold,
   Braces,
   Brackets,
   BringToFront,
+  ChartColumn,
   ChevronRight,
   Circle,
+  CopyPlus,
   CornerDownRight,
   Cross,
   Cylinder,
@@ -39,9 +41,12 @@ import {
   PenLine,
   Pentagon,
   Plus,
+  Presentation,
+  RemoveFormatting,
   SendToBack,
   Shapes,
   Slash,
+  Smile,
   Space,
   Spline,
   Square,
@@ -51,20 +56,21 @@ import {
   Strikethrough,
   Subscript,
   Superscript,
+  Table,
   Trash2,
   Triangle,
   Type,
   Underline,
   Wallpaper,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import type { ArrangeMessage, EditGeometry, EditLayer } from "../lib/arrange";
 import {
+  type AgentInsert,
+  AUTOFIT_LABELS,
   type Autofit,
-  BORDER_WIDTHS,
   type DeckColor,
-  EDIT_COLORS,
   type EditSelection,
   type EditStyle,
   type EditTool,
@@ -79,65 +85,127 @@ import {
   parseFontSize,
   type StackOrder,
   stepFontSize,
+  strokeWidths,
   type TextAlign,
   type ToolFamily,
   toolbarState,
   type VerticalAlign,
 } from "../lib/editTools";
-import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
-import { ArrangeControls, GroupControls, LayersPanel, TiltControls } from "./ArrangeControls";
-import { keepFocus, ToolButton } from "./Button";
+import { AlignControls, GroupControls, LayersPanel, PositionControls, SnapToggle } from "./ArrangeControls";
+import { ToolButton } from "./Button";
+import { ColorButton } from "./ColorButton";
+import { useEditPanelAsk } from "./editPanelAsk";
 import { DraftInput } from "./Field";
 import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
 import { DropdownPanel, dropdownPanel } from "./Popover";
-import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
+import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
 import { TimelineTools } from "./TimelineTools";
 
-const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
-  { tool: "select", label: "Select and move (V)", icon: <MousePointer2 /> },
-  { tool: "text", label: "Add text (T)", icon: <Type /> },
-  { tool: "rect", label: "Add a rectangle (R)", icon: <Square /> },
+/** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
+interface ToolChoice {
+  tool: EditTool;
+  label: string;
+  title?: string;
+  shortcut?: string;
+  icon: ReactNode;
+}
+
+const SNAPS_45 = "Shift snaps to 45°";
+
+const TOOLS: ToolChoice[] = [
+  { tool: "select", label: "Select and move", shortcut: "v", icon: <MousePointer2 /> },
+  { tool: "text", label: "Add text", shortcut: "t", icon: <Type /> },
+  { tool: "rect", label: "Add a rectangle", shortcut: "r", icon: <Square /> },
   { tool: "rounded", label: "Add a rounded rectangle", icon: <SquareRoundCorner /> },
-  { tool: "ellipse", label: "Add an ellipse (O)", icon: <Circle /> },
+  { tool: "ellipse", label: "Add an ellipse", shortcut: "o", icon: <Circle /> },
   { tool: "triangle", label: "Add a triangle", icon: <Triangle /> },
   { tool: "star", label: "Add a star", icon: <Star /> },
   { tool: "bubble", label: "Add a speech bubble", icon: <MessageSquare /> },
-  { tool: "draw", label: "Draw freehand (D)", icon: <PenLine /> },
-  { tool: "line", label: "Add a line (L, Shift snaps to 45°)", icon: <Slash /> },
-  { tool: "arrow", label: "Add an arrow (A, Shift snaps to 45°)", icon: <MoveUpRight /> },
+  { tool: "draw", label: "Draw freehand", shortcut: "d", icon: <PenLine /> },
+  { tool: "line", label: "Add a line", title: `Add a line, ${SNAPS_45}`, shortcut: "l", icon: <Slash /> },
+  { tool: "arrow", label: "Add an arrow", title: `Add an arrow, ${SNAPS_45}`, shortcut: "a", icon: <MoveUpRight /> },
 ];
+/** How many of `TOOLS` go in the Insert section's first row. */
+const FIRST_ROW_TOOLS = 7;
 
-/** Shapes for diagrams, in the Insert section's "More shapes" picker. */
-const MORE_SHAPES: { tool: EditTool; label: string; icon: ReactNode }[] = [
-  { tool: "diamond", label: "Add a diamond (a decision in a flowchart)", icon: <Diamond /> },
-  { tool: "chevron", label: "Add a chevron (a step in a process)", icon: <ChevronRight /> },
-  { tool: "block-arrow", label: "Add a block arrow", icon: <ArrowBigRight /> },
-  { tool: "double-arrow", label: "Add a double-headed arrow", icon: <ArrowLeftRight /> },
-  { tool: "hexagon", label: "Add a hexagon (a preparation step)", icon: <Hexagon /> },
-  { tool: "octagon", label: "Add an octagon", icon: <Octagon /> },
-  { tool: "pentagon", label: "Add a pentagon", icon: <Pentagon /> },
-  { tool: "parallelogram", label: "Add a parallelogram (input or output)", icon: <Parallelogram /> },
-  { tool: "trapezoid", label: "Add a trapezoid", icon: <Trapezoid /> },
-  { tool: "plus", label: "Add a plus", icon: <Cross /> },
-  { tool: "cylinder", label: "Add a cylinder (a database)", icon: <Cylinder /> },
-  { tool: "document", label: "Add a document", icon: <FileText /> },
-  { tool: "heart", label: "Add a heart", icon: <Heart /> },
-  { tool: "bracket", label: "Add a bracket", icon: <Brackets /> },
-  { tool: "brace", label: "Add a brace", icon: <Braces /> },
+/** Shapes for diagrams, in the Insert section's "More shapes" picker, under the heading each belongs to. */
+const MORE_SHAPES: { heading: string; shapes: ToolChoice[] }[] = [
   {
-    tool: "elbow",
-    label: "Add an elbow connector (turns at right angles between the elements its ends stick to)",
-    icon: <CornerDownRight />,
+    heading: "Flowchart",
+    shapes: [
+      { tool: "diamond", label: "Add a diamond (a decision in a flowchart)", icon: <Diamond /> },
+      { tool: "parallelogram", label: "Add a parallelogram (input or output)", icon: <Parallelogram /> },
+      { tool: "hexagon", label: "Add a hexagon (a preparation step)", icon: <Hexagon /> },
+      { tool: "cylinder", label: "Add a cylinder (a database)", icon: <Cylinder /> },
+      { tool: "document", label: "Add a document", icon: <FileText /> },
+      { tool: "trapezoid", label: "Add a trapezoid", icon: <Trapezoid /> },
+    ],
   },
-  { tool: "curve", label: "Add a curved connector (curves between the elements its ends stick to)", icon: <Spline /> },
+  {
+    heading: "Arrows",
+    shapes: [
+      { tool: "chevron", label: "Add a chevron (a step in a process)", icon: <ChevronRight /> },
+      { tool: "block-arrow", label: "Add a block arrow", icon: <ArrowBigRight /> },
+      { tool: "double-arrow", label: "Add a double-headed arrow", icon: <ArrowLeftRight /> },
+    ],
+  },
+  {
+    heading: "Shapes",
+    shapes: [
+      { tool: "pentagon", label: "Add a pentagon", icon: <Pentagon /> },
+      { tool: "octagon", label: "Add an octagon", icon: <Octagon /> },
+      { tool: "plus", label: "Add a plus", icon: <Cross /> },
+      { tool: "heart", label: "Add a heart", icon: <Heart /> },
+    ],
+  },
+  {
+    heading: "Brackets",
+    shapes: [
+      { tool: "bracket", label: "Add a bracket", icon: <Brackets /> },
+      { tool: "brace", label: "Add a brace", icon: <Braces /> },
+    ],
+  },
+  {
+    heading: "Connectors",
+    shapes: [
+      {
+        tool: "elbow",
+        label: "Add an elbow connector (turns at right angles between the elements its ends stick to)",
+        icon: <CornerDownRight />,
+      },
+      {
+        tool: "curve",
+        label: "Add a curved connector (curves between the elements its ends stick to)",
+        icon: <Spline />,
+      },
+    ],
+  },
 ];
 
-const ALIGN: { value: TextAlign; label: string; icon: ReactNode }[] = [
-  { value: "left", label: "Align text left", icon: <AlignLeft /> },
-  { value: "center", label: "Center text", icon: <AlignCenter /> },
-  { value: "right", label: "Align text right", icon: <AlignRight /> },
+/** What the agent adds, as the Insert section offers it: the request starts in the chat. */
+const AGENT_INSERTS: { kind: AgentInsert; label: string; title: string; icon: ReactNode }[] = [
+  {
+    kind: "table",
+    label: "Table…",
+    title: "Ask the agent for a table: starts the request in the chat",
+    icon: <Table />,
+  },
+  {
+    kind: "chart",
+    label: "Chart…",
+    title: "Ask the agent for a chart: starts the request in the chat",
+    icon: <ChartColumn />,
+  },
+  { kind: "icon", label: "Icon…", title: "Ask the agent for an icon: starts the request in the chat", icon: <Smile /> },
+];
+
+const ALIGN: { value: TextAlign; label: string; shortcut: string; icon: ReactNode }[] = [
+  { value: "left", label: "Align text left", shortcut: "mod+shift+l", icon: <AlignLeft /> },
+  { value: "center", label: "Center text", shortcut: "mod+shift+e", icon: <AlignCenter /> },
+  { value: "right", label: "Align text right", shortcut: "mod+shift+r", icon: <AlignRight /> },
+  { value: "justify", label: "Justify text", shortcut: "mod+shift+j", icon: <AlignJustify /> },
 ];
 
 const VALIGN: { value: VerticalAlign; label: string; icon: ReactNode }[] = [
@@ -146,11 +214,11 @@ const VALIGN: { value: VerticalAlign; label: string; icon: ReactNode }[] = [
   { value: "bottom", label: "Align text to the bottom", icon: <AlignVerticalJustifyEnd /> },
 ];
 
-const ORDER: { to: StackOrder; label: string; icon: ReactNode }[] = [
-  { to: "front", label: "Bring to front", icon: <BringToFront /> },
-  { to: "forward", label: "Bring forward", icon: <ArrowUp /> },
-  { to: "backward", label: "Send backward", icon: <ArrowDown /> },
-  { to: "back", label: "Send to back", icon: <SendToBack /> },
+const ORDER: { to: StackOrder; label: string; shortcut: string; icon: ReactNode }[] = [
+  { to: "front", label: "Bring to front", shortcut: "mod+shift+]", icon: <BringToFront /> },
+  { to: "forward", label: "Bring forward", shortcut: "mod+]", icon: <ArrowUp /> },
+  { to: "backward", label: "Send backward", shortcut: "mod+[", icon: <ArrowDown /> },
+  { to: "back", label: "Send to back", shortcut: "mod+shift+[", icon: <SendToBack /> },
 ];
 
 /** The text's on-or-off looks, each a button of its own. */
@@ -171,10 +239,19 @@ const SCRIPTS: { value: "sup" | "sub"; label: string; icon: ReactNode }[] = [
   { value: "sub", label: "Subscript", icon: <Subscript /> },
 ];
 
-const LISTS: { value: ListKind; label: string; icon: ReactNode }[] = [
-  { value: "ul", label: "Bulleted list (Tab indents, Shift+Tab outdents)", icon: <List /> },
-  { value: "ol", label: "Numbered list (Tab indents, Shift+Tab outdents)", icon: <ListOrdered /> },
+const LISTS: { value: ListKind; label: string; title: string; icon: ReactNode }[] = [
+  { value: "ul", label: "Bulleted list", title: "Bulleted list (Tab indents, Shift+Tab outdents)", icon: <List /> },
+  {
+    value: "ol",
+    label: "Numbered list",
+    title: "Numbered list (Tab indents, Shift+Tab outdents)",
+    icon: <ListOrdered />,
+  },
 ];
+
+/** Why a control is disabled, by what it works on. */
+const NEEDS_TEXT = "Select text or a text box";
+const NEEDS_ELEMENT = "Select an element";
 
 /** A slide a link can go to. */
 export interface LinkTarget {
@@ -183,15 +260,18 @@ export interface LinkTarget {
 }
 
 /**
- * Edit mode's tools, in a ribbon above the slide, whose sections collapse to an icon as it narrows: add text, images, shapes, lines and freehand drawings, restyle the
- * selection (font, size, color, bold, italic, underline, strikethrough, superscript /
- * subscript, lists, links, spacing, alignment, how text fits, fill, border, opacity, shadow,
- * corner radius, image fit and flips), paint one element's look onto another, set the slide's
- * background, move the selection up or down the stack, or delete it. While typing, the text styles go to the selected text. With
- * nothing selected, the styles are those of what the current tool adds.
+ * Edit mode's tools, in a ribbon above the slide, whose sections collapse to an icon as it
+ * narrows: add text, images, shapes, lines and freehand drawings, or start a request to the agent
+ * for a table, chart or icon; restyle the selection (font, size, color, bold, italic, underline,
+ * strikethrough, superscript / subscript, lists, links, spacing, alignment, how text fits, fill,
+ * border, opacity, shadow, corner radius, image fit), clear its formatting, paint one element's
+ * look onto another; set the slide's background; line the selection up, space it out, move it up
+ * or down the stack, group, lock, duplicate or delete it, and set its exact place and size.
+ * While typing, the text styles go to the selected text. With nothing selected, the styles are
+ * those of what the current tool adds. A control that waits for a selection says so in its tooltip.
  *
  * Its buttons keep focus in the slide, so the text being edited keeps its selection; after a
- * typed value (a font size, a link) `onReturnFocus` gives focus back to the slide.
+ * typed value or a pick from a list `onReturnFocus` gives focus back to the slide.
  */
 export function EditToolbar(props: {
   sizeMode: "resize" | "stretch";
@@ -217,6 +297,8 @@ export function EditToolbar(props: {
   onBackground?: (color: string | null) => void;
   /** Picks image files: to add to the slide, or to put in the selected image. */
   onPickImage?: (replace: boolean) => void;
+  /** Starts a request to the agent for something the tools do not draw. */
+  onInsertAsk?: (kind: AgentInsert) => void;
   onReturnFocus?: () => void;
   onOrder: (to: StackOrder) => void;
   onDelete: () => void;
@@ -234,6 +316,23 @@ export function EditToolbar(props: {
   const returnFocus = () => props.onReturnFocus?.();
   const ribbon = useRibbonFit();
   const { collapsedFrom } = ribbon;
+  const vector = !!state?.vector;
+  const strokeOff = !state || !!selection?.clipped;
+  const strokeReason = selection?.clipped ? "A cut-out shape takes no border" : NEEDS_ELEMENT;
+  const strokeWidth = style.strokeWidth ?? 0;
+  const toolButton = (t: ToolChoice) => (
+    <ToolButton
+      keepFocus
+      key={t.tool}
+      label={t.label}
+      title={t.title}
+      shortcut={t.shortcut}
+      active={props.tool === t.tool}
+      onClick={() => props.onTool(t.tool)}
+    >
+      {t.icon}
+    </ToolButton>
+  );
 
   return (
     <div
@@ -244,27 +343,27 @@ export function EditToolbar(props: {
       className="flex min-w-0 flex-[1_1_200px]"
     >
       <RibbonSection title="Insert" icon={<Shapes />} collapsed={collapsedFrom <= 0} closeOn={props.tool}>
-        {[TOOLS.slice(0, 6), TOOLS.slice(6)].map((row, index) => (
-          <RibbonRow key={row[0]?.tool}>
-            {row.map((t) => (
-              <ToolButton
-                keepFocus
-                key={t.tool}
-                label={t.label}
-                active={props.tool === t.tool}
-                onClick={() => props.onTool(t.tool)}
-              >
-                {t.icon}
-              </ToolButton>
-            ))}
-            {index === 0 && <MoreShapes tool={props.tool} onTool={props.onTool} />}
-            {index === 1 && (
-              <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
-                <ImagePlus />
-              </ToolButton>
-            )}
-          </RibbonRow>
-        ))}
+        <RibbonRow>
+          {TOOLS.slice(0, FIRST_ROW_TOOLS).map(toolButton)}
+          <MoreShapes tool={props.tool} onTool={props.onTool} />
+        </RibbonRow>
+        <RibbonRow>
+          {TOOLS.slice(FIRST_ROW_TOOLS).map(toolButton)}
+          <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+            <ImagePlus />
+          </ToolButton>
+          {AGENT_INSERTS.map((insert) => (
+            <ToolButton
+              keepFocus
+              key={insert.kind}
+              label={insert.label}
+              title={insert.title}
+              onClick={() => props.onInsertAsk?.(insert.kind)}
+            >
+              {insert.icon}
+            </ToolButton>
+          ))}
+        </RibbonRow>
       </RibbonSection>
       <RibbonSection title="Text" icon={<Type />} collapsed={collapsedFrom <= 1} closeOn={props.tool}>
         <RibbonRow>
@@ -273,11 +372,14 @@ export function EditToolbar(props: {
             fonts={props.fonts ?? []}
             disabled={textOff}
             onChange={(fontFamily) => props.onStyle({ fontFamily })}
+            onDone={returnFocus}
           />
           <ToolButton
             keepFocus
             label="Smaller text"
+            shortcut="mod+shift+,"
             disabled={textOff}
+            disabledReason={NEEDS_TEXT}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
           >
             <Minus />
@@ -290,7 +392,9 @@ export function EditToolbar(props: {
           <ToolButton
             keepFocus
             label="Larger text"
+            shortcut="mod+shift+."
             disabled={textOff}
+            disabledReason={NEEDS_TEXT}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
           >
             <Plus />
@@ -305,6 +409,7 @@ export function EditToolbar(props: {
               shortcut={m.shortcut}
               active={!textOff && !!style[m.mark]}
               disabled={textOff}
+              disabledReason={NEEDS_TEXT}
               onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
             >
               {m.icon}
@@ -317,6 +422,7 @@ export function EditToolbar(props: {
               label={s.label}
               active={!textOff && !!selection && selection.script === s.value}
               disabled={textOff || !selection}
+              disabledReason={NEEDS_TEXT}
               onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
             >
               {s.icon}
@@ -326,9 +432,12 @@ export function EditToolbar(props: {
             label="Text color"
             icon={<Baseline />}
             value={style.color ?? null}
+            other={!!selection?.colorOther}
             disabled={textOff}
+            disabledReason={NEEDS_TEXT}
             deck={props.colors}
             onChange={(color) => props.onStyle({ color })}
+            onDone={returnFocus}
           />
           <LinkButton
             value={selection?.link ?? null}
@@ -337,6 +446,16 @@ export function EditToolbar(props: {
             onChange={(href) => props.onLink?.(href)}
             onDone={returnFocus}
           />
+          <ToolButton
+            keepFocus
+            label="Clear formatting"
+            title="Clear formatting: take bold, colors, sizes and other formatting off the text, keeping its links"
+            disabled={textOff || !selection}
+            disabledReason={NEEDS_TEXT}
+            onClick={() => props.onArrange?.({ type: "slop:edit-clear-formatting" })}
+          >
+            <RemoveFormatting />
+          </ToolButton>
         </RibbonRow>
       </RibbonSection>
       <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={collapsedFrom <= 2} closeOn={props.tool}>
@@ -346,8 +465,10 @@ export function EditToolbar(props: {
               keepFocus
               key={a.value}
               label={a.label}
+              shortcut={a.shortcut}
               active={!textOff && style.align === a.value}
               disabled={textOff}
+              disabledReason={NEEDS_TEXT}
               onClick={() => props.onStyle({ align: a.value })}
             >
               {a.icon}
@@ -358,8 +479,10 @@ export function EditToolbar(props: {
               keepFocus
               key={l.value}
               label={l.label}
+              title={l.title}
               active={!textOff && !!selection && selection.list === l.value}
               disabled={textOff || !selection}
+              disabledReason={NEEDS_TEXT}
               onClick={() => props.onList?.(l.value)}
             >
               {l.icon}
@@ -370,6 +493,7 @@ export function EditToolbar(props: {
             letterSpacing={style.letterSpacing ?? 0}
             disabled={textOff}
             onChange={props.onStyle}
+            onDone={returnFocus}
           />
         </RibbonRow>
         <RibbonRow>
@@ -380,23 +504,28 @@ export function EditToolbar(props: {
               label={a.label}
               active={!textOff && !!state?.valign && style.valign === a.value}
               disabled={textOff || !state?.valign}
+              disabledReason={textOff ? NEEDS_TEXT : "This element's text cannot align vertically"}
               onClick={() => props.onStyle({ valign: a.value })}
             >
               {a.icon}
             </ToolButton>
           ))}
-          <select
-            aria-label="When text does not fit"
-            title="When text does not fit its box: only show the overflow, shrink the text, or grow the box"
+          <RibbonSelect
+            label="When text does not fit"
+            title="When text does not fit its box: leave it (the overflow is marked), shrink the text, or grow the box"
             disabled={textOff || !selection}
+            disabledReason={NEEDS_TEXT}
             value={selection?.autofit ?? ""}
-            onChange={(event) => props.onStyle({ autofit: (event.target.value || null) as Autofit | null })}
-            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
+            onPick={(autofit) => props.onStyle({ autofit: (autofit || null) as Autofit | null })}
+            onDone={returnFocus}
+            className="w-full min-w-0 flex-1 enabled:hover:bg-accent"
           >
-            <option value="">Report overflow</option>
-            <option value="shrink">Shrink text</option>
-            <option value="grow">Grow box</option>
-          </select>
+            {AUTOFIT_LABELS.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </RibbonSelect>
         </RibbonRow>
       </RibbonSection>
       <RibbonSection title="Style" icon={<PaintBucket />} collapsed={collapsedFrom <= 3} closeOn={props.tool}>
@@ -405,41 +534,48 @@ export function EditToolbar(props: {
             label="Fill"
             icon={<PaintBucket />}
             value={style.fill ?? null}
+            other={!!selection?.fillOther}
             disabled={!state}
+            disabledReason={NEEDS_ELEMENT}
             none
             deck={props.colors}
             onChange={(fill) => props.onStyle({ fill })}
+            onDone={returnFocus}
           />
           <ColorButton
-            label={state?.vector ? "Line color" : "Border color"}
+            label={vector ? "Line color" : "Border color"}
             icon={<SquareDashed />}
             value={style.stroke ?? null}
-            disabled={!state || !!selection?.clipped}
+            other={!!selection?.strokeOther}
+            disabled={strokeOff}
+            disabledReason={strokeReason}
             none
             deck={props.colors}
             onChange={(stroke) => props.onStyle({ stroke })}
+            onDone={returnFocus}
           />
-          <select
-            aria-label={state?.vector ? "Line width" : "Border width"}
-            title={state?.vector ? "Line width" : "Border width"}
-            disabled={!state || !!selection?.clipped}
-            value={String(style.strokeWidth ?? 0)}
-            onChange={(event) => props.onStyle({ strokeWidth: Number(event.target.value) })}
-            className="h-6 w-24 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
+          <RibbonSelect
+            label={vector ? "Line width" : "Border width"}
+            disabled={strokeOff}
+            disabledReason={strokeReason}
+            value={String(strokeWidth)}
+            onPick={(width) => props.onStyle({ strokeWidth: Number(width) })}
+            onDone={returnFocus}
+            className="w-24 enabled:hover:bg-accent"
           >
-            {[...new Set([...BORDER_WIDTHS, style.strokeWidth ?? 0])]
-              .sort((a, b) => a - b)
-              .map((w) => (
-                <option key={w} value={w}>
-                  {w === 0 ? "No border" : `${w}px`}
-                </option>
-              ))}
-          </select>
+            {strokeWidths(strokeWidth, vector).map((w) => (
+              <option key={w} value={w}>
+                {w === 0 ? "No border" : `${w}px`}
+              </option>
+            ))}
+          </RibbonSelect>
           <DashSelect
             value={style.dash ?? "solid"}
-            vector={!!state?.vector}
-            disabled={!state || !!selection?.clipped}
+            vector={vector}
+            disabled={strokeOff}
+            disabledReason={strokeReason}
             onChange={props.onStyle}
+            onDone={returnFocus}
           />
         </RibbonRow>
         <RibbonRow>
@@ -448,43 +584,40 @@ export function EditToolbar(props: {
             selection={selection}
             onTool={props.onTool}
             onStyle={props.onStyle}
+            onArrange={props.onArrange}
             onPickImage={props.onPickImage}
             onReturnFocus={returnFocus}
           />
           <LineButton selection={selection} onChange={props.onStyle} onDone={returnFocus} />
+        </RibbonRow>
+      </RibbonSection>
+      <RibbonSection title="Slide" icon={<Presentation />} collapsed={collapsedFrom <= 4} closeOn={props.tool}>
+        <RibbonRow>
           <ColorButton
             label="Slide background"
             icon={<Wallpaper />}
             value={props.background ?? null}
             none
             deck={props.colors}
+            panel="background"
             onChange={(color) => props.onBackground?.(color)}
+            onDone={returnFocus}
           />
         </RibbonRow>
       </RibbonSection>
-      <RibbonSection title="Arrange" icon={<Move />} collapsed={collapsedFrom <= 4} closeOn={props.tool}>
+      <RibbonSection title="Arrange" icon={<Move />} collapsed={collapsedFrom <= 5} closeOn={props.tool}>
         <RibbonRow>
-          <select
-            aria-label="Size mode"
-            title="Resize changes the box; Stretch scales its contents"
-            value={props.sizeMode}
-            onChange={(event) => props.onSizeMode(event.target.value as "resize" | "stretch")}
-            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent"
-          >
-            <option value="resize">Resize</option>
-            <option value="stretch">Stretch</option>
-          </select>
-          <ArrangeControls
+          <AlignControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
+          <PositionControls
             geometry={props.geometry ?? null}
             selection={selection}
             onArrange={props.onArrange}
-            onStyle={props.onStyle}
             onDone={returnFocus}
+            sizeMode={props.sizeMode}
+            onSizeMode={props.onSizeMode}
             keepRatio={props.keepRatio}
             onKeepRatio={props.onKeepRatio}
           />
-          <TiltControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
-          <LayersPanel layers={props.layers ?? []} onArrange={props.onArrange} />
         </RibbonRow>
         <RibbonRow>
           {ORDER.map((o) => (
@@ -492,34 +625,49 @@ export function EditToolbar(props: {
               keepFocus
               key={o.to}
               label={o.label}
+              shortcut={o.shortcut}
               disabled={!props.selection}
+              disabledReason={NEEDS_ELEMENT}
               onClick={() => props.onOrder(o.to)}
             >
               {o.icon}
             </ToolButton>
           ))}
           <GroupControls geometry={props.geometry ?? null} selection={selection} onArrange={props.onArrange} />
+          <LayersPanel layers={props.layers ?? []} onArrange={props.onArrange} />
+          <SnapToggle />
+          <ToolButton
+            keepFocus
+            label="Duplicate"
+            shortcut="mod+d"
+            disabled={!props.selection}
+            disabledReason={NEEDS_ELEMENT}
+            onClick={() => props.onArrange?.({ type: "slop:edit-duplicate" })}
+          >
+            <CopyPlus />
+          </ToolButton>
           <ToolButton
             keepFocus
             destructive
             label="Delete"
             shortcut="backspace"
             disabled={!props.selection}
+            disabledReason={NEEDS_ELEMENT}
             onClick={props.onDelete}
           >
             <Trash2 />
           </ToolButton>
         </RibbonRow>
       </RibbonSection>
-      <TimelineTools collapsed={collapsedFrom <= 5} />
+      <TimelineTools collapsed={collapsedFrom <= 6} />
     </div>
   );
 }
 
-/** The "More shapes" picker: diagram shapes, which go back to Select once one is added. */
+/** The "More shapes" picker: diagram shapes under their headings, which go back to Select once one is added. */
 function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void }) {
   const { open, setOpen, ref, toggle } = useDropdown();
-  const current = MORE_SHAPES.find((s) => s.tool === props.tool);
+  const current = MORE_SHAPES.flatMap((group) => group.shapes).find((s) => s.tool === props.tool);
   return (
     <div ref={ref} className="relative">
       <ToolButton
@@ -530,155 +678,34 @@ function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void })
         active={!!current || open}
         onClick={toggle}
       >
-        {current?.icon ?? <Plus />}
+        {current?.icon ?? <Shapes />}
       </ToolButton>
       {open && (
-        <DropdownPanel role="dialog" aria-label="More shapes" className="grid w-max grid-cols-4 gap-0.5 p-1">
-          {MORE_SHAPES.map((s) => (
-            <ToolButton
-              keepFocus
-              key={s.tool}
-              label={s.label}
-              active={props.tool === s.tool}
-              onClick={() => {
-                props.onTool(s.tool);
-                setOpen(false);
-              }}
-            >
-              {s.icon}
-            </ToolButton>
+        <DropdownPanel role="dialog" aria-label="More shapes" className="flex w-max flex-col gap-1 p-1.5">
+          {MORE_SHAPES.map((group) => (
+            <fieldset key={group.heading} aria-label={group.heading} className="flex flex-col gap-0.5">
+              <span className="text-[10px] leading-3 text-muted-foreground">{group.heading}</span>
+              <div className="flex gap-0.5">
+                {group.shapes.map((s) => (
+                  <ToolButton
+                    keepFocus
+                    key={s.tool}
+                    label={s.label}
+                    active={props.tool === s.tool}
+                    onClick={() => {
+                      props.onTool(s.tool);
+                      setOpen(false);
+                    }}
+                  >
+                    {s.icon}
+                  </ToolButton>
+                ))}
+              </div>
+            </fieldset>
           ))}
         </DropdownPanel>
       )}
     </div>
-  );
-}
-
-/** A color well: the deck's colors, preset swatches, a custom color, and with `none`, no color at all. */
-function ColorButton(props: {
-  label: string;
-  icon: ReactNode;
-  value: string | null;
-  disabled?: boolean;
-  none?: boolean;
-  deck?: DeckColor[];
-  onChange: (color: string | null) => void;
-}) {
-  const { open, setOpen, ref, toggle } = useDropdown({ disabled: props.disabled });
-  const custom = useRef<HTMLInputElement>(null);
-  const onChange = useRef(props.onChange);
-  onChange.current = props.onChange;
-
-  // The system color picker reports every color the user passes over; only the one they settle on counts.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
-  useEffect(() => {
-    const input = custom.current;
-    if (!input) return;
-    const pick = () => onChange.current(input.value);
-    input.addEventListener("change", pick);
-    return () => input.removeEventListener("change", pick);
-  }, [open]);
-
-  const pick = (color: string | null) => {
-    props.onChange(color);
-    setOpen(false);
-  };
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label={props.label}
-        title={props.label}
-        aria-expanded={open}
-        disabled={props.disabled}
-        onMouseDown={keepFocus}
-        onClick={toggle}
-        className="flex flex-col items-center rounded-md px-1 pt-0.5 pb-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5"
-      >
-        {props.icon}
-        <span
-          data-testid={`${props.label} swatch`}
-          className="mt-0.5 h-1 w-4 rounded-sm border border-foreground/20"
-          style={{ background: props.value ?? "transparent" }}
-        />
-      </button>
-      {open && (
-        <DropdownPanel role="dialog" aria-label={props.label}>
-          {!!props.deck?.length && (
-            <fieldset aria-label="Deck colors" className="mb-2 grid w-max grid-cols-6 gap-1 border-b pb-2">
-              {props.deck.map((color) => (
-                <Swatch
-                  key={color.name}
-                  color={color.value}
-                  label={`Deck color ${color.name}`}
-                  title={color.name}
-                  picked={props.value === color.value}
-                  onPick={() => pick(color.value)}
-                />
-              ))}
-            </fieldset>
-          )}
-          <div className="grid w-max grid-cols-6 gap-1">
-            {props.none && (
-              <button
-                type="button"
-                aria-label="None"
-                title="None"
-                aria-pressed={props.value === null}
-                onMouseDown={keepFocus}
-                onClick={() => pick(null)}
-                className={cn(
-                  "flex size-5 items-center justify-center rounded-full border text-muted-foreground [&_svg]:size-3.5",
-                  props.value === null && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
-                )}
-              >
-                <Ban />
-              </button>
-            )}
-            {EDIT_COLORS.map((color) => (
-              <Swatch
-                key={color}
-                color={color}
-                label={color}
-                title={color}
-                picked={props.value === color}
-                onPick={() => pick(color)}
-              />
-            ))}
-          </div>
-          <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              ref={custom}
-              type="color"
-              aria-label={`Custom ${props.label.toLowerCase()}`}
-              defaultValue={props.value ?? SWATCHES.ink}
-              className="h-5 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
-            />
-            Custom
-          </label>
-        </DropdownPanel>
-      )}
-    </div>
-  );
-}
-
-/** One color to pick in a color well, ringed while it is the one picked. */
-function Swatch(props: { color: string; label: string; title: string; picked: boolean; onPick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.title}
-      aria-pressed={props.picked}
-      onMouseDown={keepFocus}
-      onClick={props.onPick}
-      className={cn(
-        "size-5 rounded-full border border-foreground/20",
-        props.picked && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
-      )}
-      style={{ background: props.color }}
-    />
   );
 }
 
@@ -688,6 +715,7 @@ function FontPicker(props: {
   fonts: FontChoice[];
   disabled: boolean;
   onChange: (stack: string | null) => void;
+  onDone: () => void;
 }) {
   const choices = fontChoices(props.fonts);
   const name = firstFamily(props.value).toLowerCase();
@@ -696,16 +724,16 @@ function FontPicker(props: {
   // A font the list does not have (set in the deck's styles) still shows as the current one.
   const current = name && !match ? firstFamily(props.value) : null;
   return (
-    <select
-      aria-label="Font"
-      title="Font"
+    <RibbonSelect
+      label="Font"
       disabled={props.disabled}
+      disabledReason={NEEDS_TEXT}
       value={match ? match.stack : current ? "__current" : ""}
-      onChange={(event) => {
-        const value = event.target.value;
+      onPick={(value) => {
         if (value !== "__current") props.onChange(value || null);
       }}
-      className="h-6 w-28 truncate rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
+      onDone={props.onDone}
+      className="w-28 truncate enabled:hover:bg-accent"
     >
       <option value="">Default font</option>
       {current && <option value="__current">{current}</option>}
@@ -725,16 +753,16 @@ function FontPicker(props: {
           </option>
         ))}
       </optgroup>
-    </select>
+    </RibbonSelect>
   );
 }
 
-/** The font size as a number to type; it applies on Enter or when the field loses focus. */
+/** The font size as a number to type; it applies on Enter or when the field loses focus, and ↑ / ↓ step it. */
 function FontSizeInput(props: { value: number | null; onChange: (size: number) => void; onDone: () => void }) {
   return (
     <DraftInput
       aria-label="Font size"
-      title="Font size (type a size and press Enter)"
+      title={props.value === null ? NEEDS_TEXT : "Font size (type a size and press Enter, or step it with ↑ and ↓)"}
       disabled={props.value === null}
       value={props.value}
       parse={parseFontSize}
@@ -760,14 +788,21 @@ function LinkButton(props: {
   const [slide, setSlide] = useState("");
   const [invalid, setInvalid] = useState(false);
 
-  const toggle = () => {
-    if (!open) {
-      setAddress(props.value && !slideNow ? props.value : "");
-      setSlide(slideNow ?? "");
-      setInvalid(false);
-    }
-    setOpen(!open);
+  /** Opens the popover on the link as it is now. */
+  const show = () => {
+    setAddress(props.value && !slideNow ? props.value : "");
+    setSlide(slideNow ?? "");
+    setInvalid(false);
+    setOpen(true);
   };
+  const toggle = () => {
+    if (open) setOpen(false);
+    else show();
+  };
+  // ⌘K opens it, from the slide or the app.
+  useEditPanelAsk("link", () => {
+    if (!props.disabled) show();
+  });
   const finish = (href: string | null) => {
     props.onChange(href);
     setOpen(false);
@@ -787,10 +822,12 @@ function LinkButton(props: {
       <ToolButton
         keepFocus
         label="Link"
+        shortcut="mod+k"
         title={props.value ? `Link: ${props.value}` : "Add a link"}
         active={!!props.value}
         aria-expanded={open}
         disabled={props.disabled}
+        disabledReason={NEEDS_ELEMENT}
         onClick={toggle}
       >
         <Link />
@@ -865,13 +902,13 @@ function SpacingButton(props: {
   letterSpacing: number;
   disabled: boolean;
   onChange: (changes: EditStyle) => void;
+  onDone: () => void;
 }) {
   const { open, ref, toggle } = useDropdown({ disabled: props.disabled });
   const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
     (a, b) => a - b,
   );
   const spacings = [...new Set<number>([...LETTER_SPACINGS, props.letterSpacing])].sort((a, b) => a - b);
-  const select = "h-6 rounded border bg-transparent px-1";
   return (
     <div ref={ref} className="relative">
       <ToolButton
@@ -880,6 +917,7 @@ function SpacingButton(props: {
         title="Line height and letter spacing"
         aria-expanded={open}
         disabled={props.disabled}
+        disabledReason={NEEDS_TEXT}
         onClick={toggle}
       >
         <Space />
@@ -893,11 +931,12 @@ function SpacingButton(props: {
           <label htmlFor="edit-line-height" className="text-muted-foreground">
             Line height
           </label>
-          <select
+          <RibbonSelect
             id="edit-line-height"
             value={props.lineHeight === null ? "" : String(props.lineHeight)}
-            onChange={(event) => props.onChange({ lineHeight: event.target.value ? Number(event.target.value) : null })}
-            className={select}
+            onPick={(height) => props.onChange({ lineHeight: height ? Number(height) : null })}
+            onDone={props.onDone}
+            className="border"
           >
             <option value="">Default</option>
             {heights.map((h) => (
@@ -905,22 +944,23 @@ function SpacingButton(props: {
                 {h}
               </option>
             ))}
-          </select>
+          </RibbonSelect>
           <label htmlFor="edit-letter-spacing" className="text-muted-foreground">
             Letter spacing
           </label>
-          <select
+          <RibbonSelect
             id="edit-letter-spacing"
             value={String(props.letterSpacing)}
-            onChange={(event) => props.onChange({ letterSpacing: Number(event.target.value) })}
-            className={select}
+            onPick={(spacing) => props.onChange({ letterSpacing: Number(spacing) })}
+            onDone={props.onDone}
+            className="border"
           >
             {spacings.map((v) => (
               <option key={v} value={v}>
                 {v === 0 ? "Normal" : `${v}px`}
               </option>
             ))}
-          </select>
+          </RibbonSelect>
         </DropdownPanel>
       )}
     </div>

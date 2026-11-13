@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { answerUnsaved } from "../test/unsaved";
 import { CodePanel, CodeView } from "./CodeView";
 
 /** deck.html as the fake backend currently has it. */
@@ -284,6 +285,60 @@ describe("CodeView: editing and saving", () => {
     expect(view.state.doc.toString()).toBe(edited);
   });
 
+  it("saves the edits when what leaves the deck is told to save them first", async () => {
+    const { view } = await renderView();
+    await type(view, "<h1>Hello", "!");
+    const edited = view.state.doc.toString();
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "save_deck_source") {
+        disk = edited;
+        return deckFor(edited, "saved");
+      }
+    });
+    let closing!: Promise<boolean>;
+    act(() => {
+      closing = useApp.getState().closeDeck();
+    });
+    await act(async () => void (await answerUnsaved("save")));
+    expect(await closing).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("save_deck_source", {
+      id: "/decks/talk/deck.html",
+      source: edited,
+      base: DECK_HTML,
+    });
+    expect(useApp.getState().deck).toBeNull();
+  });
+
+  it("keeps the deck open when saving first runs into a change on disk", async () => {
+    const { view } = await renderView();
+    await type(view, "<h1>Hello", "!");
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "save_deck_source") throw "deck.html changed on disk";
+    });
+    let closing!: Promise<boolean>;
+    act(() => {
+      closing = useApp.getState().closeDeck();
+    });
+    await act(async () => void (await answerUnsaved("save")));
+    expect(await closing).toBe(false);
+    expect(useApp.getState().deck).not.toBeNull();
+    expect(useApp.getState().codeDirty).toBe(true);
+    // The editor says why, in the tab that now shows.
+    expect(useApp.getState().sidebarTab).toBe("code");
+    expect(screen.getByText(/changed on disk while you were editing/)).toBeTruthy();
+  });
+
+  it("saves nothing for the store once it is gone", async () => {
+    const { view, unmount } = await renderView();
+    await type(view, "<h1>Hello", "!");
+    unmount();
+    useApp.setState({ codeDirty: true });
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith("save_deck_source", expect.anything());
+  });
+
   // jsdom is not a Mac, so Mod is Ctrl here.
   it("saves with Mod-S", async () => {
     const { view } = await renderView();
@@ -322,6 +377,14 @@ describe("CodeView: editing and saving", () => {
     const { view } = await renderView();
     await type(view, "<h1>Hello", " there");
     await act(async () => fireEvent.click(button("Revert")));
+    // It asks first: the edits are not on disk, so there is no getting them back.
+    const dialog = screen.getByRole("dialog", { name: "Discard unsaved changes" });
+    expect(dialog).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved changes" })).toBeNull();
+    expect(useApp.getState().codeDirty).toBe(true);
+    await act(async () => fireEvent.click(button("Revert")));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Discard changes" })));
     expect(view.state.doc.toString()).toBe(DECK_HTML);
     expect(useApp.getState().codeDirty).toBe(false);
   });

@@ -24,6 +24,7 @@ export const appWindow = {
   setTitle: vi.fn(async (_title: string) => {}),
   setFullscreen: vi.fn(async (_fullscreen: boolean) => {}),
   isFullscreen: vi.fn(async () => false),
+  requestUserAttention: vi.fn(async (_type: number | null) => {}),
   onCloseRequested: vi.fn(async (handler: CloseHandler) => {
     closeHandlers.add(handler);
     return () => void closeHandlers.delete(handler);
@@ -50,6 +51,7 @@ export const open: Mock = vi.fn();
 
 /** `@tauri-apps/plugin-opener` */
 export const revealItemInDir: Mock = vi.fn(async () => {});
+export const openUrl: Mock = vi.fn(async () => {});
 
 export const tauriMocks = [
   invoke,
@@ -59,7 +61,9 @@ export const tauriMocks = [
   save,
   open,
   revealItemInDir,
+  openUrl,
   getCurrentWindow,
+  appWindow.requestUserAttention,
   appWindow.setTitle,
   appWindow.setFullscreen,
   appWindow.isFullscreen,

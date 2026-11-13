@@ -404,19 +404,37 @@ pub fn add_template_slide(
     })
 }
 
-/// Inserts `markup`, a slide copied from deck `from` (this one or another), after `after`.
-/// Its assets come along into this deck's `assets/` (see [`crate::assets::bring_assets`]).
-pub fn paste_slide(
+/// Inserts `slides`, the markup of slides copied from deck `from` (this one or another), after
+/// `after`, one after the other, all in one write. Their assets come along into this deck's
+/// `assets/` (see [`crate::assets::bring_assets`]).
+pub fn paste_slides(
     file: &Path,
     after: Option<String>,
     from: Option<&Path>,
-    markup: &str,
-) -> Result<(Deck, String)> {
-    let markup = match from {
-        Some(from) => bring_assets(markup, from, file)?,
-        None => markup.to_string(),
-    };
-    edit_with(file, |s| html::paste_slide(s, after.as_deref(), &markup))
+    slides: &[String],
+) -> Result<RailEdit> {
+    if slides.is_empty() {
+        return Err(Error::msg("The clipboard holds no slide."));
+    }
+    let slides = slides
+        .iter()
+        .map(|markup| match from {
+            Some(from) => bring_assets(markup, from, file),
+            None => Ok(markup.clone()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    rail_edit(file, |s| {
+        let mut out = s.to_string();
+        let mut after = after;
+        let mut created = Vec::with_capacity(slides.len());
+        for markup in &slides {
+            let (next, id) = html::paste_slide(&out, after.as_deref(), markup)?;
+            out = next;
+            after = Some(id.clone());
+            created.push(id);
+        }
+        Ok((out, created))
+    })
 }
 
 /// Puts a copy of each of `slides` right after it, all in one write.
@@ -711,6 +729,26 @@ pub fn replace_text(
 ) -> Result<ReplacedText> {
     let previous = read_html(file)?;
     let replaced = find::replace(&previous, query, replacement, options, only);
+    write_replaced(file, previous, replaced)
+}
+
+/// Replaces one match of `query` with `replacement`: the `nth` on slide `slide` (see
+/// [`find::replace_nth`]). The file is only written when something changed.
+pub fn replace_match(
+    file: &Path,
+    query: &str,
+    replacement: &str,
+    options: find::Options,
+    slide: &str,
+    nth: usize,
+) -> Result<ReplacedText> {
+    let previous = read_html(file)?;
+    let replaced = find::replace_nth(&previous, query, replacement, options, slide, nth);
+    write_replaced(file, previous, replaced)
+}
+
+/// Writes what a replace made of the deck (`previous` before it), if it changed anything.
+fn write_replaced(file: &Path, previous: String, replaced: find::Replaced) -> Result<ReplacedText> {
     if replaced.count > 0 {
         write_html(file, &replaced.html)?;
     }
@@ -818,10 +856,12 @@ mod tests {
         fs::create_dir_all(folder(&from).join("assets")).unwrap();
         fs::write(folder(&from).join("assets/Photo.PNG"), b"photo").unwrap();
         let markup = r#"<section class="slide" id="a"><img src="assets/Photo.PNG"></section>"#;
-        let (deck, id) = paste_slide(&to, Some("a".into()), Some(&from), markup).unwrap();
-        assert_eq!(id, "a-2");
+        let pasted = paste_slides(&to, Some("a".into()), Some(&from), &[markup.into()]).unwrap();
+        assert_eq!(pasted.created, ["a-2"]);
         assert_eq!(
-            deck.slides
+            pasted
+                .deck
+                .slides
                 .iter()
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
@@ -830,7 +870,34 @@ mod tests {
         let html = read_html(&to).unwrap();
         assert!(html.contains(r#"<section class="slide" id="a-2"><img src="assets/photo.png">"#));
         assert!(folder(&to).join("assets/photo.png").is_file());
-        assert!(paste_slide(&to, None, None, "<p>x</p>").is_err());
+        assert!(paste_slides(&to, None, None, &["<p>x</p>".into()]).is_err());
+        assert!(paste_slides(&to, None, None, &[]).is_err());
+    }
+
+    #[test]
+    fn pastes_several_slides_one_after_the_other_in_one_write() {
+        let deck = TempDeck::new(THREE);
+        let copied = [
+            r#"<section class="slide" id="x">X</section>"#.to_string(),
+            r#"<section class="slide" id="a">A again</section>"#.to_string(),
+        ];
+        let pasted = paste_slides(&deck.file(), Some("a".into()), None, &copied).unwrap();
+        assert_eq!(pasted.created, ["x", "a-2"]);
+        assert_eq!(slide_ids(&pasted.deck), ["a", "x", "a-2", "b", "c"]);
+        // One change to take back: the source before it is the deck as it was.
+        assert_eq!(pasted.previous, THREE);
+        // Without a slide to go after, they go to the end, still in their order.
+        let ended = paste_slides(&deck.file(), None, None, &copied).unwrap();
+        assert_eq!(ended.created, ["x-2", "a-3"]);
+        assert_eq!(
+            slide_ids(&ended.deck),
+            ["a", "x", "a-2", "b", "c", "x-2", "a-3"]
+        );
+        // A clip that is no slide pastes none of them.
+        let before = deck.html();
+        let broken = [copied[0].clone(), "<p>x</p>".to_string()];
+        assert!(paste_slides(&deck.file(), None, None, &broken).is_err());
+        assert_eq!(deck.html(), before);
     }
 
     /// A throwaway deck folder holding `html` as deck.html.
@@ -946,6 +1013,17 @@ mod tests {
         // Nothing found: the file is left alone.
         let none = replace_text(&deck.file(), "zzz", "x", options, None).unwrap();
         assert_eq!(none.count, 0);
+
+        // One match: only that one, written the same way.
+        let one = replace_match(&deck.file(), "alpha", "Beta", options, "a", 0).unwrap();
+        assert_eq!(
+            (one.count, one.previous.as_str()),
+            (1, done.source.as_str())
+        );
+        assert!(deck.html().contains(">Beta</section>"));
+        let past = replace_match(&deck.file(), "beta", "x", options, "a", 1).unwrap();
+        assert_eq!((past.count, deck.html()), (0, one.source.clone()));
+        save_source(&deck.file(), &one.previous, Some(&one.source), false).unwrap();
 
         // Undo: the previous source saved back over this one.
         save_source(&deck.file(), &done.previous, Some(&done.source), false).unwrap();

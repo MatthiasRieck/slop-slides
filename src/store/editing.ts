@@ -1,11 +1,15 @@
 import { api, type Deck } from "../lib/api";
 import {
+  type AgentInsert,
+  combineElements,
   DEFAULT_EDIT_STYLES,
   type EditElement,
   type EditStyle,
   type EditTool,
   type ToolFamily,
 } from "../lib/editTools";
+import { withRecentColor } from "../lib/palette";
+import { loadFlag, saveFlag } from "../lib/storage";
 import { captureSlide } from "./capture";
 import { promptAgent } from "./composer";
 import { editsSaved, queueEdit } from "./editQueue";
@@ -48,7 +52,28 @@ export interface EditingSlice {
    * a version, so the stage keeps it running instead of loading the slide again.
    */
   editSaved: Record<string, string>;
+  /** Dragging and resizing snap to the guides; remembered between slides and launches. */
+  editSnap: boolean;
+  /** The colors picked last in the edit toolbar's color wells, the latest first. */
+  recentColors: string[];
+  /**
+   * The look copied from an element (⌥⌘C), as the slide editor reported it, to paste onto others
+   * on any slide. The editor reads it back, so the app only keeps it.
+   */
+  copiedStyle: unknown;
+  /**
+   * A popover of the edit toolbar to open, asked for from outside it (⌘K, the context menu), with
+   * a counter so the same one can be asked for again.
+   */
+  editPanelAsk: { panel: EditPanel; rev: number } | null;
 
+  /** Turns snapping to the guides on or off. */
+  setEditSnap: (on: boolean) => void;
+  /** Counts `color` as picked last in a color well. */
+  noteColor: (color: string) => void;
+  setCopiedStyle: (style: unknown) => void;
+  /** Asks the edit toolbar to open one of its popovers. */
+  askForEditPanel: (panel: EditPanel) => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
   /** Switches the deck to a mode, leaving the one it is in. */
@@ -75,9 +100,30 @@ export interface EditingSlice {
   tidyLayout: (overflow?: string[]) => Promise<void>;
   /** Readies the composer for a question about `element`, with a screenshot of the slide showing it selected. */
   askAboutElement: (element: EditElement) => Promise<void>;
+  /** Like `askAboutElement`, about all of `elements` together. */
+  askAboutElements: (elements: EditElement[]) => Promise<void>;
+  /**
+   * Starts a request to the agent for something the edit tools do not draw (a table, a chart, an
+   * icon): the composer gets the start of the request, with a screenshot of the slide, for the
+   * user to finish and send.
+   */
+  askForInsert: (kind: AgentInsert) => Promise<void>;
   /** Like `tidyLayout`, but has the agent give only `element` a place in the layout. */
   tidyElement: (element: EditElement) => Promise<void>;
 }
+
+/** The popovers of the edit toolbar that can be asked for from outside it. */
+export type EditPanel = "link" | "background";
+
+/** Where `editSnap` is remembered. */
+const SNAP_KEY = "slopslides.editSnap";
+
+/** How each request to the agent from the Insert section starts; the user says the rest. */
+export const INSERT_PROMPTS: Record<AgentInsert, string> = {
+  table: "Add a table to this slide: ",
+  chart: "Add a chart to this slide: ",
+  icon: "Add an icon to this slide: ",
+};
 
 /** No edit session's edits. */
 export const NO_EDIT_STATE = { editBase: null, editedSlides: [], editSaved: {} as Record<string, string> };
@@ -131,6 +177,25 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   editBase: null,
   editedSlides: [],
   editSaved: {},
+  editSnap: loadFlag(SNAP_KEY, true),
+  recentColors: [],
+  copiedStyle: null,
+  editPanelAsk: null,
+
+  setEditSnap: (editSnap) => {
+    set({ editSnap });
+    try {
+      saveFlag(SNAP_KEY, editSnap);
+    } catch {
+      // Only the remembered choice is lost.
+    }
+  },
+
+  noteColor: (color) => set((s) => ({ recentColors: withRecentColor(s.recentColors, color) })),
+
+  setCopiedStyle: (copiedStyle) => set({ copiedStyle }),
+
+  askForEditPanel: (panel) => set((s) => ({ editPanelAsk: { panel, rev: (s.editPanelAsk?.rev ?? 0) + 1 } })),
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
@@ -217,6 +282,20 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   },
 
   askAboutElement: (element) => promptAboutElement(app, "", element),
+
+  askAboutElements: async (elements) => {
+    const element = combineElements(elements);
+    if (element) await promptAboutElement(app, "", element);
+  },
+
+  askForInsert: async (kind) => {
+    const { deck } = get();
+    if (!deck || selectedSlide(get())?.locked) return;
+    await editsSaved();
+    const screenshot = await captureSlide(deck.id);
+    if (get().deck?.id !== deck.id) return;
+    promptAgent(app, INSERT_PROMPTS[kind], { screenshot });
+  },
 
   tidyElement: async (element) => {
     await promptAboutElement(app, TIDY_ELEMENT_PROMPT, element, { leaveEditing: true });

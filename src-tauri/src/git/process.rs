@@ -82,6 +82,14 @@ pub(super) fn head_commit(dir: &Path) -> Option<Commit> {
     })
 }
 
+/// The branch checked out in the repository around `dir`, which it has before its first commit
+/// too; None while a commit is checked out instead (a detached HEAD).
+pub(super) fn current_branch(dir: &Path) -> Option<String> {
+    let out = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    let name = String::from_utf8_lossy(&out).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 /// The files around `dir`, relative to it, that differ from the last commit.
 pub(super) fn changed_files(dir: &Path) -> Vec<String> {
     let args = ["diff", "--name-only", "-z", "--relative", "HEAD", "--", "."];

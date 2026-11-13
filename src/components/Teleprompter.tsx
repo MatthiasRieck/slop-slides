@@ -20,7 +20,8 @@ const pieceClass = (piece: Piece) => (piece.said ? "text-foreground/40" : "");
 /**
  * Turns the teleprompter on and off: the microphone is on only while it is following, and the
  * first use offers to download the speech model, which then runs locally. Lasts as long as the
- * component using it, so the microphone goes off with it.
+ * component using it (the show, see `useShowSession`, not the presenter view that displays it),
+ * so the microphone goes off with the show.
  */
 export function useTeleprompter() {
   const model = useSpeechModel<"following">("voice-follow-failed", () => void api.cancelRecording());

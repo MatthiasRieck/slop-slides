@@ -1,23 +1,40 @@
-import { Check, GitCompare, ListFilter, Minus, Plus, RefreshCw, RotateCcw, Undo2 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  GitBranch,
+  GitCompare,
+  ListFilter,
+  Loader2,
+  Minus,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  SlidersHorizontal,
+  Trash2,
+  Undo2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useChanges, visibleRows } from "../changesStore";
+import { type CompareView, useChanges, visibleRows } from "../changesStore";
 import { useContentSize } from "../hooks/useContentSize";
-import type { Change, Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
+import type { Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
 import { MAX_FEATHER, normalAngle } from "../lib/compare";
 import { formatKeys, keepsKey } from "../lib/keys";
 import { scrollBehavior } from "../lib/motion";
 import { pixelsOf } from "../lib/slideSize";
-import { cn, headSlideUrl } from "../lib/utils";
+import { cn, headSlideUrl, plural } from "../lib/utils";
 import { useApp } from "../store";
-import { ToolButton } from "./Button";
+import { Button, ToolButton } from "./Button";
 import {
   actionsOf,
+  branchLabel,
+  canDiscardAll,
   caption,
   changeCounts,
   comparable,
   contentMarkOf,
   describeRow,
+  isClean,
   MARKS,
   type Mark,
   type MarkActions,
@@ -25,7 +42,10 @@ import {
   STYLES,
   slideNumbers,
   stageTitle,
+  stylesActions,
 } from "./changes/changeRows";
+import { Dialog } from "./Dialog";
+import { Popover } from "./Popover";
 import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -48,6 +68,30 @@ function CountBadge(props: { mark: Mark; title: string; count?: number }) {
   );
 }
 
+/** Where the next commit goes: the branch checked out, or a warning that none is. */
+function Branch({ changes, className }: { changes: DeckChanges; className?: string }) {
+  const label = branchLabel(changes);
+  if (!label) return null;
+  return (
+    <span
+      data-testid="branch"
+      title={
+        changes.detached
+          ? "A commit is checked out, not a branch: a commit made now is on no branch"
+          : `On branch ${label}: commits go here`
+      }
+      className={cn(
+        "flex min-w-0 items-center gap-1",
+        changes.detached ? "font-medium text-warning" : "text-muted-foreground",
+        className,
+      )}
+    >
+      {changes.detached ? <AlertTriangle className="size-3 shrink-0" /> : <GitBranch className="size-3 shrink-0" />}
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 /** The left of Git mode: the slides, with the removed ones in between, marked by what changed. */
 export function ChangesRail() {
   const deck = useApp((s) => s.deck);
@@ -60,6 +104,7 @@ export function ChangesRail() {
   const counts = changeCounts(slides);
   const stylesChanged = !!changes?.stylesChanged;
   const canStage = !!changes && changes.tracking !== "noRepository";
+  const clean = !!changes && isClean(changes);
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
@@ -81,7 +126,24 @@ export function ChangesRail() {
           <ListFilter className="size-4" />
         </ToolButton>
       </div>
-      {changes && changes.tracking !== "noRepository" && <CommitBox deck={deck.id} changes={changes} />}
+      {!changes && (
+        <p role="status" className="flex items-center gap-1.5 px-3 pb-3 text-xs text-muted-foreground">
+          <Loader2 className="size-3 animate-spin" />
+          Reading changes…
+        </p>
+      )}
+      {changes && clean && (
+        <div data-testid="no-changes" className="flex shrink-0 flex-col gap-1 border-b px-3 pb-3 text-xs">
+          <p className="flex items-center gap-1.5 font-medium">
+            <Check className="size-3.5 shrink-0 text-success" />
+            <span>
+              No changes since <code>{changes.commit?.hash}</code>
+            </span>
+          </p>
+          <Branch changes={changes} />
+        </div>
+      )}
+      {changes && !clean && changes.tracking !== "noRepository" && <CommitBox deck={deck} changes={changes} />}
       <ol className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-4 pt-1.5">
         {changes && stylesChanged && <StylesRow deck={deck.id} changes={changes} canStage={canStage} />}
         {rows.map((row) => (
@@ -104,22 +166,37 @@ export function ChangesRail() {
   );
 }
 
-/** The message of the next commit, the button that makes it, and staging everything at once. */
-function CommitBox({ deck, changes }: { deck: string; changes: DeckChanges }) {
+/**
+ * The message of the next commit and the button that makes it, on which branch, and everything
+ * at once: staging, unstaging and discarding. With nothing staged the button commits all there
+ * is; while it cannot commit, its tooltip says what it waits for.
+ */
+function CommitBox({ deck, changes }: { deck: Deck; changes: DeckChanges }) {
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const { stagedFiles, stagedElsewhere, hasUnstaged } = changes;
-  const ready = stagedFiles > 0 && message.trim() !== "" && !committing;
+  // Nothing picked for the commit: it takes everything there is.
+  const all = stagedFiles === 0 && hasUnstaged;
+  const waitsFor =
+    stagedFiles === 0 && !hasUnstaged
+      ? "Nothing to commit"
+      : message.trim() === ""
+        ? "Write a message to commit"
+        : null;
+  const locked = lockedChange(deck, changes);
 
   const commit = async () => {
-    if (!ready) return;
+    if (waitsFor || committing) return;
     setCommitting(true);
-    if (await useChanges.getState().commit(deck, message)) setMessage("");
+    const { commit, commitAll } = useChanges.getState();
+    if (await (all ? commitAll : commit)(deck.id, message)) setMessage("");
     setCommitting(false);
   };
 
   return (
     <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 pb-3">
+      <Branch changes={changes} className="text-2xs" />
       <textarea
         aria-label="Commit message"
         placeholder="Commit message"
@@ -131,41 +208,110 @@ function CommitBox({ deck, changes }: { deck: string; changes: DeckChanges }) {
         }}
         className="w-full resize-none rounded border border-input bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
       />
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          disabled={!ready}
-          title={
-            stagedFiles === 0 ? "Stage something to commit it" : `Commit what is staged (${formatKeys("mod+enter")})`
-          }
-          onClick={() => void commit()}
-          className="min-w-0 flex-1 truncate rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-40"
-        >
-          Commit{stagedFiles > 0 ? ` ${stagedFiles} ${stagedFiles === 1 ? "file" : "files"}` : ""}
-        </button>
-        <ToolButton
-          variant="panel"
+      <Button
+        variant="primary"
+        busy={committing}
+        disabled={waitsFor !== null}
+        title={
+          waitsFor ??
+          `${all ? "Stage everything in this deck and commit it" : "Commit what is staged"} (${formatKeys("mod+enter")})`
+        }
+        onClick={() => void commit()}
+        className="justify-center"
+      >
+        <span className="truncate">
+          {all ? "Commit all" : `Commit${stagedFiles > 0 ? ` ${plural(stagedFiles, "file")}` : ""}`}
+        </span>
+      </Button>
+      <div className="flex flex-wrap items-center gap-1">
+        <Button
+          size="sm"
           title="Stage everything in this deck"
           disabled={!hasUnstaged}
-          onClick={() => void useChanges.getState().stageAll(deck)}
+          onClick={() => void useChanges.getState().stageAll(deck.id)}
         >
-          <Plus className="size-3.5" />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
+          Stage all
+        </Button>
+        <Button
+          size="sm"
           title="Unstage everything in this deck's folder"
           disabled={stagedFiles === stagedElsewhere}
-          onClick={() => void useChanges.getState().unstageAll(deck)}
+          onClick={() => void useChanges.getState().unstageAll(deck.id)}
         >
-          <Minus className="size-3.5" />
-        </ToolButton>
+          Unstage all
+        </Button>
+        {canDiscardAll(changes) && (
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={locked !== null}
+            title={
+              locked !== null
+                ? `Slide ${locked} is locked; unlock it to discard its changes`
+                : "Put the whole deck back as it was committed"
+            }
+            onClick={() => setDiscarding(true)}
+          >
+            Discard all…
+          </Button>
+        )}
       </div>
       {stagedElsewhere > 0 && (
         <p className="text-2xs leading-snug text-muted-foreground">
           Also commits {stagedElsewhere} staged {stagedElsewhere === 1 ? "file" : "files"} outside this deck's folder.
         </p>
       )}
+      {discarding && (
+        <DiscardAllDialog
+          changes={changes}
+          onClose={() => setDiscarding(false)}
+          onDiscard={() => {
+            setDiscarding(false);
+            void useChanges.getState().restoreAll(deck.id);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** The number of the first slide that changed and is locked, which keeps it from being discarded; null without one. */
+function lockedChange(deck: Deck, changes: DeckChanges): number | null {
+  const changed = new Set(changes.slides.filter((row) => row.status !== "unchanged" || row.moved).map((row) => row.id));
+  const at = deck.slides.findIndex((slide) => slide.locked && changed.has(slide.id));
+  return at < 0 ? null : at + 1;
+}
+
+/** Asks before every change since the last commit goes. */
+function DiscardAllDialog(props: { changes: DeckChanges; onClose: () => void; onDiscard: () => void }) {
+  const { commit } = props.changes;
+  return (
+    <Dialog
+      label="Discard all changes"
+      onClose={props.onClose}
+      className="flex w-[26rem] max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
+      heading={<h2 className="text-base font-semibold">Discard all changes to this deck?</h2>}
+    >
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        Every slide and the shared styles go back to how they were at the last commit
+        {commit ? (
+          <>
+            {" "}
+            (<code>{commit.hash}</code> {commit.subject})
+          </>
+        ) : null}
+        : new slides are taken out, removed ones come back, and what is staged of the deck is unstaged.{" "}
+        {formatKeys("mod+z")} brings the changes back.
+      </p>
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="xl" data-autofocus onClick={props.onClose}>
+          Cancel
+        </Button>
+        <Button variant="destructive" size="xl" onClick={props.onDiscard}>
+          Discard all changes
+        </Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -175,6 +321,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
   const slide = deck.slides.find((s) => s.id === row.id);
   const marks = marksOf(row);
   const content = contentMarkOf(row);
+  const actions = content && canStage ? actionsOf(row, content) : null;
   const itemRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (picked) itemRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
@@ -185,7 +332,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
       <span className="w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground">
         {number ?? "–"}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="relative">
           <button
             type="button"
@@ -217,18 +364,13 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
               />
             ) : null}
           </button>
-          {content && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <MarkRow
-                mark={content}
-                deck={deck.id}
-                actions={canStage ? actionsOf(row, content) : null}
-                locked={!!slide?.locked}
-              />
-            </div>
-          )}
+          {/* In a corner, so the picture of the slide stays in view. */}
+          {content && <MarkBadge mark={content} className="pointer-events-none absolute right-1 top-1" />}
           {content && row.staged && <StagedMark />}
         </div>
+        {content && actions && (
+          <MarkActionsRow mark={content} deck={deck.id} actions={actions} locked={!!slide?.locked} />
+        )}
         {row.moved && (
           <MoveRow row={row} number={number} deck={deck.id} actions={canStage ? actionsOf(row, MARKS.moved) : null} />
         )}
@@ -245,7 +387,7 @@ function MoveRow(props: { row: SlideChange; number?: number; deck: string; actio
   return (
     <div
       data-testid="move-row"
-      className="flex items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
+      className="flex flex-wrap items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
     >
       <span className="flex min-w-0 items-center gap-1" title={title}>
         {row.moveStaged && (
@@ -257,9 +399,10 @@ function MoveRow(props: { row: SlideChange; number?: number; deck: string; actio
             <Check className="size-2.5" />
           </span>
         )}
+        <MarkBadge mark={MARKS.moved} small />
         <span className="truncate tabular-nums">{from}</span>
       </span>
-      <MarkRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} small />
+      {actions && <MarkActionsRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} />}
     </div>
   );
 }
@@ -279,93 +422,89 @@ function StagedMark() {
 
 /** The row above the slides for what they share, once that changed: a styles mark with its buttons. */
 function StylesRow({ deck, changes, canStage }: { deck: string; changes: DeckChanges; canStage: boolean }) {
-  const actions = canStage
-    ? { change: { kind: "styles" } as const, noun: "the shared styles", staged: changes.stylesStaged }
-    : null;
   return (
     <li data-testid="styles-row" className="flex gap-2">
       <span className="w-4 shrink-0" />
-      <div className="relative flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-        <span className="truncate">Shared styles</span>
-        <MarkRow mark={STYLES} deck={deck} actions={actions} locked={false} />
-        {changes.stylesStaged && <StagedMark />}
+      <div className="relative flex min-w-0 flex-1 flex-wrap items-center justify-between gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-1.5">
+          {changes.stylesStaged && (
+            <span
+              data-testid="staged-mark"
+              title="Staged"
+              className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+            >
+              <Check className="size-2.5" />
+            </span>
+          )}
+          <MarkBadge mark={STYLES} small />
+          <span className="truncate">Shared styles</span>
+        </span>
+        {canStage && (
+          <MarkActionsRow mark={STYLES} deck={deck} actions={stylesActions(changes.stylesStaged)} locked={false} />
+        )}
       </div>
     </li>
   );
 }
 
-/** A status icon, with staging on its left and restoring on its right. */
-function MarkRow(props: {
-  mark: Mark;
-  deck: string;
-  actions: MarkActions | null;
-  locked: boolean;
-  /** Fits a row of text instead of a slide's picture. */
-  small?: boolean;
-}) {
-  const { mark, deck, actions, locked, small } = props;
+/** The round icon of a kind of change. */
+function MarkBadge({ mark, small, className }: { mark: Mark; small?: boolean; className?: string }) {
   const { label, icon: Icon, color } = mark;
-  const { stage, unstage, restore } = useChanges.getState();
   return (
-    <fieldset aria-label={label} className={cn("flex shrink-0 items-center", small ? "gap-1" : "gap-1.5")}>
-      {actions && (
-        <MarkButton
-          small={small}
-          label={actions.staged ? "Unstage" : "Stage"}
-          title={stageTitle(actions)}
-          onClick={() => void (actions.staged ? unstage : stage)(deck, actions.change)}
-        >
-          {actions.staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
-        </MarkButton>
+    <span
+      data-testid="change-mark"
+      title={label}
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full shadow-md",
+        small ? "size-4" : "size-6",
+        color,
+        className,
       )}
-      <span
-        data-testid="change-mark"
-        title={label}
-        className={cn("flex items-center justify-center rounded-full shadow-md", small ? "size-5" : "size-7", color)}
-      >
-        <Icon className={small ? "size-3" : "size-4"} />
-      </span>
-      {actions && (
-        <MarkButton
-          small={small}
-          label="Restore"
-          title={
-            locked
-              ? "This slide is locked; unlock it to restore it"
-              : `Put ${actions.noun} back as committed, or staged (${formatKeys("mod+z")} undoes it)`
-          }
-          disabled={locked}
-          onClick={() => void restore(deck, actions.change)}
-        >
-          <Undo2 className="size-3.5" />
-        </MarkButton>
-      )}
-    </fieldset>
+    >
+      <Icon className={small ? "size-2.5" : "size-3.5"} />
+    </span>
   );
 }
 
-function MarkButton(props: {
-  label: string;
-  title: string;
-  disabled?: boolean;
-  small?: boolean;
-  onClick: () => void;
-  children: ReactNode;
+/**
+ * What can be done with a change, as buttons that say it: stage it (or take it out of the next
+ * commit again), and put it back as committed, named by what that does to it (see
+ * `restoreActionOf`) and red where work goes with it.
+ */
+function MarkActionsRow(props: {
+  mark: Mark;
+  deck: string;
+  actions: MarkActions;
+  locked: boolean;
+  /** What the buttons are for, when the mark's name does not say it. */
+  label?: string;
 }) {
+  const { mark, deck, actions, locked } = props;
+  const { stage, unstage, restore } = useChanges.getState();
+  const undo = actions.restore;
   return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.title}
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={cn(
-        "pointer-events-auto flex items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40 hover:opacity-90 disabled:pointer-events-none disabled:opacity-40",
-        props.small ? "size-5" : "size-6",
-      )}
-    >
-      {props.children}
-    </button>
+    <fieldset aria-label={props.label ?? mark.label} className="flex min-w-0 flex-wrap items-center gap-1">
+      <Button
+        size="xs"
+        title={stageTitle(actions)}
+        onClick={() => void (actions.staged ? unstage : stage)(deck, actions.change)}
+        className="bg-background"
+      >
+        {actions.staged ? <Minus className="size-3" /> : <Plus className="size-3" />}
+        {actions.staged ? "Unstage" : "Stage"}
+      </Button>
+      <Button
+        size="xs"
+        variant={undo.destructive ? "destructive" : "outline"}
+        title={locked ? "This slide is locked; unlock it first" : `${undo.title} (${formatKeys("mod+z")} undoes it)`}
+        disabled={locked}
+        onClick={() => void restore(deck, actions.change)}
+        className="bg-background"
+      >
+        {undo.destructive ? <Trash2 className="size-3" /> : <Undo2 className="size-3" />}
+        {undo.label}
+      </Button>
+    </fieldset>
   );
 }
 
@@ -431,12 +570,35 @@ export function ChangesView() {
 
 function Changes({ deck }: { deck: Deck }) {
   const changes = useChanges((s) => (s.deck === deck.id ? s.changes : null));
+  const error = useChanges((s) => (s.deck === deck.id ? s.error : null));
   const row = useChanges((s) => s.changes?.slides.find((r) => r.key === s.picked));
   useRefreshChanges(deck.id);
   useChangesKeyboard();
 
+  if (error) {
+    return (
+      <Message title="Could not read the changes" role="alert">
+        <span className="selectable whitespace-pre-wrap break-words">{error}</span>
+        <Button className="mx-auto mt-3" onClick={() => void useChanges.getState().refresh(deck.id)}>
+          <RefreshCw />
+          Retry
+        </Button>
+      </Message>
+    );
+  }
+  if (!changes) {
+    return (
+      <div
+        role="status"
+        className="flex h-full items-center justify-center gap-2 bg-canvas text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" />
+        Reading changes…
+      </div>
+    );
+  }
   // Without a repository the mode is about to close; see ModeTabs.tsx.
-  if (!changes || changes.tracking === "noRepository") return <div className="h-full bg-canvas" />;
+  if (changes.tracking === "noRepository") return <div className="h-full bg-canvas" />;
   return (
     <div className="flex h-full flex-col">
       <ComparisonBar changes={changes} deck={deck.id} enabled={!!row && comparable(row, changes)} />
@@ -449,23 +611,33 @@ function Changes({ deck }: { deck: Deck }) {
   );
 }
 
-function Message({ title, children }: { title: string; children: React.ReactNode }) {
+function Message({ title, role, children }: { title: string; role?: "alert"; children: React.ReactNode }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 bg-canvas p-6 text-center">
+    <div role={role} className="flex h-full flex-col items-center justify-center gap-2 bg-canvas p-6 text-center">
       <GitCompare className="size-6 text-muted-foreground" />
       <p className="text-sm font-medium">{title}</p>
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">{children}</p>
+      <div className="max-w-sm text-xs leading-relaxed text-muted-foreground">{children}</div>
     </div>
   );
 }
 
-/** What is compared with, and the divider's angle and feather. */
+const VIEWS: { id: CompareView; label: string; title: string }[] = [
+  { id: "split", label: "Split", title: "Both versions, split by a divider you can drag" },
+  { id: "before", label: "Before", title: "The slide as it was committed" },
+  { id: "after", label: "After", title: "The slide as it is now" },
+];
+
+/**
+ * What is compared with and on which branch, how the two versions show (split, or one of them),
+ * and the divider's settings behind a button of their own.
+ */
 function ComparisonBar({ changes, deck, enabled }: { changes: DeckChanges; deck: string; enabled: boolean }) {
-  const divider = useChanges((s) => s.divider);
-  const { setDivider, resetDivider } = useChanges.getState();
+  const view = useChanges((s) => s.view);
+  const loading = useChanges((s) => s.loading);
   const { commit } = changes;
   return (
     <div className="relative z-20 flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b bg-background px-3 py-1 text-xs text-muted-foreground">
+      <Branch changes={changes} className="max-w-40 shrink-0" />
       <span className="min-w-24 flex-1 truncate" title={commit ? `${commit.hash} ${commit.subject}` : undefined}>
         {commit ? (
           <>
@@ -475,36 +647,84 @@ function ComparisonBar({ changes, deck, enabled }: { changes: DeckChanges; deck:
           "Not committed yet"
         )}
       </span>
-      <ValueSlider
-        label="Angle"
-        unit="°"
-        min={-180}
-        max={180}
-        value={divider.angle}
-        disabled={!enabled}
-        onChange={(angle) => setDivider({ angle: normalAngle(angle) })}
-      />
-      <ValueSlider
-        label="Feather"
-        unit="px"
-        min={0}
-        max={MAX_FEATHER}
-        value={divider.feather}
-        disabled={!enabled}
-        onChange={(feather) => setDivider({ feather })}
-      />
-      <ToolButton
-        variant="panel"
-        title="Put the divider back in the middle, without a feather"
-        disabled={!enabled}
-        onClick={resetDivider}
-      >
-        <RotateCcw className="size-3.5" />
-      </ToolButton>
-      <ToolButton variant="plain" title="Compare again" onClick={() => void useChanges.getState().refresh(deck)}>
-        <RefreshCw className="size-3.5" />
+      <fieldset aria-label="Show" className="flex shrink-0 overflow-hidden rounded-md border">
+        {VIEWS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            aria-pressed={view === option.id}
+            disabled={!enabled}
+            title={enabled ? option.title : "This slide has one version to show"}
+            onClick={() => useChanges.getState().setView(option.id)}
+            className="px-2 py-1 font-medium enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-40 aria-pressed:enabled:bg-accent aria-pressed:enabled:text-foreground"
+          >
+            {option.label}
+          </button>
+        ))}
+      </fieldset>
+      <DividerSettings enabled={enabled && view === "split"} />
+      <ToolButton variant="plain" label="Refresh" onClick={() => void useChanges.getState().refresh(deck)}>
+        <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
       </ToolButton>
     </div>
+  );
+}
+
+/** The divider's angle and feather, and putting it back, in a panel behind one button. */
+function DividerSettings({ enabled }: { enabled: boolean }) {
+  const divider = useChanges((s) => s.divider);
+  const { setDivider, resetDivider } = useChanges.getState();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  if (!enabled && open) setOpen(false);
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        aria-expanded={open}
+        disabled={!enabled}
+        title={enabled ? "The divider's angle and feather" : "The divider shows in the split view"}
+        onClick={() => setOpen(!open)}
+        className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-40 aria-expanded:bg-accent aria-expanded:text-foreground"
+      >
+        <SlidersHorizontal className="size-3.5" />
+        Divider
+      </button>
+      {open && (
+        <Popover anchor={anchor} onClose={close} width={280} align="end" label="Divider" className="p-3">
+          <div className="flex flex-col gap-3 text-xs text-muted-foreground">
+            <ValueSlider
+              label="Angle"
+              unit="°"
+              min={-180}
+              max={180}
+              value={divider.angle}
+              disabled={!enabled}
+              onChange={(angle) => setDivider({ angle: normalAngle(angle) })}
+            />
+            <ValueSlider
+              label="Feather"
+              unit="px"
+              min={0}
+              max={MAX_FEATHER}
+              value={divider.feather}
+              disabled={!enabled}
+              onChange={(feather) => setDivider({ feather })}
+            />
+            <Button
+              className="self-start"
+              title="Put the divider back in the middle, without a feather"
+              onClick={resetDivider}
+            >
+              <RotateCcw />
+              Reset divider
+            </Button>
+          </div>
+        </Popover>
+      )}
+    </>
   );
 }
 
@@ -524,6 +744,7 @@ function ValueSlider(props: {
   const clamped = (n: number) => Math.min(max, Math.max(min, Math.round(n)));
   return (
     <div className="flex items-center gap-1.5">
+      <span className={cn("w-12 shrink-0", disabled && "opacity-40")}>{label}</span>
       <input
         type="range"
         aria-label={label}
@@ -533,9 +754,8 @@ function ValueSlider(props: {
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="h-1 w-20 accent-primary disabled:opacity-40"
+        className="h-1 min-w-0 flex-1 accent-primary disabled:opacity-40"
       />
-      <span className={cn(disabled && "opacity-40")}>{label}</span>
       <input
         type="number"
         aria-label={`${label} in ${unit === "°" ? "degrees" : "pixels"}`}
@@ -551,7 +771,7 @@ function ValueSlider(props: {
         onBlur={() => setDraft(null)}
         className="h-6 w-14 rounded border border-input bg-background px-1 text-right tabular-nums text-foreground outline-none focus:ring-1 focus:ring-primary disabled:opacity-40"
       />
-      <span className={cn(disabled && "opacity-40")}>{unit}</span>
+      <span className={cn("w-4 shrink-0", disabled && "opacity-40")}>{unit}</span>
     </div>
   );
 }
@@ -560,12 +780,14 @@ function ValueSlider(props: {
 function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; row: SlideChange }) {
   const area = useRef<HTMLDivElement>(null);
   const room = useContentSize(area);
+  const view = useChanges((s) => s.view);
   const canvas = pixelsOf({ size: deck.size });
   const oldCanvas = pixelsOf({ size: changes.oldSize });
   const scale = room ? Math.max(0, Math.min(room.width / canvas.width, room.height / canvas.height)) : 0;
   const box = { width: canvas.width * scale, height: canvas.height * scale };
   const commit = changes.commit?.hash;
   const slide = deck.slides.find((s) => s.id === row.id);
+  const compared = comparable(row, changes);
 
   const before =
     row.oldId && commit ? (
@@ -580,6 +802,8 @@ function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; r
       />
     ) : null;
   const after = slide ? <LiveSlide deck={deck} slide={slide} /> : null;
+  // One version of a slide that has two, when asked for; else whichever there is.
+  const single = compared && view === "before" ? before : compared && view === "after" ? after : (after ?? before);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-canvas">
@@ -587,16 +811,21 @@ function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; r
       <div className="min-h-0 flex-1 p-6">
         <div ref={area} className="flex size-full items-center justify-center">
           {scale > 0 &&
-            (comparable(row, changes) ? (
+            (compared && view === "split" ? (
               <SlideComparison box={box} scale={scale} before={before} after={after} />
             ) : (
-              <div className="flex items-center overflow-hidden bg-stage" style={box}>
-                {after ?? before}
+              <div data-testid="single-version" className="flex items-center overflow-hidden bg-stage" style={box}>
+                {single}
               </div>
             ))}
         </div>
       </div>
       <p className="flex min-h-10 shrink-0 items-center justify-center px-3 text-center text-xs text-muted-foreground">
+        {compared && view !== "split" && (
+          <span className="mr-1.5 font-medium text-foreground">
+            {view === "before" ? `Before (${commit}).` : "After (now)."}
+          </span>
+        )}
         {caption(row, changes)}
       </p>
     </div>
@@ -607,67 +836,16 @@ function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; r
 function ChangeActions({ deck, changes }: { deck: Deck; changes: DeckChanges }) {
   if (changes.tracking !== "committed" || !changes.stylesChanged) return null;
   return (
-    <div className="flex min-h-10 shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pt-2">
-      <ActionGroup
-        label="Shared styles"
-        noun="the shared styles"
+    <div className="flex min-h-10 shrink-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
+      <span>Shared styles</span>
+      <MarkActionsRow
+        mark={STYLES}
         deck={deck.id}
-        change={{ kind: "styles" }}
-        staged={changes.stylesStaged}
+        actions={stylesActions(changes.stylesStaged)}
         locked={false}
+        label="Shared styles"
       />
     </div>
-  );
-}
-
-function ActionGroup(props: {
-  label: string;
-  /** What the buttons' tooltips call the change. */
-  noun: string;
-  deck: string;
-  change: Change;
-  staged: boolean;
-  locked: boolean;
-}) {
-  const { label, noun, deck, change, staged, locked } = props;
-  const { stage, unstage, restore } = useChanges.getState();
-  return (
-    <fieldset aria-label={label} className="flex items-center gap-1 text-xs text-muted-foreground">
-      <span className="mr-1">{label}</span>
-      <ActionButton
-        title={stageTitle({ staged, noun })}
-        onClick={() => void (staged ? unstage(deck, change) : stage(deck, change))}
-      >
-        {staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
-        {staged ? "Unstage" : "Stage"}
-      </ActionButton>
-      <ActionButton
-        title={
-          locked
-            ? "This slide is locked; unlock it to restore it"
-            : `Put ${noun} back as committed (${formatKeys("mod+z")} undoes it)`
-        }
-        disabled={locked}
-        onClick={() => void restore(deck, change)}
-      >
-        <Undo2 className="size-3.5" />
-        Restore
-      </ActionButton>
-    </fieldset>
-  );
-}
-
-function ActionButton(props: { title: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      title={props.title}
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className="flex items-center gap-1 rounded-md border bg-background px-2 py-1 font-medium text-foreground hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
-    >
-      {props.children}
-    </button>
   );
 }
 

@@ -1,12 +1,29 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, Shield } from "lucide-react";
+import { Check, ChevronDown, Shield, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
+import { formatKeys } from "../lib/keys";
 import { PROVIDERS } from "../lib/models";
-import { type ApprovalDecision, PERMISSION_MODES, type PermissionMode } from "../lib/permissions";
+import {
+  type ApprovalDecision,
+  PERMISSION_MODES,
+  type PermissionMode,
+  rememberedModes,
+  rememberModes,
+} from "../lib/permissions";
+import { cn } from "../lib/utils";
 import { type ChatPart, useApp } from "../store";
+import { Button } from "./Button";
 import { Popover } from "./Popover";
 
+/** Marks the chat's message input, which an approval may take the keyboard focus from while it is empty. */
+export const COMPOSER_INPUT_ATTR = "data-composer-input";
+
+/**
+ * The selected agent's permission mode, in the composer's footer. Full access stands out, by its
+ * color and its name, as the one mode in which nothing is asked. The modes a provider offers are
+ * shown as last known and asked for again in the background.
+ */
 export function PermissionPicker() {
   const provider = useApp((s) => s.selection.provider);
   const deckId = useApp((s) => s.workspace?.path);
@@ -21,15 +38,18 @@ export function PermissionPicker() {
     // Asked when opened: Codex answers by starting its app-server.
     if (!open || !deckId) return;
     let active = true;
-    setModes([]);
+    const known = rememberedModes(provider, deckId);
+    setModes(known ?? []);
     setError(null);
     void api
       .permissionModes(provider, deckId)
       .then((next) => {
+        rememberModes(provider, deckId, next);
         if (active) setModes(next);
       })
       .catch((e) => {
-        if (active) setError(errorMessage(e));
+        // What was known stays on show; only a first look that fails has nothing else to say.
+        if (active && !known) setError(errorMessage(e));
       });
     return () => {
       active = false;
@@ -57,6 +77,7 @@ export function PermissionPicker() {
     useApp.getState().setPermissionMode(next);
     setOpen(false);
   };
+  const full = mode === "fullAccess";
   return (
     <div ref={root} className="min-w-0 shrink-0">
       <button
@@ -65,10 +86,15 @@ export function PermissionPicker() {
         title={`${name} permissions: ${PERMISSION_MODES[mode].label}`}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+        className={cn(
+          "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs hover:bg-accent disabled:opacity-40",
+          full ? "font-medium text-warning" : "text-muted-foreground hover:text-foreground",
+        )}
       >
-        <Shield className="size-3.5 shrink-0" />
-        <span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span>
+        {full ? <ShieldAlert className="size-3.5 shrink-0" /> : <Shield className="size-3.5 shrink-0" />}
+        <span className={cn("whitespace-nowrap", !full && "hidden @[26rem]:inline")}>
+          {PERMISSION_MODES[mode].label}
+        </span>
         <ChevronDown className="hidden size-3 @[17rem]:block" />
       </button>
       {open && (
@@ -87,10 +113,15 @@ export function PermissionPicker() {
                   type="button"
                   aria-pressed={mode === m}
                   onClick={() => void choose(m)}
-                  className="block w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent"
+                  className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent"
                 >
-                  <span className="font-medium">{PERMISSION_MODES[m].label}</span>
-                  <span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className={cn("font-medium", m === "fullAccess" && "text-warning")}>
+                      {PERMISSION_MODES[m].label}
+                    </span>
+                    <span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
+                  </span>
+                  {mode === m && <Check aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" />}
                 </button>
               ))
             )}
@@ -109,13 +140,31 @@ export function PermissionPicker() {
   );
 }
 
+/** Whether the keyboard focus is on nothing the user is in the middle of: nowhere, or in the empty message input. */
+function focusIsIdle(): boolean {
+  const el = document.activeElement;
+  if (!el || el === document.body) return true;
+  return el instanceof HTMLTextAreaElement && el.hasAttribute(COMPOSER_INPUT_ATTR) && el.value === "";
+}
+
+/**
+ * The agent asking to be allowed something, in the transcript. While it waits it stands out and
+ * is read out, and its accepting button takes the keyboard focus if that is on nothing else; only
+ * a key pressed on the card itself answers it. Stop, which ends the whole turn, sits apart.
+ */
 export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approval" }> }) {
   const deckId = useApp((s) => s.chatKey);
   const running = useApp((s) => s.running);
   const [submitted, setSubmitted] = useState<ApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [onPrimary, setOnPrimary] = useState(false);
   const sending = useRef(false);
+  const primaryRef = useRef<HTMLButtonElement>(null);
   const active = part.status === "pending" && running && !submitted;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only as the request appears
+  useEffect(() => {
+    if (active && focusIsIdle()) primaryRef.current?.focus({ preventScroll: true });
+  }, []);
   const respond = async (decision: ApprovalDecision) => {
     if (!deckId || !active || sending.current) return;
     sending.current = true;
@@ -135,10 +184,20 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
     acceptForSession: "Allow for session",
     decline: "Deny",
   };
+  const { decisions } = part.approval;
+  const primary = decisions.includes("accept") ? "accept" : decisions.find((d) => d !== "decline");
   return (
-    <section className="rounded-lg border p-3 text-xs" aria-label="Approval request">
-      <p className="flex items-center gap-1.5 font-medium">
-        <Shield className="size-3.5" />
+    <section
+      className={cn("rounded-lg border p-3 text-xs", active && "border-warning/60 bg-warning/5")}
+      aria-label="Approval request"
+    >
+      {/* Read out at once as it appears: the turn waits for the answer. */}
+      <p
+        role={active ? "status" : undefined}
+        aria-live={active ? "assertive" : undefined}
+        className="flex items-center gap-1.5 font-medium"
+      >
+        {active ? <ShieldAlert className="size-3.5 text-warning" /> : <Shield className="size-3.5" />}
         {part.approval.title}
       </p>
       {part.approval.reason && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{part.approval.reason}</p>}
@@ -146,21 +205,32 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
         {part.approval.details}
       </pre>
       {active ? (
-        <div className="flex flex-wrap gap-2">
-          {part.approval.decisions.map((d) => (
-            <button
+        <div className="flex flex-wrap items-center gap-2">
+          {decisions.map((d) => (
+            <Button
               key={d}
-              type="button"
+              ref={d === primary ? primaryRef : undefined}
+              variant={d === primary ? "primary" : d === "decline" ? "ghost" : "outline"}
+              size="xl"
+              onFocus={d === primary ? () => setOnPrimary(true) : undefined}
+              onBlur={d === primary ? () => setOnPrimary(false) : undefined}
               onClick={() => void respond(d)}
-              className="rounded-md border px-2.5 py-1.5 hover:bg-accent"
+              className={cn(d === "decline" && "text-muted-foreground")}
             >
               {labels[d]}
-            </button>
+            </Button>
           ))}
+          {onPrimary && primary && (
+            <span className="text-2xs text-muted-foreground">
+              {formatKeys("enter")} to {labels[primary].toLowerCase()}
+            </span>
+          )}
+          <span className="flex-1" />
           <button
             type="button"
+            title="Stop the agent's turn"
             onClick={() => useApp.getState().interrupt()}
-            className="rounded-md border px-2.5 py-1.5 hover:bg-accent"
+            className="rounded px-1 py-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           >
             Stop
           </button>

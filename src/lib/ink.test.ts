@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import {
+  canRedoInk,
+  canUndoInk,
+  INK_COLORS,
+  INK_HISTORY,
   INK_STYLE,
+  type InkHistory,
   inkBounds,
+  inkChanged,
+  inkColorName,
   isDot,
   LASER_GLOW,
   LASER_SIZE,
   paintTrails,
   pruneTrails,
+  redoInk,
   SLIDE_SIZE,
   type Stroke,
   strokePath,
@@ -18,6 +26,7 @@ import {
   toPixels,
   trailFade,
   trailSegments,
+  undoInk,
   visibleArea,
   zoomBox,
 } from "./ink";
@@ -303,5 +312,108 @@ describe("visibleArea", () => {
   it("is empty for a layer off screen", () => {
     expect(visibleArea({ left: 900, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
     expect(visibleArea({ left: -500, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
+  });
+});
+
+describe("ink colors", () => {
+  it("are called by their names, not their values", () => {
+    expect(INK_COLORS.map(inkColorName)).toEqual(["Red", "Yellow", "Green", "Blue", "White"]);
+    expect(inkColorName("#123456")).toBe("#123456");
+  });
+});
+
+describe("ink history", () => {
+  const stroke = (x: number): Stroke => ({ tool: "pen", color: "#000", points: [[x, x]] });
+  const [a, b, c] = [stroke(1), stroke(2), stroke(3)];
+
+  /** Applies `changes` to no ink, one after the other, keeping the history. */
+  function inkAfter(...changes: Stroke[][]) {
+    let strokes: Stroke[] = [];
+    let history: InkHistory | undefined;
+    for (const next of changes) {
+      history = inkChanged(history, strokes, next);
+      strokes = next;
+    }
+    return { strokes, history };
+  }
+
+  it("undoes a stroke drawn, and redoes it", () => {
+    const drawn = inkAfter([a], [a, b]);
+    expect(canUndoInk(drawn.history, drawn.strokes)).toBe(true);
+    expect(canRedoInk(drawn.history, drawn.strokes)).toBe(false);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    expect(back.strokes).toEqual([a]);
+    expect(canRedoInk(back.history, back.strokes)).toBe(true);
+    expect(redoInk(back.history, back.strokes)!.strokes).toEqual([a, b]);
+  });
+
+  it("brings back what clear removed", () => {
+    const cleared = inkAfter([a], [a, b], []);
+    expect(canUndoInk(cleared.history, cleared.strokes)).toBe(true);
+    const back = undoInk(cleared.history, cleared.strokes)!;
+    expect(back.strokes).toEqual([a, b]);
+    expect(redoInk(back.history, back.strokes)!.strokes).toEqual([]);
+  });
+
+  it("brings back a stroke the eraser took, where it was", () => {
+    const erased = inkAfter([a], [a, b], [a, b, c], [a, c]);
+    expect(undoInk(erased.history, erased.strokes)!.strokes).toEqual([a, b, c]);
+  });
+
+  it("goes back all the way, one change at a time, and forward again", () => {
+    let { strokes, history } = inkAfter([a], [a, b], []);
+    const seen: number[] = [];
+    for (let back = undoInk(history, strokes); back; back = undoInk(history, strokes)) {
+      ({ strokes, history } = back);
+      seen.push(strokes.length);
+    }
+    expect(seen).toEqual([2, 1, 0]);
+    expect(canUndoInk(history, strokes)).toBe(false);
+    for (let again = redoInk(history, strokes); again; again = redoInk(history, strokes)) {
+      ({ strokes, history } = again);
+      seen.push(strokes.length);
+    }
+    expect(seen).toEqual([2, 1, 0, 1, 2, 0]);
+  });
+
+  it("forgets what was undone once something else is drawn", () => {
+    const drawn = inkAfter([a], [a, b]);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    const next = [a, c];
+    const history = inkChanged(back.history, back.strokes, next);
+    expect(canRedoInk(history, next)).toBe(false);
+    expect(redoInk(history, next)).toBeNull();
+    expect(undoInk(history, next)!.strokes).toEqual([a]);
+  });
+
+  it("drops the last stroke of ink that has no history, as redoing puts back", () => {
+    const strokes = [a, b];
+    expect(canUndoInk(undefined, strokes)).toBe(true);
+    const back = undoInk(undefined, strokes)!;
+    expect(back.strokes).toEqual([a]);
+    expect(redoInk(back.history, back.strokes)!.strokes).toBe(strokes);
+    expect(undoInk(undefined, [])).toBeNull();
+    expect(canUndoInk(undefined, [])).toBe(false);
+  });
+
+  it("does not apply to ink that changed some other way", () => {
+    const drawn = inkAfter([a], [a, b]);
+    // The same strokes in another array: sent off and drawn again, say.
+    const other = [a, b];
+    expect(canRedoInk(drawn.history, other)).toBe(false);
+    expect(undoInk(drawn.history, other)!.strokes).toEqual([a]);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    expect(redoInk(back.history, [a])).toBeNull();
+  });
+
+  it("keeps a limited number of changes", () => {
+    let strokes: Stroke[] = [];
+    let history: InkHistory | undefined;
+    for (let i = 0; i < INK_HISTORY + 20; i++) {
+      const next = [...strokes, stroke(i)];
+      history = inkChanged(history, strokes, next);
+      strokes = next;
+    }
+    expect(history!.past).toHaveLength(INK_HISTORY);
   });
 });

@@ -113,6 +113,84 @@ html[data-slop-player] .deck > .slide.active {
 html[data-slop-review] .slide > .slop-review {
   display: block;
 }
+/* B (or .) and W blank the screen to black or white; the slide stays as it is underneath. */
+html[data-slop-blank],
+html[data-slop-blank] body {
+  background: #000 !important;
+}
+html[data-slop-blank="white"],
+html[data-slop-blank="white"] body {
+  background: #fff !important;
+}
+html[data-slop-blank] .deck {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* In the app's show the cursor goes with the show's controls, once the pointer rests. */
+html[data-slop-idle],
+html[data-slop-idle] * {
+  cursor: none !important;
+}
+/* The control strip of a deck opened in a browser (the player adds it, never in the app's frames
+   or in a capture). Hidden, it takes no press and no focus; it is only as wide as its buttons,
+   so pressing the slide beside it still advances. */
+.slop-controls {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(17, 17, 17, 0.8);
+  color: #fff;
+  font: 500 13px/1 system-ui, sans-serif;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0s linear 0.2s;
+}
+html[data-slop-controls] .slop-controls {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.2s ease;
+}
+.slop-controls button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+}
+.slop-controls button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.slop-controls button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+.slop-controls svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.slop-controls-count {
+  min-width: 56px;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .slide img,
 .slide video,
 .slide canvas,
@@ -160,6 +238,10 @@ html[data-slop-static] *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  .slop-controls,
+  html[data-slop-controls] .slop-controls {
+    transition: none !important;
+  }
 }
 /* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
    shown, backgrounds and all, rather than in the browser's ink-saving colors. */
@@ -196,6 +278,12 @@ html[data-slop-static] *::after {
   .slide .reveal {
     opacity: 1 !important;
     animation: none !important;
+  }
+  .slop-controls {
+    display: none !important;
+  }
+  html[data-slop-blank] .deck {
+    opacity: 1 !important;
   }
 }
 
@@ -347,7 +435,13 @@ html:active-view-transition .deck > .slide {
   </main>
   <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
   <script>
-/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
+/* SlopSlide player. Keys, none of them with ⌘, Ctrl or Alt held:
+   →/↓, Space, PageDown, Enter: next slide; ←/↑, PageUp, Backspace, Shift+Space: previous slide;
+   Home/End: first/last slide; a number then Enter: that slide; B or . blanks the screen to
+   black, W to white (a navigation key or a click brings the slide back); R: review marks.
+   In a file of its own (not in the app's frames) also N/P for next/previous and F for full
+   screen, and a strip of controls shows while the pointer moves. In the app's show the keys
+   are forwarded to the app too, which has the controls (see "slop:go" below). */
 (function () {
   var root = document.documentElement;
   // The runtime-css block sets this before the body renders; without it the stylesheet lists
@@ -358,6 +452,9 @@ html:active-view-transition .deck > .slide {
   var framed = window.parent !== window;
   if (params.has("static")) root.setAttribute("data-slop-static", "");
   if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
+
+  // Rendered for a still or a capture (thumbnails, PDF, video, images): nothing to operate.
+  var still = params.has("static") || params.has("print");
 
   var deck = document.querySelector(".deck");
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
@@ -398,6 +495,8 @@ html:active-view-transition .deck > .slide {
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  // The control strip's "3 / 12", once the strip is there (see `controls`).
+  var count = null;
   // When the slide on screen showed, on the document's animation clock (see keepTime).
   var shownAt = null;
   var transition = null;
@@ -442,6 +541,7 @@ html:active-view-transition .deck > .slide {
         slides.forEach(function (el) { morphNames(el, false); });
       });
     } else update();
+    if (count) count.textContent = index + 1 + " / " + slides.length;
     if (embed) return;
     var id = slides[index].id || String(index + 1);
     try {
@@ -631,28 +731,93 @@ html:active-view-transition .deck > .slide {
   window.addEventListener("load", fitAll);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
 
-  function navigate(key) {
-    if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);
-    else if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp") show(current - 1);
-    else if (key === "Home") show(0);
-    else if (key === "End") show(slides.length - 1);
-    else if ((key === "f" || key === "F") && !framed) {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else root.requestFullscreen && root.requestFullscreen();
-    } else return false;
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else root.requestFullscreen && root.requestFullscreen();
+  }
+
+  // The screen blanked to black or white, the slide staying where it is underneath.
+  function blank(color) {
+    if (root.getAttribute("data-slop-blank") === color) root.removeAttribute("data-slop-blank");
+    else root.setAttribute("data-slop-blank", color);
+  }
+  /** Brings the slide back when the screen is blank; false when it was not. */
+  function unblank() {
+    if (!root.hasAttribute("data-slop-blank")) return false;
+    root.removeAttribute("data-slop-blank");
     return true;
+  }
+
+  // The digits typed so far of a slide number, which Enter jumps to; forgotten after a pause.
+  var typed = "";
+  var typedTimer = null;
+  var TYPED_MS = 3000;
+  function forget() {
+    typed = "";
+    clearTimeout(typedTimer);
+  }
+
+  /** Where a navigation key goes: a slide index, or null when `key` is none. */
+  function destination(key, shift) {
+    var lower = key.length === 1 ? key.toLowerCase() : key;
+    if (key === " ") return shift ? current - 1 : current + 1;
+    // A file of its own also takes N and P; in the app those letters are the presenter's.
+    if (!framed && lower === "n") return current + 1;
+    if (!framed && lower === "p") return current - 1;
+    if (shift) return null;
+    if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === "Enter") return current + 1;
+    if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp" || key === "Backspace") return current - 1;
+    if (key === "Home") return 0;
+    if (key === "End") return slides.length - 1;
+    return null;
+  }
+
+  /** Acts on a key pressed without ⌘, Ctrl or Alt; false when it is none of the player's. */
+  function navigate(key, shift) {
+    var lower = key.length === 1 ? key.toLowerCase() : key;
+    if (/^[0-9]$/.test(key)) {
+      typed = (typed + key).slice(-4);
+      clearTimeout(typedTimer);
+      typedTimer = setTimeout(forget, TYPED_MS);
+      return true;
+    }
+    var number = typed;
+    forget();
+    if (lower === "b" || key === ".") blank("black");
+    else if (lower === "w") blank("white");
+    else if (lower === "f" && !framed) toggleFullscreen();
+    else if (key === "Enter" && number && !shift) {
+      unblank();
+      show(parseInt(number, 10) - 1);
+    } else {
+      var to = destination(key, shift);
+      if (to === null) return false;
+      // On a blank screen the key only brings the slide back.
+      if (!unblank()) show(to);
+    }
+    return true;
+  }
+
+  /** Whether a key pressed on `el` is its own: typing in a field, or Enter and Space on a control. */
+  function keepsKey(el, key) {
+    if (!el || !el.closest) return false;
+    if (el.closest("input, textarea, select, [contenteditable]")) return true;
+    return (key === "Enter" || key === " ") && !!el.closest("a[href], button, summary, video, audio");
   }
 
   window.addEventListener("keydown", function (event) {
     if (framed) {
       var mod = event.metaKey || event.ctrlKey;
-      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey }, "*");
+      var message = { type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey };
+      if (event.altKey) message.alt = true;
+      window.parent.postMessage(message, "*");
     }
     if (embed) return;
-    var plain = !event.metaKey && !event.ctrlKey && !event.altKey;
-    if ((event.key === "r" || event.key === "R") && plain) {
+    // With a modifier the key is the browser's (find, back, reload) or the system's.
+    if (event.metaKey || event.ctrlKey || event.altKey || keepsKey(event.target, event.key)) return;
+    if (event.key === "r" || event.key === "R") {
       if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
-    } else if (navigate(event.key)) event.preventDefault();
+    } else if (navigate(event.key, event.shiftKey)) event.preventDefault();
   });
 
   // Narration playing in the app keeps the slide's timed animations with it (src/lib/slideClock.ts):
@@ -717,15 +882,37 @@ html:active-view-transition .deck > .slide {
   });
 
   if (embed) return;
-  // The presenter forwards keys pressed while its drawing tools have focus.
+  // The presenter forwards keys pressed while its drawing tools have focus: { type: "slop:go",
+  // key, shift }. Its controls come and go with the pointer, whose moves over the slide only this
+  // page sees: it says so ({ type: "slop:pointer" }, a few times a second at most), and hides the
+  // cursor while the presenter says the pointer rests ({ type: "slop:idle", idle }).
   window.addEventListener("message", function (event) {
-    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key));
+    var data = event.data;
+    if (!framed || !data) return;
+    if (data.type === "slop:go") navigate(String(data.key), !!data.shift);
+    if (data.type === "slop:idle") {
+      if (data.idle) root.setAttribute("data-slop-idle", "");
+      else root.removeAttribute("data-slop-idle");
+    }
   });
+  if (framed) {
+    var POINTER_MS = 250;
+    var pointerTold = 0;
+    document.addEventListener("mousemove", function () {
+      var now = Date.now();
+      // The first move after a rest is told at once, so the cursor is back at once.
+      if (now - pointerTold < POINTER_MS && !root.hasAttribute("data-slop-idle")) return;
+      pointerTold = now;
+      window.parent.postMessage({ type: "slop:pointer" }, "*");
+    });
+  }
   window.addEventListener("hashchange", function () {
     show(indexFor(decodeURIComponent(location.hash.slice(1))));
   });
   document.addEventListener("click", function (event) {
-    if (event.target.closest("a, button, input, select, textarea, video, [contenteditable]")) return;
+    if (event.target.closest("a, button, input, select, textarea, video, [contenteditable], .slop-controls")) return;
+    // On a blank screen the click only brings the slide back.
+    if (unblank()) return;
     show(event.clientX < window.innerWidth / 4 ? current - 1 : current + 1);
   });
   var touchX = null;
@@ -738,6 +925,81 @@ html:active-view-transition .deck > .slide {
     if (Math.abs(dx) > 40) show(current + (dx < 0 ? 1 : -1));
     touchX = null;
   });
+
+  // A file opened in a browser has nothing saying how to operate it: a small strip of controls
+  // (previous, "3 / 12", next, full screen) at the bottom shows while the pointer moves or after
+  // a touch and goes again after a pause. The app's frames have controls of their own, and a
+  // still or a capture is not operated at all. Hidden, the strip takes no press and no focus
+  // (runtime.css), and it is never as wide as the slide, so pressing the slide still advances.
+  if (framed || still) return;
+  var IDLE_MS = 2500;
+  var ICONS = {
+    previous: "M15 6l-6 6 6 6",
+    next: "M9 6l6 6-6 6",
+    fullscreen: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
+  };
+  function control(label, icon, run) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", icon);
+    svg.appendChild(path);
+    button.appendChild(svg);
+    // Pressed with the pointer it leaves the focus where it was, so the strip can go again.
+    button.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+    });
+    button.addEventListener("click", run);
+    return button;
+  }
+  var strip = document.createElement("div");
+  strip.className = "slop-controls";
+  strip.setAttribute("role", "toolbar");
+  strip.setAttribute("aria-label", "Slide controls");
+  strip.appendChild(
+    control("Previous slide (←)", ICONS.previous, function () {
+      if (!unblank()) show(current - 1);
+    }),
+  );
+  count = document.createElement("span");
+  count.className = "slop-controls-count";
+  count.textContent = current + 1 + " / " + slides.length;
+  strip.appendChild(count);
+  strip.appendChild(
+    control("Next slide (→)", ICONS.next, function () {
+      if (!unblank()) show(current + 1);
+    }),
+  );
+  if (root.requestFullscreen) strip.appendChild(control("Full screen (F)", ICONS.fullscreen, toggleFullscreen));
+  document.body.appendChild(strip);
+
+  var idle = null;
+  var over = false;
+  function hideControls() {
+    // It stays while the pointer is on it or the keyboard is in it.
+    if (over || strip.contains(document.activeElement)) return;
+    root.removeAttribute("data-slop-controls");
+  }
+  function showControls() {
+    root.setAttribute("data-slop-controls", "");
+    clearTimeout(idle);
+    idle = setTimeout(hideControls, IDLE_MS);
+  }
+  document.addEventListener("mousemove", showControls);
+  document.addEventListener("touchstart", showControls);
+  strip.addEventListener("mouseenter", function () {
+    over = true;
+  });
+  strip.addEventListener("mouseleave", function () {
+    over = false;
+    showControls();
+  });
+  strip.addEventListener("focusout", showControls);
 })();
   </script>
   <!-- /slopslide:runtime-js -->

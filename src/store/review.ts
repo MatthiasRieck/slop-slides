@@ -27,6 +27,8 @@ export interface ReviewSlice {
    * once changed, or when the user picks them in the composer.
    */
   commentsHeld: Record<string, string>;
+  /** The comment the list of comments asked the stage to open, once its slide is shown; null when none. */
+  commentAsked: { slide: string; id: string } | null;
 
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
@@ -46,6 +48,12 @@ export interface ReviewSlice {
   /** Leaves a comment out of the next messages, or takes it along again. */
   setCommentHeld: (comment: SlideComment, held: boolean) => void;
   holdComments: (comments: SlideComment[]) => void;
+  /** Goes to `slide` with the review on show and asks the stage to open comment `id` there. */
+  showComment: (slide: string, id: string) => void;
+  /** The stage opened the comment it was asked to, or found it gone. */
+  commentShown: () => void;
+  /** Has the next message take every comment of the deck along, those left out before too. */
+  takeAllComments: () => void;
 }
 
 const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
@@ -65,7 +73,7 @@ export function heldComment(state: Pick<AppState, "commentsHeld">, comment: Slid
   return state.commentsHeld[comment.id] === comment.text;
 }
 
-export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
+export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
   sketches: {},
   sketchesSent: {},
   reviewVisible: loadFlag(REVIEW_VISIBLE_KEY, true),
@@ -73,6 +81,7 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
   comments: {},
   commentScope: "slide",
   commentsHeld: {},
+  commentAsked: null,
 
   setSketches: (update) => {
     set((s) => ({ sketches: update(s.sketches) }));
@@ -140,6 +149,20 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
     set((s) => ({
       commentsHeld: { ...s.commentsHeld, ...Object.fromEntries(comments.map((c) => [c.id, c.text])) },
     })),
+
+  showComment: (slide, id) => {
+    const app = get();
+    if (!app.reviewVisible) app.setReviewVisible(true);
+    if (app.selected !== slide) app.select(slide);
+    set({ commentAsked: { slide, id } });
+  },
+
+  commentShown: () => set({ commentAsked: null }),
+
+  takeAllComments: () => {
+    if (!get().reviewVisible) get().setReviewVisible(true);
+    set({ commentScope: "deck", commentsHeld: {} });
+  },
 });
 
 const REVIEW_SAVE_DELAY = 400;

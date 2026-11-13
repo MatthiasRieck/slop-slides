@@ -1,5 +1,6 @@
-import type { Placement } from "../lib/screens";
+import type { Placement, ShowStart } from "../lib/screens";
 import { loadFlag, loadJson, loadText, saveFlag, saveJson, saveText } from "../lib/storage";
+import { type DeckMode, deckMode } from "./editing";
 import type { Slice } from "./types";
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
@@ -57,10 +58,14 @@ export interface UiSlice {
   presenting: boolean;
   /** Where the show goes: picked screens, or windows; null: full screen where it is. */
   screens: Placement | null;
+  /** Where the show starts: on the selected slide, or on the deck's first. */
+  presentFrom: ShowStart;
   /** What the app has to tell the user, oldest first; at most `MAX_TOASTS`. */
   toasts: Toast[];
   /** The shortcut help is open (see ../components/ShortcutHelp.tsx). */
   shortcutHelpOpen: boolean;
+  /** The mode the deck's settings opened from, which closing them goes back to. */
+  settingsReturn: Exclude<DeckMode, "settings">;
 
   setSidebarOpen: (open: boolean) => void;
   /** Shows the sidebar on `tab`, opening that tab (after the others) if it is closed. */
@@ -71,7 +76,7 @@ export interface UiSlice {
   setRailOpen: (open: boolean) => void;
   setFinalState: (finalState: boolean) => void;
   setTimelineOpen: (open: boolean) => void;
-  setPresenting: (presenting: boolean, screens?: Placement | null) => void;
+  setPresenting: (presenting: boolean, screens?: Placement | null, from?: ShowStart) => void;
   /**
    * Shows a toast, after the others, and gives its id. Said again, a message moves to the end
    * rather than showing twice. The helpers in ./errors.ts are what the app calls.
@@ -79,6 +84,10 @@ export interface UiSlice {
   showToast: (kind: ToastKind, text: string, action?: ToastAction) => number;
   dismissToast: (id: number) => void;
   setShortcutHelpOpen: (open: boolean) => void;
+  /** Shows the deck's settings in the place of the slide, remembering the mode to go back to. */
+  openDeckSettings: () => void;
+  /** Leaves the deck's settings for the mode they opened from. */
+  closeDeckSettings: () => void;
 }
 
 /** The sidebar's tabs as last left; anything saved that is not a tab is dropped. */
@@ -105,8 +114,10 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   timelineOpen: loadFlag(TIMELINE_OPEN_KEY, false),
   presenting: false,
   screens: null,
+  presentFrom: "current",
   toasts: [],
   shortcutHelpOpen: false,
+  settingsReturn: "view",
 
   setSidebarOpen: (sidebarOpen) => {
     // Opening it with every tab closed brings back the chat, rather than an empty panel.
@@ -156,7 +167,7 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
     set({ timelineOpen });
   },
 
-  setPresenting: (presenting, screens = null) => set({ presenting, screens }),
+  setPresenting: (presenting, screens = null, from = "current") => set({ presenting, screens, presentFrom: from }),
 
   showToast: (kind, text, action) => {
     const toast: Toast = { id: nextToastId++, kind, text, ...(action && { action }) };
@@ -169,4 +180,15 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
   setShortcutHelpOpen: (shortcutHelpOpen) => set({ shortcutHelpOpen }),
+
+  openDeckSettings: () => {
+    const from = deckMode(get());
+    if (from === "settings") return;
+    set({ settingsReturn: from });
+    get().setMode("settings");
+  },
+
+  closeDeckSettings: () => {
+    if (deckMode(get()) === "settings") get().setMode(get().settingsReturn);
+  },
 });

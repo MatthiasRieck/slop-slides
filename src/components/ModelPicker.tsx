@@ -13,6 +13,7 @@ import {
 } from "../lib/models";
 import { cn } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
+import { InstallHint } from "./chat/InstallHint";
 import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
 
@@ -30,7 +31,7 @@ export function ModelPicker() {
   const close = useMemo(() => () => setOpen(false), []);
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    <div ref={rootRef} className="relative min-w-0 shrink">
       <button
         type="button"
         aria-expanded={open}
@@ -40,7 +41,8 @@ export function ModelPicker() {
         className={cn(triggerClass, "max-w-full")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
-        <span className="hidden truncate font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
+        {/* The name always shows, cut short as room runs out; effort and permissions give way first. */}
+        <span className="truncate font-medium text-foreground/90">{selection.label}</span>
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
@@ -286,7 +288,9 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
       ) : (
         <>
           <p className="text-sm text-foreground">{cli} is not installed</p>
-          <p className="text-xs leading-relaxed text-muted-foreground">{install}</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            <InstallHint text={install} />
+          </p>
         </>
       )}
       <button

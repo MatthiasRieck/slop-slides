@@ -2,11 +2,15 @@ import { api } from "./api";
 
 export { formatDuration } from "./narration";
 
-/** A slide's narration audio, playing; `stop` ends it early. */
+/** A slide's narration audio, playing; `stop` ends it early, `pause` holds it where it is. */
 export interface Playback {
   /** Resolves when the audio has played to its end, or was stopped. */
   ended: Promise<void>;
   stop: () => void;
+  /** Holds it where it is, to `resume` from there. */
+  pause: () => void;
+  /** Plays on from where it was paused. */
+  resume: () => Promise<void>;
   /** Where it is in the audio, in seconds. */
   time: () => number;
 }
@@ -40,5 +44,11 @@ export async function playNarration(deck: string, slide: string, from: number | 
     stop();
     throw error;
   }
-  return { ended, stop, time: () => audio.currentTime };
+  return {
+    ended,
+    stop,
+    pause: () => audio.pause(),
+    resume: () => audio.play(),
+    time: () => audio.currentTime,
+  };
 }

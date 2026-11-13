@@ -17,17 +17,18 @@ import {
   ArrowUpRight,
   FlipHorizontal2,
   FlipVertical2,
+  Frame,
   Group,
   Layers,
   Link2,
   Link2Off,
   Lock,
   LockOpen,
-  Move,
-  Rotate3d,
+  Magnet,
   RotateCcw,
   RotateCcwSquare,
   RotateCwSquare,
+  Scaling,
   StretchHorizontal,
   StretchVertical,
   Ungroup,
@@ -38,6 +39,7 @@ import {
   type AlignTarget,
   type AlignTo,
   type ArrangeMessage,
+  type DistributeAxis,
   type EditGeometry,
   type EditLayer,
   type GeometryField,
@@ -45,12 +47,30 @@ import {
   quarterTurn,
   TILT_STEP,
 } from "../lib/arrange";
-import type { EditSelection, EditStyle } from "../lib/editTools";
+import type { EditSelection } from "../lib/editTools";
+import { formatKeys } from "../lib/keys";
 import { cn } from "../lib/utils";
+import { useApp } from "../store";
 import { keepFocus, ToolButton } from "./Button";
 import { DraftInput } from "./Field";
 import { DropdownPanel } from "./Popover";
+import { RibbonSelect } from "./Ribbon";
 import { SectionLabel } from "./SectionLabel";
+
+const DISTRIBUTE: { axis: DistributeAxis; label: string; title: string; icon: ReactNode }[] = [
+  {
+    axis: "h",
+    label: "Distribute horizontally",
+    title: "Even out the gaps side to side",
+    icon: <AlignHorizontalDistributeCenter />,
+  },
+  {
+    axis: "v",
+    label: "Distribute vertically",
+    title: "Even out the gaps top to bottom",
+    icon: <AlignVerticalDistributeCenter />,
+  },
+];
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -87,26 +107,91 @@ const TILTS: { side: string; x: number; y: number; icon: ReactNode }[] = [
   { side: "bottom right", x: -1, y: 1, icon: <ArrowDownRight /> },
 ];
 
+const NOTHING_SELECTED = "Select an element";
+
+/** What an align button says it does: with the slide, or with the other selected elements. */
+function alignLabel(edges: string, many: boolean, target: AlignTarget) {
+  if (!many) return `Align with the slide's ${edges}`;
+  return target === "slide" ? `Align ${edges} with the slide` : `Align ${edges}`;
+}
+
 /**
- * The selection's place on the slide: align it with the slide or with its own bounds, distribute
- * and match the size of several elements, flip and quarter-turn it, and exact position, size and
- * rotation. Several elements have bounds to move, but no size or rotation to type. The panel
- * stays open for one change after another, also through the preview's reload after each save,
- * which clears the selection until the editor restores it.
+ * Lines the selection up and spaces it out, at the ribbon's top level: one element aligns with
+ * the slide; several align with each other, or each with the slide while the toggle is on; three
+ * or more can be distributed.
  */
-export function ArrangeControls(props: {
+export function AlignControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
+  const [toSlide, setToSlide] = useState(false);
+  const count = props.geometry?.count ?? 0;
+  const off = count === 0;
+  const many = count > 1;
+  const target: AlignTarget = many && !toSlide ? "selection" : "slide";
+  return (
+    <>
+      {ALIGN.map((a) => (
+        <ToolButton
+          key={a.to}
+          keepFocus
+          label={alignLabel(a.label, many, target)}
+          disabled={off}
+          disabledReason={NOTHING_SELECTED}
+          onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to, target })}
+        >
+          {a.icon}
+        </ToolButton>
+      ))}
+      <ToolButton
+        keepFocus
+        label="Align with the slide"
+        title={
+          toSlide
+            ? "Several elements each line up with the slide's edges or center; press to line them up with each other"
+            : "Line several elements up with the slide's edges or center, not with each other"
+        }
+        active={many && toSlide}
+        disabled={!many}
+        disabledReason="Select two or more elements (one element always aligns with the slide)"
+        onClick={() => setToSlide(!toSlide)}
+      >
+        <Frame />
+      </ToolButton>
+      {DISTRIBUTE.map((d) => (
+        <ToolButton
+          key={d.axis}
+          keepFocus
+          label={d.label}
+          title={d.title}
+          disabled={count < 3}
+          disabledReason="Select three or more elements"
+          onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: d.axis })}
+        >
+          {d.icon}
+        </ToolButton>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The selection's exact place and size, in one popover: how the handles change its size, its
+ * position, size and rotation as numbers, matching the size of several elements, flips, quarter
+ * turns and the 3D rotation. Several elements have bounds to move, but no size or rotation to
+ * type. The panel stays open for one change after another, also through the preview's reload
+ * after each save, which clears the selection until the editor restores it.
+ */
+export function PositionControls(props: {
   geometry: EditGeometry | null;
   /** The selected element's look, for flipping it. */
   selection?: EditSelection | null;
   onArrange?: (message: ArrangeMessage) => void;
-  onStyle?: (changes: EditStyle) => void;
   onDone: () => void;
+  sizeMode: "resize" | "stretch";
+  onSizeMode: (mode: "resize" | "stretch") => void;
   /** Resizes keep the aspect ratio: by the handles, and a typed width or height brings the other along. */
   keepRatio?: boolean;
   onKeepRatio?: (on: boolean) => void;
 }) {
   const { open, ref, toggle } = useDropdown();
-  const [target, setTarget] = useState<AlignTarget>("selection");
   // What the panel shows while the selection is away, so it does not jump or close.
   const shown = useRef<EditGeometry | null>(null);
   if (props.geometry) shown.current = props.geometry;
@@ -130,140 +215,40 @@ export function ArrangeControls(props: {
     else props.onArrange?.(message);
   };
   const many = (geometry?.count ?? 0) > 1;
-  const alignTo: AlignTarget = many ? target : "slide";
   const selection = props.selection ?? null;
-  const flips = !off && !many && !!selection?.flippable;
+  // Each of several elements flips if it can; one says itself whether it does.
+  const flips = !off && (many || !!selection?.flippable || !!selection?.group);
+  const flipReason = off ? NOTHING_SELECTED : "Text and plain boxes have nothing to flip";
   const rotation = geometry?.rotation ?? null;
+  const tilt = (t: (typeof TILTS)[number]) => (
+    <ToolButton
+      keepFocus
+      key={t.side}
+      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
+      disabled={off}
+      disabledReason={NOTHING_SELECTED}
+      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
+    >
+      {t.icon}
+    </ToolButton>
+  );
 
   return (
     <div ref={ref} className="relative">
       <ToolButton
         keepFocus
-        label="Arrange"
-        title="Align, distribute, match size, flip, position and size"
+        label="Position and size"
+        title="Position, size and rotation as numbers, match size, flip, quarter turns and 3D rotation"
         aria-expanded={open}
         active={open}
         disabled={off && !open}
+        disabledReason={NOTHING_SELECTED}
         onClick={toggle}
       >
-        <Move />
+        <Scaling />
       </ToolButton>
       {open && geometry && (
-        <DropdownPanel role="dialog" aria-label="Arrange" className="flex w-max flex-col gap-2 text-xs">
-          <div className="flex items-center justify-between gap-2">
-            <SectionLabel>Align</SectionLabel>
-            <fieldset aria-label="Align to" className="flex rounded-md border p-0.5">
-              {(["slide", "selection"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  aria-pressed={alignTo === t}
-                  title={
-                    t === "slide"
-                      ? "Line each element up with the slide's edges or center"
-                      : "Line the elements up with each other (two or more)"
-                  }
-                  disabled={off || (t === "selection" && !many)}
-                  onMouseDown={keepFocus}
-                  onClick={() => setTarget(t)}
-                  className={cn(
-                    "rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
-                    alignTo === t && "bg-accent text-foreground",
-                  )}
-                >
-                  {t === "slide" ? "Slide" : "Selection"}
-                </button>
-              ))}
-            </fieldset>
-          </div>
-          <div className="flex items-center gap-0.5">
-            {ALIGN.map((a) => (
-              <ToolButton
-                key={a.to}
-                keepFocus
-                label={alignLabel(a.label, many, alignTo)}
-                disabled={off}
-                onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to, target: alignTo })}
-              >
-                {a.icon}
-              </ToolButton>
-            ))}
-            <div className="mx-1 h-4 w-px bg-border" />
-            <ToolButton
-              keepFocus
-              label="Distribute horizontally"
-              title="Even out the gaps side to side (three or more elements)"
-              disabled={off || geometry.count < 3}
-              onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "h" })}
-            >
-              <AlignHorizontalDistributeCenter />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Distribute vertically"
-              title="Even out the gaps top to bottom (three or more elements)"
-              disabled={off || geometry.count < 3}
-              onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "v" })}
-            >
-              <AlignVerticalDistributeCenter />
-            </ToolButton>
-          </div>
-          <div className="flex items-center gap-0.5">
-            <ToolButton
-              keepFocus
-              label="Match width"
-              title="Give the others the first selected element's width (two or more elements)"
-              disabled={off || !many}
-              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "w" })}
-            >
-              <StretchHorizontal />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Match height"
-              title="Give the others the first selected element's height (two or more elements)"
-              disabled={off || !many}
-              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "h" })}
-            >
-              <StretchVertical />
-            </ToolButton>
-            <div className="mx-1 h-4 w-px bg-border" />
-            <ToolButton
-              keepFocus
-              label="Flip horizontally"
-              title={flips ? "Flip horizontally" : "Flip horizontally (images, shapes and drawings; not text or lines)"}
-              active={flips && !!selection?.flipX}
-              disabled={!flips}
-              onClick={() => props.onStyle?.({ flipX: !selection?.flipX })}
-            >
-              <FlipHorizontal2 />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Flip vertically"
-              title={flips ? "Flip vertically" : "Flip vertically (images, shapes and drawings; not text or lines)"}
-              active={flips && !!selection?.flipY}
-              disabled={!flips}
-              onClick={() => props.onStyle?.({ flipY: !selection?.flipY })}
-            >
-              <FlipVertical2 />
-            </ToolButton>
-            <div className="mx-1 h-4 w-px bg-border" />
-            {([-1, 1] as const).map((step) => (
-              <ToolButton
-                key={step}
-                keepFocus
-                label={step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise"}
-                disabled={off || rotation === null}
-                onClick={() =>
-                  rotation !== null &&
-                  props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
-                }
-              >
-                {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
-              </ToolButton>
-            ))}
-          </div>
+        <DropdownPanel role="dialog" aria-label="Position and size" className="flex w-max flex-col gap-2 text-xs">
           <div className="flex items-center gap-1.5">
             {FIELDS.map((f) => (
               <Fragment key={f.field}>
@@ -292,58 +277,132 @@ export function ArrangeControls(props: {
               </Fragment>
             ))}
           </div>
-          {many && <p className="text-muted-foreground">{geometry.count} elements selected</p>}
+          {many && (
+            <p className="text-muted-foreground">
+              {geometry.count} elements selected: they move together; group them to size or turn them as one
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <label htmlFor="edit-size-mode" className="text-muted-foreground">
+              Handles
+            </label>
+            <RibbonSelect
+              id="edit-size-mode"
+              label="Size mode"
+              title="Resize changes the box; Stretch scales its contents too"
+              value={props.sizeMode}
+              onPick={(mode) => props.onSizeMode(mode as "resize" | "stretch")}
+              onDone={props.onDone}
+              className="border"
+            >
+              <option value="resize">Resize the box</option>
+              <option value="stretch">Stretch the contents</option>
+            </RibbonSelect>
+          </div>
+          <div className="flex items-center gap-0.5">
+            <ToolButton
+              keepFocus
+              label="Match width"
+              title="Give the others the first selected element's width"
+              disabled={off || !many}
+              disabledReason="Select two or more elements"
+              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "w" })}
+            >
+              <StretchHorizontal />
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Match height"
+              title="Give the others the first selected element's height"
+              disabled={off || !many}
+              disabledReason="Select two or more elements"
+              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "h" })}
+            >
+              <StretchVertical />
+            </ToolButton>
+            <div className="mx-1 h-4 w-px bg-border" />
+            <ToolButton
+              keepFocus
+              label="Flip horizontally"
+              shortcut="mod+shift+h"
+              active={flips && !many && !!selection?.flipX}
+              disabled={!flips}
+              disabledReason={flipReason}
+              onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "x" })}
+            >
+              <FlipHorizontal2 />
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Flip vertically"
+              shortcut="mod+shift+v"
+              active={flips && !many && !!selection?.flipY}
+              disabled={!flips}
+              disabledReason={flipReason}
+              onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "y" })}
+            >
+              <FlipVertical2 />
+            </ToolButton>
+            <div className="mx-1 h-4 w-px bg-border" />
+            {([-1, 1] as const).map((step) => (
+              <ToolButton
+                key={step}
+                keepFocus
+                label={step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise"}
+                disabled={off || rotation === null}
+                disabledReason={off ? NOTHING_SELECTED : "Select one element"}
+                onClick={() =>
+                  rotation !== null &&
+                  props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
+                }
+              >
+                {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
+              </ToolButton>
+            ))}
+          </div>
+          <div className="flex items-start gap-2">
+            <SectionLabel>3D rotate</SectionLabel>
+            <fieldset aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
+              {TILTS.slice(0, 4).map(tilt)}
+              <ToolButton
+                keepFocus
+                label="Reset the 3D rotation"
+                disabled={off}
+                disabledReason={NOTHING_SELECTED}
+                onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
+              >
+                <RotateCcw />
+              </ToolButton>
+              {TILTS.slice(4).map(tilt)}
+            </fieldset>
+          </div>
         </DropdownPanel>
       )}
     </div>
   );
-}
-
-/** What an align button says it does: with the slide, or with the other selected elements. */
-function alignLabel(edges: string, many: boolean, target: AlignTarget) {
-  if (!many) return `Align with the slide's ${edges}`;
-  return target === "slide" ? `Align ${edges} with the slide` : `Align ${edges}`;
 }
 
 /**
- * Turns the selection in 3D, a step at a time, with a reset in the middle. The panel stays open
- * to press again, and through the preview's reload after a save, which clears the selection
- * until the editor restores it.
+ * Whether dragging and resizing snap to the guides, remembered between slides and launches. The
+ * slide editor is told by the stage (see useSlideEditing).
  */
-export function TiltControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
-  const { open, ref, toggle } = useDropdown();
-  const off = !props.geometry;
-  const tilt = (t: (typeof TILTS)[number]) => (
+export function SnapToggle() {
+  const snap = useApp((s) => s.editSnap);
+  const held = formatKeys("mod");
+  return (
     <ToolButton
       keepFocus
-      key={t.side}
-      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
-      disabled={off}
-      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
+      label="Snap to guides"
+      title={
+        snap
+          ? `Snap to guides: moves and resizes snap to the slide and other elements (hold ${held} while dragging to move freely)`
+          : `Snap to guides is off (hold ${held} while dragging to snap)`
+      }
+      active={snap}
+      onClick={() => useApp.getState().setEditSnap(!snap)}
     >
-      {t.icon}
+      <Magnet />
     </ToolButton>
-  );
-  return (
-    <div ref={ref} className="relative">
-      <ToolButton keepFocus label="3D rotate" active={open} disabled={off && !open} onClick={toggle}>
-        <Rotate3d />
-      </ToolButton>
-      {open && (
-        <DropdownPanel role="dialog" aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5 p-1">
-          {TILTS.slice(0, 4).map(tilt)}
-          <ToolButton
-            keepFocus
-            label="Reset the 3D rotation"
-            disabled={off}
-            onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
-          >
-            <RotateCcw />
-          </ToolButton>
-          {TILTS.slice(4).map(tilt)}
-        </DropdownPanel>
-      )}
-    </div>
   );
 }
 
@@ -375,8 +434,8 @@ function GeometryInput(props: {
 }
 
 /**
- * Groups the selection (⌘G), takes a group apart (⇧⌘G), and locks or unlocks the selection so
- * it cannot be picked, moved or deleted by accident.
+ * Groups the selection, takes a group apart, and locks or unlocks the selection so it cannot be
+ * picked, moved or deleted by accident.
  */
 export function GroupControls(props: {
   geometry: EditGeometry | null;
@@ -391,8 +450,9 @@ export function GroupControls(props: {
         keepFocus
         label="Group"
         shortcut="mod+g"
-        title="Group the selected elements, to move, size and style them as one (two or more)"
+        title="Group the selected elements, to move, size and style them as one"
         disabled={count < 2}
+        disabledReason="Select two or more elements"
         onClick={() => props.onArrange?.({ type: "slop:edit-group" })}
       >
         <Group />
@@ -402,6 +462,7 @@ export function GroupControls(props: {
         label="Ungroup"
         shortcut="mod+shift+g"
         disabled={!props.selection?.group}
+        disabledReason="Select a group"
         onClick={() => props.onArrange?.({ type: "slop:edit-ungroup" })}
       >
         <Ungroup />
@@ -409,13 +470,15 @@ export function GroupControls(props: {
       <ToolButton
         keepFocus
         label={locked ? "Unlock" : "Lock"}
+        shortcut="mod+alt+l"
         title={
           locked
             ? "Unlock, so it can be picked and moved again"
-            : "Lock, so it cannot be picked, moved or deleted by accident (unlock it from the Layers panel)"
+            : "Lock, so it cannot be picked, moved or deleted by accident (right-click it or use Layers to unlock it)"
         }
         active={locked}
         disabled={!props.selection}
+        disabledReason={NOTHING_SELECTED}
         onClick={() => props.onArrange?.({ type: "slop:edit-lock", locked: !locked })}
       >
         {locked ? <Lock /> : <LockOpen />}
@@ -442,6 +505,7 @@ export function LayersPanel(props: { layers: EditLayer[]; onArrange?: (message: 
         aria-expanded={open}
         active={open}
         disabled={!layers.length && !open}
+        disabledReason="Nothing on this slide"
         onClick={toggle}
       >
         <Layers />

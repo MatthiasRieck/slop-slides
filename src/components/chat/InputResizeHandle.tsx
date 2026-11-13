@@ -6,13 +6,16 @@ export const MIN_INPUT_HEIGHT = 64;
 /**
  * The grip at the top of the composer that makes the message input taller or shorter, by
  * dragging or with the arrow keys (Home and End for the smallest and largest). `height` is the
- * height chosen so far, if any; `onResize` gets the next one, between the smallest and `max`.
+ * height chosen so far, null while the input fits itself to its text; `onResize` gets the next
+ * one, between the smallest and `max`. A double click (or Escape on the grip) gives the height
+ * back to the text: `onResize(null)`.
  */
 export function InputResizeHandle(props: {
   textarea: RefObject<HTMLTextAreaElement | null>;
   height: number | null;
   max: number;
-  onResize: (height: number) => void;
+  onResize: (height: number | null) => void;
+  className?: string;
 }) {
   const { textarea, max } = props;
   const resizeStart = useRef<{ y: number; height: number } | null>(null);
@@ -28,8 +31,12 @@ export function InputResizeHandle(props: {
       aria-valuemax={max}
       aria-valuenow={props.height ?? MIN_INPUT_HEIGHT}
       tabIndex={0}
-      title="Drag up to make the message input taller"
-      className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl"
+      title={
+        props.height === null
+          ? "Drag up to make the message input taller"
+          : "Drag to resize the message input; double-click to fit it to the text again"
+      }
+      className={`group flex h-4 w-full shrink-0 cursor-ns-resize touch-none items-center justify-center rounded-t-2xl ${props.className ?? ""}`}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -50,6 +57,7 @@ export function InputResizeHandle(props: {
       onLostPointerCapture={() => {
         resizeStart.current = null;
       }}
+      onDoubleClick={() => props.onResize(null)}
       onKeyDown={(e) => {
         const height = current();
         if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Home" || e.key === "End") {
@@ -57,6 +65,9 @@ export function InputResizeHandle(props: {
           resize(
             e.key === "Home" ? MIN_INPUT_HEIGHT : e.key === "End" ? max : height + (e.key === "ArrowUp" ? 16 : -16),
           );
+        } else if (e.key === "Escape" && props.height !== null) {
+          e.preventDefault();
+          props.onResize(null);
         }
       }}
     >

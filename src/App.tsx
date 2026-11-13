@@ -2,11 +2,13 @@ import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ChangesRail, ChangesView } from "./components/ChangesView";
+import { useChatShortcut } from "./components/chat/useChatShortcut";
 import { DeckSettings } from "./components/DeckSettings";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import { NarrationTimeline } from "./components/NarrationTimeline";
 import { Presenter } from "./components/Presenter";
+import { usePresentKeys } from "./components/presenter/present";
 import { RewindDialog } from "./components/RewindDialog";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Sidebar } from "./components/Sidebar";
@@ -15,6 +17,8 @@ import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
+import { UnsavedChanges } from "./components/UnsavedChanges";
+import { useShellKeys } from "./hooks/useShellKeys";
 import { useCloseGuard, useWindowTitle } from "./hooks/useWindowShell";
 import { api } from "./lib/api";
 import { cn, isMac } from "./lib/utils";
@@ -24,6 +28,7 @@ export function App() {
   const workspace = useApp((s) => s.workspace);
   const presenting = useApp((s) => s.presenting);
   useNewWindowKey();
+  usePresentKeys();
   useCloseGuard();
   useWindowTitle();
 
@@ -33,6 +38,7 @@ export function App() {
       {presenting && <Presenter />}
       <SlideImageExport />
       <RewindDialog />
+      <UnsavedChanges />
       <Toasts />
     </>
   );
@@ -63,12 +69,14 @@ export const SIDEBAR_MAX_SIZE = "67%";
  * Maximized, the sidebar covers the whole window, the rest staying as it is underneath.
  */
 function Workbench() {
+  useChatShortcut();
   const hasDeck = useApp((s) => s.deck !== null);
   const mode = useApp(deckMode);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const sidebarMaximized = useApp((s) => s.sidebarMaximized);
   const railOpen = useApp((s) => s.railOpen);
   const timelineOpen = useApp((s) => s.timelineOpen);
+  useShellKeys();
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
   const deckVersion = useApp((s) =>
     s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",

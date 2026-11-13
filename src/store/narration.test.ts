@@ -62,4 +62,15 @@ describe("cleaning up recorded narration", () => {
     useApp.getState().cleanNarration("intro");
     expect(fillComposer.mock.calls[0]?.[0]).toContain("the narration of slide `intro`");
   });
+
+  it("opens the chat, where the request waits, when another tab or nothing is showing", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ sidebarOpen: true, sidebarTab: "narration", sidebarTabs: ["chat", "narration"] });
+    useApp.getState().cleanNarration(null);
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    useApp.getState().setSidebarOpen(false);
+    useApp.getState().cleanNarration("intro");
+    expect(useApp.getState().sidebarOpen).toBe(true);
+    expect(useApp.getState().sidebarTab).toBe("chat");
+  });
 });

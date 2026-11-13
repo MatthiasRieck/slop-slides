@@ -193,14 +193,19 @@ describe("several selected elements", () => {
     const [a, b] = e.selected() as HTMLElement[];
     expect([a!.textContent, b!.textContent]).toEqual(["A", "B"]);
     expect(a!.id).toBe("");
-    // Centered in the view, as one: 500 × 300 around (960, 540).
-    expect([a!.style.left, a!.style.top]).toEqual(["710px", "390px"]);
-    expect([b!.style.left, b!.style.top]).toEqual(["1010px", "590px"]);
-    // Again at the same spot, the whole group steps aside.
+    // Where they were, a step away from the originals, as one.
+    expect([a!.style.left, a!.style.top, a!.style.translate]).toEqual(["100px", "100px", "40px 40px"]);
+    expect([b!.style.left, b!.style.top, b!.style.translate]).toEqual(["400px", "300px", "40px 40px"]);
+    // Again at the same spot, the whole group steps further aside.
     e.fromParent({ type: "slop:edit-paste", html });
     const [a2, b2] = e.selected() as HTMLElement[];
-    expect(a2!.style.translate).toBe("40px 40px");
-    expect(b2!.style.translate).toBe("40px 40px");
+    expect(a2!.style.translate).toBe("80px 80px");
+    expect(b2!.style.translate).toBe("80px 80px");
+    // From the context menu, centered on its point as one: 500 × 300 around (960, 540).
+    e.fromParent({ type: "slop:edit-paste", html, x: 960, y: 540 });
+    const [a3, b3] = e.selected() as HTMLElement[];
+    expect([a3!.style.left, a3!.style.top]).toEqual(["710px", "390px"]);
+    expect([b3!.style.left, b3!.style.top]).toEqual(["1010px", "590px"]);
     e.pick("#a", "#b");
     e.key("x", { metaKey: true });
     expect(e.doc.querySelector("#a")).toBeNull();

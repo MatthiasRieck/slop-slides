@@ -24,7 +24,9 @@ import { useDeckAudio } from "./narration/useDeckAudio";
 /**
  * Picks how a video export is made: how long each slide is shown, the frame rate, whether
  * animations play or each slide is a still, and whether the narration is spoken (each slide
- * then staying until its narration and the pauses around it end). Remembers the choice.
+ * then staying until its narration and the pauses around it end). The choice is remembered as
+ * it is made, each time it is one the backend takes: the timeline under the slide and the show's
+ * Play lay the deck out with the same times (see `TimingSettings`, which sets them there).
  */
 export function VideoExportPanel(props: {
   /** The slides the video shows: those not hidden. */
@@ -69,9 +71,17 @@ export function VideoExportPanel(props: {
     pauseBefore: Number(before),
     pauseAfter: Number(after),
   });
+  // Saved as it is set, not only when exporting: each time once it is one that can be used.
+  const usable = secondsProblem(seconds) === null && pauseProblem(before) === null && pauseProblem(after) === null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `options` reads the fields listed.
+  useEffect(() => {
+    if (!usable) return;
+    const next = options();
+    const saved = loadVideoOptions();
+    if ((Object.keys(next) as (keyof VideoOptions)[]).some((key) => next[key] !== saved[key])) saveVideoOptions(next);
+  }, [usable, seconds, fps, animate, narration, before, after]);
   const submit = () => {
     if (problem) return;
-    saveVideoOptions(options());
     props.onExport(options());
   };
 
@@ -92,8 +102,8 @@ export function VideoExportPanel(props: {
       <div className="text-sm font-medium">Export video</div>
       <div className="flex items-end gap-2">
         <NumberField
-          label={speaks ? "Seconds per slide, at least" : "Seconds per slide"}
-          aria-label="Seconds per slide"
+          label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
+          aria-label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
           min={MIN_SECONDS}
           max={MAX_SECONDS}
           value={seconds}

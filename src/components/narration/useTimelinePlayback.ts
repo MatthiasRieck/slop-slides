@@ -8,8 +8,9 @@ import { useApp } from "../../store";
 
 /**
  * The playhead of the deck's `timeline` and playing it from there, the stage following along:
- * `play` plays (or, while it plays, pauses), and `freeze` stops at a moment, the slide on the
- * stage frozen as it is then, its timed animations that far in. A changed deck stops it, and so
+ * `play` plays (or, while it plays, pauses), `freeze` stops at a moment, the slide on the
+ * stage frozen as it is then, its timed animations that far in, and `goToSlide` moves to where a
+ * slide starts, so that Play plays from the slide picked. A changed deck stops it, and so
  * does leaving. While `editing`, the stage is only taken to play: stopped, it stays the editor's,
  * showing the slide's final state, whatever moment the playhead is at.
  */
@@ -55,9 +56,9 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = fa
     if (editing) setSlideClock(null);
     else clockAt(to, true);
   };
-  const play = () => {
-    if (stop) return freeze(time);
-    const from = time >= timeline.end ? 0 : time;
+  /** Plays from `from` (the start, at the end), the stage following along. */
+  const playFrom = (at: number) => {
+    const from = at >= timeline.end ? 0 : Math.max(0, at);
     setTime(from);
     select(slideAt(timeline, from));
     const stopping = playTimeline(deck.id, timeline, from, {
@@ -74,6 +75,20 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = fa
     });
     setStop(() => stopping);
   };
+  const play = () => (stop ? freeze(time) : playFrom(time));
+  /**
+   * Goes to the start of the slide at `index`: playing, it plays on from there; stopped, the
+   * playhead waits there with the slide selected and showing as it does anywhere else, its
+   * animations running, rather than frozen before the first of them.
+   */
+  const goToSlide = (index: number) => {
+    const slide = timeline.slides[index];
+    if (!slide) return;
+    if (stop) return playFrom(slide.start);
+    setTime(slide.start);
+    select(index);
+    setSlideClock(null);
+  };
 
-  return { time, playing, play, freeze, select };
+  return { time, playing, play, freeze, select, goToSlide };
 }

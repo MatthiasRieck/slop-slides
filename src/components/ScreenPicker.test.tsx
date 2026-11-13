@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Screen } from "../lib/api";
+import { saveChoice } from "../lib/screens";
 import { ScreenPicker } from "./ScreenPicker";
 
 const screens: Screen[] = [
@@ -29,6 +30,8 @@ const screens: Screen[] = [
   },
 ];
 
+beforeEach(() => localStorage.clear());
+
 describe("ScreenPicker", () => {
   it("shows every screen and starts with the show on the last one", () => {
     const onStart = vi.fn();
@@ -39,10 +42,60 @@ describe("ScreenPicker", () => {
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: 0 });
   });
 
-  it("only says what a screen is called and how big it is", () => {
+  it("says what a screen is called, what it shows and how big it is", () => {
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
-    expect(screen.getByTestId("screen-0").textContent).toBe("Built-in3024×1964");
-    expect(screen.getByTestId("screen-1").textContent).toBe("Projector1920×1080");
+    expect(screen.getByTestId("screen-0").textContent).toBe("Built-inPresenter view3024×1964");
+    expect(screen.getByTestId("screen-1").textContent).toBe("ProjectorSlides1920×1080");
+  });
+
+  it("names each screen's role in words, as it changes", () => {
+    const threeScreens = [...screens, { ...screens[1], index: 2, name: "Side", x: 3432 } as Screen];
+    render(<ScreenPicker screens={threeScreens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
+    const roles = () => [0, 1, 2].map((i) => screen.getByTestId(`screen-role-${i}`).textContent);
+    expect(roles()).toEqual(["Presenter view", "Not used", "Slides"]);
+    fireEvent.click(screen.getByLabelText("Slides on Projector"));
+    expect(roles()).toEqual(["Presenter view", "Slides", "Not used"]);
+    fireEvent.click(screen.getByLabelText("No presenter view"));
+    expect(roles()).toEqual(["Not used", "Slides", "Not used"]);
+  });
+
+  it("puts the slides on the screen that is not the main one, wherever it is listed", () => {
+    const onStart = vi.fn();
+    const swapped = [
+      { ...screens[1]!, index: 0 },
+      { ...screens[0]!, index: 1 },
+    ];
+    render(<ScreenPicker screens={swapped} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
+    expect(screen.getByTestId("screen-role-0").textContent).toBe("Slides");
+    fireEvent.click(screen.getByText("Start presenting"));
+    expect(onStart).toHaveBeenCalledWith({ audience: 0, presenter: 1 });
+  });
+
+  it("swaps the slides and the presenter view", () => {
+    const onStart = vi.fn();
+    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
+    const swap = screen.getByRole("button", { name: "Swap" }) as HTMLButtonElement;
+    fireEvent.click(swap);
+    expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("presenter");
+    fireEvent.click(screen.getByText("Start presenting"));
+    expect(onStart).toHaveBeenCalledWith({ audience: 0, presenter: 1 });
+    // Without a presenter view there is nothing to swap, and it says so.
+    fireEvent.click(screen.getByLabelText("No presenter view"));
+    expect(swap.disabled).toBe(true);
+    expect(swap.title).toMatch(/Pick a screen for the presenter view first/);
+  });
+
+  it("starts with what was picked last for these screens", () => {
+    saveChoice(screens, { audience: 0, presenter: 1 });
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
+    expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("presenter");
+  });
+
+  it("has the focus on Start presenting, so Enter starts the show", () => {
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByText("Start presenting"));
   });
 
   it("has each role on one screen", () => {

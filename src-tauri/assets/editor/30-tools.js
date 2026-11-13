@@ -353,7 +353,7 @@
     if (has("letterSpacing")) el.style.letterSpacing = changes.letterSpacing ? changes.letterSpacing + "px" : "";
     if (has("lineHeight")) el.style.lineHeight = changes.lineHeight > 0 ? String(Math.round(changes.lineHeight * 100) / 100) : "";
     if (has("autofit")) setAutofit(el, changes.autofit);
-    if (has("align") && /^(left|center|right)$/.test(changes.align)) {
+    if (has("align") && /^(left|center|right|justify)$/.test(changes.align)) {
       el.style.textAlign = changes.align;
       withDescendants(el).filter(isList).forEach(function (list) {
         alignList(list, changes.align, depthOf(list, el));

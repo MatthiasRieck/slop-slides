@@ -411,11 +411,13 @@ describe("slide editor", () => {
       expect(menus(e)).toHaveLength(1);
     });
 
-    it("stays out of the way of a drawing tool", () => {
+    it("puts a drawing tool away and opens the menu", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "rect" });
       expect(rightClick(e, e.$("h1")).defaultPrevented).toBe(true);
-      expect(menus(e)).toEqual([]);
+      expect(e.messages("slop:edit-tool").at(-1)).toMatchObject({ tool: "select" });
+      expect(e.selected()).toEqual([e.$("h1")]);
+      expect(menus(e)).toHaveLength(1);
     });
 
     it("drops the drag a Control-click started", () => {
@@ -600,7 +602,7 @@ describe("slide editor", () => {
       e.$(`#${id}`).getBoundingClientRect = () => ({ ...rect, toJSON: () => rect }) as DOMRect;
     };
 
-    it("pastes a copy on top of the slide in the middle of the view, leaving the layout as it was", () => {
+    it("pastes a copy on top of the slide where it was copied from, leaving the layout as it was", () => {
       const e = editor();
       onScreen(e);
       const card = e.$(".card").outerHTML;
@@ -611,44 +613,53 @@ describe("slide editor", () => {
       // Nothing in the layout moved.
       expect(e.$(".card").outerHTML).toBe(card);
       expect(copy.style.position).toBe("absolute");
-      // Centered on (960, 540); its place is all in left and top.
-      expect([copy.style.left, copy.style.top, copy.style.width]).toEqual(["860px", "490px", "200px"]);
+      // At the coordinates it was copied at; its place is all in left and top.
+      expect([copy.style.left, copy.style.top, copy.style.width]).toEqual(["10px", "20px", "200px"]);
       expect(copy.style.translate).toBe("");
       expect(e.selected()).toEqual([copy]);
       expect(e.commits()).toHaveLength(1);
       expect(e.commits()[0]!.select).toEqual([e.$("#intro").children.length - 1]);
     });
 
-    it("pastes where the pointer is when it is over the slide", () => {
+    it("keeps the copied position wherever the pointer is", () => {
       const e = editor();
       onScreen(e);
-      const html = clip({ x: 0, y: 0, w: 200, h: 100 }, '<div data-added="shape"></div>');
+      const html = clip({ x: 30, y: 40, w: 200, h: 100 }, '<div data-added="shape"></div>');
       e.move(e.$(".shape"), 300, 400);
       e.fromParent({ type: "slop:edit-paste", html });
       const shape = e.$("#intro").lastElementChild as HTMLElement;
       expect([shape.style.left, shape.style.top, shape.style.width, shape.style.height]).toEqual([
-        "200px",
-        "350px",
+        "30px",
+        "40px",
         "200px",
         "100px",
       ]);
+      expect(shape.style.translate).toBe("");
     });
 
-    it("pastes in the middle of the view once the pointer is off the slide or out of the window", () => {
+    it("pastes centered on the point the app gives, as from the context menu", () => {
       const e = editor();
       onScreen(e);
-      const html = clip({ x: 0, y: 0, w: 200, h: 100 }, '<div data-added="shape"></div>');
+      const html = clip({ x: 30, y: 40, w: 200, h: 100 }, '<div data-added="shape"></div>');
+      e.fromParent({ type: "slop:edit-paste", html, x: 300, y: 400 });
+      const shape = e.$("#intro").lastElementChild as HTMLElement;
+      expect([shape.style.left, shape.style.top]).toEqual(["200px", "350px"]);
+    });
+
+    it("pastes a copy that does not say where it was in the middle of the view, or under the pointer", () => {
+      const e = editor();
+      onScreen(e);
+      const html = clip({ w: 200, h: 100 }, '<div data-added="shape"></div>');
       e.move(e.doc.body, 1950, 400);
       e.fromParent({ type: "slop:edit-paste", html });
       expect((e.$("#intro").lastElementChild as HTMLElement).style.left).toBe("860px");
-      e.move(e.doc.body, 300, 400);
-      e.doc.documentElement.dispatchEvent(new e.window.PointerEvent("pointerleave"));
+      e.move(e.$(".shape"), 300, 400);
       e.fromParent({ type: "slop:edit-paste", html });
       const second = e.$("#intro").lastElementChild as HTMLElement;
-      expect([second.style.left, second.style.translate]).toEqual(["860px", "40px 40px"]);
+      expect([second.style.left, second.style.top]).toEqual(["200px", "350px"]);
     });
 
-    it("offsets copies pasted at the same spot, further for each copy", () => {
+    it("pastes on its own slide a step away from the original, further for each copy", () => {
       const e = editor({ markup: FREE });
       onScreen(e);
       e.down(e.$(".note"));
@@ -657,10 +668,20 @@ describe("slide editor", () => {
       e.fromParent({ type: "slop:edit-paste", html });
       e.fromParent({ type: "slop:edit-paste", html });
       const notes = [...e.doc.querySelectorAll<HTMLElement>(".note")];
-      expect(notes.map((n) => n.style.translate)).toEqual(["", "", "40px 40px"]);
+      expect(notes.map((n) => n.style.translate)).toEqual(["", "40px 40px", "80px 80px"]);
       expect(notes[1]!.style.left).toBe(notes[2]!.style.left);
       expect(notes[0]!.style.left).toBe("100px");
       expect(e.commits()).toHaveLength(2);
+    });
+
+    it("pastes a cut element back exactly where it was", () => {
+      const note = '<p class="note" style="position: absolute; left: 100px; top: 50px">Note</p>';
+      const e = editor({ markup: DECK.replace("</svg>", `</svg>${note}`) });
+      onScreen(e);
+      e.down(e.$(".note"));
+      e.key("x", { metaKey: true });
+      e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
+      expect(e.$(".note").style.translate).toBe("");
     });
 
     it("pastes a cut element on top, keeping the slot the cut left so the layout stays put", () => {
@@ -691,7 +712,8 @@ describe("slide editor", () => {
       expect(e.$("#outro").lastElementChild).toBe(p);
       expect(p.style.position).toBe("absolute");
       // Text may wrap differently here, so it keeps its width but not its height.
-      expect([p.style.left, p.style.top, p.style.width, p.style.height]).toEqual(["810px", "515px", "300px", ""]);
+      // At the same coordinates as on the slide it came from.
+      expect([p.style.left, p.style.top, p.style.width, p.style.height]).toEqual(["100px", "200px", "300px", ""]);
       expect(p.style.translate).toBe("");
       // Its own inline styles win over how it looked.
       expect([p.style.color, p.style.fontSize]).toEqual(["blue", "40px"]);
@@ -2089,6 +2111,9 @@ describe("slide editor", () => {
           text: true,
           vector: false,
           color: "#ffffff",
+          colorOther: false,
+          fillOther: false,
+          strokeOther: false,
           fontSize: 40,
           // jsdom has no fonts of its own.
           fontFamily: expect.any(String),

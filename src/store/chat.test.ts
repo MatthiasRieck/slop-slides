@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { invoke } from "../test/tauri";
-import type { AssistantMessage, UserMessage } from "./messages";
+import { appWindow, invoke } from "../test/tauri";
+import { type AssistantMessage, lastSentText, retryTarget, sendOptionsOf, type UserMessage } from "./messages";
 import {
   assistantMessage,
   backend,
@@ -516,6 +516,163 @@ describe("composer", () => {
       rev: 3,
       screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png",
     });
+  });
+
+  it("is taken once by the composer, and the next one counts from the start", async () => {
+    const useApp = await freshStore();
+    useApp.getState().fillComposer("fix it");
+    useApp.getState().clearComposerFill();
+    expect(useApp.getState().composerFill).toBeNull();
+    useApp.getState().fillComposer("fix it");
+    expect(useApp.getState().composerFill).toEqual({ text: "fix it", rev: 1 });
+  });
+
+  it("focusComposer shows the chat and asks the composer to take the focus", async () => {
+    const useApp = await freshStore();
+    useApp.getState().setSidebarTab("files");
+    useApp.getState().setSidebarOpen(false);
+    const asked = useApp.getState().composerFocus;
+    useApp.getState().focusComposer();
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "chat", composerFocus: asked + 1 });
+    // With the chat on show it only asks again.
+    useApp.getState().focusComposer();
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "chat", composerFocus: asked + 2 });
+  });
+});
+
+describe("retrying the last turn", () => {
+  const failed = (status: AssistantMessage["status"], message: Partial<UserMessage> = {}) => [
+    { ...userMessage("Make it blue"), ...message },
+    assistantMessage({ status, error: status === "error" ? "boom" : null }),
+  ];
+
+  it.each(["error", "interrupted"] as const)("sends the message of a turn that ended in %s again", async (status) => {
+    const useApp = await freshStore();
+    useApp.setState({
+      deck: DECK,
+      selected: "intro",
+      messages: failed(status, { slide: "outro", attachments: ["assets/a.png"], screenshot: "/s/shot.png" }),
+    });
+    await useApp.getState().retryLast();
+    const sent = useApp.getState().messages.at(-2) as UserMessage;
+    // On the slide it was about, not the one selected now, with what went along with it.
+    expect(sent).toMatchObject({
+      text: "Make it blue",
+      slide: "outro",
+      attachments: ["assets/a.png"],
+      screenshot: "/s/shot.png",
+    });
+    expect(sent.id).not.toBe("u-Make it blue");
+    expect(useApp.getState().messages).toHaveLength(4);
+    expect(prompts()).toHaveLength(1);
+    expect(prompts()[0]).toContain('Current slide: <section id="outro">');
+    expect(prompts()[0]).toContain("Attached files: assets/a.png");
+    expect(useApp.getState().running).toBe(true);
+  });
+
+  it("sends a message that was about no slide about none", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro", messages: failed("error") });
+    await useApp.getState().retryLast();
+    expect(useApp.getState().messages.at(-2)).toMatchObject({ slide: null });
+    expect(prompts()[0]).not.toContain("Current slide");
+  });
+
+  it("does nothing after a turn that went well, with nothing said, or while the agent works", async () => {
+    const useApp = await freshStore();
+    await useApp.getState().retryLast();
+    useApp.setState({ messages: [userMessage("Hi"), assistantMessage()] });
+    await useApp.getState().retryLast();
+    useApp.setState({ messages: failed("error"), running: true });
+    await useApp.getState().retryLast();
+    expect(prompts()).toEqual([]);
+    expect(useApp.getState().queue).toEqual([]);
+  });
+
+  it("knows what to retry, and what was sent last", () => {
+    expect(retryTarget([])).toBeNull();
+    expect(retryTarget(failed("done"))).toBeNull();
+    expect(retryTarget(failed("streaming"))).toBeNull();
+    expect(retryTarget(failed("error"))).toMatchObject({ text: "Make it blue" });
+    // Only the last turn: an earlier failure is history.
+    expect(retryTarget([...failed("error"), userMessage("Again"), assistantMessage()])).toBeNull();
+    expect(retryTarget([assistantMessage({ status: "error" })])).toBeNull();
+
+    expect(lastSentText([])).toBeNull();
+    const compact: UserMessage = { ...userMessage("/compact"), command: "compact" };
+    expect(lastSentText([userMessage("One"), assistantMessage(), userMessage("Two"), compact])).toBe("Two");
+    expect(sendOptionsOf(userMessage("Plain"))).toEqual({ includeSlide: false, slide: null, attachments: [] });
+  });
+});
+
+describe("the folder's chat moving to the deck it made", () => {
+  it("stays the same conversation: its key changes, its revision does not", async () => {
+    const { useApp, emit } = await withBridge({ move_chat_to_deck: () => null });
+    useApp.setState({
+      deck: DECK,
+      chatFollowsDeck: true,
+      messages: [userMessage("Make a deck"), assistantMessage({ status: "streaming" })],
+      running: true,
+    });
+    const revision = useApp.getState().chatRevision;
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(useApp.getState().chatKey).toBe(DECK.id));
+    // What the chat panel keys the draft and the composer on (see ChatPanel.tsx).
+    expect(useApp.getState().chatRevision).toBe(revision);
+    expect(useApp.getState().messages).toHaveLength(2);
+  });
+});
+
+describe("asking for the user's attention", () => {
+  const pending = {
+    id: "ap",
+    title: "Run a command",
+    reason: null,
+    details: "ls",
+    acceptLabel: "Allow",
+    decisions: ["accept" as const],
+  };
+  async function turn() {
+    const bridged = await withBridge();
+    bridged.useApp.setState({
+      messages: [userMessage("first"), assistantMessage({ status: "streaming", thinking: true })],
+      running: true,
+    });
+    return bridged;
+  }
+  const asked = () => appWindow.requestUserAttention.mock.calls.length;
+  afterEach(() => vi.restoreAllMocks());
+
+  it("asks when an approval arrives or a turn ends while the window is not in use", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const { emit } = await turn();
+    emit({ type: "textDelta", text: "Working on it" });
+    await Promise.resolve();
+    expect(asked()).toBe(0);
+    emit({ type: "approvalRequested", approval: pending });
+    await vi.waitFor(() => expect(asked()).toBe(1));
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(asked()).toBe(2));
+    // Informational: it asks once and stops by itself.
+    expect(appWindow.requestUserAttention).toHaveBeenLastCalledWith(2);
+  });
+
+  it("does not ask while the window has the focus", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const { emit } = await turn();
+    emit({ type: "approvalRequested", approval: pending });
+    emit({ type: "finished", interrupted: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(asked()).toBe(0);
+  });
+
+  it("goes on when the window cannot ask", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    appWindow.requestUserAttention.mockRejectedValueOnce(new Error("not allowed"));
+    const { useApp, emit } = await turn();
+    emit({ type: "finished", interrupted: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(useApp.getState().running).toBe(false);
   });
 });
 

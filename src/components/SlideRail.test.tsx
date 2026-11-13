@@ -29,6 +29,8 @@ beforeEach(() => {
 
 // dnd-kit gives sortable items role="button", so find them by tag.
 const items = () => [...document.querySelectorAll<HTMLElement>("ol > li")];
+/** The number a slide's row shows before its thumbnail. */
+const number = (li: HTMLElement) => li.querySelector("span")?.textContent;
 const item = (index: number) => within(items()[index]!);
 
 /** What the backend answers a rail change with. */
@@ -59,7 +61,7 @@ describe("SlideRail", () => {
       act(() => useApp.getState().setSearch({ query: "x" }));
       expect(shown()).toHaveLength(3);
       act(() => useApp.getState().setSearchMatches([found("b"), found("b"), found("c")]));
-      expect(shown().map((li) => li.textContent)).toEqual(["2", "3"]);
+      expect(shown().map(number)).toEqual(["2", "3"]);
       expect(screen.getByText("Slides · 2 of 3")).toBeTruthy();
       act(() => useApp.getState().setSearch({ query: "" }));
       expect(shown()).toHaveLength(3);
@@ -84,13 +86,13 @@ describe("SlideRail", () => {
     it("stops the slides being dragged, which would reorder only those shown", () => {
       useApp.setState({ deck: withSlides("a", "b"), selected: "a" });
       render(<SlideRail />);
-      const draggable = () => items()[0]!.getAttribute("aria-disabled");
-      expect(draggable()).toBe("false");
+      const draggable = () => items()[0]!.getAttribute("data-draggable");
+      expect(draggable()).toBe("true");
       act(() => {
         useApp.getState().setSearch({ query: "x" });
         useApp.getState().setSearchMatches([found("a"), found("b")]);
       });
-      expect(draggable()).toBe("true");
+      expect(draggable()).toBe("false");
     });
   });
 
@@ -295,7 +297,8 @@ describe("hidden slides in the rail", () => {
   it("still renders hidden slides in place, keeping their number", () => {
     render(<SlideRail />);
     expect(items()).toHaveLength(3);
-    expect(screen.getByText("Slides · 3")).toBeTruthy();
+    // The count says how many of them a show skips.
+    expect(screen.getByText("Slides · 3 (1 hidden)")).toBeTruthy();
     expect(items().map((li) => li.querySelector("span")?.textContent)).toEqual(["1", "2", "3"]);
     expect(thumbnail(items()[2]!)).toBeTruthy();
   });
@@ -367,9 +370,9 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(next);
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", {
+    expect(invoke).toHaveBeenCalledWith("set_slides_locked", {
       id: "/decks/talk/deck.html",
-      slide: "intro",
+      slides: ["intro"],
       locked: true,
     });
     expect(useApp.getState().deck).toBe(next);
@@ -381,9 +384,9 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Unlock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", {
+    expect(invoke).toHaveBeenCalledWith("set_slides_locked", {
       id: "/decks/talk/deck.html",
-      slide: "outro",
+      slides: ["outro"],
       locked: false,
     });
     // Still there, so that it can fade out.
@@ -684,7 +687,7 @@ describe("collapsing a section", () => {
   const shownSlides = () =>
     items()
       .filter((li) => "railSlide" in li.dataset && !li.classList.contains("hidden"))
-      .map((li) => li.textContent);
+      .map(number);
   const header = (title: string) => within(headers().find((li) => li.textContent?.includes(title))!);
 
   beforeEach(() => useApp.setState({ deck, selected: "a", railSelected: [] }));
@@ -800,29 +803,33 @@ describe("in View mode, which changes nothing", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("has New slide and the section button off, saying where they are on", () => {
+  it("has the section button off, saying where it is on, and New slide go to Edit for its layouts", () => {
     render(<SlideRail />);
-    const add = screen.getByRole("button", { name: "New slide" }) as HTMLButtonElement;
-    expect(add.disabled).toBe(true);
-    expect(add.title).toBe("Switch to Edit to change the slides");
-    fireEvent.click(add);
-    expect(screen.queryByTitle("Add blank slide")).toBeNull();
-    const section = screen.getAllByTitle("Switch to Edit to change the slides")[0] as HTMLButtonElement;
+    const section = screen.getByRole("button", { name: "Start a section at this slide" }) as HTMLButtonElement;
     expect(section.disabled).toBe(true);
-    // Edit mode turns them on, and puts a picker left open away again with it.
-    act(() => useApp.getState().setMode("edit"));
+    expect(section.title).toBe("Switch to Edit to change the slides");
+    // No dead end: adding a slide is Edit mode's, so the button goes there.
+    const add = screen.getByRole("button", { name: "New slide" }) as HTMLButtonElement;
     expect(add.disabled).toBe(false);
+    expect(add.title).toBe("New slide: switches to Edit and opens the layouts");
     fireEvent.click(add);
+    expect(useApp.getState().editing).toBe(true);
     expect(screen.getByTitle("Add blank slide")).toBeTruthy();
+    expect(add.title).toBe("New slide");
+    // Back in View, the layouts left open go away again.
     act(() => useApp.getState().setMode("view"));
     expect(screen.queryByTitle("Add blank slide")).toBeNull();
   });
 
-  it("does not let slides or sections be dragged", () => {
+  it("does not let slides or sections be dragged, and says how to edit one in its tooltip", () => {
     render(<SlideRail />);
-    expect(items().map((li) => li.getAttribute("aria-disabled"))).toEqual(["true", "true", "true", "true"]);
+    const draggable = () =>
+      items().map((li) => li.getAttribute("data-draggable") ?? String(li.getAttribute("aria-disabled") !== "true"));
+    expect(draggable()).toEqual(["false", "false", "false", "false"]);
+    expect(screen.getByRole("button", { name: "Slide 1" }).title).toBe("Slide 1 · double-click to edit");
     act(() => useApp.getState().setMode("edit"));
-    expect(items().map((li) => li.getAttribute("aria-disabled"))).toEqual(["false", "false", "false", "false"]);
+    expect(draggable()).toEqual(["true", "true", "true", "true"]);
+    expect(screen.getByRole("button", { name: "Slide 1" }).title).toBe("Slide 1");
   });
 
   it("keeps the picked slides' tools off, but for clearing the pick", () => {
@@ -832,7 +839,7 @@ describe("in View mode, which changes nothing", () => {
     for (const name of ["Move up", "Move down", "Hide slides", "Duplicate slides", "Delete slides"]) {
       expect((bulk.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
     }
-    fireEvent.click(bulk.getByTitle("Clear selection"));
+    fireEvent.click(bulk.getByRole("button", { name: "Clear selection" }));
     expect(useApp.getState().railSelected).toEqual([]);
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -897,7 +904,9 @@ describe("sections in the rail", () => {
   it("cannot add a section without a selected slide", () => {
     useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
     render(<SlideRail />);
-    expect((screen.getByTitle("Start a section at this slide") as HTMLButtonElement).disabled).toBe(true);
+    const button = screen.getByRole("button", { name: "Start a section at this slide" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe("Select a slide to start a section");
   });
 
   it("renames a section by double-clicking its title", async () => {
@@ -940,7 +949,7 @@ describe("sections in the rail", () => {
   it("removes a section but keeps its slides", async () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
-    await act(async () => fireEvent.click(within(headers()[0]!).getByTitle("Remove section")));
+    await act(async () => fireEvent.click(within(headers()[0]!).getByTitle("Remove section (keeps its slides)")));
     expect(invoke).toHaveBeenCalledWith("delete_section", { id: "/decks/talk/deck.html", index: 0 });
     expect(headers()).toHaveLength(0);
     expect(items()).toHaveLength(3);
@@ -948,7 +957,7 @@ describe("sections in the rail", () => {
 
   it.each([
     ["Rename section", "rename_section"],
-    ["Remove section", "delete_section"],
+    ["Remove section (keeps its slides)", "delete_section"],
   ])("reports a failed %s", async (title, command) => {
     invoke.mockRejectedValue("Section not found: 0");
     render(<SlideRail />);
@@ -974,9 +983,21 @@ describe("sections in the rail", () => {
     // The stage shows the slide in an iframe. A pointer over an iframe sends its events to the
     // iframe's document, so the rail never saw the move or the release and the drag stuck.
     const startDrag = (li: HTMLElement) => {
-      fireEvent.pointerDown(li, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+      // A slide is dragged by its thumbnail, the row's one button.
+      fireEvent.pointerDown(li.querySelector("button[data-thumbnail]")!, {
+        isPrimary: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+      });
       fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 40 });
     };
+    // A drag swallows clicks until dnd-kit drops its guard, 50ms after the drag ends; one the rail
+    // was unmounted under is ended here, or the guard would stay for the tests after.
+    afterEach(async () => {
+      fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 40 });
+      await act(() => new Promise<void>((resolve) => setTimeout(resolve, 60)));
+    });
     const stageFrame = () => {
       const frame = document.createElement("iframe");
       frame.style.pointerEvents = "auto";
@@ -1022,5 +1043,367 @@ describe("sections in the rail", () => {
       expect(getComputedStyle(frame).pointerEvents).toBe("auto");
       frame.remove();
     });
+  });
+});
+
+describe("a slide's row, for the keyboard and a screen reader", () => {
+  const thumb = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+  it("is one button named by its number and what is special about the slide, current when shown", () => {
+    const deck = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-hidden data-locked`));
+    useApp.setState({ deck, selected: "intro", comments: { outro: [{ id: "c", text: "Hm", x: 0, y: 0 }] } });
+    render(<SlideRail />);
+    expect(thumb("Slide 1").getAttribute("aria-current")).toBe("true");
+    expect(thumb("Slide 2").getAttribute("aria-current")).toBeNull();
+    expect(thumb("Slide 3, hidden, locked, 1 comment")).toBeTruthy();
+    // The row itself is no button around its button, and takes no tab stop of its own.
+    for (const li of items()) {
+      expect(li.getAttribute("role")).toBeNull();
+      expect(li.getAttribute("tabindex")).toBeNull();
+      expect(li.querySelectorAll("button[data-thumbnail]")).toHaveLength(1);
+    }
+    expect(thumb("Slide 1").className).toContain("focus-visible:outline-2");
+    useApp.setState({ comments: {} });
+  });
+
+  it("shows the quick actions while the focus is in the row, not only under the pointer", () => {
+    render(<SlideRail />);
+    const actions = item(0).getByTitle("Duplicate").parentElement!;
+    expect(actions.className).toContain("group-focus-within:flex");
+    expect(item(0).getByRole("button", { name: "Duplicate" })).toBeTruthy();
+  });
+
+  it("moves the focus along when the keys go to another slide from a thumbnail", () => {
+    render(<SlideRail />);
+    thumb("Slide 1").focus();
+    act(() => useApp.getState().selectRelative(1));
+    expect(document.activeElement).toBe(thumb("Slide 2"));
+    // With the focus elsewhere, it stays there.
+    (document.activeElement as HTMLElement).blur();
+    act(() => useApp.getState().selectRelative(1));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("picks a slide up with Space to move it with the arrows, leaving Enter to select it", () => {
+    render(<SlideRail />);
+    const first = thumb("Slide 1");
+    first.focus();
+    const enter = fireEvent.keyDown(first, { key: "Enter", code: "Enter" });
+    expect(enter).toBe(true);
+    const space = fireEvent.keyDown(first, { key: " ", code: "Space" });
+    // dnd-kit took the key: the row is being moved.
+    expect(space).toBe(false);
+    act(() => void fireEvent.keyDown(document, { key: "Escape", code: "Escape" }));
+  });
+
+  it("counts a slide's comments and, while a search is on, its matches, on the thumbnail", () => {
+    useApp.setState({ comments: { intro: [1, 2].map((n) => ({ id: `c${n}`, text: "Hm", x: 0, y: 0 })) } });
+    render(<SlideRail />);
+    expect(item(0).getByTestId("comment-count").textContent).toBe("2");
+    expect(item(0).getByTestId("comment-count").title).toBe("2 comments");
+    expect(item(1).queryByTestId("comment-count")).toBeNull();
+    expect(item(0).queryByTestId("match-count")).toBeNull();
+    const found = (slide: string) => ({
+      slide,
+      index: 0,
+      locked: false,
+      notes: false,
+      before: "",
+      text: "x",
+      after: "",
+    });
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp.getState().setSearchMatches([found("intro"), found("intro"), found("intro")]);
+    });
+    expect(item(0).getByTestId("match-count").textContent).toBe("3");
+    act(() => useApp.getState().clearSearch());
+    useApp.setState({ comments: {} });
+  });
+});
+
+describe("the menu of a right-click", () => {
+  beforeEach(() => {
+    useApp.setState({ railSelected: [] });
+    useApp.getState().clearSearch();
+  });
+  const thumb = (n: number) => screen.getByRole("button", { name: new RegExp(`^Slide ${n}\\b`) });
+  const menu = () => within(screen.getByRole("menu"));
+  const choice = (name: string | RegExp) => menu().getByRole("menuitem", { name }) as HTMLButtonElement;
+  const off = (name: string | RegExp) => choice(name).getAttribute("aria-disabled") === "true";
+  const edit = (deck: unknown, created: string[] = []) => edited(deck, created);
+
+  it("picks the slide it was asked for on, and lists what can be done with it, with the keys", () => {
+    render(<SlideRail />);
+    fireEvent.contextMenu(thumb(3), { clientX: 30, clientY: 40 });
+    expect(useApp.getState().selected).toBe("outro");
+    expect(screen.getByRole("menu", { name: "Slide" })).toBeTruthy();
+    expect(
+      menu()
+        .getAllByRole("menuitem")
+        .map((b) => b.textContent),
+    ).toEqual([
+      "New slideCtrl+Shift+N",
+      "DuplicateCtrl+D",
+      "CopyCtrl+C",
+      "CutCtrl+X",
+      "Paste afterCtrl+V",
+      "DeleteBackspace",
+      "Hide",
+      "Lock",
+      "Move upCtrl+↑",
+      "Move downCtrl+↓",
+      "Start section here",
+    ]);
+    // A press beside it, or Escape, puts it away.
+    fireEvent.pointerDown(screen.getByTestId("context-menu-cover"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.contextMenu(thumb(3));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("is about every picked slide when the one asked on is among them", async () => {
+    render(<SlideRail />);
+    act(() => useApp.getState().extendRailSelection("outro", "toggle"));
+    fireEvent.contextMenu(thumb(1));
+    expect(useApp.getState().railSelected).toEqual(["intro", "outro"]);
+    invoke.mockResolvedValue(edit(DECK));
+    await act(async () => fireEvent.click(choice(/^Hide/)));
+    // A change waits for the ones before it, so it may take a moment.
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_slides_hidden", {
+        id: DECK.id,
+        slides: ["intro", "outro"],
+        hidden: true,
+      }),
+    );
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.contextMenu(thumb(1));
+    await act(async () => fireEvent.click(choice(/^Lock/)));
+    expect(invoke).toHaveBeenCalledWith("set_slides_locked", { id: DECK.id, slides: ["intro", "outro"], locked: true });
+
+    fireEvent.contextMenu(thumb(3));
+    await act(async () => fireEvent.click(choice(/^Copy/)));
+    expect(invoke).toHaveBeenCalledWith("copy_slides", { id: DECK.id, slides: ["intro", "outro"] });
+
+    // Asked on a slide that is not picked, it is about that one alone.
+    fireEvent.contextMenu(thumb(2));
+    expect(useApp.getState()).toMatchObject({ selected: "#2", railSelected: [] });
+    await act(async () => fireEvent.click(choice(/^Duplicate/)));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("duplicate_slides", { id: DECK.id, slides: ["#2"] }));
+  });
+
+  it.each([
+    [/^New slide/, "add_slide", { id: DECK.id, after: "#2" }],
+    [/^Cut/, "copy_slides", { id: DECK.id, slides: ["#2"] }],
+    [/^Paste after/, "paste_slides", { id: DECK.id, after: "#2" }],
+    [/^Delete/, "delete_slides", { id: DECK.id, slides: ["#2"] }],
+    [/^Move down/, "reorder_slides", { id: DECK.id, slides: ["intro", "outro", "#2"] }],
+  ])("does %s", async (name, command, args) => {
+    invoke.mockImplementation(async (cmd: string) =>
+      cmd === "add_slide" ? { deck: DECK, slide: "intro" } : cmd === "paste_slides" ? null : edit(DECK),
+    );
+    render(<SlideRail />);
+    fireEvent.contextMenu(thumb(2));
+    await act(async () => fireEvent.click(choice(name)));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(command, args));
+  });
+
+  it("starts a section at the slide, and goes on to naming it", async () => {
+    const next = { ...DECK, sections: [{ index: 0, title: "New section", before: 2 } as Section] };
+    invoke.mockResolvedValue(next);
+    render(<SlideRail />);
+    fireEvent.contextMenu(thumb(3));
+    await act(async () => fireEvent.click(choice("Start section here")));
+    expect(invoke).toHaveBeenCalledWith("add_section", { id: DECK.id, before: "outro", title: "New section" });
+    expect(screen.getByLabelText("Section title")).toBeTruthy();
+  });
+
+  it("has what changes the deck off in View, saying where it is on, but still copies", async () => {
+    useApp.setState({ editing: false });
+    render(<SlideRail />);
+    fireEvent.contextMenu(thumb(1));
+    for (const name of [
+      /^New slide/,
+      /^Duplicate/,
+      /^Cut/,
+      /^Paste/,
+      /^Delete/,
+      /^Hide/,
+      /^Lock/,
+      /^Move up/,
+      /^Start/,
+    ]) {
+      expect(off(name)).toBe(true);
+      expect(choice(name).title).toBe("Switch to Edit to change the slides");
+    }
+    fireEvent.click(choice(/^Delete/));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(off(/^Copy/)).toBe(false);
+    await act(async () => fireEvent.click(choice(/^Copy/)));
+    expect(invoke).toHaveBeenCalledWith("copy_slides", { id: DECK.id, slides: ["intro"] });
+  });
+
+  it("says why a locked slide is not deleted, and why nothing moves during a search", () => {
+    const deck = deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`));
+    useApp.setState({ deck });
+    render(<SlideRail />);
+    fireEvent.contextMenu(thumb(1));
+    expect(choice(/^Delete/).title).toBe("This slide is locked");
+    expect(choice(/^Cut/).title).toBe("This slide is locked");
+    expect(off(/^Unlock/)).toBe(false);
+    fireEvent.pointerDown(screen.getByTestId("context-menu-cover"));
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp
+        .getState()
+        .setSearchMatches([{ slide: "intro", index: 0, locked: true, notes: false, before: "", text: "x", after: "" }]);
+    });
+    fireEvent.contextMenu(thumb(1));
+    expect(choice(/^Move up/).title).toBe("Clear the search to reorder");
+    act(() => useApp.getState().clearSearch());
+  });
+
+  describe("on a section's header", () => {
+    const SECTIONED = DECK_HTML.replace(
+      `<section class="slide" id="intro">`,
+      `<div class="deck-section" data-title="Opening"></div>\n<section class="slide" id="intro">`,
+    ).replace(
+      `<section class="slide" id="outro">`,
+      `<div class="deck-section" data-title="Closing"></div>\n<section class="slide" id="outro">`,
+    );
+    const header = (n: number) => screen.getAllByTestId("section-header")[n]!;
+    beforeEach(() => useApp.setState({ deck: deckFor(SECTIONED), selected: "intro" }));
+
+    it("renames, folds one or all, picks its slides, and removes it with a way back", async () => {
+      render(<SlideRail />);
+      fireEvent.contextMenu(header(0), { clientX: 5, clientY: 5 });
+      expect(screen.getByRole("menu", { name: "Section" })).toBeTruthy();
+      expect(
+        menu()
+          .getAllByRole("menuitem")
+          .map((b) => b.textContent),
+      ).toEqual([
+        "Rename",
+        "Collapse",
+        "Collapse all",
+        "Expand all",
+        "Select its slides",
+        "Remove section (keeps its slides)",
+      ]);
+      expect(off("Expand all")).toBe(true);
+      fireEvent.click(choice("Collapse"));
+      expect(useApp.getState().collapsedSections).toEqual(["intro"]);
+
+      fireEvent.contextMenu(header(0));
+      expect(choice("Expand")).toBeTruthy();
+      fireEvent.click(choice("Collapse all"));
+      expect(useApp.getState().collapsedSections).toEqual(["intro", "outro"]);
+      fireEvent.contextMenu(header(1));
+      fireEvent.click(choice("Expand all"));
+      expect(useApp.getState().collapsedSections).toEqual([]);
+
+      fireEvent.contextMenu(header(0));
+      fireEvent.click(choice("Select its slides"));
+      expect(useApp.getState()).toMatchObject({ selected: "intro", railSelected: ["intro", "#2"] });
+
+      fireEvent.contextMenu(header(1));
+      fireEvent.click(choice("Rename"));
+      expect((screen.getByLabelText("Section title") as HTMLInputElement).value).toBe("Closing");
+      fireEvent.keyDown(screen.getByLabelText("Section title"), { key: "Escape" });
+
+      invoke.mockResolvedValue(deckFor(DECK_HTML));
+      fireEvent.contextMenu(header(0));
+      await act(async () => fireEvent.click(choice("Remove section (keeps its slides)")));
+      expect(invoke).toHaveBeenCalledWith("delete_section", { id: DECK.id, index: 0 });
+      const toast = useApp.getState().toasts.at(-1)!;
+      expect(toast.text).toBe("Removed the section “Opening”; its slides stay");
+      expect(toast.action?.label).toBe("Undo");
+    });
+
+    it("only folds and picks in View", () => {
+      useApp.setState({ editing: false });
+      render(<SlideRail />);
+      fireEvent.contextMenu(header(0));
+      expect(off("Rename")).toBe(true);
+      expect(off("Remove section (keeps its slides)")).toBe(true);
+      expect(off("Collapse")).toBe(false);
+      expect(off("Select its slides")).toBe(false);
+    });
+
+    it("keeps the old name, and says so, when a rename leaves it empty", async () => {
+      render(<SlideRail />);
+      fireEvent.click(within(header(0)).getByTitle("Rename section"));
+      const input = screen.getByLabelText("Section title");
+      fireEvent.change(input, { target: { value: "   " } });
+      await act(async () => fireEvent.blur(input));
+      expect(invoke).not.toHaveBeenCalledWith("rename_section", expect.anything());
+      expect(within(header(0)).getByText("Opening")).toBeTruthy();
+      expect(useApp.getState().toasts.at(-1)).toMatchObject({
+        kind: "info",
+        text: "A section needs a name: it is still “Opening”.",
+      });
+    });
+  });
+});
+
+describe("what the rail says after a change", () => {
+  beforeEach(() => useApp.setState({ railSelected: [] }));
+  it("says how many slides went, with a way to take it back", async () => {
+    invoke.mockResolvedValue(edited(withSlides("#2", "outro")));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(0).getByTitle("Delete")));
+    const toast = useApp.getState().toasts.at(-1)!;
+    expect(toast).toMatchObject({ kind: "success", text: "Deleted 1 slide" });
+    expect(toast.action?.label).toBe("Undo");
+  });
+
+  it("says why the picked slides cannot be moved while a search lists only some", () => {
+    render(<SlideRail />);
+    act(() => useApp.getState().extendRailSelection("outro", "toggle"));
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp.getState().setSearchMatches(
+        ["intro", "outro"].map((slide) => ({
+          slide,
+          index: 0,
+          locked: false,
+          notes: false,
+          before: "",
+          text: "x",
+          after: "",
+        })),
+      );
+    });
+    const up = screen.getByRole("button", { name: "Move up" }) as HTMLButtonElement;
+    expect(up.disabled).toBe(true);
+    expect(up.title).toBe("Clear the search to reorder");
+    act(() => useApp.getState().clearSearch());
+  });
+
+  it("badges the slide being dragged with how many go along, and dims the others", async () => {
+    // jsdom has no layout: give the rows a size, so the badge has a slide to ride on.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      () => ({ top: 0, bottom: 60, left: 0, right: 100, width: 100, height: 60, x: 0, y: 0 }) as DOMRect,
+    );
+    render(<SlideRail />);
+    act(() => useApp.getState().extendRailSelection("outro", "toggle"));
+    const grab = items()[0]!.querySelector("button[data-thumbnail]")!;
+    act(() => {
+      fireEvent.pointerDown(grab, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    });
+    expect(screen.getByTestId("drag-count").textContent).toBe("2 slides");
+    expect(items()[2]!.className).toContain("opacity-40");
+    expect(items()[1]!.className).not.toContain("opacity-40");
+    await act(async () => void fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 40 }));
+    expect(screen.queryByTestId("drag-count")).toBeNull();
+    expect(items()[2]!.className).not.toContain("opacity-40");
+    // dnd-kit swallows clicks for 50ms after a drag.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    vi.restoreAllMocks();
   });
 });

@@ -69,7 +69,8 @@ describe("templates", () => {
     const useApp = await storeWith(DECK);
     useApp.setState({ sidebarOpen: false, sidebarTab: "files" });
     backend({ stage_template: () => STAGED });
-    await useApp.getState().applyStyle("swiss");
+    // The caller learns that it became a request, to say so where the style was picked.
+    expect(await useApp.getState().applyStyle("swiss")).toBe("requested");
     expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
     expect(calls("apply_template")).toEqual([]);
     const text = useApp.getState().composerFill?.text ?? "";
@@ -85,7 +86,7 @@ describe("templates", () => {
     const useApp = await storeWith(empty, null);
     const styled = { ...empty, template: "swiss", shellHash: "styled" };
     backend({ apply_template: () => styled });
-    await useApp.getState().applyStyle("swiss");
+    expect(await useApp.getState().applyStyle("swiss")).toBe("applied");
     expect(calls("apply_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
     expect(useApp.getState().deck).toEqual(styled);
     expect(useApp.getState().composerFill).toBeNull();
@@ -93,14 +94,14 @@ describe("templates", () => {
 
   it("ignores unknown templates and reports failures", async () => {
     const useApp = await storeWith(DECK);
-    await useApp.getState().applyStyle("nope");
+    expect(await useApp.getState().applyStyle("nope")).toBeNull();
     expect(invoke).not.toHaveBeenCalled();
     backend({
       stage_template: () => {
         throw "template not found: swiss";
       },
     });
-    await useApp.getState().applyStyle("swiss");
+    expect(await useApp.getState().applyStyle("swiss")).toBeNull();
     expect(lastError(useApp.getState())).toBe("template not found: swiss");
     expect(useApp.getState().composerFill).toBeNull();
   });
@@ -192,7 +193,7 @@ describe("changing the slide size", () => {
     const { useApp } = await freshModule();
     backend({ set_slide_size: () => resized() });
     useApp.setState({ deck: DECK, sidebarOpen: false, composerFill: null, running: false });
-    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(await useApp.getState().resizeSlides(PORTRAIT)).toBe("requested");
     expect(calls("set_slide_size")).toEqual([{ id: "/decks/talk/deck.html", size: PORTRAIT }]);
     expect(useApp.getState().deck?.size).toMatchObject(PORTRAIT);
     expect(calls("send_message")).toEqual([]);
@@ -207,7 +208,7 @@ describe("changing the slide size", () => {
     const empty = { ...DECK, slides: [] };
     backend({ set_slide_size: () => ({ ...resized(), slides: [] }) });
     useApp.setState({ deck: empty, composerFill: null });
-    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(await useApp.getState().resizeSlides(PORTRAIT)).toBe("applied");
     expect(calls("set_slide_size")).toHaveLength(1);
     expect(useApp.getState().deck?.size).toMatchObject(PORTRAIT);
     expect(useApp.getState().composerFill).toBeNull();
@@ -217,9 +218,9 @@ describe("changing the slide size", () => {
     const { useApp } = await freshModule();
     backend({ set_slide_size: () => resized() });
     useApp.setState({ deck: DECK, composerFill: null, running: false });
-    await useApp.getState().resizeSlides({ width: 1920, height: 1080, unit: "px" });
+    expect(await useApp.getState().resizeSlides({ width: 1920, height: 1080, unit: "px" })).toBeNull();
     useApp.setState({ running: true });
-    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(await useApp.getState().resizeSlides(PORTRAIT)).toBeNull();
     expect(calls("set_slide_size")).toEqual([]);
     expect(useApp.getState().composerFill).toBeNull();
   });
@@ -232,7 +233,7 @@ describe("changing the slide size", () => {
       },
     });
     useApp.setState({ deck: DECK, composerFill: null, toasts: [], running: false });
-    await useApp.getState().resizeSlides({ width: 1, height: 1, unit: "in" });
+    expect(await useApp.getState().resizeSlides({ width: 1, height: 1, unit: "in" })).toBeNull();
     expect(lastError(useApp.getState())).toContain("100 to 10000");
     expect(useApp.getState().deck).toBe(DECK);
     expect(useApp.getState().composerFill).toBeNull();

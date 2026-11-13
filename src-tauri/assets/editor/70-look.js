@@ -165,11 +165,8 @@
     return { vector: now.vector, shared: shared, paint: paint, text: text };
   }
 
-  /** Gives `el` the look the format painter took (fill and line only between likes), and puts it away. */
-  function paintOnto(el) {
-    var taken = painting;
-    useTool("select", true);
-    if (!el || !taken) return;
+  /** The changes that give `el` the look `taken` (see paintableStyle): fill and line only between likes, text only onto text. */
+  function paintChanges(el, taken) {
     var target = describe(el);
     var changes = {};
     [taken.shared, target.vector === taken.vector ? taken.paint : {}, target.text ? taken.text : {}].forEach(function (part) {
@@ -177,8 +174,16 @@
         changes[key] = part[key];
       });
     });
+    return changes;
+  }
+
+  /** Gives `el` the look the format painter took, and puts it away. */
+  function paintOnto(el) {
+    var taken = painting;
+    useTool("select", true);
+    if (!el || !taken) return;
     select(el);
-    applyStyle(changes);
+    applyStyle(paintChanges(el, taken));
   }
 
   /**

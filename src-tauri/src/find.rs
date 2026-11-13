@@ -105,6 +105,34 @@ pub fn replace(
     options: Options,
     only: Option<&[String]>,
 ) -> Replaced {
+    replace_where(source, query, replacement, options, only, None)
+}
+
+/// Replaces one match of `query` with `replacement` (plain text): the `nth` on slide `slide`,
+/// counting from 0 in the order [`find`] gives that slide's matches. A locked slide is left
+/// alone, and so is the deck when the slide has no such match.
+pub fn replace_nth(
+    source: &str,
+    query: &str,
+    replacement: &str,
+    options: Options,
+    slide: &str,
+    nth: usize,
+) -> Replaced {
+    let only = [slide.to_string()];
+    replace_where(source, query, replacement, options, Some(&only), Some(nth))
+}
+
+/// Replaces the matches of `query` in the slides `only` names (all without it): every match
+/// on them, or with `nth` just that one of each slide's.
+fn replace_where(
+    source: &str,
+    query: &str,
+    replacement: &str,
+    options: Options,
+    only: Option<&[String]>,
+    nth: Option<usize>,
+) -> Replaced {
     let needle = normalize_query(query, options);
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut slides = Vec::new();
@@ -122,6 +150,9 @@ pub fn replace(
                 for at in matches(&chars, &needle, options) {
                     hits.push(chars[at.start].1.start..chars[at.end - 1].1.end);
                 }
+            }
+            if let Some(nth) = nth {
+                hits = hits.into_iter().skip(nth).take(1).collect();
             }
             if hits.is_empty() {
                 continue;
@@ -518,6 +549,41 @@ mod tests {
 
         let none = replace(&source, "nowhere", "x", CASE, None);
         assert_eq!((none.count, none.html), (0, source));
+    }
+
+    #[test]
+    fn replaces_one_match_of_a_slide_counted_as_find_lists_them() {
+        let source = deck(
+            r#"<section class="slide" id="a"><h1>Acme</h1><p>Acme and acme</p><aside class="notes">Say acme</aside></section>
+<section class="slide" id="b" data-locked><p>Acme</p></section>
+<section class="slide" id="c"><p>Acme</p></section>"#,
+        );
+        let second = replace_nth(&source, "acme", "Initech", CASE, "a", 1);
+        assert_eq!((second.count, second.slides.clone()), (1, vec!["a".into()]));
+        assert!(second.html.contains(
+            r#"<h1>Acme</h1><p>Initech and acme</p><aside class="notes">Say acme</aside>"#
+        ));
+        assert!(second.html.contains(r#"id="c"><p>Acme</p>"#));
+        // The one after it takes its place among the slide's matches.
+        assert_eq!(find(&second.html, "acme", CASE).len(), 5);
+        assert_eq!(find(&second.html, "acme", CASE)[1].before, "Initech and ");
+
+        // A match in the notes counts too, after those the slide shows.
+        let notes = replace_nth(&source, "acme", "Initech", CASE, "a", 3);
+        assert!(notes
+            .html
+            .contains(r#"<aside class="notes">Say Initech</aside>"#));
+
+        // Past the slide's last match, on a locked slide, or on one that is not there: nothing.
+        let past = replace_nth(&source, "acme", "x", CASE, "a", 4);
+        assert_eq!((past.count, past.html), (0, source.clone()));
+        let locked = replace_nth(&source, "acme", "x", CASE, "b", 0);
+        assert_eq!(
+            (locked.count, locked.skipped.clone()),
+            (0, vec!["b".into()])
+        );
+        assert_eq!(locked.html, source);
+        assert_eq!(replace_nth(&source, "acme", "x", CASE, "gone", 0).count, 0);
     }
 
     #[test]

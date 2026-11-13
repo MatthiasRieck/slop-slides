@@ -4,9 +4,12 @@ import * as tauri from "./tauri";
 // Every test runs against the shared Tauri stand-ins in ./tauri.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke, Channel: tauri.Channel }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen, emit: tauri.emit }));
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: tauri.getCurrentWindow }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: tauri.getCurrentWindow,
+  UserAttentionType: { Critical: 1, Informational: 2 },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: tauri.ask, save: tauri.save, open: tauri.open }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: tauri.revealItemInDir }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: tauri.revealItemInDir, openUrl: tauri.openUrl }));
 
 afterEach(() => {
   for (const mock of tauri.tauriMocks) mock.mockClear();

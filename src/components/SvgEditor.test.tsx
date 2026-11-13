@@ -313,7 +313,7 @@ describe("SvgEditor", () => {
       if (command === "update_slide") return deckFor(DECK_HTML, "2");
     });
     await open();
-    const accept = screen.getByRole("button", { name: /Accept/ }) as HTMLButtonElement;
+    const accept = screen.getByRole("button", { name: /Apply to slide/ }) as HTMLButtonElement;
     const discard = screen.getByRole("button", { name: /Discard/ }) as HTMLButtonElement;
     expect([accept.disabled, discard.disabled]).toEqual([true, true]);
     press(shown().querySelector("#box")!, 25, 25);

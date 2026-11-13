@@ -19,10 +19,11 @@ vi.mock("./CodeView", async () => {
   };
 });
 
-import { useApp } from "../store";
+import { provideCodeSave, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask } from "../test/tauri";
+import { answerUnsaved, unsavedAsked } from "../test/unsaved";
 import { Sidebar } from "./Sidebar";
 
 beforeEach(() => {
@@ -37,6 +38,9 @@ beforeEach(() => {
     sidebarTabs: ["chat", "files"],
     sidebarTab: "chat",
     sidebarOpen: true,
+    running: false,
+    messages: [],
+    shortcutHelpOpen: false,
   });
 });
 
@@ -93,7 +97,7 @@ describe("Sidebar", () => {
       "Notes",
       "HTML",
       "SVG",
-      "Settings",
+      "App settings",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
@@ -150,7 +154,7 @@ describe("Sidebar", () => {
     render(<Sidebar />);
     const maximize = screen.getByRole("button", { name: "Restore the sidebar" });
     const hide = screen.getByRole("button", { name: "Hide sidebar" });
-    expect(maximize.nextElementSibling).toBe(hide);
+    expect(maximize.nextElementSibling?.contains(hide)).toBe(true);
     fireEvent.click(hide);
     expect(useApp.getState()).toMatchObject({ sidebarOpen: false, sidebarMaximized: false });
   });
@@ -227,26 +231,38 @@ describe("Sidebar", () => {
     expect(codeMounts).toHaveBeenCalledTimes(1);
   });
 
-  it("asks before closing the HTML tab over unsaved edits", async () => {
+  it("asks before closing the HTML tab over unsaved edits: stay, or close without saving", async () => {
     useApp.setState({ sidebarTabs: ["chat", "code"], sidebarTab: "code", codeDirty: true });
-    ask.mockResolvedValueOnce(false);
     render(<Sidebar />);
     expect(screen.getByTestId("code-mark").title).toBe("Unsaved changes");
     fireEvent.click(screen.getByRole("button", { name: "Close HTML" }));
-    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    await act(async () => void (await answerUnsaved("cancel")));
     expect(tabNames()).toEqual(["Chat", "HTML"]);
-    ask.mockResolvedValueOnce(true);
     fireEvent.click(screen.getByRole("button", { name: "Close HTML" }));
+    await act(async () => void (await answerUnsaved("discard")));
     await waitFor(() => expect(tabNames()).toEqual(["Chat"]));
+    expect(ask).not.toHaveBeenCalled();
   });
 
-  it("closes the HTML tab without asking when nothing is unsaved", () => {
+  it("saves the HTML tab's edits before closing it, when asked to", async () => {
+    useApp.setState({ sidebarTabs: ["chat", "code"], sidebarTab: "code", codeDirty: true });
+    const save = vi.fn(async () => useApp.getState().setCodeDirty(false));
+    const gone = provideCodeSave(save);
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Close HTML" }));
+    await act(async () => void (await answerUnsaved("save")));
+    await waitFor(() => expect(tabNames()).toEqual(["Chat"]));
+    expect(save).toHaveBeenCalledOnce();
+    gone();
+  });
+
+  it("closes the HTML tab without asking when nothing is unsaved", async () => {
     useApp.setState({ sidebarTabs: ["chat", "code"], sidebarTab: "chat" });
     render(<Sidebar />);
     expect(screen.queryByTestId("code-mark")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Close HTML" }));
     expect(tabNames()).toEqual(["Chat"]);
-    expect(ask).not.toHaveBeenCalled();
+    expect(await unsavedAsked()).toBe(false);
   });
 
   it("marks the Narration tab while the selected slide has narration", () => {
@@ -263,17 +279,122 @@ describe("Sidebar", () => {
     expect(tab("Narration")).toBeTruthy();
   });
 
-  it("opens the settings in a tab from the button at the bottom", () => {
+  it("opens the app's settings in a tab from the button at the bottom", () => {
     render(<Sidebar />);
-    const settings = screen.getByRole("button", { name: "Settings" });
+    const settings = screen.getByRole("button", { name: "App settings" });
     expect(settings.getAttribute("aria-pressed")).toBe("false");
+    expect(settings.title).toBe("App settings (Ctrl+,)");
     fireEvent.click(settings);
-    expect(tabNames()).toEqual(["Chat", "Files", "Settings"]);
+    expect(tabNames()).toEqual(["Chat", "Files", "App settings"]);
     expect(shown("settings")).toBe(true);
-    expect(screen.getByRole("button", { name: "Settings" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "App settings" }).getAttribute("aria-pressed")).toBe("true");
     // A second press keeps the one tab.
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(tabNames()).toEqual(["Chat", "Files", "Settings"]);
+    fireEvent.click(screen.getByRole("button", { name: "App settings" }));
+    expect(tabNames()).toEqual(["Chat", "Files", "App settings"]);
+  });
+
+  it("opens the keyboard shortcuts from the button beside the settings", () => {
+    render(<Sidebar />);
+    const shortcuts = screen.getByRole("button", { name: "Keyboard shortcuts" });
+    expect(shortcuts.previousElementSibling).toBe(screen.getByRole("button", { name: "App settings" }));
+    expect(shortcuts.title).toBe("Keyboard shortcuts (?, Ctrl+/)");
+    fireEvent.click(shortcuts);
+    expect(useApp.getState().shortcutHelpOpen).toBe(true);
+  });
+
+  describe("a tab's close button", () => {
+    const close = (name: string) => screen.getByRole("button", { name: `Close ${name}` });
+
+    it("sits on the tab's trailing edge, the icon staying where it is", () => {
+      render(<Sidebar />);
+      // After the tab itself, not over its icon: a click meant for the tab stays the tab's.
+      expect(tab("Files").nextElementSibling).toBe(close("Files"));
+      expect(close("Files").className).not.toContain("absolute");
+      const icon = tab("Files").querySelector("svg")!;
+      expect(icon.getAttribute("class")).not.toMatch(/invisible/);
+    });
+
+    it("shows on the active tab, and on the others when hovered or focused", () => {
+      render(<Sidebar />);
+      expect(close("Chat").className).toMatch(/(^| )opacity-100( |$)/);
+      const other = close("Files").className;
+      expect(other).toMatch(/(^| )opacity-0( |$)/);
+      expect(other).toContain("group-hover:opacity-100");
+      expect(other).toContain("group-focus-within:opacity-100");
+      // Never out of the keyboard's reach.
+      expect(other).not.toContain("invisible");
+    });
+
+    it("closes the tab on a middle click, and leaves the other buttons' clicks alone", () => {
+      render(<Sidebar />);
+      fireEvent(tab("Files"), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 2 }));
+      expect(tabNames()).toEqual(["Chat", "Files"]);
+      fireEvent(tab("Files"), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+      expect(tabNames()).toEqual(["Chat"]);
+    });
+
+    it("asks about unsaved edits on a middle click too", async () => {
+      useApp.setState({ sidebarTabs: ["chat", "code"], sidebarTab: "chat", codeDirty: true });
+      render(<Sidebar />);
+      fireEvent(tab("HTML"), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+      await act(async () => void (await answerUnsaved("cancel")));
+      expect(tabNames()).toEqual(["Chat", "HTML"]);
+    });
+  });
+
+  describe("the Chat tab's mark", () => {
+    const mark = () => document.querySelector<HTMLElement>("[role=tablist] [data-attention]");
+
+    it("is a spinner while the agent works and another tab shows", () => {
+      useApp.setState({ sidebarTab: "files", running: true });
+      render(<Sidebar />);
+      expect(mark()?.dataset.attention).toBe("working");
+      expect(screen.getByRole("tab", { name: /^Chat/ }).contains(mark())).toBe(true);
+      // On show, the chat says so itself.
+      fireEvent.click(screen.getByRole("tab", { name: /^Chat/ }));
+      expect(mark()).toBeNull();
+    });
+
+    it("is a warning dot while the agent waits for an approval", () => {
+      useApp.setState({
+        sidebarTab: "files",
+        running: true,
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            parts: [
+              {
+                kind: "approval",
+                status: "pending",
+                approval: {
+                  id: "p1",
+                  title: "Run a command",
+                  reason: null,
+                  details: "ls",
+                  acceptLabel: "Allow once",
+                  decisions: ["accept"],
+                },
+              },
+            ],
+            status: "streaming",
+            thinking: false,
+            error: null,
+            costUsd: null,
+            durationMs: null,
+            createdAt: 1,
+          },
+        ],
+      });
+      render(<Sidebar />);
+      expect(mark()?.dataset.attention).toBe("approval");
+    });
+
+    it("is not there while the chat is at rest", () => {
+      useApp.setState({ sidebarTab: "files" });
+      render(<Sidebar />);
+      expect(mark()).toBeNull();
+    });
   });
 
   describe("when the tabs don't fit", () => {

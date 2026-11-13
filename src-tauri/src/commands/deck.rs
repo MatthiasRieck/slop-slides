@@ -81,6 +81,7 @@ pub fn open_deck(
     if idle {
         history::checkpoint(&files::app_home()?, &file)?;
     }
+    workspace::remember_deck(&files::app_home()?, &root, &file, &deck.title)?;
     open.open_deck(label, &file, keep_chat).map_err(taken)?;
     Ok(deck)
 }
@@ -118,9 +119,12 @@ pub fn save_comments(id: String, comments: comments::Comments) -> Result<()> {
 
 #[tauri::command]
 pub fn rename_deck(id: String, title: String) -> Result<Deck> {
-    changing(&id, Change::new(Source::Deck, "Rename deck"), |file| {
+    let deck = changing(&id, Change::new(Source::Deck, "Rename deck"), |file| {
         deck::rename(file, &title)
-    })
+    })?;
+    // The start screen lists it under its new title.
+    workspace::retitle_deck(&files::app_home()?, &deck::deck_file(&id)?, &deck.title)?;
+    Ok(deck)
 }
 
 #[tauri::command]
@@ -213,6 +217,29 @@ pub fn set_slide_locked(window: Window, id: String, slide: String, locked: bool)
     })
 }
 
+/// Locks or unlocks `slides`, as one change in the deck's history. Each slide's guard is
+/// refreshed as it is locked (see [`deck::set_slide_locked`]).
+#[tauri::command]
+pub fn set_slides_locked(
+    window: Window,
+    id: String,
+    slides: Vec<String>,
+    locked: bool,
+) -> Result<Deck> {
+    let session = current_session(&window)?;
+    let label = if locked {
+        "Lock slides"
+    } else {
+        "Unlock slides"
+    };
+    changing(&id, Change::new(Source::Rail, label), |file| {
+        for slide in &slides {
+            deck::set_slide_locked(file, session.as_deref(), slide, locked)?;
+        }
+        deck::load(file)
+    })
+}
+
 #[tauri::command]
 pub fn add_section(id: String, before: Option<String>, title: String) -> Result<Deck> {
     changing(&id, Change::new(Source::Rail, "Add section"), |file| {
@@ -301,6 +328,22 @@ pub fn replace_in_deck(
 ) -> Result<deck::ReplacedText> {
     changing(&id, Change::new(Source::Edit, "Replace text"), |file| {
         deck::replace_text(file, &query, &replacement, options, slides.as_deref())
+    })
+}
+
+/// Replaces one match of `query` in deck `id`: the `nth` on `slide`, from 0, in the order
+/// `find_in_deck` lists that slide's matches.
+#[tauri::command]
+pub fn replace_match_in_deck(
+    id: String,
+    query: String,
+    replacement: String,
+    options: find::Options,
+    slide: String,
+    nth: usize,
+) -> Result<deck::ReplacedText> {
+    changing(&id, Change::new(Source::Edit, "Replace text"), |file| {
+        deck::replace_match(file, &query, &replacement, options, &slide, nth)
     })
 }
 

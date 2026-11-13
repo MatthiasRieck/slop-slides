@@ -1,8 +1,8 @@
-import { AppWindow, Loader2, MonitorPlay, StickyNote } from "lucide-react";
+import { AppWindow, ArrowLeftRight, Loader2, MonitorPlay, StickyNote } from "lucide-react";
 import { useState } from "react";
 
 import type { Screen } from "../lib/api";
-import { arrange, choose, defaultChoice, type ScreenChoice } from "../lib/screens";
+import { arrange, choose, loadChoice, type ScreenChoice, swap } from "../lib/screens";
 import { cn } from "../lib/utils";
 import { Dialog } from "./Dialog";
 
@@ -12,12 +12,17 @@ const MAX_HEIGHT_REM = 16;
 /** The small print on a screen, which stays readable over a screenshot. */
 const LABEL = "relative max-w-full truncate rounded bg-background/85 px-1.5 py-px text-[10px] font-medium";
 
+/** What a screen is used for, in words: its border's color alone would not say. */
+const ROLE_NAMES = { audience: "Slides", presenter: "Presenter view", none: "Not used" } as const;
+
 /**
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
- * the desk, with a button on each for the audience's slides and one for the presenter view
- * (notes, next slide, timers). Each is on one screen at a time. A screenshot of a screen, where
- * there is one, makes it easy to recognize. Or the show goes in windows instead, for sharing
- * the slides' window in a call.
+ * the desk, each saying what it shows ("Slides", "Presenter view", "Not used"), with a button on
+ * each for the audience's slides and one for the presenter view (notes, next slide, timers). Each
+ * is on one screen at a time, and Swap exchanges the two. It starts with what was picked last for
+ * these screens, or else with the slides on a screen that is not the computer's main one (see
+ * `loadChoice`). A screenshot of a screen, where there is one, makes it easy to recognize. Enter
+ * starts the show. Or the show goes in windows instead, for sharing the slides' window in a call.
  */
 export function ScreenPicker(props: {
   screens: Screen[];
@@ -29,7 +34,7 @@ export function ScreenPicker(props: {
   onCancel: () => void;
 }) {
   const { screens } = props;
-  const [choice, setChoice] = useState(() => defaultChoice(screens));
+  const [choice, setChoice] = useState(() => loadChoice(screens));
   const { aspect, boxes } = arrange(screens);
 
   return (
@@ -81,6 +86,17 @@ export function ScreenPicker(props: {
                 </>
               )}
               <span className={LABEL}>{screen.name}</span>
+              <span
+                data-testid={`screen-role-${screen.index}`}
+                className={cn(
+                  "relative max-w-full truncate rounded px-1.5 py-px text-[10px] font-semibold",
+                  role === "audience" && "bg-primary text-primary-foreground",
+                  role === "presenter" && "bg-warning text-warning-foreground",
+                  !role && "bg-background/85 text-muted-foreground",
+                )}
+              >
+                {ROLE_NAMES[role ?? "none"]}
+              </span>
               <div className="relative flex gap-1.5">
                 <RoleButton
                   label={`Slides on ${screen.name}`}
@@ -107,19 +123,37 @@ export function ScreenPicker(props: {
           );
         })}
       </div>
-      <label className="flex items-center gap-2 text-xs">
-        <input
-          type="checkbox"
-          checked={choice.presenter === null}
-          onChange={(event) =>
-            setChoice({
-              ...choice,
-              presenter: event.target.checked ? null : screens.findIndex((s) => s.index !== choice.audience),
-            })
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={choice.presenter === null}
+            onChange={(event) =>
+              setChoice({
+                ...choice,
+                presenter: event.target.checked
+                  ? null
+                  : (screens.find((s) => s.index !== choice.audience)?.index ?? null),
+              })
+            }
+          />
+          No presenter view
+        </label>
+        <button
+          type="button"
+          title={
+            choice.presenter === null
+              ? "Pick a screen for the presenter view first"
+              : "Put the slides where the presenter view is, and the presenter view where the slides are"
           }
-        />
-        No presenter view
-      </label>
+          disabled={choice.presenter === null}
+          onClick={() => setChoice(swap(choice))}
+          className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs enabled:hover:bg-accent disabled:cursor-default disabled:opacity-40 [&_svg]:size-3.5"
+        >
+          <ArrowLeftRight />
+          Swap
+        </button>
+      </div>
       <div className="flex justify-end gap-2">
         <button
           type="button"
@@ -139,6 +173,8 @@ export function ScreenPicker(props: {
         </button>
         <button
           type="button"
+          // Enter starts the show with what is picked.
+          data-autofocus
           onClick={() => props.onStart(choice)}
           className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-sm hover:opacity-90"
         >

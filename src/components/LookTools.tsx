@@ -1,20 +1,25 @@
-import { Blend, FlipHorizontal2, FlipVertical2, Image, Paintbrush, Replace } from "lucide-react";
+import { Blend, Crop, Paintbrush, Replace } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
-import { type EditSelection, type EditStyle, type EditTool, FIT_POSITIONS, type ImageFit } from "../lib/editTools";
+import type { ArrangeMessage } from "../lib/arrange";
+import {
+  type EditSelection,
+  type EditStyle,
+  type EditTool,
+  FIT_LABELS,
+  FIT_POSITION_NAMES,
+  FIT_POSITIONS,
+  type ImageFit,
+} from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
+import { DraftInput } from "./Field";
 import { DropdownPanel } from "./Popover";
-
-const FITS: { value: ImageFit; label: string }[] = [
-  { value: "contain", label: "Fit" },
-  { value: "cover", label: "Fill" },
-  { value: "fill", label: "Stretch" },
-];
+import { RibbonSelect } from "./Ribbon";
 
 /**
  * The toolbar's tools for how an element looks, beyond text, fill and border: opacity, shadow and
- * corner radius; the format painter; fitting, flipping and describing the selected image. Mounted
+ * corner radius; the format painter; replacing, fitting and describing the selected image. Mounted
  * in EditToolbar.
  */
 export function LookTools(props: {
@@ -22,6 +27,8 @@ export function LookTools(props: {
   selection: EditSelection | null;
   onTool: (tool: EditTool) => void;
   onStyle: (changes: EditStyle) => void;
+  /** Previews a restyle in the slide while a slider is dragged, and takes a preview back. */
+  onArrange?: (message: ArrangeMessage) => void;
   onPickImage?: (replace: boolean) => void;
   onReturnFocus: () => void;
 }) {
@@ -29,12 +36,19 @@ export function LookTools(props: {
   const painting = props.tool === "paint";
   return (
     <>
-      <AppearanceButton selection={selection} onStyle={props.onStyle} onDone={props.onReturnFocus} />
+      <AppearanceButton
+        selection={selection}
+        onStyle={props.onStyle}
+        onArrange={props.onArrange}
+        onDone={props.onReturnFocus}
+      />
       <ToolButton
         keepFocus
-        label="Copy this look to the next element clicked"
+        label="Format painter"
+        title="Copy this look to the next element clicked"
         active={painting}
         disabled={!selection && !painting}
+        disabledReason="Select an element"
         onClick={() => props.onTool(painting ? "select" : "paint")}
       >
         <Paintbrush />
@@ -51,20 +65,24 @@ export function LookTools(props: {
 
 const popoverPanel = "grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs";
 
-/** Opacity, shadow and corner radius of the selection. */
+/** Opacity, shadow and corner radius of the selection, and a shape's proportions. */
 function AppearanceButton(props: {
   selection: EditSelection | null;
   onStyle: (changes: EditStyle) => void;
+  onArrange?: (message: ArrangeMessage) => void;
   onDone: () => void;
 }) {
   // The panel shows only with a selection, and comes back with it: saving reloads the slide's
   // preview, which reports the selection again.
   const { open, ref, toggle } = useDropdown();
   const s = props.selection;
-  const change = (changes: EditStyle) => {
-    props.onStyle(changes);
-    props.onDone();
-  };
+  /** What a slider needs to show its value in the slide as it moves and to apply the one it is let go at. */
+  const live = (style: (value: number) => EditStyle) => ({
+    onPreview: (value: number) => props.onArrange?.({ type: "slop:edit-style", style: style(value), preview: true }),
+    onCancel: () => props.onArrange?.({ type: "slop:edit-style-cancel" }),
+    onCommit: (value: number) => props.onStyle(style(value)),
+    onDone: props.onDone,
+  });
   return (
     <div ref={ref} className="relative">
       <ToolButton
@@ -73,6 +91,7 @@ function AppearanceButton(props: {
         title="Opacity, shadow, corner radius and a shape's proportions"
         aria-expanded={open}
         disabled={!s}
+        disabledReason="Select an element"
         onClick={toggle}
       >
         <Blend />
@@ -86,7 +105,7 @@ function AppearanceButton(props: {
             max={100}
             step={5}
             unit="%"
-            onCommit={(n) => change({ opacity: n / 100 })}
+            {...live((n) => ({ opacity: n / 100 }))}
           />
           <Slider
             label="Shadow"
@@ -95,7 +114,7 @@ function AppearanceButton(props: {
             step={2}
             unit="px"
             disabled={s.clipped}
-            onCommit={(shadow) => change({ shadow })}
+            {...live((shadow) => ({ shadow }))}
           />
           <Slider
             label="Corner radius"
@@ -104,7 +123,7 @@ function AppearanceButton(props: {
             step={2}
             unit="px"
             disabled={s.radius === null}
-            onCommit={(radius) => change({ radius })}
+            {...live((radius) => ({ radius }))}
           />
           {s.adjust && (
             <Slider
@@ -115,7 +134,7 @@ function AppearanceButton(props: {
               step={s.adjust.step}
               // A star counts its points; the others go by a share of the shape's height.
               unit={s.adjust.label === "Points" ? "" : "%"}
-              onCommit={(adjust) => change({ adjust })}
+              {...live((adjust) => ({ adjust }))}
             />
           )}
         </DropdownPanel>
@@ -124,7 +143,12 @@ function AppearanceButton(props: {
   );
 }
 
-/** A slider showing its value as it moves; only the value it is let go at is applied. */
+/**
+ * A slider with its value as a number to type beside it. While it is dragged the value shows in
+ * the slide (`onPreview`); the one it is let go at is applied, once (`onCommit`). A drag that
+ * never lands (Escape, or the slider going away under the pointer) is taken back (`onCancel`).
+ * A typed number applies on Enter or when the field loses focus, within the slider's range.
+ */
 function Slider(props: {
   label: string;
   value: number;
@@ -133,21 +157,40 @@ function Slider(props: {
   step: number;
   unit: string;
   disabled?: boolean;
+  onPreview: (value: number) => void;
   onCommit: (value: number) => void;
+  onCancel: () => void;
+  onDone: () => void;
 }) {
+  const min = props.min ?? 0;
+  const max = Math.max(props.max, props.value);
   const [draft, setDraft] = useState(props.value);
   useEffect(() => setDraft(props.value), [props.value]);
   const input = useRef<HTMLInputElement>(null);
-  const onCommit = useRef(props.onCommit);
-  onCommit.current = props.onCommit;
-  // React's onChange fires all along the drag, and each applied value saves the slide.
+  // A value was previewed that has not been applied or taken back yet.
+  const previewing = useRef(false);
+  const latest = useRef(props);
+  latest.current = props;
+  // React's onChange fires all along the drag; the browser's own `change` only when it ends.
   useEffect(() => {
     const el = input.current;
     if (!el) return;
-    const commit = () => onCommit.current(Number(el.value));
+    const commit = () => {
+      previewing.current = false;
+      latest.current.onCommit(Number(el.value));
+    };
     el.addEventListener("change", commit);
-    return () => el.removeEventListener("change", commit);
+    return () => {
+      el.removeEventListener("change", commit);
+      if (previewing.current) latest.current.onCancel();
+    };
   }, []);
+  const cancel = () => {
+    if (!previewing.current) return;
+    previewing.current = false;
+    setDraft(props.value);
+    props.onCancel();
+  };
   return (
     <>
       <span className={cn("text-muted-foreground", props.disabled && "opacity-30")}>{props.label}</span>
@@ -156,24 +199,48 @@ function Slider(props: {
           ref={input}
           type="range"
           aria-label={props.label}
-          min={props.min ?? 0}
-          max={Math.max(props.max, props.value)}
+          min={min}
+          max={max}
           step={props.step}
           disabled={props.disabled}
           value={draft}
-          onChange={(event) => setDraft(Number(event.target.value))}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            setDraft(value);
+            previewing.current = true;
+            props.onPreview(value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape" || !previewing.current) return;
+            // Only the drag is taken back; the popover stays.
+            event.stopPropagation();
+            cancel();
+          }}
           className="h-4 w-28 disabled:opacity-40"
         />
-        <span className="w-10 text-right tabular-nums">
-          {draft}
-          {props.unit}
+        <span className="flex w-14 items-center justify-end gap-0.5 tabular-nums">
+          <DraftInput
+            aria-label={`${props.label} value`}
+            title={`${props.label} (type a value and press Enter)`}
+            disabled={props.disabled}
+            value={draft}
+            parse={(text) => {
+              const value = Number(text.trim());
+              return text.trim() && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : null;
+            }}
+            sanitize={(text) => text.replace(/[^\d]/g, "")}
+            onChange={props.onCommit}
+            onDone={props.onDone}
+            className="h-5 w-9 rounded border bg-transparent px-0.5 text-right text-foreground disabled:opacity-40"
+          />
+          <span className="w-3 text-muted-foreground">{props.unit}</span>
         </span>
       </span>
     </>
   );
 }
 
-/** Replacing, fitting, flipping and describing the selected image. */
+/** Replacing, fitting and describing the selected image. Flipping it is with the other flips, under Position and size. */
 function ImageButton(props: {
   selection: EditSelection | null;
   onStyle: (changes: EditStyle) => void;
@@ -191,65 +258,55 @@ function ImageButton(props: {
     <div ref={ref} className="relative">
       <ToolButton
         keepFocus
-        label="Image"
-        title="Replace, fit, flip and describe the image"
+        label="Image options"
+        title="Replace, fit and describe the image"
         aria-expanded={open}
         disabled={!s}
+        disabledReason="Select an image"
         onClick={toggle}
       >
-        <Image />
+        <Crop />
       </ToolButton>
       {open && s && (
-        <DropdownPanel role="dialog" aria-label="Image" className={popoverPanel}>
+        <DropdownPanel role="dialog" aria-label="Image options" className={popoverPanel}>
           <span className="text-muted-foreground">Image</span>
           <span className="flex items-center gap-0.5">
             <ToolButton keepFocus label="Replace the image, keeping its size and place" onClick={props.onReplace}>
               <Replace />
             </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Flip horizontally"
-              active={s.flipX}
-              onClick={() => props.onStyle({ flipX: !s.flipX })}
-            >
-              <FlipHorizontal2 />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Flip vertically"
-              active={s.flipY}
-              onClick={() => props.onStyle({ flipY: !s.flipY })}
-            >
-              <FlipVertical2 />
-            </ToolButton>
           </span>
           <label htmlFor="edit-image-fit" className="text-muted-foreground">
             Fit
           </label>
-          <select
+          <RibbonSelect
             id="edit-image-fit"
+            title="How the image fills its box"
             value={s.fit ?? "fill"}
-            onChange={(event) => props.onStyle({ fit: event.target.value as ImageFit })}
-            className="h-6 rounded border bg-transparent px-1"
+            onPick={(fit) => props.onStyle({ fit: fit as ImageFit })}
+            onDone={props.onDone}
+            className="border"
           >
-            {FITS.map((f) => (
+            {FIT_LABELS.map((f) => (
               <option key={f.value} value={f.value}>
                 {f.label}
               </option>
             ))}
-          </select>
+          </RibbonSelect>
           <span className="text-muted-foreground">Position</span>
           <fieldset aria-label="Image position" className="grid w-max grid-cols-3 gap-0.5">
-            {FIT_POSITIONS.map((position) => (
+            {FIT_POSITIONS.map((position, index) => (
               <button
                 key={position}
                 type="button"
                 aria-label={`Position ${position}`}
-                title={position}
+                title={FIT_POSITION_NAMES[index]}
                 aria-pressed={s.fitPosition === position}
                 onMouseDown={keepFocus}
                 onClick={() => props.onStyle({ fitPosition: position })}
-                className={cn("size-3 rounded-sm border", s.fitPosition === position && "bg-foreground/60")}
+                className={cn(
+                  "size-5 rounded-sm border hover:bg-accent",
+                  s.fitPosition === position && "bg-foreground/60 hover:bg-foreground/60",
+                )}
               />
             ))}
           </fieldset>

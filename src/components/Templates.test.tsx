@@ -237,10 +237,60 @@ describe("style picker", () => {
     expect(useApp.getState().deck?.template).toBe("swiss");
   });
 
-  it("disables restyling while the agent is working", () => {
+  it("says where the request went, and marks the style asked for", async () => {
+    render(<StylePicker />);
+    expect(screen.queryByRole("status")).toBeNull();
+    const bento = screen.getByRole("button", { name: "Bento Grid style" });
+    await act(async () => fireEvent.click(bento));
+    expect(screen.getByRole("status").textContent).toBe("Request added to the chat. Send it to restyle.");
+    expect(bento.dataset.requested).toBe("true");
+    expect(bento.textContent).toContain("Requested");
+    expect(screen.getByRole("button", { name: "Swiss Design style" }).dataset.requested).toBeUndefined();
+    // Asking for another moves the mark.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Swiss Design style" })));
+    expect(bento.dataset.requested).toBeUndefined();
+    expect(screen.getByRole("button", { name: "Swiss Design style" }).dataset.requested).toBe("true");
+  });
+
+  it("says nothing of a request when the style was applied directly, or could not be staged", async () => {
+    const empty = { ...DECK, slides: [] };
+    useApp.setState({ deck: empty, selected: null });
+    invoke.mockImplementation(async (command: string) =>
+      command === "apply_template" ? { ...empty, template: "swiss" } : undefined,
+    );
+    const { unmount } = render(<StylePicker />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Swiss Design style" })));
+    expect(screen.queryByRole("status")).toBeNull();
+    unmount();
+
+    useApp.setState({ deck: DECK });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "stage_template") throw "template not found: swiss";
+    });
+    render(<StylePicker />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Swiss Design style" })));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "Swiss Design style" }).dataset.requested).toBeUndefined();
+  });
+
+  it("forgets the request for another deck", async () => {
+    render(<StylePicker />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Bento Grid style" })));
+    expect(screen.getByRole("status")).toBeTruthy();
+    act(() => useApp.setState({ deck: { ...DECK, id: "/other/deck.html" } }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("disables restyling while the agent is working, and says what it waits for", () => {
     useApp.setState({ running: true });
     render(<StylePicker />);
-    expect((screen.getByRole("button", { name: "Swiss Design style" }) as HTMLButtonElement).disabled).toBe(true);
+    const swiss = screen.getByRole("button", { name: "Swiss Design style" }) as HTMLButtonElement;
+    expect(swiss.disabled).toBe(true);
+    expect(swiss.title).toBe("Wait for the agent to finish to restyle the deck");
+    expect(screen.getByText("Wait for the agent to finish to restyle the deck.")).toBeTruthy();
+    act(() => useApp.setState({ running: false }));
+    expect(swiss.disabled).toBe(false);
+    expect(swiss.title).toBe("");
   });
 
   it("saves the deck as a template under the name given", async () => {

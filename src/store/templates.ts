@@ -13,10 +13,11 @@ export interface TemplatesSlice {
 
   refreshTemplates: () => Promise<void>;
   /**
-   * Restyles the deck like the template: an empty deck takes its styles directly; otherwise
-   * the composer gets a prompt asking the agent to.
+   * Restyles the deck like the template: an empty deck takes its styles directly (`applied`);
+   * otherwise the composer gets a prompt asking the agent to (`requested`). Null when neither
+   * happened.
    */
-  applyStyle: (template: string) => Promise<void>;
+  applyStyle: (template: string) => Promise<DesignChange | null>;
   /**
    * Adds a slide on the template's layout `slide` after the selected one: a copy of it when
    * the deck uses that template, else a prompt in the composer for the agent.
@@ -27,11 +28,18 @@ export interface TemplatesSlice {
   /** Saves the deck as a user template with placeholder content; null when it failed. */
   saveAsTemplate: (name: string) => Promise<TemplateSummary | null>;
   /**
-   * Gives every slide the canvas `size`, then (when the deck has slides) puts a prompt in the
-   * composer asking the agent to lay the slides out again for it.
+   * Gives every slide the canvas `size` (`applied`), then, when the deck has slides, puts a
+   * prompt in the composer asking the agent to lay the slides out again for it (`requested`).
+   * Null when the size stayed as it was.
    */
-  resizeSlides: (size: SlideSize) => Promise<void>;
+  resizeSlides: (size: SlideSize) => Promise<DesignChange | null>;
 }
+
+/**
+ * How a change to the deck's design went: `applied` to the deck as it is, or `requested` of the
+ * agent, in a message waiting in the chat's composer for the user to send.
+ */
+export type DesignChange = "applied" | "requested";
 
 export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
   const findTemplate = (id: string) => get().templates?.find((t) => t.id === id);
@@ -51,16 +59,18 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
     applyStyle: async (id) => {
       const { deck } = get();
       const template = findTemplate(id);
-      if (!deck || !template) return;
+      if (!deck || !template) return null;
       try {
         if (deck.slides.length === 0) {
           get().setDeck(await api.applyTemplate(deck.id, id));
-          return;
+          return "applied";
         }
         const path = await api.stageTemplate(deck.id, id);
         promptAgent(app, stylePrompt(template, path));
+        return "requested";
       } catch (error) {
         showErrorIn(app, error);
+        return null;
       }
     },
 
@@ -111,16 +121,19 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
 
     resizeSlides: async (size) => {
       const { deck, running } = get();
-      if (!deck || running) return;
+      if (!deck || running) return null;
       const from = deck.size ?? DEFAULT_SIZE;
-      if (sameSize(from, size)) return;
+      if (sameSize(from, size)) return null;
       try {
         const resized = await api.setSlideSize(deck.id, size);
-        if (get().deck?.id !== deck.id) return;
+        if (get().deck?.id !== deck.id) return null;
         get().setDeck(resized);
-        if (resized.slides.length > 0) promptAgent(app, resizePrompt(from, resized.size ?? size));
+        if (resized.slides.length === 0) return "applied";
+        promptAgent(app, resizePrompt(from, resized.size ?? size));
+        return "requested";
       } catch (error) {
         showErrorIn(app, error);
+        return null;
       }
     },
   };

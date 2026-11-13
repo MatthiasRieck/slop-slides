@@ -1,4 +1,5 @@
 import { type AgentEvent, api, type Deck, errorMessage } from "../lib/api";
+import { requestAttention } from "../lib/attention";
 import type { SlideComment } from "../lib/comments";
 import { inkBounds, type Stroke } from "../lib/ink";
 import type { Provider } from "../lib/models";
@@ -17,7 +18,9 @@ import {
   persistChat,
   type QueuedMessage,
   type ReadyMessage,
+  retryTarget,
   type SendOptions,
+  sendOptionsOf,
   settleInterrupted,
   settleReply,
   type UserMessage,
@@ -63,6 +66,11 @@ export interface ChatSlice {
   steerQueued: (id: string) => Promise<void>;
   /** Takes a message out of the queue, returning it (to edit it in the composer). */
   takeQueued: (id: string) => QueuedMessage | null;
+  /**
+   * Sends the message of the last turn again, with its slide and attachments, when that turn
+   * failed or was stopped (see `retryTarget`).
+   */
+  retryLast: () => Promise<void>;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
   interrupt: () => void;
@@ -136,6 +144,11 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     const item = get().queue.find((q) => q.id === id) ?? null;
     if (item) set((s) => ({ queue: s.queue.filter((q) => q.id !== id) }));
     return item;
+  },
+
+  retryLast: async () => {
+    const message = get().running ? null : retryTarget(get().messages);
+    if (message) await get().send(message.text, sendOptionsOf(message));
   },
 
   compact: async () => {
@@ -259,6 +272,8 @@ async function followDeck(app: AppStore) {
     return;
   }
   if (app.getState().chatKey === folder && app.getState().deck?.id === deck.id) {
+    // The same conversation under another key: `chatRevision` stays, and with it the composer's
+    // draft and attachments (see ChatPanel.tsx).
     app.setState({ chatKey: deck.id, chatFollowsDeck: false });
   }
 }
@@ -447,6 +462,8 @@ export function applyAgentEvent(app: AppStore, event: AgentEvent) {
       });
       app.setState({ running: false });
       persistChat(app);
+      // The user may be elsewhere, waiting for this.
+      requestAttention();
       // The turn's changes are in the decks' histories once it finished.
       void refreshHistory(app);
       const next = () => {
@@ -458,6 +475,8 @@ export function applyAgentEvent(app: AppStore, event: AgentEvent) {
       return;
     }
     default:
+      // The turn waits for the user, who may be elsewhere.
+      if (event.type === "approvalRequested") requestAttention();
       return updateLastAssistant(app, (m, s) =>
         applyReplyEvent(m, event, { messages: s.messages, provider: s.selection.provider }),
       );

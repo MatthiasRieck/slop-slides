@@ -162,3 +162,40 @@ export function filmstripFrames(width: number, picture: number, from: number, to
   const last = Math.min(Math.ceil(width / picture), Math.ceil(to / picture)) - 1;
   return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => first + i);
 }
+
+/** `seconds` to the tenth, like `0:03.2`: what a step of a tenth of a second changes. */
+export function formatTenths(seconds: number): string {
+  const tenths = Math.max(0, Math.round(seconds * 10));
+  return `${Math.floor(tenths / 600)}:${String(Math.floor(tenths / 10) % 60).padStart(2, "0")}.${tenths % 10}`;
+}
+
+/** How long a slide shows, for its block on the track: `5.0s`, or `1:05` from a minute on. */
+export function formatShown(seconds: number): string {
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** How far from the edge of what is in sight the playhead is kept, as a part of it. */
+const VIEW_MARGIN = 0.1;
+
+/**
+ * Where a track scrolled to `scrolled` (showing `view` pixels of it) scrolls to, for the playhead
+ * at `x` to be in sight: where it is while the playhead is, or else on by a page, the playhead
+ * near its left, as a playing track turns its pages.
+ */
+export function scrollToPlayhead(x: number, scrolled: number, view: number): number {
+  if (!(view > 0) || (x >= scrolled && x <= scrolled + view)) return scrolled;
+  return Math.max(0, x - view * VIEW_MARGIN);
+}
+
+/**
+ * Where a track scrolls to as its width changes from `before` to `after` (a zoom), for the
+ * playhead, at `at` of its length (0 to 1), to stay where it is on screen; one out of sight
+ * comes to the middle.
+ */
+export function scrollForZoom(at: number, before: number, after: number, scrolled: number, view: number): number {
+  const was = at * before - scrolled;
+  const offset = was >= 0 && was <= view ? was : view / 2;
+  return Math.max(0, Math.min(at * after - offset, Math.max(0, after - view)));
+}

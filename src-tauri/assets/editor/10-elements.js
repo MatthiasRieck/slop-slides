@@ -30,7 +30,7 @@
   }
 
   function commit() {
-    if (batching) return;
+    if (batching || preview) return;
     followLines([]);
     clearTimeout(nudgeTimer);
     nudgeTimer = null;
@@ -154,7 +154,34 @@
   /** Tells the app what its toolbar shows for the selection. */
   function report() {
     reportFrame = 0;
-    window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describe(selected) }, "*");
+    window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describeSelection() }, "*");
+  }
+
+  /**
+   * What the toolbar shows for the whole selection: the primary element's look, with each color
+   * the other selected elements do not share reported as mixed (null, with its `…Other` set).
+   */
+  function describeSelection() {
+    var now = describe(selected);
+    if (!now || !extras.length) return now;
+    var others = allSelected().filter(function (el) {
+      return el !== selected;
+    }).map(describe);
+    [["color", "colorOther"], ["fill", "fillOther"], ["stroke", "strokeOther"]].forEach(function (keys) {
+      var same = others.every(function (other) {
+        return other[keys[0]] === now[keys[0]] && other[keys[1]] === now[keys[1]];
+      });
+      if (same) return;
+      now[keys[0]] = null;
+      now[keys[1]] = true;
+    });
+    return now;
+  }
+
+  /** Whether a CSS color or SVG paint shows something that is not one plain color: a gradient, a pattern, `currentColor`. */
+  function otherPaint(value) {
+    value = String(value || "").trim();
+    return !!value && !/^(none|transparent)$/i.test(value) && !/^rgba\(0, 0, 0, 0\)$/.test(value) && toHex(value) === null && !/^rgba?\(/.test(value);
   }
 
   /** Reports once per frame, however often the text selection moves while typing. */
@@ -284,11 +311,17 @@
     var figure = figureOf(el) ? figurePaint(el) : null;
     var line = kind === "drawing" ? lineOf(el) : null;
     var borderDash = /^(dashed|dotted)$/.test(style.borderTopStyle || "") ? style.borderTopStyle : "solid";
+    // A fill or line the color wells cannot show as one color: a gradient or image, or a paint that is not plain.
+    var fillOther = figure ? false : first ? otherPaint(first.getAttribute("fill")) : (style.backgroundImage || "none") !== "none" || otherPaint(style.backgroundColor);
+    var strokeOther = figure ? false : first ? otherPaint(first.getAttribute("stroke")) : borderWidth > 0 && otherPaint(style.borderTopColor);
     return {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
       vector: kind === "drawing",
       color: toHex(text.color),
+      colorOther: toHex(text.color) === null,
+      fillOther: fillOther,
+      strokeOther: strokeOther,
       fontSize: Math.round(parseFloat(text.fontSize) / fit) || null,
       fontFamily: firstFamily(text.fontFamily) || null,
       bold: weightOf(text) >= 600,
@@ -298,7 +331,7 @@
       script: script && el.contains(script) ? script.tagName.toLowerCase() : null,
       letterSpacing: isFinite(spacing) ? Math.round(spacing * 10) / 10 : 0,
       lineHeight: lineHeightOf(style),
-      align: /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left",
+      align: /justify/.test(align) ? "justify" : /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left",
       valign: valignOf(style),
       list: list,
       link: link ? link.getAttribute("href") || "" : null,
@@ -565,10 +598,14 @@
     return !!el && el.namespaceURI === SVG_NS && el.localName === "svg";
   }
 
-  /** Puts the "Edit SVG" button at the selected drawing's top right, outside its handles. */
+  /**
+   * Puts the "Edit SVG" button at the selected drawing's top right, outside its handles. A line or
+   * arrow drawn with the line tools has its own handles and toolbar controls, so it shows none (the
+   * context menu still opens it in the SVG editor).
+   */
   function placeSvgButton() {
-    var show = isDrawing(selected) && !editing && !extras.length && tool === "select" && !(drag && drag.moved) &&
-      slide.contains(selected);
+    var show = isDrawing(selected) && !lineOf(selected) && !editing && !extras.length && tool === "select" &&
+      !(drag && drag.moved) && slide.contains(selected);
     svgButton.hidden = !show;
     if (!show) return;
     var rect = selected.getBoundingClientRect();

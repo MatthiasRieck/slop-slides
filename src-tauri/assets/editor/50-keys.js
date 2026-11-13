@@ -12,6 +12,8 @@
         if (mod && !event.altKey && !event.shiftKey && TOGGLES[letter]) {
           event.preventDefault();
           toggleStyle(TOGGLES[letter]);
+        } else if (runShortcut(event)) {
+          event.preventDefault();
         } else if (mod && event.shiftKey && letter === "v") {
           // The app reads the clipboard's text and answers with slop:edit-insert-text.
           event.preventDefault();
@@ -45,6 +47,11 @@
       if (tool !== "select" && event.key === "Escape") {
         cancelCreating();
         useTool("select", true);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (runShortcut(event)) {
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
@@ -119,7 +126,7 @@
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
-    if (arrangeMessage(data) || groupMessage(data)) return;
+    if (arrangeMessage(data) || groupMessage(data) || commandMessage(data)) return;
     if (data.type === "slop:edit-select") {
       finishEditing();
       select(atPath(data.path));
@@ -151,6 +158,12 @@
         useTool(String(data.tool));
       }
     } else if (data.type === "slop:edit-style" && data.style && typeof data.style === "object") {
+      if (data.preview) {
+        previewStyle(data.style);
+        return;
+      }
+      // What a preview showed is saved with this, as one change.
+      endPreview();
       if (editing) styleText(data.style);
       else applyToSelection(data.style);
     } else if (data.type === "slop:edit-list") {
@@ -176,12 +189,12 @@
     } else if (data.type === "slop:edit-copy") {
       copySelected(!!data.cut);
     } else if (data.type === "slop:edit-paste-images") {
-      var at = pastePoint();
+      var at = givenPoint(data) || pastePoint();
       insertImages(data.images, at.x, at.y);
     } else if (data.type === "slop:edit-paste") {
-      pasteElement(data.html);
+      pasteElement(data.html, givenPoint(data));
     } else if (data.type === "slop:edit-paste-text" && typeof data.text === "string") {
-      pasteText(data.text, data.style);
+      pasteText(data.text, data.style, givenPoint(data));
     } else if (data.type === "slop:edit-replace-image" && typeof data.src === "string") {
       replaceImage(data.src);
     } else if (data.type === "slop:edit-background" && (data.color === null || typeof data.color === "string")) {

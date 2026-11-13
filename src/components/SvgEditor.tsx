@@ -77,8 +77,8 @@ const CHECKERS: Record<Backdrop, { ground: string; check: string }> = {
  * on the slide in edit mode), edited in memory. Click an element to select it and drag it to
  * move it; drag a shape's points (and its curves' control points) to reshape it, drag the small
  * dots between them to add points and double-click a point to take it out. Its look, any of its
- * attributes, its place among the layers and the drawing's markup can all be changed. Accept
- * saves the drawing into the slide; Discard goes back to the slide's.
+ * attributes, its place among the layers and the drawing's markup can all be changed. "Apply to
+ * slide" (⌘S) saves the drawing into the slide; Discard goes back to the slide's.
  */
 export function SvgEditor() {
   const edit = useSvgEditor((s) => s.edit);
@@ -250,16 +250,19 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
           title={
             otherDeck
               ? "Open the deck the drawing is in to save it"
-              : `Save the drawing into the slide (${formatKeys("mod+s")})`
+              : !dirty
+                ? "Nothing has changed in the drawing yet"
+                : `Save the drawing into the slide (${formatKeys("mod+s")})`
           }
         >
           <Check />
-          {edit.saving ? "Saving…" : "Accept"}
+          {edit.saving ? "Saving…" : "Apply to slide"}
+          {!edit.saving && <span className="font-normal opacity-70">{formatKeys("mod+s")}</span>}
         </Button>
       </div>
       {otherDeck && (
         <p className="border-b bg-warning/10 px-3 py-1.5 text-xs text-warning">
-          This drawing is in another deck; open it to accept the changes.
+          This drawing is in another deck; open it to apply the changes.
         </p>
       )}
       <div className="flex min-h-0 flex-1 flex-col @3xl:flex-row">

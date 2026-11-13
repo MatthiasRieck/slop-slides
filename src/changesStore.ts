@@ -1,24 +1,33 @@
 import { create } from "zustand";
 
-import { api, type Change, type DeckChanges, type SlideChange } from "./lib/api";
+import { api, type Change, type DeckChanges, errorMessage, type RailEdit, type SlideChange } from "./lib/api";
 import { DEFAULT_DIVIDER, type Divider } from "./lib/compare";
-import { showError, useApp } from "./store";
+import { showError, showSuccess, useApp } from "./store";
+
+/** What the comparison shows of a slide that changed: both versions split by the divider, or one of them. */
+export type CompareView = "split" | "before" | "after";
 
 /**
  * Git mode (see components/ChangesView.tsx): what changed in the open deck since the last commit,
  * the row picked in the list (which, unlike the app's selected slide, can be a removed slide),
- * and the divider of the comparison, which stays put going from slide to slide.
+ * and how the comparison shows a slide (its view and its divider), which stays put going from
+ * slide to slide.
  */
 interface ChangesState {
   /** The changes of `deck`; null until they have been read. */
   changes: DeckChanges | null;
   deck: string | null;
+  /** The changes of `deck` are being read. */
+  loading: boolean;
+  /** Why the changes of `deck` could not be read, when the last reading failed. */
+  error: string | null;
   /** The deck last found in a git repository, which is what offers Git mode. */
   repository: string | null;
   picked: string | null;
   /** Leaves the slides that did not change out of the list. */
   onlyChanges: boolean;
   divider: Divider;
+  view: CompareView;
   /** Finds out whether `deck` is in a git repository. */
   checkRepository: (deck: string) => Promise<void>;
   /** Reads the changes of `deck` again. */
@@ -33,10 +42,15 @@ interface ChangesState {
   unstage: (deck: string, change: Change) => Promise<void>;
   /** Puts a change back as it was committed; the slide list's undo brings it back. */
   restore: (deck: string, change: Change) => Promise<void>;
+  /** Puts the whole deck back as it was committed, as one change the slide list's undo brings back. */
+  restoreAll: (deck: string) => Promise<void>;
   stageAll: (deck: string) => Promise<void>;
   unstageAll: (deck: string) => Promise<void>;
-  /** Commits what is staged; false when that failed. */
+  /** Commits what is staged and says which commit it made; false when that failed. */
   commit: (deck: string, message: string) => Promise<boolean>;
+  /** Stages everything in the deck, then commits it; false when either failed. */
+  commitAll: (deck: string, message: string) => Promise<boolean>;
+  setView: (view: CompareView) => void;
   setDivider: (changes: Partial<Divider>) => void;
   resetDivider: () => void;
 }
@@ -76,13 +90,24 @@ export const useChanges = create<ChangesState>((set, get) => {
       await get().refresh(deck);
     }
   };
+  /** After a restore wrote the deck: reads the changes again, and selects a slide that is still there. */
+  const restored = async (deck: string, edit: RailEdit | null) => {
+    await get().refresh(deck);
+    // Restoring an added slide takes away the slide that was selected.
+    const { selected, select } = useApp.getState();
+    const slides = edit?.deck.slides;
+    if (slides && !slides.some((slide) => slide.id === selected)) select(slides[0]?.id ?? null);
+  };
   return {
     changes: null,
     deck: null,
+    loading: false,
+    error: null,
     repository: null,
     picked: null,
     onlyChanges: false,
     divider: DEFAULT_DIVIDER,
+    view: "split",
 
     checkRepository: async (deck) => {
       let found = false;
@@ -96,14 +121,17 @@ export const useChanges = create<ChangesState>((set, get) => {
 
     refresh: async (deck) => {
       const ticket = ++lastRefresh;
+      // Another deck's changes are not this one's, not even while its own are read.
+      if (get().deck !== deck) set({ deck, changes: null, picked: null, error: null });
+      set({ loading: true });
       try {
         const changes = await api.deckChanges(deck);
         if (ticket !== lastRefresh) return;
-        const previous = get().deck === deck ? get().picked : null;
-        const picked = keepPicked(changes, previous, useApp.getState().selected);
-        set({ changes, deck, picked });
+        const picked = keepPicked(changes, get().picked, useApp.getState().selected);
+        set({ changes, picked, loading: false, error: null });
       } catch (error) {
-        if (ticket === lastRefresh) showError(error);
+        // The view says so, with a way to try again; what was read before stays behind it.
+        if (ticket === lastRefresh) set({ loading: false, error: errorMessage(error) });
       }
     },
 
@@ -130,18 +158,34 @@ export const useChanges = create<ChangesState>((set, get) => {
     stage: async (deck, change) => void (await run(deck, () => api.stageChange(deck, change))),
     unstage: async (deck, change) => void (await run(deck, () => api.unstageChange(deck, change))),
 
-    restore: async (deck, change) => {
-      const edit = await useApp.getState().editRail((id) => api.restoreChange(id, change));
-      await get().refresh(deck);
-      // Restoring an added slide takes away the slide that was selected.
-      const { selected, select } = useApp.getState();
-      const slides = edit?.deck.slides;
-      if (slides && !slides.some((slide) => slide.id === selected)) select(slides[0]?.id ?? null);
-    },
+    restore: async (deck, change) =>
+      restored(deck, await useApp.getState().editRail((id) => api.restoreChange(id, change))),
+
+    restoreAll: async (deck) => restored(deck, await useApp.getState().editRail((id) => api.restoreAllChanges(id))),
 
     stageAll: async (deck) => void (await run(deck, () => api.stageAll(deck))),
     unstageAll: async (deck) => void (await run(deck, () => api.unstageAll(deck))),
-    commit: (deck, message) => run(deck, () => api.commitChanges(deck, message)),
+
+    commit: async (deck, message) => {
+      const done = await run(deck, () => api.commitChanges(deck, message));
+      // The changes were read again: their commit is the one just made.
+      const hash = get().changes?.commit?.hash;
+      if (done) showSuccess(hash ? `Committed ${hash}` : "Committed");
+      return done;
+    },
+
+    commitAll: async (deck, message) => {
+      try {
+        await api.stageAll(deck);
+      } catch (error) {
+        showError(error);
+        await get().refresh(deck);
+        return false;
+      }
+      return get().commit(deck, message);
+    },
+
+    setView: (view) => set({ view }),
 
     setDivider: (changes) => set((s) => ({ divider: { ...s.divider, ...changes } })),
     resetDivider: () => set({ divider: DEFAULT_DIVIDER }),

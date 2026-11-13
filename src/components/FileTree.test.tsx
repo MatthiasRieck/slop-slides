@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
+import { lastError, toastTexts } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
 import { FileTree } from "./FileTree";
 
@@ -32,10 +33,12 @@ beforeEach(() => {
     openedFile: null,
     workspaceChange: null,
     openPath: vi.fn(async () => {}),
+    toasts: [],
   });
 });
 
 const items = () => screen.queryAllByRole("treeitem").map((i) => i.textContent);
+const item = (name: string) => screen.getByRole("treeitem", { name }) as HTMLButtonElement;
 const listed = () => invoke.mock.calls.filter(([c]) => c === "list_dir").map(([, a]) => (a as { path: string }).path);
 
 describe("FileTree", () => {
@@ -102,7 +105,7 @@ describe("FileTree", () => {
 
   it("reveals the folder in the file manager", async () => {
     render(<FileTree />);
-    fireEvent.click(screen.getByTitle("Show in folder"));
+    fireEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     expect(revealItemInDir).toHaveBeenCalledWith("/ws");
   });
 
@@ -129,5 +132,198 @@ describe("FileTree", () => {
     useApp.setState({ workspace: null });
     const { container } = render(<FileTree />);
     expect(container.innerHTML).toBe("");
+  });
+
+  it("uses one icon for revealing in the file manager, apart from the open folder's", async () => {
+    render(<FileTree />);
+    await waitFor(() => expect(items()).toHaveLength(3));
+    const reveal = screen.getByRole("button", { name: "Show in folder" });
+    expect(reveal.querySelector("svg")!.getAttribute("class")).toContain("lucide-folder-search");
+  });
+
+  it("says why a folder inside could not be listed, where its entries would be", async () => {
+    delete folders.talks;
+    render(<FileTree />);
+    await waitFor(() => expect(items()).toHaveLength(3));
+    await act(async () => fireEvent.click(item("talks")));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe('cannot read "talks"');
+    expect(item("talks").nextElementSibling).toBe(alert);
+    // The rest of the tree stays.
+    expect(items()).toEqual(["talks", "index.html", "notes.md"]);
+    // Closed, the folder takes its error with it; opened again, it is read again.
+    fireEvent.click(item("talks"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    folders.talks = [entry("talks/intro.html", "deck")];
+    await act(async () => fireEvent.click(item("talks")));
+    await waitFor(() => expect(items()).toEqual(["talks", "intro.html", "index.html", "notes.md"]));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  describe("with the keys", () => {
+    const key = (name: string, k: string) => fireEvent.keyDown(item(name), { key: k });
+    const tabStops = () =>
+      screen
+        .getAllByRole("treeitem")
+        .filter((i) => i.tabIndex === 0)
+        .map((i) => i.textContent);
+
+    it("says how deep each row is, and stops Tab at one row only", async () => {
+      localStorage.setItem("slopslide.expanded:/ws", JSON.stringify(["talks", "talks/q3"]));
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(6));
+      expect(screen.getAllByRole("treeitem").map((i) => i.getAttribute("aria-level"))).toEqual([
+        "1",
+        "2",
+        "3",
+        "2",
+        "1",
+        "1",
+      ]);
+      expect(tabStops()).toEqual(["talks"]);
+    });
+
+    it("stops Tab at the open file's row", async () => {
+      useApp.setState({ openedFile: { path: "index.html", absolute: "/ws/index.html", kind: "webpage" } });
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      expect(tabStops()).toEqual(["index.html"]);
+    });
+
+    it("goes through the rows with the arrows, Home and End", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      item("talks").focus();
+      key("talks", "ArrowDown");
+      expect(document.activeElement).toBe(item("index.html"));
+      expect(tabStops()).toEqual(["index.html"]);
+      key("index.html", "End");
+      expect(document.activeElement).toBe(item("notes.md"));
+      // At the end, it stays.
+      key("notes.md", "ArrowDown");
+      expect(document.activeElement).toBe(item("notes.md"));
+      key("notes.md", "ArrowUp");
+      expect(document.activeElement).toBe(item("index.html"));
+      key("index.html", "Home");
+      expect(document.activeElement).toBe(item("talks"));
+    });
+
+    it("opens a folder with →, goes into it, and comes back out and closes it with ←", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      item("talks").focus();
+      await act(async () => key("talks", "ArrowRight"));
+      await waitFor(() => expect(items()).toHaveLength(5));
+      expect(item("talks").getAttribute("aria-expanded")).toBe("true");
+      key("talks", "ArrowRight");
+      expect(document.activeElement).toBe(item("q3"));
+      key("q3", "ArrowDown");
+      expect(document.activeElement).toBe(item("intro.html"));
+      // On a file, ← goes to the folder it is in; on the open folder, it closes it.
+      key("intro.html", "ArrowLeft");
+      expect(document.activeElement).toBe(item("talks"));
+      key("talks", "ArrowLeft");
+      expect(item("talks").getAttribute("aria-expanded")).toBe("false");
+      expect(items()).toHaveLength(3);
+    });
+
+    it("leaves keys held with a modifier to the app", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      item("talks").focus();
+      fireEvent.keyDown(item("talks"), { key: "ArrowDown", metaKey: true });
+      expect(document.activeElement).toBe(item("talks"));
+    });
+  });
+
+  describe("a row's menu", () => {
+    const menuItems = () => within(screen.getByRole("menu")).getAllByRole("menuitem");
+    const labels = () => menuItems().map((m) => m.textContent);
+    const choose = (name: string | RegExp) =>
+      fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name }));
+    const writeText = vi.fn(async (_text: string) => {});
+
+    beforeEach(() => {
+      writeText.mockReset().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      folders[""]!.push(entry("q3.pptx", "file"));
+    });
+
+    const openMenu = async (name: string) => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(4));
+      fireEvent.contextMenu(item(name), { clientX: 40, clientY: 60 });
+    };
+
+    it("opens on a right-click, where the pointer is, named after the row", async () => {
+      await openMenu("index.html");
+      const menu = screen.getByRole("menu", { name: "index.html" });
+      expect(menu.parentElement!.style.left).toBe("40px");
+      expect(menu.parentElement!.style.top).toBe("60px");
+      expect(labels()).toEqual(["Open", "Show in folder", "Copy path"]);
+    });
+
+    it("opens the file", async () => {
+      await openMenu("index.html");
+      choose("Open");
+      expect(useApp.getState().openPath).toHaveBeenCalledWith("index.html");
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("opens or closes a folder", async () => {
+      await openMenu("talks");
+      expect(labels()).toEqual(["Expand", "Show in folder", "Copy path"]);
+      await act(async () => choose("Expand"));
+      await waitFor(() => expect(item("talks").getAttribute("aria-expanded")).toBe("true"));
+      fireEvent.contextMenu(item("talks"), { clientX: 40, clientY: 60 });
+      expect(labels()[0]).toBe("Collapse");
+    });
+
+    it("reveals the row's file in the file manager", async () => {
+      await openMenu("notes.md");
+      choose("Show in folder");
+      expect(revealItemInDir).toHaveBeenCalledWith("/ws/notes.md");
+    });
+
+    it("copies the row's path, and says so", async () => {
+      await openMenu("notes.md");
+      await act(async () => choose("Copy path"));
+      expect(writeText).toHaveBeenCalledWith("/ws/notes.md");
+      expect(toastTexts(useApp.getState(), "success")).toEqual(["Path copied."]);
+    });
+
+    it("says when the path could not be copied", async () => {
+      writeText.mockRejectedValue("the clipboard is not available");
+      await openMenu("notes.md");
+      await act(async () => choose("Copy path"));
+      expect(lastError(useApp.getState())).toBe("Could not copy the path: the clipboard is not available");
+    });
+
+    it("offers to import a PowerPoint file as a deck", async () => {
+      const importPptx = vi.fn(async () => {});
+      useApp.setState({ importPptx });
+      await openMenu("q3.pptx");
+      expect(labels()).toEqual(["Open", "Import as deckThis file stays as it is", "Show in folder", "Copy path"]);
+      choose(/^Import as deck/);
+      expect(importPptx).toHaveBeenCalledWith("/ws/q3.pptx");
+    });
+
+    it("closes on Escape and on a press outside, doing nothing", async () => {
+      await openMenu("index.html");
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.queryByRole("menu")).toBeNull();
+      fireEvent.contextMenu(item("index.html"), { clientX: 40, clientY: 60 });
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(useApp.getState().openPath).not.toHaveBeenCalled();
+    });
+
+    it("opens under the row on Shift+F10", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(4));
+      item("notes.md").focus();
+      fireEvent.keyDown(item("notes.md"), { key: "F10", shiftKey: true });
+      expect(screen.getByRole("menu", { name: "notes.md" })).toBeTruthy();
+    });
   });
 });

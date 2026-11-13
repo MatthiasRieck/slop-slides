@@ -200,9 +200,14 @@ describe("App", () => {
     await act(async () => {});
     expect(await requestClose()).toBe(true);
     act(() => useApp.setState({ codeDirty: true }));
-    ask.mockResolvedValue(false);
-    expect(await requestClose()).toBe(false);
-    ask.mockReset();
+    // The question is the app's own dialog: save, don't save, or stay.
+    const closing = requestClose();
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
+    expect(dialog.textContent).toContain("Save the changes to deck.html?");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await closing).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Unsaved changes" })).toBeNull();
+    expect(ask).not.toHaveBeenCalled();
     act(() => useApp.setState({ codeDirty: false }));
   });
 

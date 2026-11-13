@@ -3,15 +3,21 @@ import { describe, expect, it } from "vitest";
 import type { DeckChanges, SlideChange, SlideStatus } from "../../lib/api";
 import {
   actionsOf,
+  branchLabel,
+  canDiscardAll,
   caption,
   changeCounts,
   comparable,
   contentMarkOf,
   describeRow,
+  isClean,
   MARKS,
   marksOf,
+  restoreActionOf,
+  STYLES as STYLES_MARK,
   slideNumbers,
   stageTitle,
+  stylesActions,
 } from "./changeRows";
 
 const row = (status: SlideStatus, id: string, more: Partial<SlideChange> = {}): SlideChange => ({
@@ -29,6 +35,8 @@ const row = (status: SlideStatus, id: string, more: Partial<SlideChange> = {}): 
 
 const changes = (overrides: Partial<DeckChanges> = {}): DeckChanges => ({
   tracking: "committed",
+  branch: "main",
+  detached: false,
   commit: { hash: "abc123", subject: "First draft" },
   stylesChanged: false,
   oldSize: null,
@@ -57,11 +65,13 @@ describe("a row's marks", () => {
       change: { kind: "slide", id: "a", oldId: "a" },
       noun: "this slide",
       staged: true,
+      restore: restoreActionOf(MARKS.modified),
     });
     expect(actionsOf(both, MARKS.moved)).toEqual({
       change: { kind: "move", id: "a", oldId: "a" },
       noun: "this move",
       staged: false,
+      restore: restoreActionOf(MARKS.moved),
     });
     expect(actionsOf(row("added", "new", { moved: true }), MARKS.moved)).toBeNull();
     expect(stageTitle({ staged: false, noun: "this move" })).toBe("Add this move to the next commit");
@@ -110,9 +120,60 @@ describe("the caption under the slide", () => {
     [
       row("added", "a"),
       changes({ tracking: "notCommitted", stylesChanged: true }),
-      `Not committed yet, so every slide is new; restoring takes it out.${STYLES}`,
+      `Not committed yet, so every slide is new; discarding one takes it out.${STYLES}`,
     ],
   ])("says what %#. is", (shown, deck, text) => {
     expect(caption(shown, deck)).toBe(text);
+  });
+});
+
+describe("putting a change back", () => {
+  it("is named by what it does to the change, and marked where work goes with it", () => {
+    expect(restoreActionOf(MARKS.added)).toMatchObject({ label: "Discard new slide", destructive: true });
+    expect(restoreActionOf(MARKS.removed)).toMatchObject({ label: "Bring back", destructive: false });
+    expect(restoreActionOf(MARKS.modified)).toMatchObject({ label: "Discard changes", destructive: true });
+    expect(restoreActionOf(MARKS.moved)).toMatchObject({ label: "Undo move", destructive: false });
+    expect(restoreActionOf(STYLES_MARK)).toMatchObject({ label: "Discard changes", destructive: true });
+    expect(restoreActionOf(STYLES_MARK).title).toContain("shared styles");
+    expect(restoreActionOf(MARKS.added).title).toContain("Take this slide out");
+  });
+
+  it("gives the shared styles their actions", () => {
+    expect(stylesActions(true)).toEqual({
+      change: { kind: "styles" },
+      noun: "the shared styles",
+      staged: true,
+      restore: restoreActionOf(STYLES_MARK),
+    });
+  });
+});
+
+describe("the deck as a whole", () => {
+  const unchanged = [row("unchanged", "a"), row("unchanged", "b")];
+  const clean = { slides: unchanged, hasUnstaged: false };
+
+  it("is clean when nothing differs from the commit and nothing waits for one", () => {
+    expect(isClean(changes(clean))).toBe(true);
+    expect(isClean(changes({ ...clean, stylesChanged: true }))).toBe(false);
+    expect(isClean(changes({ ...clean, stagedFiles: 1 }))).toBe(false);
+    expect(isClean(changes({ ...clean, hasUnstaged: true }))).toBe(false);
+    expect(isClean(changes({ ...clean, slides: [row("modified", "a")] }))).toBe(false);
+    expect(isClean(changes({ ...clean, slides: [row("unchanged", "a", { moved: true })] }))).toBe(false);
+    expect(isClean(changes({ ...clean, tracking: "notCommitted" }))).toBe(false);
+  });
+
+  it("can be discarded all at once when a commit has it and something changed", () => {
+    expect(canDiscardAll(changes(clean))).toBe(false);
+    expect(canDiscardAll(changes({ ...clean, hasUnstaged: true }))).toBe(false);
+    expect(canDiscardAll(changes({ slides: [row("added", "a")] }))).toBe(true);
+    expect(canDiscardAll(changes({ ...clean, stylesChanged: true }))).toBe(true);
+    expect(canDiscardAll(changes({ slides: [row("unchanged", "a", { moved: true })] }))).toBe(true);
+    expect(canDiscardAll(changes({ tracking: "notCommitted", slides: [row("added", "a")] }))).toBe(false);
+  });
+
+  it("says where the next commit goes", () => {
+    expect(branchLabel({ branch: "talks/q3", detached: false })).toBe("talks/q3");
+    expect(branchLabel({ branch: null, detached: true })).toBe("Detached HEAD");
+    expect(branchLabel({ branch: null, detached: false })).toBeNull();
   });
 });

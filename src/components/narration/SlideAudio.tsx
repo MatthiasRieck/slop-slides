@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Loader2, Play, Sparkles, Square, Trash2 } from "lucide-react";
+import { AudioLines, Loader2, Pause, Play, Sparkles, Trash2, X } from "lucide-react";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import type { Deck, SlideAudio } from "../../lib/api";
@@ -77,7 +77,11 @@ function SlideWave(props: {
   );
 }
 
-/** What the slide's audio is: its waveform, and buttons to hear it and to (re)make it. */
+/**
+ * What the slide's audio is: its waveform, and buttons to hear it and to (re)make it. Play pauses
+ * and plays on from there; pressing the waveform plays from that moment. While this slide's audio
+ * is being generated, Cancel takes the place of Generate, where the wait is.
+ */
 export function SlideAudioControls(props: {
   deck: Deck;
   slide: string;
@@ -90,6 +94,8 @@ export function SlideAudioControls(props: {
   const speech = useNarration((s) => s.speech);
   const render = useNarration((s) => s.render);
   const [playback, setPlayback] = useState<Playback | null>(null);
+  // Held where it is, to play on from there.
+  const [paused, setPaused] = useState(false);
   useEffect(() => () => playback?.stop(), [playback]);
 
   const provider = speech ? deckProvider(deck, speech) : undefined;
@@ -99,14 +105,28 @@ export function SlideAudioControls(props: {
     await props.flush();
     await useNarration.getState().renderAudio(deck.id, [slide]);
   };
-  const play = async (from?: number) => {
-    // Pressed on the waveform, it starts over from there; the button stops what plays.
+  /** Plays from `from` seconds in, in place of what plays. */
+  const play = async (from: number) => {
     playback?.stop();
-    if (playback && from === undefined) return;
+    setPaused(false);
     try {
-      const started = await playNarration(deck.id, slide, from ?? 0);
+      const started = await playNarration(deck.id, slide, from);
       setPlayback(started);
       void started.ended.then(() => setPlayback((p) => (p === started ? null : p)));
+    } catch (error) {
+      showError(error, "Could not play the narration: ");
+    }
+  };
+  /** The button: plays from the start, pauses what plays, or plays on what is paused. */
+  const toggle = async () => {
+    if (!playback) return play(0);
+    if (!paused) {
+      playback.pause();
+      return setPaused(true);
+    }
+    try {
+      await playback.resume();
+      setPaused(false);
     } catch (error) {
       showError(error, "Could not play the narration: ");
     }
@@ -139,7 +159,7 @@ export function SlideAudioControls(props: {
           {busy ? (
             <>
               <Loader2 className="size-3.5 animate-spin" />
-              Speaking…
+              Generating audio…
             </>
           ) : (
             audioLabel(audio)
@@ -150,7 +170,7 @@ export function SlideAudioControls(props: {
             <Button
               size="md"
               onClick={() => void clean()}
-              title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
+              title="Puts a request in the chat, for the agent to turn this slide's recorded words into clean, fluent sentences. It opens the chat; you send it."
             >
               <Sparkles />
               Clean up
@@ -159,11 +179,19 @@ export function SlideAudioControls(props: {
           <Button
             size="md"
             disabled={!audio?.seconds || busy}
-            onClick={() => void play()}
-            title={audio?.state === "stale" ? "Play the out-of-date audio" : "Play the audio"}
+            onClick={() => void toggle()}
+            title={
+              playback
+                ? paused
+                  ? "Play on from where it was paused"
+                  : "Pause the audio"
+                : audio?.state === "stale"
+                  ? "Play the out-of-date audio from the start; press the waveform to play from there"
+                  : "Play the audio from the start; press the waveform to play from there"
+            }
           >
-            {playback ? <Square /> : <Play />}
-            {playback ? "Stop" : "Play"}
+            {playback && !paused ? <Pause /> : <Play />}
+            {playback ? (paused ? "Resume" : "Pause") : "Play"}
           </Button>
           {recorded ? (
             <Button
@@ -177,15 +205,26 @@ export function SlideAudioControls(props: {
               <Trash2 />
               {audio?.imported ? "Remove audio" : "Delete recording"}
             </Button>
+          ) : busy ? (
+            <Button
+              size="md"
+              onClick={() => void useNarration.getState().cancelRender()}
+              title="Stop generating the audio"
+            >
+              <X />
+              Cancel
+            </Button>
           ) : (
             <Button
               size="md"
               disabled={!canSpeak || render !== null}
               onClick={() => void generate()}
               title={
-                canSpeak
-                  ? "Speak this slide's narration"
-                  : `Add your ${provider?.name ?? "narration service's"} API key first`
+                !canSpeak
+                  ? `Add your ${provider?.name ?? "narration service's"} API key first`
+                  : render !== null
+                    ? "Audio is being generated for another slide"
+                    : "Generate this slide's audio from its narration"
               }
             >
               <AudioLines />
@@ -201,10 +240,10 @@ export function SlideAudioControls(props: {
 export function audioLabel(audio: SlideAudio | undefined): string {
   if (!audio || audio.state === "missing" || audio.state === "none") return "No audio yet";
   const length = audio.seconds !== null ? formatDuration(audio.seconds) : "";
-  if (audio.imported) return `Imported audio ${length}${audio.timed ? ", words timed" : ""}`;
-  if (audio.recorded) return `Your recording ${length}${audio.timed ? ", words timed" : ""}`;
+  if (audio.imported) return `Imported audio ${length}${audio.timed ? ", words synced" : ""}`;
+  if (audio.recorded) return `Your recording ${length}${audio.timed ? ", words synced" : ""}`;
   if (audio.state === "stale") return `Audio ${length}, out of date`;
-  return `Audio ${length}${audio.timed ? ", words timed" : ""}`;
+  return `Audio ${length}${audio.timed ? ", words synced" : ""}`;
 }
 
 /** Whether the user really wants their recording (or the `imported` audio) gone; it cannot be brought back. */

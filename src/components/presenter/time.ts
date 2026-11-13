@@ -49,3 +49,50 @@ export function plannedBudget(budget: Budget, shown: Slide[], slide: Slide | und
   const planned = shown.reduce((sum, s) => sum + (s.time ?? 0), 0) / 60;
   return { total: budget.total || planned, perSlide: slide?.time ? slide.time / 60 : budget.perSlide };
 }
+
+/** Where each time counted down comes from, to say beside the field that would set it; null when the presenter's own. */
+export function budgetSources(
+  budget: Budget,
+  shown: Slide[],
+  slide: Slide | undefined,
+): { total: string | null; perSlide: string | null } {
+  const planned = shown.reduce((sum, s) => sum + (s.time ?? 0), 0);
+  return {
+    total: !budget.total && planned > 0 ? `${formatElapsed(planned * 1000)} from slide times` : null,
+    perSlide: slide?.time ? `${formatElapsed(slide.time * 1000)} from this slide's time` : null,
+  };
+}
+
+/**
+ * A clock that can be paused: the time it ran before it last started (`elapsed`, ms), and when
+ * that was (`since`, null while paused).
+ */
+export interface Stopwatch {
+  elapsed: number;
+  since: number | null;
+}
+
+/** A stopwatch at zero, running from `now` unless `paused`. */
+export function startWatch(now: number, paused = false): Stopwatch {
+  return { elapsed: 0, since: paused ? null : now };
+}
+
+/** How long `watch` has run by `now`, in ms. */
+export function watchTime(watch: Stopwatch, now: number): number {
+  return watch.elapsed + (watch.since === null ? 0 : Math.max(0, now - watch.since));
+}
+
+/** `watch` stopped at `now`, keeping the time it ran. */
+export function pauseWatch(watch: Stopwatch, now: number): Stopwatch {
+  return watch.since === null ? watch : { elapsed: watchTime(watch, now), since: null };
+}
+
+/** `watch` running again from `now`. */
+export function resumeWatch(watch: Stopwatch, now: number): Stopwatch {
+  return watch.since === null ? { ...watch, since: now } : watch;
+}
+
+/** The time of day at `now`, hours and minutes as the system writes them. */
+export function formatClock(now: number): string {
+  return new Date(now).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}

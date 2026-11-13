@@ -47,6 +47,21 @@ pub fn restore_change(id: String, change: git::Change) -> Result<RailEdit> {
     Ok(edit)
 }
 
+/// Puts the whole deck back as it was committed, as one change the slide list's undo takes back.
+#[tauri::command(async)]
+pub fn restore_all_changes(id: String) -> Result<RailEdit> {
+    let file = deck::deck_file(&id)?;
+    let before = deck::read_html(&file)?;
+    let source = git::restored_all(&file)?;
+    let edit = changing(
+        &id,
+        Change::new(Source::Deck, "Discard all changes"),
+        |file| deck::restore(file, None, source),
+    )?;
+    git::finish_restore_all(&file, &before)?;
+    Ok(edit)
+}
+
 #[tauri::command(async)]
 pub fn stage_all(id: String) -> Result<()> {
     git::stage_all(&deck::deck_file(&id)?)

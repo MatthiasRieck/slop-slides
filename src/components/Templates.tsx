@@ -1,5 +1,5 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Check, FolderOpen, Loader2, Plus, Save } from "lucide-react";
+import { Check, FolderSearch, Loader2, MessageSquare, Plus, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { TemplateSummary } from "../lib/api";
@@ -133,9 +133,28 @@ export function StylePicker() {
   const templates = useTemplates();
   if (!deck) return null;
   return (
-    <StylePanel templates={templates} current={deck.template ?? null} empty={deck.slides.length === 0} busy={running} />
+    <StylePanel
+      // Another deck starts without the last one's request.
+      key={deck.id}
+      templates={templates}
+      current={deck.template ?? null}
+      empty={deck.slides.length === 0}
+      busy={running}
+    />
   );
 }
+
+/** Said where a change to the design became a message for the agent, which the user still has to send. */
+export function RequestStatus({ children }: { children: string }) {
+  return (
+    <p role="status" className="flex items-center gap-1.5 text-2xs text-foreground">
+      <MessageSquare className="size-3 shrink-0 text-primary" />
+      {children}
+    </p>
+  );
+}
+
+const STYLE_BUSY = "Wait for the agent to finish to restyle the deck";
 
 function StylePanel(props: {
   templates: TemplateSummary[] | undefined;
@@ -144,6 +163,14 @@ function StylePanel(props: {
   busy: boolean;
 }) {
   const { templates, current } = props;
+  /** The style asked of the agent last: its request waits in the chat. */
+  const [requested, setRequested] = useState<string | null>(null);
+  const disabled = props.busy && !props.empty;
+
+  const pick = async (id: string) => {
+    setRequested(null);
+    if ((await useApp.getState().applyStyle(id)) === "requested") setRequested(id);
+  };
 
   return (
     <>
@@ -154,6 +181,8 @@ function StylePanel(props: {
             ? "The deck takes the style's fonts, colors, and layouts."
             : "The chat gets a request for the agent to restyle every slide, keeping the content."}
         </p>
+        {disabled && <p className="text-2xs text-muted-foreground">{STYLE_BUSY}.</p>}
+        {requested && <RequestStatus>Request added to the chat. Send it to restyle.</RequestStatus>}
       </div>
       <div className="min-h-0 overflow-y-auto p-3">
         {templates === undefined ? (
@@ -164,16 +193,19 @@ function StylePanel(props: {
               <li key={t.id}>
                 <button
                   type="button"
-                  disabled={props.busy && !props.empty}
+                  disabled={disabled}
+                  title={disabled ? STYLE_BUSY : undefined}
                   aria-label={`${t.title} style`}
                   aria-current={t.id === current || undefined}
-                  onClick={() => void useApp.getState().applyStyle(t.id)}
-                  className="group flex w-full flex-col gap-1 text-left disabled:opacity-40"
+                  data-requested={t.id === requested || undefined}
+                  onClick={() => void pick(t.id)}
+                  className="group flex w-full flex-col gap-1 text-left disabled:cursor-default disabled:opacity-40"
                 >
                   <div
                     className={cn(
-                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-hover:ring-2 group-hover:ring-input",
-                      t.id === current && "ring-2 ring-primary group-hover:ring-primary",
+                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-enabled:group-hover:ring-2 group-enabled:group-hover:ring-input",
+                      t.id === current && "ring-2 ring-primary group-enabled:group-hover:ring-primary",
+                      t.id === requested && "ring-2 ring-primary/60 ring-offset-2 ring-offset-card",
                     )}
                   >
                     {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} size={pixelsOf(t)} />}
@@ -182,6 +214,9 @@ function StylePanel(props: {
                     <span className="truncate">{t.title}</span>
                     {!t.builtin && <span className="rounded bg-muted px-1 text-muted-foreground">Yours</span>}
                     {t.id === current && <Check className="size-3 text-primary" />}
+                    {t.id === requested && (
+                      <span className="rounded bg-primary/10 px-1 font-medium text-primary">Requested</span>
+                    )}
                   </span>
                 </button>
               </li>
@@ -238,7 +273,7 @@ function SaveAsTemplate() {
                   onClick={() => void revealItemInDir(`${saved.path}/deck.html`)}
                   className="rounded p-0.5 hover:bg-accent hover:text-foreground"
                 >
-                  <FolderOpen className="size-3.5" />
+                  <FolderSearch className="size-3.5" />
                 </button>
               )}
             </span>

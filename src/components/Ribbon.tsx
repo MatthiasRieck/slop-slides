@@ -1,5 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import {
+  type ComponentProps,
   createContext,
   type ReactNode,
   useCallback,
@@ -137,6 +138,43 @@ export function RibbonSection(props: {
 /** One line of tools in a ribbon section. */
 export function RibbonRow({ children }: { children: ReactNode }) {
   return <div className="flex h-6 items-center gap-0.5">{children}</div>;
+}
+
+/**
+ * A list to pick from in a ribbon or one of its popovers. `label` names it and is its tooltip
+ * (`title` replaces the tooltip); disabled, the tooltip is `disabledReason`, saying what it waits
+ * for. A pick calls `onDone`, which hands the keyboard focus back to the slide: a native select
+ * keeps it on some platforms, and the arrows and Delete would then go to the list, not the slide.
+ */
+export function RibbonSelect({
+  label,
+  disabledReason,
+  onPick,
+  onDone,
+  className,
+  title,
+  ...rest
+}: Omit<ComponentProps<"select">, "onChange"> & {
+  label?: string;
+  disabledReason?: string;
+  onPick: (value: string) => void;
+  onDone?: () => void;
+}) {
+  return (
+    <select
+      aria-label={label}
+      title={rest.disabled && disabledReason ? disabledReason : (title ?? label)}
+      {...rest}
+      onChange={(event) => {
+        onPick(event.target.value);
+        onDone?.();
+      }}
+      className={cn(
+        "h-6 rounded-md bg-transparent px-1 text-xs disabled:cursor-default disabled:opacity-40",
+        className,
+      )}
+    />
+  );
 }
 
 /** A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the one made. */

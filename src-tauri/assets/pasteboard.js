@@ -4,11 +4,14 @@
    The preview fills the whole stage area and the slide sits in its middle, at the size it has on
    the stage. The surroundings are an endless pasteboard: drag with the middle button (pressed
    mouse wheel), swipe on a trackpad or hold Space and drag to pan; turn the mouse wheel, pinch or
-   Ctrl/⌘+scroll to zoom; 0 returns to the start. Without the slide editor, dragging with the
+   Ctrl/⌘+scroll to zoom, or press Ctrl/⌘ with + or -; 0, with Ctrl/⌘ or without, returns to the
+   start. Without the slide editor, dragging with the
    primary button pans too, except from text, which it selects instead (even text under an
    invisible layer the deck spreads over the slide), and from links and other controls. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
-   with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
+   with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app's zoom
+   buttons send { type: "slop:camera", zoomBy: factor } and { type: "slop:camera", zoomTo: k },
+   which zoom around the middle of the view, keeping what is there in place. The app also
    sends { type: "slop:canvas", color, accent, ... }: the color of the panel around the slide and
    the palette's colors (src/index.css) as `--slop-*`, for what the preview and the editor draw.
    A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
@@ -174,6 +177,14 @@
     var f = k / cam.k;
     setCamera(px - (px - h.x - cam.x) * f - h.x, py - (py - h.y - cam.y) * f - h.y, k);
   }
+
+  /** Zooms by `factor` around the middle of the view, as the zoom buttons and keys do. */
+  function zoomBy(factor) {
+    zoomAt(window.innerWidth / 2, window.innerHeight / 2, factor);
+  }
+
+  // How much one press of a zoom key or button zooms.
+  var ZOOM_STEP = 1.25;
 
   function setPanning(on) {
     spaceDown = on;
@@ -556,12 +567,32 @@
     { passive: false },
   );
 
-  // Capture phase, so the player never forwards these keys to the app. In a show, Space advances.
+  // Ctrl/⌘ with + (or =, the same key unshifted), - and 0 zoom in, out and back to the start,
+  // also while text is edited: with the modifier they are no text. Capture phase, so neither the
+  // player forwards them to the app nor the webview zooms the whole page.
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      var key = event.key;
+      if (key === "=" || key === "+") zoomBy(ZOOM_STEP);
+      else if (key === "-" || key === "_") zoomBy(1 / ZOOM_STEP);
+      else if (key === "0") setCamera(0, 0, 1);
+      else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+
+  // Capture phase, so the player never forwards these keys to the app. In a show, Space advances,
+  // and 0 with the slide already fitted is a digit of the slide number being typed.
   window.addEventListener(
     "keydown",
     function (event) {
       if (api.busy() || event.metaKey || event.ctrlKey || event.altKey) return;
       if ((event.key !== " " || show) && event.key !== "0") return;
+      if (event.key === "0" && show && cam.x === 0 && cam.y === 0 && cam.k === 1) return;
       if (event.key === "0") setCamera(0, 0, 1);
       else setPanning(true);
       event.preventDefault();
@@ -685,6 +716,8 @@
     }
     if (data.type === "slop:camera") {
       if (data.home) setCamera(0, 0, 1);
+      else if (Number.isFinite(data.zoomBy) && data.zoomBy > 0) zoomBy(data.zoomBy);
+      else if (Number.isFinite(data.zoomTo) && data.zoomTo > 0) zoomBy(data.zoomTo / cam.k);
       else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);
     } else if (data.type === "slop:canvas") {
       if (typeof data.color === "string") root.style.setProperty("--slop-canvas", data.color);

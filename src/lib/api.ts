@@ -43,6 +43,16 @@ export interface RecentWorkspace {
   openedMs: number;
 }
 
+/** A deck opened before, for the start screen to open again. */
+export interface RecentDeck {
+  /** The deck file's absolute path: the deck's id. */
+  path: string;
+  title: string;
+  /** The folder it opens in. */
+  workspace: string;
+  openedMs: number;
+}
+
 export interface Slide {
   /** The slide's `id` attribute in the deck file. */
   id: string;
@@ -147,7 +157,7 @@ export type Pasted =
   | { kind: "element"; html: string }
   | { kind: "images"; images: string[] }
   | { kind: "text"; text: string }
-  /** A slide copied from the slide rail: it goes in as a new slide (see `pasteSlide`). */
+  /** A slide copied from the slide rail: it goes in as a new slide (see `pasteSlides`). */
   | { kind: "slide" }
   | { kind: "nothing" };
 
@@ -407,6 +417,10 @@ export type Change =
 /** The deck compared with the last commit. */
 export interface DeckChanges {
   tracking: "noRepository" | "notCommitted" | "committed";
+  /** The branch checked out, which the next commit goes to; null outside a repository and while `detached`. */
+  branch: string | null;
+  /** A commit is checked out rather than a branch, so the next commit is on no branch. */
+  detached: boolean;
   /** The commit compared with; `hash` reloads what is shown from it when it changes. */
   commit: { hash: string; subject: string } | null;
   /** Something every slide shares changed, so any of them may look different. */
@@ -466,6 +480,9 @@ export const api = {
   /** Folders opened before, newest first. */
   recentWorkspaces: () => invoke<RecentWorkspace[]>("recent_workspaces"),
   forgetWorkspace: (path: string) => invoke<void>("forget_workspace", { path }),
+  /** Decks opened before, newest first. */
+  recentDecks: () => invoke<RecentDeck[]>("recent_decks"),
+  forgetDeck: (path: string) => invoke<void>("forget_deck", { path }),
   /** `~/Documents/SlopSlide`, where decks lived before workspaces. */
   libraryFolder: () => invoke<string>("library_folder"),
   /** One folder of the open workspace (`""` for its root), folders first. */
@@ -501,6 +518,9 @@ export const api = {
     invoke<RailEdit>("set_slides_hidden", { id, slides, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
+  /** Locks or unlocks `slides`, as one change to the deck. */
+  setSlidesLocked: (id: string, slides: string[], locked: boolean) =>
+    invoke<Deck>("set_slides_locked", { id, slides, locked }),
   /** Sets the seconds expected on a slide; 0 removes them. */
   setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
   /** Sets the timing of slides on the narration timeline, all in one write. */
@@ -538,6 +558,15 @@ export const api = {
   /** Replaces `query` in the text of the deck's slides, or only of `slides`; locked slides are left alone. */
   replaceInDeck: (id: string, query: string, replacement: string, options: FindOptions, slides: string[] | null) =>
     invoke<ReplacedText>("replace_in_deck", { id, query, replacement, options, slides }),
+  /** Replaces one match of `query`: the `nth` on `slide`, from 0, in the order `findInDeck` lists that slide's. */
+  replaceMatchInDeck: (
+    id: string,
+    query: string,
+    replacement: string,
+    options: FindOptions,
+    slide: string,
+    nth: number,
+  ) => invoke<ReplacedText>("replace_match_in_deck", { id, query, replacement, options, slide, nth }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
   saveAsset: (id: string, name: string, data: string) => invoke<string>("save_asset", { id, name, data }),
@@ -548,9 +577,9 @@ export const api = {
   copyToClipboard: (html: string, text: string, id: string | null = null) =>
     invoke<void>("copy_to_clipboard", { html, text, id }),
   /** Puts a whole slide on the system clipboard, to paste into this deck or another one. */
-  copySlide: (id: string, slide: string) => invoke<void>("copy_slide", { id, slide }),
-  /** Inserts the slide on the clipboard after `after` (with its images); null when there is none. */
-  pasteSlide: (id: string, after: string | null) => invoke<CreatedSlide | null>("paste_slide", { id, after }),
+  copySlides: (id: string, slides: string[]) => invoke<void>("copy_slides", { id, slides }),
+  /** Inserts the slides on the clipboard after `after`, in their order (with their images); null when there are none. */
+  pasteSlides: (id: string, after: string | null) => invoke<RailEdit | null>("paste_slides", { id, after }),
   /** The clipboard's plain text (empty without any), for pasting into text without its formatting. */
   readClipboardText: () => invoke<string>("read_clipboard_text"),
   /** What pasting into deck `id` brings in; pasted images are saved into its assets. */
@@ -589,6 +618,8 @@ export const api = {
   unstageChange: (id: string, change: Change) => invoke<void>("unstage_change", { id, change }),
   /** Puts a change back as it was committed, in the deck and the index. */
   restoreChange: (id: string, change: Change) => invoke<RailEdit>("restore_change", { id, change }),
+  /** Puts the whole deck back as it was committed, as one change to undo. */
+  restoreAllChanges: (id: string) => invoke<RailEdit>("restore_all_changes", { id }),
   /** Stages the whole deck and the changed files it refers to. */
   stageAll: (id: string) => invoke<void>("stage_all", { id }),
   /** Unstages everything in the deck's folder. */

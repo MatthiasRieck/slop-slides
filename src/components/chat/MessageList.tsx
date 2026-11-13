@@ -1,26 +1,72 @@
-import { AlertTriangle, ArrowDown, Check, ChevronRight, Copy, FoldVertical, Loader2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  AlertTriangle,
+  ArrowDown,
+  Check,
+  ChevronRight,
+  FileText,
+  FoldVertical,
+  Loader2,
+  Pencil,
+  RotateCw,
+  ShieldAlert,
+  X,
+} from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 
-import { cn, workspaceChatFileUrl } from "../../lib/utils";
+import { isImage } from "../../lib/drop";
+import { basename, cn, workspaceChatFileUrl } from "../../lib/utils";
 import { type AssistantMessage, type ChatMessage, type UserMessage, useApp } from "../../store";
+import { retryTarget } from "../../store/messages";
 import { ApprovalCard, ApprovalReview } from "../Permissions";
-import { describeTool, editedSlide, type ToolPart, toolArguments } from "./toolCalls";
+import { formatElapsed, replyActivity } from "./activity";
+import { ChatMarkdown } from "./ChatMarkdown";
+import { CopyButton } from "./CopyButton";
+import { describeTool, editedSlide, groupParts, stepsLabel, type ToolPart, toolArguments } from "./toolCalls";
+import { useElapsed } from "./useElapsed";
+
+/** Shows on hovering its message, or with the keyboard focus on it. */
+const ON_HOVER = "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100";
+
+/** Whether the reply coming in waits for the user to allow or deny something. */
+const awaitsApproval = (message: ChatMessage | undefined) =>
+  message?.role === "assistant" &&
+  message.status === "streaming" &&
+  message.parts.some((p) => p.kind === "approval" && p.status === "pending");
 
 /**
  * The conversation, kept scrolled to the latest message unless the user scrolled up (then a
- * button jumps back down). `children` come before the messages.
+ * button jumps back down, which also says when the agent waits for an approval down there). A
+ * message the user sends always shows. `children` come before the messages.
  */
 export function MessageList(props: { messages: ChatMessage[]; running: boolean; children?: React.ReactNode }) {
+  const { messages, running } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
+  const lastSent = messages.findLast((m) => m.role === "user")?.id;
+  const seenSent = useRef(lastSent);
+
+  const jump = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    pinned.current = true;
+    setShowLatest(false);
+  };
 
   useLayoutEffect(() => {
+    // The user's own message is what they want to see next, wherever they had scrolled to.
+    if (lastSent !== seenSent.current) {
+      seenSent.current = lastSent;
+      pinned.current = true;
+      setShowLatest(false);
+    }
     const el = scrollRef.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   });
+
+  const last = messages.at(-1);
+  const approval = running && awaitsApproval(last);
+  const retry = !running && retryTarget(messages) !== null;
 
   return (
     <div
@@ -34,11 +80,11 @@ export function MessageList(props: { messages: ChatMessage[]; running: boolean; 
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 pb-6">
         {props.children}
-        {props.messages.map((message) =>
+        {messages.map((message) =>
           message.role === "user" ? (
             <UserBubble key={message.id} message={message} />
           ) : (
-            <AssistantBlock key={message.id} message={message} />
+            <AssistantBlock key={message.id} message={message} retry={retry && message === last} />
           ),
         )}
       </div>
@@ -46,20 +92,56 @@ export function MessageList(props: { messages: ChatMessage[]; running: boolean; 
         <div className="sticky bottom-3 flex justify-center">
           <button
             type="button"
-            aria-label="Jump to latest message"
-            onClick={() => {
-              const el = scrollRef.current;
-              if (el) el.scrollTop = el.scrollHeight;
-              pinned.current = true;
-              setShowLatest(false);
-            }}
-            className="flex items-center gap-1 rounded-full border bg-card px-3 py-1.5 text-xs shadow-sm"
+            aria-label={approval ? "Approval needed: jump to the request" : "Jump to latest message"}
+            onClick={jump}
+            className={cn(
+              "flex items-center gap-1 rounded-full border bg-card px-3 py-1.5 text-xs shadow-sm",
+              approval && "border-warning/60 font-medium text-warning",
+            )}
           >
-            <ArrowDown className="size-3" /> Latest
+            {approval ? (
+              <>
+                <ShieldAlert className="size-3" /> Approval needed <ArrowDown className="size-3" />
+              </>
+            ) : (
+              <>
+                <ArrowDown className="size-3" /> Jump to latest
+              </>
+            )}
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+/** What a picture sent along with a message shows, for those who cannot see it. */
+type Picture = { path: string; alt: string };
+
+/** The pictures that went along with a message: its screenshot, its sketch and its attached images. */
+function picturesOf(message: UserMessage): Picture[] {
+  return [
+    ...(message.screenshot ? [{ path: message.screenshot, alt: "Slide screenshot" }] : []),
+    ...(message.sketch?.image ? [{ path: message.sketch.image, alt: "Slide with your sketch" }] : []),
+    ...message.attachments.filter(isImage).map((path) => ({ path, alt: basename(path) })),
+  ];
+}
+
+/** A picture sent along with a message, small; nothing once its file is gone. */
+function Thumbnail({ picture, workspace }: { picture: Picture; workspace: string }) {
+  const [missing, setMissing] = useState(false);
+  if (missing) return null;
+  return (
+    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: a failed load is not an interaction
+    <img
+      src={workspaceChatFileUrl(workspace, picture.path)}
+      alt={picture.alt}
+      title={picture.alt}
+      loading="lazy"
+      draggable={false}
+      onError={() => setMissing(true)}
+      className="size-14 rounded-lg border bg-muted object-cover"
+    />
   );
 }
 
@@ -68,20 +150,45 @@ function UserBubble({ message }: { message: UserMessage }) {
   const [expanded, setExpanded] = useState(false);
   const collapsible = message.text.length > 900 || message.text.split("\n").length > 12;
   const deck = useApp((s) => s.deck);
+  const workspace = useApp((s) => s.workspace?.path ?? "");
   const slideNumber = message.slide && deck ? deck.slides.findIndex((s) => s.id === message.slide) + 1 : 0;
+  const pictures = picturesOf(message);
+  const files = message.attachments.filter((a) => !isImage(a));
   return (
     <div className="group flex min-w-0 flex-col items-end gap-1">
+      {pictures.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+          {pictures.map((picture) => (
+            <Thumbnail key={picture.path} picture={picture} workspace={workspace} />
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <ul className="flex max-w-[85%] flex-wrap justify-end gap-1">
+          {files.map((file) => (
+            <li
+              key={file}
+              title={file}
+              className="flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
+            >
+              <FileText className="size-3 shrink-0" />
+              <span className="truncate">{file.replace(/^assets\//, "")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="selectable min-w-0 max-w-[85%] rounded-2xl bg-accent p-3 text-sm leading-relaxed">
-        <div
+        {/* What the user typed is shown as typed: marks in it are not formatting. */}
+        <p
           className={cn(
-            "markdown whitespace-pre-wrap break-words",
+            "whitespace-pre-wrap break-words",
             collapsible &&
               !expanded &&
               "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
           )}
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
-        </div>
+          {message.text}
+        </p>
         {collapsible && (
           <button
             type="button"
@@ -93,9 +200,23 @@ function UserBubble({ message }: { message: UserMessage }) {
           </button>
         )}
       </div>
-      <CopyMessage text={message.text} />
+      <div className="flex items-center">
+        {!message.command && (
+          <button
+            type="button"
+            aria-label="Edit message"
+            title="Edit: put this text back into the message box"
+            onClick={() => useApp.getState().fillComposer(message.text)}
+            className={cn("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground", ON_HOVER)}
+          >
+            <Pencil className="size-3" />
+          </button>
+        )}
+        <CopyButton text={message.text} label="Copy message" className={ON_HOVER} />
+      </div>
       {(slideNumber > 0 ||
-        message.attachments.length > 0 ||
+        message.sketch ||
+        !!message.comments?.length ||
         message.screenshot ||
         message.element ||
         message.reverted) && (
@@ -110,26 +231,32 @@ function UserBubble({ message }: { message: UserMessage }) {
           )}
           {message.element && <span>· about {message.element.name}</span>}
           {message.screenshot && <span>· with screenshot</span>}
-          {message.attachments.map((a) => (
-            <span key={a}>· {a.replace(/^assets\//, "")}</span>
-          ))}
         </div>
       )}
     </div>
   );
 }
 
-/** A reply of the agent's: its text, tool calls and approvals, and how the turn went. */
-function AssistantBlock({ message }: { message: AssistantMessage }) {
+/**
+ * A reply of the agent's: its text, tool calls and approvals, and how the turn went. While it
+ * comes in, its last line says what the agent is doing and for how long. Finished, tool calls in
+ * a row fold into one line of steps; `retry` offers to send the message it answered again.
+ */
+function AssistantBlock({ message, retry }: { message: AssistantMessage; retry: boolean }) {
   const streaming = message.status === "streaming";
+  // While the agent works, each step shows as it happens.
+  const groups = streaming
+    ? message.parts.map((part, index) => ({ kind: "part" as const, part, index }))
+    : groupParts(message.parts);
   return (
     <div className="group min-w-0 flex flex-col gap-2">
-      {message.parts.map((part, i) =>
-        part.kind === "text" ? (
+      {groups.map((group) => {
+        if (group.kind === "steps") return <ToolSteps key={group.tools[0]!.id} tools={group.tools} />;
+        const { part, index } = group;
+        return part.kind === "text" ? (
           part.text.trim() && (
-            // biome-ignore lint/suspicious/noArrayIndexKey: a message's parts only grow at the end
-            <div key={i} className="markdown selectable">
-              <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
+            <div key={index} className="markdown selectable">
+              <ChatMarkdown>{part.text}</ChatMarkdown>
             </div>
           )
         ) : part.kind === "approval" ? (
@@ -138,21 +265,15 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
           <ApprovalReview key={part.id} part={part} />
         ) : (
           <ToolRow key={part.id} part={part} />
-        ),
-      )}
-      {streaming && message.compacting && <span className="shimmer-text text-xs">Compacting the conversation…</span>}
+        );
+      })}
       {message.compacted && (
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <FoldVertical className="size-3.5 shrink-0" />
           Conversation compacted
         </span>
       )}
-      {streaming && !message.compacting && (message.thinking || (message.parts.length === 0 && !message.compacted)) && (
-        <span className="shimmer-text text-xs">Thinking…</span>
-      )}
-      {streaming && !message.thinking && message.parts.at(-1)?.kind === "tool" && (
-        <span className="shimmer-text text-xs">Working…</span>
-      )}
+      {streaming && <ReplyStatus message={message} />}
       {message.error && (
         <div className="selectable flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs leading-relaxed text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -161,7 +282,9 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
       )}
       {!streaming && message.parts.some((p) => p.kind === "text" && p.text.trim()) && (
         <div>
-          <CopyMessage
+          <CopyButton
+            label="Copy message"
+            className={ON_HOVER}
             text={message.parts
               .filter((p) => p.kind === "text")
               .map((p) => p.text)
@@ -169,11 +292,70 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
           />
         </div>
       )}
-      {message.status === "interrupted" && <span className="text-2xs text-muted-foreground">Stopped</span>}
+      {(message.status === "interrupted" || retry) && (
+        <div className="flex items-center gap-2 text-2xs text-muted-foreground">
+          {message.status === "interrupted" && <span>Stopped</span>}
+          {retry && (
+            <button
+              type="button"
+              title="Send the message again, with its slide and attachments"
+              onClick={() => void useApp.getState().retryLast()}
+              className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-foreground hover:bg-accent"
+            >
+              <RotateCw className="size-3" />
+              Retry
+            </button>
+          )}
+        </div>
+      )}
       {message.status === "done" && message.durationMs !== null && (
         <span className="text-2xs text-muted-foreground/70">
           {(message.durationMs / 1000).toFixed(1)}s{message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}
         </span>
+      )}
+    </div>
+  );
+}
+
+/** The last line of a reply coming in: what the agent is doing, read out as it changes, and for how long. */
+function ReplyStatus({ message }: { message: AssistantMessage }) {
+  const elapsed = useElapsed(message.createdAt, true);
+  return (
+    <div data-testid="reply-status" className="flex items-center gap-2 text-xs">
+      <span aria-live="polite" className="shimmer-text">
+        {replyActivity(message)}
+      </span>
+      {/* Counting is for the eye only: read out, it would never stop. */}
+      <span aria-hidden className="tabular-nums text-muted-foreground/70">
+        {formatElapsed(elapsed)}
+      </span>
+    </div>
+  );
+}
+
+/** Tool calls of a finished reply that followed one another, as one line that unfolds into them. */
+function ToolSteps({ tools }: { tools: ToolPart[] }) {
+  const [open, setOpen] = useState(false);
+  const failed = tools.some((tool) => tool.status === "error");
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        title={open ? "Hide the steps" : "Show each step"}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 self-start rounded-md text-xs text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
+        {failed && <X className="size-3.5 shrink-0 text-destructive" />}
+        {stepsLabel(tools)}
+      </button>
+      {open && (
+        <div className="flex min-w-0 flex-col gap-2 border-l pl-3">
+          {tools.map((tool) => (
+            <ToolRow key={tool.id} part={tool} />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -321,36 +503,6 @@ function ToolSummary(props: {
         {slide && <span className="font-mono text-[0.95em] text-foreground/80"> · #{slide}</span>}
       </span>
       {part.status === "done" && slide && <Check className="size-3 shrink-0 text-success" />}
-    </button>
-  );
-}
-
-/** Copies a message's text, showing for a moment that it did. */
-function CopyMessage({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  return (
-    <button
-      type="button"
-      title={failed ? "Could not copy. Try again." : copied ? "Copied" : "Copy message"}
-      aria-label={copied ? "Copied" : "Copy message"}
-      onClick={() => {
-        void navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            setCopied(true);
-            setFailed(false);
-          })
-          .catch(() => setFailed(true));
-      }}
-      className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 focus-visible:opacity-100"
-    >
-      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
     </button>
   );
 }

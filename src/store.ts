@@ -18,7 +18,7 @@ import { createSlidesSlice } from "./store/slides";
 import { createTemplatesSlice } from "./store/templates";
 import type { AppState } from "./store/types";
 import { createUiSlice, type ToastAction } from "./store/ui";
-import { confirmDiscardEdits as confirmDeckEdits, createWorkspaceSlice, leaveForClose } from "./store/workspace";
+import { createWorkspaceSlice, leaveForClose, settleUnsavedEdits as settleDeckEdits } from "./store/workspace";
 
 export { SKETCH_TARGET_ATTR } from "./store/capture";
 export { COMPACT_COMMAND } from "./store/chat";
@@ -48,9 +48,10 @@ export {
 export { commentsInScope, heldComment } from "./store/review";
 export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
-export { railSelection } from "./store/slides";
+export { listedSlides, railSelection } from "./store/slides";
+export type { DesignChange } from "./store/templates";
 export { SIDEBAR_TABS, type SidebarTab, type Toast, type ToastAction, type ToastKind } from "./store/ui";
-export type { WorkspaceChange } from "./store/workspace";
+export { provideCodeSave, type WorkspaceChange } from "./store/workspace";
 
 export const useApp = create<AppState>()((...a) => ({
   ...createWorkspaceSlice(...a),
@@ -72,8 +73,11 @@ export const useApp = create<AppState>()((...a) => ({
 /** Saves review marks and comments still waiting for the user to pause, right away. */
 export const flushReviewSave = () => flushReview(useApp);
 
-/** Whether the user gives up the unsaved edits in the sidebar's HTML tab. */
-export const confirmDiscardEdits = () => confirmDeckEdits(useApp);
+/**
+ * Settles the unsaved edits in the sidebar's HTML tab before what would lose them: the user saves
+ * them, gives them up, or stays. True when nothing unsaved is left to lose.
+ */
+export const settleUnsavedEdits = () => settleDeckEdits(useApp);
 
 /**
  * Gets what is open ready for the window to close; false when the user stays, for unsaved edits,

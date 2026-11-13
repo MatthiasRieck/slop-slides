@@ -64,6 +64,30 @@ describe("NotesPanel", () => {
     expect(box().value).toBe("");
   });
 
+  it("says in its header that the notes are being saved, and when they are", async () => {
+    render(<NotesPanel />);
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.change(box(), { target: { value: "Say bye." } });
+    expect(screen.getByRole("status").textContent).toBe("Saving…");
+    await act(async () => void (await vi.advanceTimersByTimeAsync(NOTES_SAVE_DELAY)));
+    expect(setNotes).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status").textContent).toBe("Saved");
+    // Typing on is saving again.
+    fireEvent.change(box(), { target: { value: "Say bye, twice." } });
+    expect(screen.getByRole("status").textContent).toBe("Saving…");
+  });
+
+  it("does not say Saved for a save that typing has overtaken", async () => {
+    let saved: () => void = () => {};
+    setNotes.mockImplementationOnce(() => new Promise<void>((resolve) => (saved = resolve)));
+    render(<NotesPanel />);
+    fireEvent.change(box(), { target: { value: "One" } });
+    await act(async () => void (await vi.advanceTimersByTimeAsync(NOTES_SAVE_DELAY)));
+    fireEvent.change(box(), { target: { value: "One, two" } });
+    await act(async () => saved());
+    expect(screen.getByRole("status").textContent).toBe("Saving…");
+  });
+
   it("takes on notes changed elsewhere, unless the user is typing", () => {
     render(<NotesPanel />);
     act(() => useApp.setState({ deck: deckWith({ intro: "From the agent." }) }));

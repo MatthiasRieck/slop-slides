@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { parseGeometry, parseGeometryValue, parseLayers, quarterTurn } from "./arrange";
+import { parseGeometry, parseGeometryValue, parseLayers, quarterTurn, stepNumber } from "./arrange";
 
 describe("parseLayers", () => {
   it("keeps the rows it can use, dropping malformed ones", () => {
@@ -58,6 +58,16 @@ describe("parseGeometryValue", () => {
     expect(parseGeometryValue("x", "")).toBeNull();
     expect(parseGeometryValue("y", "-")).toBeNull();
     expect(parseGeometryValue("y", "1.2.3")).toBeNull();
+  });
+});
+
+describe("stepNumber", () => {
+  it("steps by one, or by ten, from the whole number nearest", () => {
+    expect(stepNumber(10, 1, false)).toBe(11);
+    expect(stepNumber(10, -1, false)).toBe(9);
+    expect(stepNumber(10, 1, true)).toBe(20);
+    expect(stepNumber(0, -1, true)).toBe(-10);
+    expect(stepNumber(10.4, 1, false)).toBe(11);
   });
 });
 

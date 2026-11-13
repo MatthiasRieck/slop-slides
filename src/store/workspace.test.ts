@@ -1,9 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
+import { answerUnsaved, unsavedAsked } from "../test/unsaved";
 import { lastError } from "./errors";
 import type { AssistantMessage, ChatMessage } from "./messages";
-import { assistantMessage, backend, calls, DECK, freshStore, type Handler, resetBackend, userMessage } from "./testing";
+import {
+  assistantMessage,
+  backend,
+  calls,
+  DECK,
+  freshModule,
+  freshStore,
+  type Handler,
+  resetBackend,
+  userMessage,
+} from "./testing";
 
 beforeEach(resetBackend);
 
@@ -83,12 +94,44 @@ describe("workspaces", () => {
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
     useApp.setState({ codeDirty: true });
-    ask.mockResolvedValue(false);
-    await useApp.getState().openPath("site/index.html");
+    const opening = useApp.getState().openPath("site/index.html");
+    expect(await answerUnsaved("cancel")).toBe("q3.html");
+    await opening;
     expect(useApp.getState().deck).toEqual(TALK);
-    expect(await useApp.getState().closeWorkspace()).toBe(false);
+    const closing = useApp.getState().closeWorkspace();
+    await answerUnsaved("cancel");
+    expect(await closing).toBe(false);
     expect(useApp.getState().workspace).toEqual(WS);
     expect(calls("close_workspace")).toEqual([]);
+  });
+
+  it("opens a deck file in its folder, or in the folder it was open in before", async () => {
+    let useApp = await freshStore(false);
+    workspaceBackend();
+    await useApp.getState().openDeckFile("/ws/talks/q3.html", "/ws");
+    expect(calls("open_workspace")).toEqual([{ path: "/ws" }]);
+    expect(calls("open_file")).toEqual([{ path: "talks/q3.html" }]);
+    expect(useApp.getState().deck).toEqual(TALK);
+
+    // Without a folder given, the one the file is in becomes the workspace.
+    useApp = await freshStore(false);
+    resetBackend();
+    workspaceBackend({ open_file: ({ path }) => ({ path, absolute: `/ws/talks/${String(path)}`, kind: "deck" }) });
+    await useApp.getState().openDeckFile("/ws/talks/q3.html");
+    expect(calls("open_workspace")).toEqual([{ path: "/ws/talks" }]);
+    expect(calls("open_file")).toEqual([{ path: "q3.html" }]);
+  });
+
+  it("opens no deck file when its folder does not open", async () => {
+    const useApp = await freshStore(false);
+    workspaceBackend({
+      open_workspace: () => {
+        throw "ws is already open in another window.";
+      },
+    });
+    await useApp.getState().openDeckFile("/ws/talks/q3.html", "/ws");
+    expect(lastError(useApp.getState())).toBe("ws is already open in another window.");
+    expect(calls("open_file")).toEqual([]);
   });
 
   it("reopens the file last open in a folder", async () => {
@@ -339,32 +382,111 @@ describe("closing a deck with unsaved HTML edits", () => {
 
   it("stays open when the user keeps their edits", async () => {
     const useApp = await freshStore();
-    ask.mockResolvedValue(false);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    expect(await useApp.getState().closeDeck()).toBe(false);
-    expect(ask).toHaveBeenCalledOnce();
+    const closing = useApp.getState().closeDeck();
+    expect(await answerUnsaved("cancel")).toBe("deck.html");
+    expect(await closing).toBe(false);
+    expect(await unsavedAsked()).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
     expect(useApp.getState().deck).not.toBeNull();
     expect(useApp.getState().codeDirty).toBe(true);
   });
 
-  it("closes and clears the dirty flag when the user discards", async () => {
-    const useApp = await freshStore();
-    ask.mockResolvedValue(true);
+  it("closes and clears the dirty flag when the user does not save", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => {});
+    provideCodeSave(save);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    expect(await useApp.getState().closeDeck()).toBe(true);
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(true);
+    expect(save).not.toHaveBeenCalled();
     expect(useApp.getState().deck).toBeNull();
     expect(useApp.getState().codeDirty).toBe(false);
   });
 
-  it("falls back to window.confirm when the native dialog is unavailable", async () => {
-    const useApp = await freshStore();
-    ask.mockRejectedValue(new Error("no dialog plugin"));
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("saves the edits through the HTML tab's editor, then closes", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => useApp.getState().setCodeDirty(false));
+    provideCodeSave(save);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    await useApp.getState().closeDeck();
-    expect(confirm).toHaveBeenCalledOnce();
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(true);
+    expect(save).toHaveBeenCalledOnce();
+    expect(useApp.getState().deck).toBeNull();
+  });
+
+  it("stays open, on the HTML tab, when the edits could not be saved", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    // The file changed on disk meanwhile: the editor keeps the edits and says so.
+    provideCodeSave(async () => {});
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true, sidebarTab: "chat", sidebarTabs: ["chat", "code"] });
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(false);
     expect(useApp.getState().deck).not.toBeNull();
-    confirm.mockRestore();
+    expect(useApp.getState().sidebarTab).toBe("code");
+  });
+
+  it("does not save through an editor that is gone", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => useApp.getState().setCodeDirty(false));
+    provideCodeSave(save)();
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("asks one question at a time: asked again, the first is cancelled", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
+    const first = useApp.getState().closeDeck();
+    await vi.waitFor(async () => expect(await unsavedAsked()).toBe(true));
+    const second = useApp.getState().closeDeck();
+    expect(await first).toBe(false);
+    await answerUnsaved("discard");
+    expect(await second).toBe(true);
+  });
+});
+
+describe("renaming a deck", () => {
+  it("gives the deck its new title, trimmed", async () => {
+    const useApp = await freshStore();
+    backend({ rename_deck: ({ title }) => ({ ...DECK, title }) });
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("  Board update  ")).toBe(true);
+    expect(calls("rename_deck")).toEqual([{ id: DECK.id, title: "Board update" }]);
+    expect(useApp.getState().deck?.title).toBe("Board update");
+  });
+
+  it("takes no empty title, and leaves an unchanged one alone", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("   ")).toBe(false);
+    expect(await useApp.getState().renameDeck(` ${DECK.title} `)).toBe(true);
+    expect(calls("rename_deck")).toEqual([]);
+  });
+
+  it("says why a deck could not be renamed, and keeps its title", async () => {
+    const useApp = await freshStore();
+    backend({
+      rename_deck: () => {
+        throw "the deck file is read-only";
+      },
+    });
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("Other")).toBe(false);
+    expect(lastError(useApp.getState())).toBe("the deck file is read-only");
+    expect(useApp.getState().deck?.title).toBe(DECK.title);
+  });
+
+  it("renames nothing without a deck", async () => {
+    const useApp = await freshStore();
+    expect(await useApp.getState().renameDeck("Other")).toBe(false);
+    expect(calls("rename_deck")).toEqual([]);
   });
 });
 

@@ -67,6 +67,28 @@ describe("lint", () => {
     });
     await useApp.getState().refreshLint();
     expect(useApp.getState().lint).toBeNull();
+    expect(useApp.getState().lintError).toBe("deck not found: talk");
+  });
+
+  it("is checking again, not failed, while a failed check is retried, and forgets the failure once one works", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), lint: null, lintError: "no" });
+    let answer: (issues: unknown) => void = () => {};
+    invoke.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    const pending = useApp.getState().refreshLint();
+    expect(useApp.getState()).toMatchObject({ lint: null, lintError: null });
+    answer([issue()]);
+    await pending;
+    expect(useApp.getState()).toMatchObject({ lint: [issue()], lintError: null });
+  });
+
+  it("takes an answer that is no list of issues for a failed check", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), lint: [] });
+    backend({ lint_deck: () => null });
+    await useApp.getState().refreshLint();
+    expect(useApp.getState().lint).toBeNull();
+    expect(useApp.getState().lintError).toBe("The check gave no result.");
   });
 
   it("resets lint and composer text when the deck closes", async () => {

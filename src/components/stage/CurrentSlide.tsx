@@ -19,6 +19,8 @@ export function CurrentSlide(props: {
 }) {
   const editReload = useApp((s) => s.editReload);
   const finalState = useApp((s) => s.finalState);
+  // Loading the slide again is what plays its animations again; the editor shows none to replay.
+  const replay = useApp((s) => (props.editing ? 0 : s.replayRev));
   const id = props.slide.id;
   // While the timeline plays over the slide, or holds it at a moment, it shows as it is then, its
   // animations kept with the narration, rather than as the editor's still of their last frame, or
@@ -29,7 +31,8 @@ export function CurrentSlide(props: {
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => onSlideClock(() => postSlideClock(frame.current, id, true)), [id]);
-  const version = useEditorVersion(props.slide, props.editing && !played, editReload);
+  const loaded = useEditorVersion(props.slide, props.editing && !played, editReload);
+  const version = replay > 0 ? `${loaded}.r${replay}` : loaded;
   return (
     <SlideFrame
       deckId={props.deckId}

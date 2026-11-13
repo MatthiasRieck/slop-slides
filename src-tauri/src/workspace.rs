@@ -6,7 +6,8 @@
 //! Each window opens one workspace, and one deck in it at a time; together the workspaces bound
 //! what the `slop://` protocol serves ([`OpenWorkspace`]). Windows may share a folder, each
 //! with another of its decks. The
-//! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`.
+//! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`, and the decks
+//! opened in them in `~/.slopslides/recent-decks.json`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -23,6 +24,7 @@ use crate::html;
 
 const RECENT_FILE: &str = "recent-workspaces.json";
 const RECENT_KEPT: usize = 10;
+const RECENT_DECKS_FILE: &str = "recent-decks.json";
 /// How much of an HTML file the file tree reads to tell decks from other pages. The markers
 /// [`classify`] looks for first are in `<head>`.
 const SNIFF_BYTES: u64 = 16 * 1024;
@@ -367,50 +369,126 @@ pub struct RecentWorkspace {
 
 /// Folders opened before, newest first; ones that no longer exist are left out.
 pub fn recent(app_home: &Path) -> Vec<RecentWorkspace> {
-    read_recent(app_home)
+    read_list::<RecentWorkspace>(app_home, RECENT_FILE)
         .into_iter()
         .filter(|w| Path::new(&w.path).is_dir())
         .collect()
 }
 
-fn read_recent(app_home: &Path) -> Vec<RecentWorkspace> {
-    fs::read_to_string(app_home.join(RECENT_FILE))
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
 /// Puts `root` first among the recent workspaces.
 pub fn remember(app_home: &Path, root: &Path) -> Result<()> {
     let path = root.to_string_lossy().into_owned();
-    let mut list = read_recent(app_home);
+    let mut list: Vec<RecentWorkspace> = read_list(app_home, RECENT_FILE);
     list.retain(|w| w.path != path);
     list.insert(
         0,
         RecentWorkspace {
             name: display_name(root),
             path,
-            opened_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
+            opened_ms: now_ms(),
         },
     );
     list.truncate(RECENT_KEPT);
-    fs::create_dir_all(app_home)?;
-    write_recent(app_home, &list)
+    write_list(app_home, RECENT_FILE, &list)
 }
 
 /// Takes `root` off the recent workspaces.
 pub fn forget(app_home: &Path, root: &str) -> Result<()> {
-    let mut list = read_recent(app_home);
+    let mut list: Vec<RecentWorkspace> = read_list(app_home, RECENT_FILE);
     list.retain(|w| w.path != root);
-    write_recent(app_home, &list)
+    write_list(app_home, RECENT_FILE, &list)
 }
 
-fn write_recent(app_home: &Path, list: &[RecentWorkspace]) -> Result<()> {
+/// A deck opened before, for the start screen to open again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentDeck {
+    /// The deck file, which is the deck's id.
+    pub path: String,
+    /// The deck's title when it was last opened or renamed.
+    pub title: String,
+    /// The folder it was open in, which opens with it again.
+    pub workspace: String,
+    pub opened_ms: u64,
+}
+
+/// Decks opened before, newest first. Ones whose file no longer exists are left out; one whose
+/// folder is gone, or no longer holds it, opens in the folder the file is in.
+pub fn recent_decks(app_home: &Path) -> Vec<RecentDeck> {
+    read_list::<RecentDeck>(app_home, RECENT_DECKS_FILE)
+        .into_iter()
+        .filter(|deck| Path::new(&deck.path).is_file())
+        .map(|mut deck| {
+            let file = Path::new(&deck.path);
+            let workspace = Path::new(&deck.workspace);
+            if !(workspace.is_dir() && inside(workspace, file)) {
+                if let Some(parent) = file.parent() {
+                    deck.workspace = parent.to_string_lossy().into_owned();
+                }
+            }
+            deck
+        })
+        .collect()
+}
+
+/// Puts the deck `file`, open in the folder `root` and called `title`, first among the recent decks.
+pub fn remember_deck(app_home: &Path, root: &Path, file: &Path, title: &str) -> Result<()> {
+    let path = file.to_string_lossy().into_owned();
+    let mut list: Vec<RecentDeck> = read_list(app_home, RECENT_DECKS_FILE);
+    list.retain(|deck| deck.path != path);
+    list.insert(
+        0,
+        RecentDeck {
+            path,
+            title: title.to_string(),
+            workspace: root.to_string_lossy().into_owned(),
+            opened_ms: now_ms(),
+        },
+    );
+    list.truncate(RECENT_KEPT);
+    write_list(app_home, RECENT_DECKS_FILE, &list)
+}
+
+/// Gives the recent deck `file` the title it was renamed to; a deck that is not among them stays out.
+pub fn retitle_deck(app_home: &Path, file: &Path, title: &str) -> Result<()> {
+    let path = file.to_string_lossy();
+    let mut list: Vec<RecentDeck> = read_list(app_home, RECENT_DECKS_FILE);
+    let Some(deck) = list.iter_mut().find(|deck| deck.path == path) else {
+        return Ok(());
+    };
+    if deck.title == title {
+        return Ok(());
+    }
+    deck.title = title.to_string();
+    write_list(app_home, RECENT_DECKS_FILE, &list)
+}
+
+/// Takes the deck file `path` off the recent decks.
+pub fn forget_deck(app_home: &Path, path: &str) -> Result<()> {
+    let mut list: Vec<RecentDeck> = read_list(app_home, RECENT_DECKS_FILE);
+    list.retain(|deck| deck.path != path);
+    write_list(app_home, RECENT_DECKS_FILE, &list)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A recent list as stored in `name`; empty when there is none or it cannot be read.
+fn read_list<T: serde::de::DeserializeOwned>(app_home: &Path, name: &str) -> Vec<T> {
+    fs::read_to_string(app_home.join(name))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_list<T: Serialize>(app_home: &Path, name: &str, list: &[T]) -> Result<()> {
+    fs::create_dir_all(app_home)?;
     fs::write(
-        app_home.join(RECENT_FILE),
+        app_home.join(name),
         serde_json::to_string_pretty(list).expect("json"),
     )?;
     Ok(())
@@ -679,5 +757,74 @@ mod tests {
         }
         assert_eq!(recent(&home).len(), RECENT_KEPT);
         assert_eq!(recent(&home)[0].name, format!("w{}", RECENT_KEPT + 2));
+    }
+
+    #[test]
+    fn remembers_recent_decks_newest_first_with_their_folder() {
+        let t = TempDir::canonical("ws-recent-decks");
+        let home = t.join("home");
+        let a = t.write("library/a/deck.html", DECK);
+        let b = t.write("library/b/deck.html", DECK);
+        let library = t.join("library");
+        assert!(recent_decks(&home).is_empty());
+        remember_deck(&home, &library, &a, "Alpha").unwrap();
+        remember_deck(&home, &library, &b, "Beta").unwrap();
+        remember_deck(&home, &library, &a, "Alpha").unwrap();
+        let decks = recent_decks(&home);
+        let titles: Vec<_> = decks.iter().map(|d| d.title.as_str()).collect();
+        assert_eq!(titles, ["Alpha", "Beta"], "reopening moves it to the top");
+        assert_eq!(decks[0].path, a.to_string_lossy());
+        assert_eq!(decks[0].workspace, library.to_string_lossy());
+        assert!(decks[0].opened_ms > 0);
+
+        retitle_deck(&home, &b, "Beta, renamed").unwrap();
+        retitle_deck(&home, &t.join("library/c/deck.html"), "Not recent").unwrap();
+        let decks = recent_decks(&home);
+        let titles: Vec<_> = decks.iter().map(|d| d.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["Alpha", "Beta, renamed"],
+            "renaming keeps the order"
+        );
+
+        fs::remove_file(&b).unwrap();
+        assert_eq!(recent_decks(&home).len(), 1, "missing files are left out");
+
+        forget_deck(&home, &a.to_string_lossy()).unwrap();
+        assert!(recent_decks(&home).is_empty());
+    }
+
+    #[test]
+    fn a_recent_deck_whose_folder_is_gone_opens_in_its_own() {
+        let t = TempDir::canonical("ws-recent-moved");
+        let home = t.join("home");
+        let deck = t.write("talks/q3/deck.html", DECK);
+        let elsewhere = t.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        remember_deck(&home, &elsewhere, &deck, "Q3").unwrap();
+        assert_eq!(
+            recent_decks(&home)[0].workspace,
+            t.join("talks/q3").to_string_lossy(),
+            "a folder that does not hold the deck"
+        );
+        remember_deck(&home, &t.join("gone"), &deck, "Q3").unwrap();
+        assert_eq!(
+            recent_decks(&home)[0].workspace,
+            t.join("talks/q3").to_string_lossy(),
+            "a folder that is gone"
+        );
+    }
+
+    #[test]
+    fn keeps_as_many_recent_decks_as_folders() {
+        let t = TempDir::new("ws-recent-cap");
+        let home = t.join("home");
+        for n in 0..RECENT_KEPT + 3 {
+            let deck = t.write(format!("d{n}/deck.html"), DECK);
+            remember_deck(&home, &t, &deck, &format!("Deck {n}")).unwrap();
+        }
+        let decks = recent_decks(&home);
+        assert_eq!(decks.len(), RECENT_KEPT);
+        assert_eq!(decks[0].title, format!("Deck {}", RECENT_KEPT + 2));
     }
 }

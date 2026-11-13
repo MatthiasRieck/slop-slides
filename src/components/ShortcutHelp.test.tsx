@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { EDIT_TOOL_KEYS } from "../lib/editTools";
 import { TOOL_KEYS } from "../lib/ink";
 import { formatKeys } from "../lib/keys";
+import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { openShortcutHelp, useApp } from "../store";
 import { keysLabel, SECTIONS, ShortcutHelp, TOOL_ROWS } from "./ShortcutHelp";
 
@@ -21,6 +22,20 @@ describe("the shortcuts listed", () => {
     expect(keysLabel("{shift} moving")).toBe("Shift moving");
     expect(keysLabel("Double-click a group")).toBe("Double-click a group");
     expect(keysLabel("{mod+shift+z}")).toBe(formatKeys("mod+shift+z"));
+  });
+
+  it("lists the shell's shortcuts under General, as the shell writes them", () => {
+    const general = SECTIONS.find((s) => s.title === "General")!.rows.map(([keys]) => keysLabel(keys));
+    expect(general).toEqual(
+      expect.arrayContaining([
+        formatKeys(SHELL_SHORTCUTS.openFolder),
+        [SHELL_SHORTCUTS.view, SHELL_SHORTCUTS.edit, SHELL_SHORTCUTS.git].map((keys) => formatKeys(keys)).join(" / "),
+        formatKeys(SHELL_SHORTCUTS.sidebar),
+        formatKeys(SHELL_SHORTCUTS.rail),
+        formatKeys(SHELL_SHORTCUTS.appSettings),
+      ]),
+    );
+    expect(general).toContain("Ctrl+Shift+\\");
   });
 
   it("groups them by where they work", () => {

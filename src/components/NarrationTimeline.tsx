@@ -1,9 +1,10 @@
-import { ChevronDown, Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
+import { ChevronDown, Minus, Pause, Play, Plus, RotateCcw, SkipBack, StepBack, StepForward, Timer } from "lucide-react";
 import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type Ref,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -11,26 +12,34 @@ import {
 
 import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
 import { type TimedComment, timedComments } from "../lib/comments";
+import { isTextField } from "../lib/keys";
 import { formatDuration } from "../lib/narrationAudio";
 import { pixelsOf } from "../lib/slideSize";
 import {
   filmstripFrames,
+  formatShown,
+  formatTenths,
   layoutTimeline,
   moveClip,
   moveEdge,
+  scrollForZoom,
+  scrollToPlayhead,
+  slideAt,
   spokenSeconds,
   type Timeline,
   type TimelineClip,
   withTiming,
 } from "../lib/timeline";
 import { cn } from "../lib/utils";
-import { loadVideoOptions } from "../lib/video";
 import { useApp } from "../store";
-import { Button } from "./Button";
+import { Button, withShortcut } from "./Button";
 import { usePeaks, useWords, Waveform, Words } from "./NarrationWave";
+import { TimingSettings } from "./narration/TimingSettings";
 import { useDeckAudio } from "./narration/useDeckAudio";
 import { useTimelinePlayback } from "./narration/useTimelinePlayback";
 import { type Move, useTimingEdits } from "./narration/useTimingEdits";
+import { useVideoOptions } from "./narration/useVideoOptions";
+import { Popover } from "./Popover";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** The zoom steps of the track: how many times the width of the panel it is. */
@@ -51,7 +60,16 @@ interface Measured {
  * The deck on a timeline, under the slide in View and in Edit while it is open: the shown slides
  * above their audio, as a video export and the self-running show play them. Each slide is a strip
  * of film, its picture over and over for as long as it shows, with its narration a band of sound
- * below. The ruler moves the playhead, and Play plays it from there, the stage following along.
+ * below. The ruler moves the playhead, and Play plays it from there, the stage following along;
+ * pressing a slide moves the playhead to where that slide starts. Zoomed in, the track scrolls to
+ * keep a playing playhead in sight, and a change of zoom leaves the playhead where it is.
+ *
+ * With the focus in the tracks, the keys play and move too: Space plays and pauses, ← and → step
+ * a tenth of a second (a second with Shift), Home and End go to the ends. The ruler is a slider
+ * for that. Elsewhere those keys mean what they always do.
+ *
+ * How long a slide without narration shows, and the pauses around narration, are set under
+ * Timing in its bar (see `TimingSettings`): the same times a video export and the show's Play use.
  *
  * In View it only plays and scrubs. Not playing, the slide on the stage is frozen as it is at the
  * playhead, its animations that far in: pausing, pressing or dragging on the ruler and stepping
@@ -66,11 +84,12 @@ interface Measured {
 export function NarrationTimeline() {
   const deck = useApp((s) => s.deck);
   const audio = useDeckAudio(deck?.id);
+  const stored = useVideoOptions();
   if (!deck) return null;
   const slides = deck.slides.filter((s) => !s.hidden);
   if (slides.length === 0) return null;
   const spoken = spokenSeconds(slides, audio);
-  const options = { ...loadVideoOptions(), narration: true };
+  const options = { ...stored, narration: true };
   const layout = (timing: SlideTiming[]) => layoutTimeline(withTiming(slides, timing), spoken, options);
   return <Tracks deck={deck} slides={slides} audio={audio} layout={layout} />;
 }
@@ -90,7 +109,7 @@ function Tracks(props: {
   const comments = useApp((s) => (s.reviewVisible ? s.comments : NO_COMMENTS));
   const [zoom, setZoom] = useState(1);
   const track = useRef<HTMLDivElement>(null);
-  const { time, playing, play, freeze, select } = useTimelinePlayback(deck, timeline, editable);
+  const { time, playing, play, freeze, goToSlide } = useTimelinePlayback(deck, timeline, editable);
   const { shown, end, held, press, pointed, release, nudge } = useTimingEdits(layout, timeline, track, editable);
   const scroller = useRef<HTMLDivElement>(null);
   const strips = useRef<HTMLDivElement>(null);
@@ -120,6 +139,28 @@ function Tracks(props: {
   const percent = (seconds: number) => `${(seconds / end) * 100}%`;
   const now = Math.min(time, shown.end);
 
+  // Zoomed in, the track is wider than the panel: playing, it scrolls on with the playhead.
+  useEffect(() => {
+    const box = scroller.current;
+    if (!playing || !box || !(end > 0)) return;
+    const to = scrollToPlayhead(measured.track * (now / end), box.scrollLeft, measured.view);
+    if (to !== box.scrollLeft) box.scrollLeft = to;
+  }, [playing, now, end, measured.track, measured.view]);
+
+  // A change of zoom keeps the playhead where it is on screen: the track's width before it, until laid out anew.
+  const zoomedFrom = useRef<number | null>(null);
+  const zoomTo = (next: number) => {
+    zoomedFrom.current = track.current?.clientWidth ?? null;
+    setZoom(next);
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Runs once the track has its new width.
+  useLayoutEffect(() => {
+    const [box, before, after] = [scroller.current, zoomedFrom.current, track.current?.clientWidth ?? 0];
+    zoomedFrom.current = null;
+    if (!box || before === null || !(end > 0)) return;
+    box.scrollLeft = scrollForZoom(now / end, before, after, box.scrollLeft, box.clientWidth);
+  }, [zoom]);
+
   const seek = (event: PointerEvent<HTMLDivElement>) => {
     // Pressed, or dragged along with the button down.
     if (event.type === "pointermove" ? !(event.buttons & 1) : event.button !== 0) return;
@@ -127,37 +168,77 @@ function Tracks(props: {
     const box = event.currentTarget.getBoundingClientRect();
     freeze(((event.clientX - box.left) / (box.width || 1)) * end);
   };
-  const step = (event: MouseEvent, direction: 1 | -1) => freeze(time + direction * (event.shiftKey ? 1 : STEP));
+  const step = (event: MouseEvent | KeyboardEvent, direction: 1 | -1) =>
+    freeze(time + direction * (event.shiftKey ? 1 : STEP));
+  /**
+   * The keys of the tracks, with the focus in them: Space plays and pauses, the arrows step, Home
+   * and End go to the ends. An edge or a narration being moved with the arrows has taken them
+   * before; a field or a button of the bar keeps its own.
+   */
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || isTextField(event.target)) return;
+    if ((event.target as Element).closest("[data-timeline-bar], [data-popover]")) return;
+    if (event.key === " ") play();
+    else if (event.key === "ArrowLeft") step(event, -1);
+    else if (event.key === "ArrowRight") step(event, 1);
+    else if (event.key === "Home") freeze(0);
+    else if (event.key === "End") freeze(timeline.end);
+    else return;
+    // The keys are the timeline's here: Space presses no button, the arrows move no slide.
+    event.preventDefault();
+    event.stopPropagation();
+  };
 
   const reset = (editable ? slides : [])
     .filter((s) => !s.locked && (s.duration != null || s.narrationStart != null))
     .map((s) => ({ slide: s.id, duration: null, narrationStart: null }));
 
   return (
-    <section aria-label="Narration timeline" className="flex h-44 shrink-0 flex-col border-t bg-background">
+    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: the keys of what is focused in it.
+    <section
+      aria-label="Narration timeline"
+      onKeyDown={onKeyDown}
+      className="flex h-44 shrink-0 flex-col border-t bg-background"
+    >
       {/* The time on the left, zoom on the right, and what plays it in the middle between them. */}
-      <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 border-b px-2 py-1 text-xs">
-        <span className="tabular-nums text-muted-foreground">
-          {formatDuration(now)} / {formatDuration(shown.end)}
+      <div
+        data-timeline-bar=""
+        className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 border-b px-2 py-1 text-xs"
+      >
+        {/* Stopped, to the tenth: that is what a step changes. */}
+        <span data-testid="timeline-time" className="tabular-nums text-muted-foreground">
+          {playing ? formatDuration(now) : formatTenths(now)} / {formatDuration(shown.end)}
         </span>
         <div data-testid="transport" className="flex items-center gap-1">
           <Button
             size="xs"
+            aria-label="Back to start"
+            title={withShortcut("Back to the start", "home")}
+            disabled={now <= 0}
+            onClick={() => freeze(0)}
+          >
+            <SkipBack />
+          </Button>
+          <Button
+            size="xs"
             aria-label="Step back"
-            title="Step back a tenth of a second, the slide frozen there; with Shift, a second"
+            title={withShortcut("Step back a tenth of a second, the slide frozen there; with Shift, a second", "left")}
             disabled={now <= 0}
             onClick={(event) => step(event, -1)}
           >
             <StepBack />
           </Button>
-          <Button size="xs" onClick={play}>
+          <Button size="xs" title={withShortcut(playing ? "Pause" : "Play from the playhead", "space")} onClick={play}>
             {playing ? <Pause /> : <Play />}
             {playing ? "Pause" : "Play"}
           </Button>
           <Button
             size="xs"
             aria-label="Step forward"
-            title="Step forward a tenth of a second, the slide frozen there; with Shift, a second"
+            title={withShortcut(
+              "Step forward a tenth of a second, the slide frozen there; with Shift, a second",
+              "right",
+            )}
             disabled={now >= timeline.end}
             onClick={(event) => step(event, 1)}
           >
@@ -165,6 +246,7 @@ function Tracks(props: {
           </Button>
         </div>
         <div className="flex items-center justify-end gap-1.5">
+          <TimingButton />
           {reset.length > 0 && (
             <Button
               size="xs"
@@ -175,14 +257,21 @@ function Tracks(props: {
               Reset timing
             </Button>
           )}
-          <Button size="xs" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => setZoom((z) => z / 2)}>
+          <Button
+            size="xs"
+            aria-label="Zoom out"
+            title={zoom === ZOOMS[0] ? "The whole timeline is in sight" : "Zoom out"}
+            disabled={zoom === ZOOMS[0]}
+            onClick={() => zoomTo(zoom / 2)}
+          >
             <Minus />
           </Button>
           <Button
             size="xs"
             aria-label="Zoom in"
+            title={zoom === ZOOMS[ZOOMS.length - 1] ? "Zoomed in all the way" : "Zoom in, around the playhead"}
             disabled={zoom === ZOOMS[ZOOMS.length - 1]}
-            onClick={() => setZoom((z) => z * 2)}
+            onClick={() => zoomTo(zoom * 2)}
           >
             <Plus />
           </Button>
@@ -207,7 +296,7 @@ function Tracks(props: {
           className="relative flex h-full min-w-full flex-col"
           style={{ width: `${zoom * 100 * Math.max(1, end / (held ?? end))}%` }}
         >
-          <Ruler end={end} onSeek={seek} />
+          <Ruler end={end} now={now} slide={slideAt(shown, now) + 1} onSeek={seek} />
           {timedComments(comments, shown.slides).map((comment) => (
             <CommentMark
               key={comment.id}
@@ -238,10 +327,11 @@ function Tracks(props: {
                     deck={deck}
                     slide={slides[index]}
                     number={index + 1}
+                    seconds={placed.end - placed.start}
                     selected={placed.id === selected}
                     frames={frames}
                     picture={picture}
-                    onSelect={() => select(index)}
+                    onSelect={() => goToSlide(index)}
                   />
                   <button
                     type="button"
@@ -266,6 +356,14 @@ function Tracks(props: {
             })}
           </div>
           <div className="relative h-10 shrink-0">
+            {shown.clips.length === 0 && (
+              <p
+                data-testid="no-narration"
+                className="sticky left-0 flex h-full w-fit items-center px-2 text-2xs text-muted-foreground"
+              >
+                No narration yet. Write it in the Narration tab.
+              </p>
+            )}
             {shown.clips.map((clip) => {
               const moveNarration: Move = (by) => moveClip(shown, clip.slide, by);
               return (
@@ -273,6 +371,7 @@ function Tracks(props: {
                   key={clip.slide}
                   deck={deck.id}
                   clip={clip}
+                  number={shown.slides.findIndex((s) => s.id === clip.slide) + 1}
                   audio={audio[clip.slide]}
                   end={end}
                   locked={!editable || slides.some((s) => s.id === clip.slide && s.locked)}
@@ -306,16 +405,71 @@ function Tracks(props: {
   );
 }
 
-/** The time along the track, which moves the playhead. */
-function Ruler({ end, onSeek }: { end: number; onSeek: (event: PointerEvent<HTMLDivElement>) => void }) {
+/**
+ * How the stored times are set, from the timeline's bar: how long a slide without narration
+ * shows, and the pauses around narration.
+ */
+function TimingButton() {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <Button
+        ref={anchor}
+        size="xs"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title="How long a slide without narration shows, and the pauses around narration"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Timer />
+        Timing
+      </Button>
+      {open && (
+        <Popover
+          anchor={anchor}
+          placement="above"
+          align="end"
+          width={280}
+          portal
+          label="Timing"
+          onClose={() => setOpen(false)}
+        >
+          <TimingSettings />
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/**
+ * The time along the track, which moves the playhead: pressed or dragged with the pointer, and
+ * a slider for the keyboard, whose keys are the timeline's (see `Tracks`).
+ */
+function Ruler(props: {
+  end: number;
+  now: number;
+  /** The number of the slide showing at the playhead. */
+  slide: number;
+  onSeek: (event: PointerEvent<HTMLDivElement>) => void;
+}) {
+  const { end, now, onSeek } = props;
   const step = rulerStep(end);
   const marks = Array.from({ length: Math.floor(end / step) + 1 }, (_, i) => i * step);
   return (
     <div
       data-testid="ruler"
+      role="slider"
+      tabIndex={0}
+      aria-label="Playhead"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(end * 10) / 10}
+      aria-valuenow={Math.round(now * 10) / 10}
+      aria-valuetext={`${formatTenths(now)} of ${formatDuration(end)}, slide ${props.slide}`}
+      title="Press or drag to move the playhead; with the focus here, ← → step and Space plays"
       onPointerDown={onSeek}
       onPointerMove={onSeek}
-      className="relative h-4 shrink-0 cursor-pointer select-none overflow-hidden border-b text-2xs tabular-nums text-muted-foreground"
+      className="relative h-4 shrink-0 cursor-pointer select-none overflow-hidden border-b text-2xs tabular-nums text-muted-foreground focus-visible:bg-accent focus-visible:outline-none"
     >
       {marks.map((at) => (
         <span key={at} className="absolute border-l pl-0.5" style={{ left: `${(at / end) * 100}%` }}>
@@ -359,6 +513,8 @@ function SlideBlock(props: {
   deck: Deck;
   slide: Slide | undefined;
   number: number;
+  /** How long it shows, live while its edge is dragged. */
+  seconds: number;
   selected: boolean;
   frames: number[];
   picture: number;
@@ -371,7 +527,7 @@ function SlideBlock(props: {
       type="button"
       aria-label={`Slide ${props.number}`}
       aria-current={props.selected ? "true" : undefined}
-      title={`Slide ${props.number}`}
+      title={`Slide ${props.number}, shown for ${formatShown(props.seconds)}. Press to move the playhead to its start`}
       onClick={props.onSelect}
       className="relative block size-full overflow-hidden rounded-md bg-card text-left"
     >
@@ -380,8 +536,11 @@ function SlideBlock(props: {
           <SlidePictures deck={props.deck} slide={slide} frames={props.frames} picture={props.picture} />
         )}
       </div>
-      <span className="absolute top-1 left-1 rounded-sm bg-overlay px-1 text-2xs tabular-nums text-overlay-foreground">
+      <span className="absolute top-1 left-1 flex max-w-[calc(100%-0.5rem)] gap-1 overflow-hidden rounded-sm bg-overlay px-1 text-2xs tabular-nums text-overlay-foreground">
         {props.number}
+        <span data-testid="slide-seconds" aria-hidden="true" className="opacity-70">
+          {formatShown(props.seconds)}
+        </span>
       </span>
       {/* Over the pictures, which would cover an outline of the button itself. */}
       <span
@@ -413,6 +572,8 @@ function SlidePictures(props: { deck: Deck; slide: Slide; frames: number[]; pict
 function Clip(props: {
   deck: string;
   clip: TimelineClip;
+  /** The number of its slide among those shown. */
+  number: number;
   audio: SlideAudio | undefined;
   end: number;
   locked: boolean;
@@ -427,8 +588,8 @@ function Clip(props: {
   const words = useWords(deck, clip.slide, audio);
   const label =
     seconds === null
-      ? `Narration of ${clip.slide}, not spoken yet`
-      : `Narration of ${clip.slide}${audio?.state === "stale" ? ", out of date" : ""}`;
+      ? `Narration of slide ${props.number}, not spoken yet`
+      : `Narration of slide ${props.number}${audio?.state === "stale" ? ", out of date" : ""}`;
   return (
     <button
       type="button"

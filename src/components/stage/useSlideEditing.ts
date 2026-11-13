@@ -5,15 +5,16 @@ import { api } from "../../lib/api";
 import { type EditGeometry, type EditLayer, parseGeometry, parseLayers } from "../../lib/arrange";
 import { catchDrops, type DropPoint, isImage } from "../../lib/drop";
 import {
+  type AgentInsert,
   type DeckColor,
-  type EditElement,
+  type EditMenuTarget,
   type EditSelection,
   type FontChoice,
   IMAGE_FILE_TYPES,
   parseDeckColors,
-  parseElement,
   parseFonts,
   parseHexColor,
+  parseMenuTarget,
   parseSelection,
 } from "../../lib/editTools";
 import { keepsKey } from "../../lib/keys";
@@ -21,7 +22,7 @@ import { dismissTopLayer } from "../../lib/layers";
 import { editingSlide, reportingErrors, showError, useApp } from "../../store";
 import { parseSvgOpen, useSvgEditor } from "../../svgStore";
 import type { EditMenuAction } from "../EditContextMenu";
-import { isEditTool, runEditKey, runHistoryKey, toolMessage } from "./editKeys";
+import { type EditShortcut, editShortcut, isEditTool, runEditKey, runHistoryKey, toolMessage } from "./editKeys";
 import { fromFrameIn, toAppPoint, toFramePoint } from "./frames";
 import { importImages, measureImages } from "./images";
 import { keyForRail } from "./useSlideKeyboard";
@@ -30,6 +31,12 @@ const NO_OVERFLOW: string[] = [];
 const NO_LAYERS: EditLayer[] = [];
 const NO_FONTS: FontChoice[] = [];
 const NO_COLORS: DeckColor[] = [];
+
+/** A point in the slide preview's own pixels. */
+interface MenuPoint {
+  x: number;
+  y: number;
+}
 
 /** `next`, or `was` when it says the same: a report that changes nothing then renders nothing again. */
 export function unlessSame<T>(was: T, next: T): T {
@@ -41,7 +48,9 @@ export function unlessSame<T>(was: T, next: T): T {
  * saves the markup it posts, keeps the selection across a reload of the slide, and
  * handles undo and leaving edit mode. Images dropped on the stage go onto the slide. The
  * editor copies elements through the system clipboard, and ⌘V pastes from it: an element
- * copied there, images (saved as assets) or text from anywhere.
+ * copied there, images (saved as assets) or text from anywhere. The shortcuts on the selection
+ * work with the focus in the app as they do in the slide (see `editShortcut`), and the look copied
+ * from an element is kept here, so it can be pasted on another slide.
  */
 export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, resetView: () => void) {
   const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
@@ -59,12 +68,15 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
   const [layers, setLayers] = useState<{ slide: string; layers: EditLayer[] } | null>(null);
   const [colors, setColors] = useState<DeckColor[]>(NO_COLORS);
   const [background, setBackground] = useState<string | null>(null);
-  // The menu a right-click in the editor opened, in the app's pixels.
-  const [menu, setMenu] = useState<{ x: number; y: number; element: EditElement | null } | null>(null);
+  // The menu a right-click in the editor opened, in the app's pixels; `at` is the same point in the preview's.
+  const [menu, setMenu] = useState<(EditMenuTarget & { x: number; y: number; at: MenuPoint }) | null>(null);
+  // What is selected, for the shortcuts pressed outside the slide.
+  const selectionRef = useRef<EditSelection | null>(null);
 
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
-  const paste = useCallback(async () => {
+  /** Pastes from the clipboard: where pastes go, or with `at` (a point in the preview), centered there. */
+  const paste = useCallback(async (at?: MenuPoint) => {
     const { deck, selected } = useApp.getState();
     if (!deck || !editingSlide(useApp.getState()) || !selected) return;
     await reportingErrors(async () => {
@@ -73,27 +85,42 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       const now = useApp.getState();
       if (!editingSlide(now) || now.selected !== selected || !loaded?.contentWindow) return;
       if (pasted.kind === "element") {
-        loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
+        // The editor puts it where it was copied from, unless the menu says where.
+        loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html, ...at }, "*");
       } else if (pasted.kind === "text") {
         loaded.contentWindow.postMessage(
-          { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text },
+          { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text, ...at },
           "*",
         );
       } else if (pasted.kind === "slide") {
-        await useApp.getState().pasteSlide();
+        await useApp.getState().pasteSlides();
       } else if (pasted.kind === "images") {
         const images = await measureImages(deck.id, pasted.images);
         // The editor puts them where the pointer is, or in the middle of the view.
-        loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images }, "*");
+        loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images, ...at }, "*");
       }
     });
   }, []);
 
   useEffect(() => {
+    /** Gives the selection the look copied last, if any. */
+    const pasteStyle = () => {
+      const { copiedStyle } = useApp.getState();
+      if (copiedStyle) post({ type: "slop:edit-paste-style", style: copiedStyle });
+    };
+    /** Does what a shortcut on the selection asks for (see `editShortcut`). */
+    const runShortcut = (shortcut: EditShortcut) => {
+      if ("post" in shortcut) post(shortcut.post);
+      else if ("pasteStyle" in shortcut) pasteStyle();
+      else if ("panel" in shortcut) useApp.getState().askForEditPanel(shortcut.panel);
+      else if (selectionRef.current) post({ type: "slop:edit-lock", locked: !selectionRef.current.locked });
+    };
     /** ⌘C / ⌘X / ⌘V while editing; `fromApp` when pressed outside the slide. True when handled. */
     const runClipboardKey = (key: string, shift: boolean, fromApp: boolean, rail = false) => {
       const lower = key.toLowerCase();
       if (shift) return false;
+      // Pressed on the slide rail, these mean the slides picked there (see useSlideKeyboard).
+      if (fromApp && rail && ["a", "c", "d", "x"].includes(lower)) return false;
       // ⌘A and ⌘D pressed outside the slide still mean the slide's elements.
       if (fromApp && (lower === "a" || lower === "d") && !window.getSelection()?.toString()) {
         post({ type: lower === "a" ? "slop:edit-select-all" : "slop:edit-duplicate" });
@@ -104,8 +131,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         return true;
       }
       // In the slide, the editor copies by itself; in the app, copying selected text comes
-      // first, and ⌘C on the slide rail copies the slide (see useSlideKeyboard).
-      if (lower === "c" && fromApp && rail) return false;
+      // first.
       if ((lower === "c" || lower === "x") && fromApp && !window.getSelection()?.toString()) {
         post({ type: "slop:edit-copy", cut: lower === "x" });
         return true;
@@ -126,6 +152,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
         // The editor reports on every keystroke and move of the caret, mostly the same thing.
         const next = { slide: data.slide, selection: parseSelection(data.selection) };
+        selectionRef.current = next.selection;
         setSelection((was) => unlessSame(was, next));
       } else if (data?.type === "slop:edit-geometry" && data.slide === selected) {
         setGeometry({ slide: data.slide, geometry: parseGeometry(data.geometry) });
@@ -142,8 +169,14 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         setBackground(parseHexColor(data.color));
       } else if (data?.type === "slop:edit-menu" && data.slide === selected) {
         // The preview is scaled down to fit; the editor gives the point in its own pixels.
-        const at = toAppPoint(frame.current, Number(data.x), Number(data.y));
-        setMenu({ ...at, element: parseElement(data.element) });
+        const at = { x: Number(data.x), y: Number(data.y) };
+        setMenu({ ...toAppPoint(frame.current, at.x, at.y), at, ...parseMenuTarget(data) });
+      } else if (data?.type === "slop:edit-style-copied" && data.slide === selected) {
+        useApp.getState().setCopiedStyle(data.style ?? null);
+      } else if (data?.type === "slop:edit-request" && data.slide === selected) {
+        // What the editor's shortcuts need the app for: its Link popover, and the look it keeps.
+        if (data.what === "link") useApp.getState().askForEditPanel("link");
+        else if (data.what === "paste-style") pasteStyle();
       } else if (data?.type === "slop:edit-paste-request" && data.slide === selected) {
         // ⌘⇧V while typing: the clipboard's text, without its formatting.
         api
@@ -172,7 +205,13 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       const target = event.target as HTMLElement | null;
       if (!editingSlide(useApp.getState()) || keepsKey(event)) return;
       if (event.metaKey || event.ctrlKey) {
-        if (
+        const shortcut = editShortcut(event);
+        if (shortcut) {
+          event.preventDefault();
+          runShortcut(shortcut);
+        } else if (event.altKey) {
+          // Nothing else here goes with Alt.
+        } else if (
           runHistoryKey(event.key, event.shiftKey) ||
           runClipboardKey(event.key, event.shiftKey, true, keyForRail(target))
         )
@@ -203,34 +242,51 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
 
   const current = useApp((s) => s.selected);
   const editing = useApp(editingSlide);
+  const canPasteStyle = useApp((s) => s.copiedStyle !== null);
 
+  /** Runs `then` once the view is back on the whole slide and has painted, for a screenshot of it. */
+  const afterResetView = (then: () => void) => {
+    resetView();
+    requestAnimationFrame(() => requestAnimationFrame(then));
+  };
   const closeMenu = () => {
     setMenu(null);
     frame.current?.focus();
   };
   const runMenuAction = (action: EditMenuAction) => {
-    const element = menu?.element;
+    const opened = menu;
+    const element = opened?.element;
     closeMenu();
     if (action === "cut" || action === "copy") post({ type: "slop:edit-copy", cut: action === "cut" });
-    else if (action === "paste") void paste();
+    // Where the menu was opened, not where the pointer went to pick "Paste".
+    else if (action === "paste") void paste(opened?.at);
+    else if (action === "edit-text") post({ type: "slop:edit-edit-text" });
+    else if (action === "select-all") post({ type: "slop:edit-select-all" });
+    else if (action === "unlock-all") post({ type: "slop:edit-unlock-all" });
+    else if (action === "copy-style") post({ type: "slop:edit-copy-style" });
+    else if (action === "paste-style") post({ type: "slop:edit-paste-style", style: useApp.getState().copiedStyle });
+    else if (action === "background") useApp.getState().askForEditPanel("background");
     else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
     else if (action === "delete") post({ type: "slop:edit-delete" });
     else if (action === "svg") post({ type: "slop:edit-open-svg" });
     else if (action === "group" || action === "ungroup") post({ type: `slop:edit-${action}` });
     else if (action === "lock" || action === "unlock") post({ type: "slop:edit-lock", locked: action === "lock" });
     else if (action === "flip-x" || action === "flip-y") {
-      const look = selection?.slide === current ? selection.selection : null;
-      if (!look?.flippable) return;
-      post({ type: "slop:edit-style", style: action === "flip-x" ? { flipX: !look.flipX } : { flipY: !look.flipY } });
+      post({ type: "slop:edit-flip", axis: action === "flip-x" ? "x" : "y" });
     } else if (action === "ask" || action === "tidy") {
-      if (!element) return;
-      // The screenshot shows the whole slide, with the element selected and the menu gone.
-      resetView();
-      const { askAboutElement, tidyElement } = useApp.getState();
-      const handOver = action === "ask" ? askAboutElement : tidyElement;
-      requestAnimationFrame(() => requestAnimationFrame(() => void handOver(element)));
+      if (!opened || !element) return;
+      // The screenshot shows the whole slide, with the selection and the menu gone.
+      const { askAboutElements, tidyElement } = useApp.getState();
+      const handOver = action === "ask" ? () => askAboutElements(opened.elements) : () => tidyElement(element);
+      afterResetView(() => void handOver());
     } else post({ type: "slop:edit-order", to: action });
   };
+
+  // The editor snaps as the toolbar's toggle says, on every slide.
+  const snap = useApp((s) => s.editSnap);
+  useEffect(() => {
+    if (editing) post({ type: "slop:edit-snap", on: snap });
+  }, [editing, snap, post]);
 
   return {
     sizeMode,
@@ -252,7 +308,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
     /** What is on the slide, the top-most first, for the Layers panel. */
     layers: editing && layers?.slide === current ? layers.layers : NO_LAYERS,
     /** The open context menu, and what it does. */
-    menu: editing ? menu : null,
+    menu: editing && menu ? { ...menu, canPasteStyle } : null,
     closeMenu,
     runMenuAction,
     /** Sends a message to the slide editor in the preview. */
@@ -281,6 +337,8 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         else post({ type: "slop:edit-paste-images", images });
       });
     },
+    /** Starts a request to the agent for a table, chart or icon, with a screenshot of the whole slide. */
+    askForInsert: (kind: AgentInsert) => afterResetView(() => void useApp.getState().askForInsert(kind)),
     /** Gives focus back to the slide, as after typing a value into the toolbar. */
     focus: () => frame.current?.focus(),
     deleteSelection: () => post({ type: "slop:edit-delete" }),
@@ -288,12 +346,14 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       frame.current = loaded;
       // A fresh editor starts with the select tool and nothing selected; it reports a restored
       // selection itself.
+      selectionRef.current = null;
       setSelection(null);
       setGeometry(null);
       setMenu(null);
-      const { selected, editTool, editStyles } = useApp.getState();
+      const { selected, editTool, editStyles, editSnap } = useApp.getState();
       const editing = editingSlide(useApp.getState());
       if (editing) {
+        post({ type: "slop:edit-snap", on: editSnap });
         post({ type: "slop:edit-size-mode", mode: sizeMode });
         post({ type: "slop:edit-keep-ratio", on: keepRatio });
         post(toolMessage(editTool, editStyles));

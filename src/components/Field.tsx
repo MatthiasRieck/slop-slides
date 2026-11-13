@@ -1,5 +1,8 @@
 import { type InputHTMLAttributes, type ReactNode, useEffect, useState } from "react";
 
+import { stepNumber } from "../lib/arrange";
+import { isMod } from "../lib/keys";
+
 /** A text or number field filling its labelled column. */
 export const inputClass = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 tabular-nums";
 /** A select as wide as its longest choice. */
@@ -72,8 +75,10 @@ export function CheckboxRow(props: {
 
 /**
  * A number to type that applies on Enter or when the field loses focus; Escape puts the value
- * back. Keystrokes pass through `sanitize`, and only a text `parse` takes, that differs from the
- * value, is applied. Enter and Escape also call `onDone`, to hand focus back.
+ * back. ↑ and ↓ take it one up or down (ten with Shift) and apply that at once, the focus staying
+ * in the field for the next step. Keystrokes pass through `sanitize`, and only a text `parse`
+ * takes, that differs from the value, is applied. Enter and Escape also call `onDone`, to hand
+ * focus back.
  */
 export function DraftInput(
   props: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "onBlur" | "onKeyDown"> & {
@@ -93,6 +98,14 @@ export function DraftInput(
     if (next === null || next === value) setDraft(shown);
     else onChange(next);
   };
+  /** Steps from what is typed (or, when that is no number, from the value) and applies the result. */
+  const step = (direction: 1 | -1, large: boolean) => {
+    const from = parse(draft) ?? value;
+    const next = from === null ? null : parse(String(stepNumber(from, direction, large)));
+    if (next === null) return;
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  };
   return (
     <input
       type="text"
@@ -111,6 +124,9 @@ export function DraftInput(
           event.preventDefault();
           setDraft(shown);
           onDone();
+        } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.altKey && !isMod(event)) {
+          event.preventDefault();
+          step(event.key === "ArrowUp" ? 1 : -1, event.shiftKey);
         }
       }}
     />

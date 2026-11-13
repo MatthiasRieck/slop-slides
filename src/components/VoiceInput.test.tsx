@@ -71,6 +71,9 @@ describe("VoiceInput", () => {
     await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
     expect(commands()).toEqual(["voice_status", "start_recording"]);
     expect(h.onStart).toHaveBeenCalledOnce();
+    // A check, which keeps what was said: a square beside the composer's Stop would look like it.
+    expect(micButton().querySelector(".lucide-check")).toBeTruthy();
+    expect(micButton().querySelector(".lucide-square")).toBeNull();
 
     fireEvent.click(micButton());
     await waitFor(() => expect(h.onEnd).toHaveBeenCalledWith("Make the title bigger.", false));

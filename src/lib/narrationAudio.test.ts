@@ -48,6 +48,21 @@ describe("playNarration", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:narration");
   });
 
+  it("pauses where it is and plays on from there", async () => {
+    invoke.mockResolvedValue(new ArrayBuffer(8));
+    const playing = await playNarration("deck", "intro");
+    made[0]!.currentTime = 1.25;
+    playing.pause();
+    expect(made[0]?.paused).toBe(true);
+    expect(playing.time()).toBe(1.25);
+    // Paused is not ended: the audio is still there to play on.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    await playing.resume();
+    expect(made[0]?.paused).toBe(false);
+    expect(made[0]?.currentTime).toBe(1.25);
+    playing.stop();
+  });
+
   it("asks where to start only once the audio has loaded", async () => {
     let load!: (bytes: ArrayBuffer) => void;
     invoke.mockReturnValue(new Promise((resolve) => (load = resolve)));

@@ -1,10 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useApp } from "../store";
+import { provideCodeSave, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { appWindow, ask, calls, invoke, requestClose } from "../test/tauri";
+import { answerUnsaved, unsavedAsked } from "../test/unsaved";
 import { confirmWindowClose, useCloseGuard, useWindowTitle, windowTitle } from "./useWindowShell";
 
 const DECK = deckFor(DECK_HTML);
@@ -61,11 +62,31 @@ describe("closing the window", () => {
 
   it("asks about unsaved HTML edits, and stays when the user keeps them", async () => {
     useApp.setState({ codeDirty: true });
-    ask.mockResolvedValue(false);
-    expect(await confirmWindowClose()).toBe(false);
-    expect(asked()).toEqual(["You have unsaved changes to deck.html. Discard them?"]);
-    ask.mockResolvedValue(true);
-    expect(await confirmWindowClose()).toBe(true);
+    let closing = confirmWindowClose();
+    expect(await answerUnsaved("cancel")).toBe("deck.html");
+    expect(await closing).toBe(false);
+    closing = confirmWindowClose();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(true);
+    // Asked in the app, not with the system's dialog.
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("saves unsaved HTML edits through the editor before closing, and stays when that fails", async () => {
+    useApp.setState({ codeDirty: true });
+    const save = vi.fn(async () => {});
+    const gone = provideCodeSave(save);
+    let closing = confirmWindowClose();
+    await answerUnsaved("save");
+    // Still unsaved (the file changed on disk, say): the window stays, on the HTML tab.
+    expect(await closing).toBe(false);
+    expect(useApp.getState().sidebarTab).toBe("code");
+    save.mockImplementation(async () => useApp.getState().setCodeDirty(false));
+    closing = confirmWindowClose();
+    await answerUnsaved("save");
+    expect(await closing).toBe(true);
+    expect(save).toHaveBeenCalledTimes(2);
+    gone();
   });
 
   it("asks about a drawing with changes not accepted, not about one without", async () => {
@@ -96,12 +117,18 @@ describe("closing the window", () => {
   it("asks about each thing in turn, and stops at the first the user stays for", async () => {
     useApp.setState({ codeDirty: true, running: true });
     useSvgEditor.setState({ edit: drawing(true) });
-    ask.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    expect(await confirmWindowClose()).toBe(false);
-    expect(asked()).toHaveLength(2);
+    // The edits are given up, the drawing is not.
+    ask.mockResolvedValueOnce(false);
+    let closing = confirmWindowClose();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(false);
+    expect(asked()).toHaveLength(1);
     ask.mockReset().mockResolvedValue(true);
-    expect(await confirmWindowClose()).toBe(true);
-    expect(asked()).toHaveLength(3);
+    closing = confirmWindowClose();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(true);
+    // The drawing, then the agent's turn.
+    expect(asked()).toHaveLength(2);
   });
 });
 
@@ -112,29 +139,28 @@ describe("useCloseGuard", () => {
     expect(appWindow.onCloseRequested).toHaveBeenCalledOnce();
     expect(await requestClose()).toBe(true);
     useApp.setState({ codeDirty: true });
-    ask.mockResolvedValue(false);
-    expect(await requestClose()).toBe(false);
-    ask.mockResolvedValue(true);
-    expect(await requestClose()).toBe(true);
+    let closing = requestClose();
+    await answerUnsaved("cancel");
+    expect(await closing).toBe(false);
+    closing = requestClose();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(true);
     // Gone, it asks nothing more.
     unmount();
     await act(async () => {});
-    ask.mockReset().mockResolvedValue(false);
     expect(await requestClose()).toBe(true);
-    expect(ask).not.toHaveBeenCalled();
+    expect(await unsavedAsked()).toBe(false);
   });
 
   it("stays open, without asking twice, when closed again while the question is open", async () => {
     renderHook(() => useCloseGuard());
     await act(async () => {});
     useApp.setState({ codeDirty: true });
-    let answer: (discard: boolean) => void = () => {};
-    ask.mockImplementation(() => new Promise<boolean>((resolve) => (answer = resolve)));
     const first = requestClose();
-    await Promise.resolve();
+    await vi.waitFor(async () => expect(await unsavedAsked()).toBe(true));
     expect(await requestClose()).toBe(false);
-    expect(ask).toHaveBeenCalledOnce();
-    answer(true);
+    // The first question is still the one open.
+    await answerUnsaved("discard");
     expect(await first).toBe(true);
   });
 

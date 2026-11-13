@@ -778,7 +778,7 @@
     guides.textContent = "";
     if (event.shiftKey) {
       at = snapLine({ x: other[0], y: other[1] }, at);
-    } else if (!event.metaKey && !event.ctrlKey) {
+    } else if (snaps(event)) {
       var tolerance = SNAP_PX / drag.zoom;
       var sx = snapAxis([at.x], drag.targets.x, tolerance);
       var sy = snapAxis([at.y], drag.targets.y, tolerance);

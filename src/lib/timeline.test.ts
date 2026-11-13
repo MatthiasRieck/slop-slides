@@ -2,7 +2,19 @@
 import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
-import { filmstripFrames, layoutTimeline, moveClip, moveEdge, slideAt, spokenSeconds, withTiming } from "./timeline";
+import {
+  filmstripFrames,
+  formatShown,
+  formatTenths,
+  layoutTimeline,
+  moveClip,
+  moveEdge,
+  scrollForZoom,
+  scrollToPlayhead,
+  slideAt,
+  spokenSeconds,
+  withTiming,
+} from "./timeline";
 import { DEFAULT_VIDEO_OPTIONS, type VideoOptions } from "./video";
 
 const slide = (id: string, more: Partial<Slide> = {}): Slide => ({
@@ -247,5 +259,68 @@ describe("filmstripFrames", () => {
   it("shows nothing before the strip is measured", () => {
     expect(filmstripFrames(0, 100, 0, 1000)).toEqual([]);
     expect(filmstripFrames(500, 0, 0, 1000)).toEqual([]);
+  });
+});
+
+describe("formatTenths", () => {
+  it.each([
+    [0, "0:00.0"],
+    [0.1, "0:00.1"],
+    [3.24, "0:03.2"],
+    [59.96, "1:00.0"],
+    [75.5, "1:15.5"],
+    [-2, "0:00.0"],
+  ])("writes %s seconds as %s", (seconds, text) => {
+    expect(formatTenths(seconds)).toBe(text);
+  });
+});
+
+describe("formatShown", () => {
+  it.each([
+    [0.5, "0.5s"],
+    [5, "5.0s"],
+    [12.34, "12.3s"],
+    [59.9, "59.9s"],
+    [60, "1:00"],
+    [125.4, "2:05"],
+  ])("writes %s seconds as %s", (seconds, text) => {
+    expect(formatShown(seconds)).toBe(text);
+  });
+});
+
+describe("scrollToPlayhead", () => {
+  it("stays put while the playhead is in sight", () => {
+    expect(scrollToPlayhead(300, 100, 400)).toBe(100);
+    expect(scrollToPlayhead(100, 100, 400)).toBe(100);
+    expect(scrollToPlayhead(500, 100, 400)).toBe(100);
+  });
+
+  it("turns the page when the playhead runs out of sight, either way", () => {
+    expect(scrollToPlayhead(501, 100, 400)).toBe(461);
+    expect(scrollToPlayhead(50, 100, 400)).toBe(10);
+    expect(scrollToPlayhead(10, 100, 400)).toBe(0);
+  });
+
+  it("does nothing before the track is measured", () => {
+    expect(scrollToPlayhead(500, 0, 0)).toBe(0);
+  });
+});
+
+describe("scrollForZoom", () => {
+  it("keeps the playhead where it is on screen", () => {
+    // Halfway along 400 pixels, at 200 on screen; twice as wide, it is at 400: scroll 200.
+    expect(scrollForZoom(0.5, 400, 800, 0, 400)).toBe(200);
+    expect(scrollForZoom(0.5, 800, 1600, 200, 400)).toBe(600);
+    expect(scrollForZoom(0.5, 1600, 800, 600, 400)).toBe(200);
+  });
+
+  it("brings a playhead that was out of sight to the middle", () => {
+    expect(scrollForZoom(0.75, 800, 1600, 0, 400)).toBe(1000);
+  });
+
+  it("never scrolls past either end", () => {
+    expect(scrollForZoom(0, 400, 800, 0, 400)).toBe(0);
+    expect(scrollForZoom(1, 800, 400, 400, 400)).toBe(0);
+    expect(scrollForZoom(1, 400, 800, 0, 400)).toBe(400);
   });
 });

@@ -13,6 +13,7 @@ import {
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
 import { DropdownPanel } from "./Popover";
+import { RibbonSelect } from "./Ribbon";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
 const HEAD_LABELS: Record<HeadKind, string> = { arrow: "Arrow", triangle: "Triangle", bar: "Bar", dot: "Dot" };
@@ -27,24 +28,26 @@ export function DashSelect(props: {
   value: Dash;
   vector: boolean;
   disabled: boolean;
+  disabledReason?: string;
   onChange: (changes: EditStyle) => void;
+  onDone?: () => void;
 }) {
-  const label = props.vector ? "Line style" : "Border style";
   return (
-    <select
-      aria-label={label}
-      title={label}
+    <RibbonSelect
+      label={props.vector ? "Line style" : "Border style"}
       disabled={props.disabled}
+      disabledReason={props.disabledReason}
       value={props.value}
-      onChange={(event) => props.onChange({ dash: event.target.value as Dash })}
-      className="h-6 w-20 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
+      onPick={(dash) => props.onChange({ dash: dash as Dash })}
+      onDone={props.onDone}
+      className="w-20 enabled:hover:bg-accent"
     >
       {DASHES.map((d) => (
         <option key={d} value={d}>
           {DASH_LABELS[d]}
         </option>
       ))}
-    </select>
+    </RibbonSelect>
   );
 }
 
@@ -90,9 +93,10 @@ export function LineButton(props: {
       <ToolButton
         keepFocus
         label="Line ends and route"
-        title={line ? "Arrowheads at either end, and how the line goes" : "Line ends and route (select a line)"}
+        title="Arrowheads at either end, and how the line goes"
         aria-expanded={open}
         disabled={!line}
+        disabledReason="Select a line"
         onClick={toggle}
       >
         <Spline />

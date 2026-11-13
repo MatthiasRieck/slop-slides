@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { Deck, Slide } from "../lib/api";
 import { useDraftText } from "../lib/useDraftText";
@@ -36,9 +36,20 @@ function NotesEditor(props: {
   onPreview: (preview: boolean) => void;
 }) {
   const { deck, slide, index, preview } = props;
-  const { draft, change, flush } = useDraftText(slide.notes ?? "", NOTES_SAVE_DELAY, (text) =>
-    useApp.getState().setNotes(slide.id, text),
-  );
+  // The notes save by themselves; the header says when they are on their way and when they are in.
+  const [saving, setSaving] = useState<"saving" | "saved" | null>(null);
+  /** Counts the changes, so a save that an edit has overtaken does not say "Saved". */
+  const typed = useRef(0);
+  const { draft, change, flush } = useDraftText(slide.notes ?? "", NOTES_SAVE_DELAY, async (text) => {
+    const at = typed.current;
+    await useApp.getState().setNotes(slide.id, text);
+    if (typed.current === at) setSaving("saved");
+  });
+  const edit = (text: string) => {
+    typed.current++;
+    setSaving("saving");
+    change(text);
+  };
   return (
     <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-2 p-3">
       <SlideBandHeader
@@ -47,13 +58,19 @@ function NotesEditor(props: {
         total={deck.slides.length}
         preview={preview}
         onPreview={props.onPreview}
-      />
+      >
+        {saving && (
+          <span role="status" className="shrink-0 text-2xs text-muted-foreground">
+            {saving === "saving" ? "Saving…" : "Saved"}
+          </span>
+        )}
+      </SlideBandHeader>
       <ScriptField
         label="Speaker notes"
         draft={draft}
         preview={preview}
         readOnly={!!slide.locked}
-        onChange={change}
+        onChange={edit}
         onBlur={() => void flush()}
         placeholder={slide.locked ? "No notes." : "What to remember while this slide is shown…"}
       />

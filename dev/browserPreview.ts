@@ -105,6 +105,8 @@ const slidesOf = (html: string) =>
 function deckChanges(file: string) {
   const committed = atHead(file)?.toString("utf8");
   const none = {
+    branch: null,
+    detached: false,
     commit: null,
     stylesChanged: false,
     oldSize: null,

@@ -583,6 +583,9 @@
   var pointer = null;
   var overflowFrame = 0;
   var reportFrame = 0;
+  // Looks at the whole slide (what overflows, its layers) wait for a pause in the typing.
+  var TYPING_PAUSE_MS = 250;
+  var slideChecksTimer = null;
   // The last caret or text selection in the element being edited, kept while focus is in the app.
   var textRange = null;
   // The next paste goes in as plain text (⌘⇧V).

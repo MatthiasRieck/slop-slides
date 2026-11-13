@@ -309,6 +309,12 @@
 
   /** Merges neighboring inline elements that look the same, and drops empty, attribute-less ones. */
   function tidy(root) {
+    tidyInline(root);
+    root.normalize();
+  }
+
+  /** `tidy` that leaves the text nodes as they are, for a caret that stands in one. */
+  function tidyInline(root) {
     Array.prototype.slice.call(root.querySelectorAll("*")).reverse().forEach(function (el) {
       if (!INLINE.test(el.tagName) || el.attributes.length) return;
       if (!hasContent(el)) el.parentNode.removeChild(el);
@@ -324,7 +330,6 @@
         }
       }
     });
-    root.normalize();
   }
 
   function sameInline(a, b) {
@@ -335,16 +340,22 @@
     });
   }
 
+  /** Gives text node `t` the formatting `changes`, in place of what the inline elements around it set. */
+  function formatText(t, changes, root) {
+    isolate(t, root).forEach(function (el) {
+      if (el !== t.parentNode || !/^span$/i.test(el.tagName)) stripFormatting(el, changes);
+    });
+    applyFormatting(t, changes, root);
+  }
+
   /** Gives the text `range` covers in the element being edited the formatting `changes`. */
   function formatRange(range, changes) {
     var root = editing;
     var at = textOffsets(root, range);
     coveredText(range, root).forEach(function (t) {
-      isolate(t, root).forEach(function (el) {
-        if (el !== t.parentNode || !/^span$/i.test(el.tagName)) stripFormatting(el, changes);
-      });
-      applyFormatting(t, changes, root);
+      formatText(t, changes, root);
     });
+    if (Object.prototype.hasOwnProperty.call(changes, "color")) colorMarkers(root);
     tidy(root);
     useRange(rangeAt(root, at));
   }

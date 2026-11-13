@@ -506,9 +506,8 @@
 
   /** Lays the handles over the selection's frame, turned with it; they keep their size on screen. */
   function placeHandles() {
-    scheduleOverflow();
+    scheduleSlideChecks();
     scheduleGeometry();
-    scheduleLayers();
     // A locked element shows its frame, but no handles to change it.
     mark(ui, "data-locked", !!selected && isLocked(selected));
     placeFrames();

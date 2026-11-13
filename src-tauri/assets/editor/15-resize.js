@@ -361,6 +361,23 @@
     window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items }, "*");
   }
 
+  /**
+   * Re-checks what overflows and the slide's layers, which means measuring every element on the
+   * slide: next frame, or while typing, once the typing pauses, so keystrokes do not wait for it.
+   */
+  function scheduleSlideChecks() {
+    clearTimeout(slideChecksTimer);
+    slideChecksTimer = null;
+    if (editing) slideChecksTimer = setTimeout(checkSlide, TYPING_PAUSE_MS);
+    else checkSlide();
+  }
+
+  function checkSlide() {
+    slideChecksTimer = null;
+    scheduleOverflow();
+    scheduleLayers();
+  }
+
   /** Re-checks for overflow once per frame, however many changes came in. */
   function scheduleOverflow() {
     if (!overflowFrame) overflowFrame = window.requestAnimationFrame(refreshOverflow);

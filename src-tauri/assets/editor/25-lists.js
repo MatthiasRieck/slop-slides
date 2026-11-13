@@ -46,6 +46,8 @@
         });
         // The break that keeps an empty item open is not content.
         while (line.nodes.length && line.nodes[line.nodes.length - 1].nodeName === "BR") line.nodes.pop();
+        // Nor is the formatting an empty item goes on in (see newItem).
+        if (!line.nodes.some(showsText)) line.nodes = [];
         lines.push(line);
         inner.forEach(function (list) {
           readList(list, depth + 1);
@@ -271,6 +273,97 @@
     if (!hasContent(item)) item.appendChild(document.createElement("br"));
   }
 
+  /** The pieces of text in `root` that show. */
+  function shownText(root) {
+    var nodes = [];
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.data.trim()) nodes.push(node);
+    }
+    return nodes;
+  }
+
+  /** The color text node `t` shows in, as `#rrggbb`. */
+  function colorOf(t) {
+    return toHex(getComputedStyle(t.parentNode).color);
+  }
+
+  /** The color each piece of text in `root` shows in, for `restoreColors`. */
+  function textColors(root) {
+    return shownText(root).map(function (t) {
+      return { node: t, color: colorOf(t) };
+    });
+  }
+
+  /** Gives text the color it had (see textColors) where it has lost it; true when any had. */
+  function restoreColors(colors, root) {
+    var changed = false;
+    colors.forEach(function (was) {
+      if (!was.color || !root.contains(was.node) || colorOf(was.node) === was.color) return;
+      formatText(was.node, { color: was.color }, root);
+      changed = true;
+    });
+    return changed;
+  }
+
+  /** Whether an element between text node `t` and `item` sets a color inline. */
+  function colorSetBelow(t, item) {
+    for (var n = t.parentNode; n && n !== item; n = n.parentNode) {
+      if ((n.style && n.style.color) || (/^font$/i.test(n.tagName) && n.hasAttribute("color"))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Has the bullets and numbers in `root` follow their text: a marker shows in the color of its
+   * item, not of the text in it, so an item whose text is all one color takes that color itself,
+   * in place of the <span>s that set it. Links, and the lists inside the item, keep their colors.
+   * True when anything changed (which leaves inline elements to tidy).
+   */
+  function colorMarkers(root) {
+    var items = Array.prototype.slice.call(root.querySelectorAll("li"));
+    if (/^li$/i.test(root.tagName)) items.unshift(root);
+    var changed = false;
+    items.forEach(function (item) {
+      var own = shownText(item).filter(function (t) {
+        return t.parentNode.closest("li, a") === item;
+      });
+      var color = own.length ? colorOf(own[0]) : null;
+      var mixed = own.some(function (t) {
+        return colorOf(t) !== color;
+      });
+      if (!color || mixed) return;
+      var spans = own.filter(function (t) {
+        return colorSetBelow(t, item);
+      });
+      // Nothing to do, unless the item sets the color its list has anyway (it has left another item).
+      var same = toHex(getComputedStyle(item).color) === color;
+      if (same && !spans.length && !(item.style.color && toHex(getComputedStyle(item.parentNode).color) === color)) return;
+      var colors = textColors(item);
+      item.style.removeProperty("color");
+      if (toHex(getComputedStyle(item).color) !== color) item.style.color = color;
+      if (!item.getAttribute("style")) item.removeAttribute("style");
+      spans.forEach(function (t) {
+        formatText(t, { color: color }, root);
+      });
+      restoreColors(colors, root);
+      changed = true;
+    });
+    return changed;
+  }
+
+  /**
+   * Runs `change`, which moves text between lines, items and lists: each piece of text keeps
+   * the color it showed in (an item's color stays behind with the item), and the markers follow
+   * their text.
+   */
+  function keepColors(root, change) {
+    var colors = textColors(root);
+    change();
+    var restored = restoreColors(colors, root);
+    if (colorMarkers(root) || restored) tidyInline(root);
+  }
+
   /**
    * Turns lines of the selection's text into a list of `kind` ("ul" or "ol"), one item per line,
    * or when they all are items of such a list already, back into plain lines. While typing,
@@ -297,17 +390,19 @@
       hoistBreaks(root);
       if (caret) range = rangeFromCaret(caret, el);
       changeText(el, function () {
-        var lines = readLines(root);
-        if (!lines.length) lines.push({ nodes: [], kind: null, depth: 0 });
-        var picked = pickLines(lines, range);
-        var off = picked.every(function (line) {
-          return line.kind === kind;
+        keepColors(root, function () {
+          var lines = readLines(root);
+          if (!lines.length) lines.push({ nodes: [], kind: null, depth: 0 });
+          var picked = pickLines(lines, range);
+          var off = picked.every(function (line) {
+            return line.kind === kind;
+          });
+          picked.forEach(function (line) {
+            setLineKind(line, off ? null : kind);
+          });
+          writeLines(root, lines, alignOf(el));
+          at = picked[0];
         });
-        picked.forEach(function (line) {
-          setLineKind(line, off ? null : kind);
-        });
-        writeLines(root, lines, alignOf(el));
-        at = picked[0];
       });
     }
     if (editing) {
@@ -340,14 +435,17 @@
     }
     var root = textRoot(editing);
     changeText(editing, function () {
-      var lines = readLines(root);
-      var line = lines.filter(function (other) {
-        return other.item === item;
-      })[0];
-      if (!line) return;
-      setLineKind(line, null);
-      writeLines(root, lines, alignOf(editing));
-      var at = lineStart(line);
+      var line = null;
+      keepColors(root, function () {
+        var lines = readLines(root);
+        line = lines.filter(function (other) {
+          return other.item === item;
+        })[0];
+        if (!line) return;
+        setLineKind(line, null);
+        writeLines(root, lines, alignOf(editing));
+      });
+      var at = line && lineStart(line);
       if (at) useRange(at);
     });
     report();
@@ -402,9 +500,29 @@
       next.appendChild(rest.extractContents());
       item.parentNode.insertBefore(next, item.nextSibling);
       ensureLine(item);
-      ensureLine(next);
+      // An empty new item goes on in the formatting the caret was in: its line is inside that.
+      var open = hasContent(next) ? null : document.createElement("br");
+      if (open) {
+        var into = next;
+        while (into.lastElementChild && INLINE.test(into.lastElementChild.tagName) && !/^a$/i.test(into.lastElementChild.tagName)) {
+          into = into.lastElementChild;
+        }
+        into.textContent = "";
+        into.appendChild(open);
+      }
+      var root = textRoot(editing);
+      if (colorMarkers(root)) tidyInline(root);
+      if (open && item.style.color) {
+        // The item took its text's color, which the new one goes on in.
+        next.style.color = item.style.color;
+        var around = [];
+        for (var el = open.parentNode; el !== next; el = el.parentNode) around.push(el);
+        around.forEach(function (el) {
+          stripFormatting(el, { color: null });
+        });
+      }
       var caret = document.createRange();
-      caret.setStart(next, 0);
+      caret.setStart(open ? open.parentNode : next, 0);
       caret.collapse(true);
       useRange(caret);
     });
@@ -424,7 +542,9 @@
       if (inner.style.listStyleType) inner.style.listStyleType = LIST_TYPES[inner.tagName.toLowerCase()][depthOf(inner, editing) % 3];
       alignList(inner, alignOf(editing), depthOf(inner, editing));
     }
-    inner.appendChild(item);
+    keepColors(textRoot(editing), function () {
+      inner.appendChild(item);
+    });
     var back = caret && rangeFromCaret(caret, editing);
     if (back) useRange(back);
     placeHandles();
@@ -437,13 +557,15 @@
     if (!outer || !/^li$/i.test(outer.tagName) || !editing.contains(outer)) return;
     var range = editRange();
     var caret = range ? caretOf(range) : null;
-    if (item.nextElementSibling) {
-      var rest = cloneShallow(list);
-      while (item.nextSibling) rest.appendChild(item.nextSibling);
-      item.appendChild(rest);
-    }
-    outer.parentNode.insertBefore(item, outer.nextSibling);
-    if (!list.children.length) list.parentNode.removeChild(list);
+    keepColors(textRoot(editing), function () {
+      if (item.nextElementSibling) {
+        var rest = cloneShallow(list);
+        while (item.nextSibling) rest.appendChild(item.nextSibling);
+        item.appendChild(rest);
+      }
+      outer.parentNode.insertBefore(item, outer.nextSibling);
+      if (!list.children.length) list.parentNode.removeChild(list);
+    });
     var back = caret && rangeFromCaret(caret, editing);
     if (!back) {
       back = document.createRange();

@@ -29,6 +29,11 @@ const NO_LAYERS: EditLayer[] = [];
 const NO_FONTS: FontChoice[] = [];
 const NO_COLORS: DeckColor[] = [];
 
+/** `next`, or `was` when it says the same: a report that changes nothing then renders nothing again. */
+export function unlessSame<T>(was: T, next: T): T {
+  return JSON.stringify(was) === JSON.stringify(next) ? was : next;
+}
+
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor/):
  * saves the markup it posts, keeps the selection across the reload that follows, and
@@ -120,7 +125,9 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         // A press in the preview never reaches this window, but for what is open here it is a press outside.
         frame.current?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
-        setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
+        // The editor reports on every keystroke and move of the caret, mostly the same thing.
+        const next = { slide: data.slide, selection: parseSelection(data.selection) };
+        setSelection((was) => unlessSame(was, next));
       } else if (data?.type === "slop:edit-geometry" && data.slide === selected) {
         setGeometry({ slide: data.slide, geometry: parseGeometry(data.geometry) });
       } else if (data?.type === "slop:edit-layers" && data.slide === selected) {

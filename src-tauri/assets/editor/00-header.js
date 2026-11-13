@@ -184,7 +184,10 @@
    In a list, Enter starts a new item (Enter on an empty item, or Backspace at the start of one,
    outdents it or makes it a plain line again), Tab / Shift+Tab indent and outdent the item, and
    Shift+Enter breaks the line. Centered or right-aligned text keeps its bullets and numbers next
-   to the text (`list-style-position: inside`) instead of at the box's left edge. ⌘V pastes
+   to the text (`list-style-position: inside`) instead of at the box's left edge. A bullet or
+   number shows in the color of its text: an item whose text is all one color takes that color
+   itself (an inline `color` on the <li>) in place of <span>s around the text, and a new item
+   goes on in the color and formatting the caret was in. ⌘V pastes
    with the formatting (bold, italic, underline, strikethrough, color, links and line breaks;
    fonts and sizes are dropped), ⌘⇧V as plain text: the editor asks the app for the clipboard's
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with

@@ -1729,6 +1729,47 @@ describe("slide editor", () => {
       expect(e.doc.querySelector("[data-slop-overflow]")!.children).toHaveLength(0);
     });
 
+    it("waits for a pause in the typing before it measures the slide again", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      e.key("Tab");
+      await frame();
+      const before = overflows(e).length;
+      const layersBefore = e.messages("slop:edit-layers").length;
+      e.down(e.$("h1"));
+      e.key("Enter");
+      await frame();
+      // The text grows past the edge while it is typed.
+      laidOut(e, { h1: rect(100, 100, 2400, 200) });
+      for (let i = 0; i < 3; i++) {
+        e.$("h1").textContent += "!";
+        e.$("h1").dispatchEvent(new e.window.Event("input", { bubbles: true }));
+        await frame();
+      }
+      expect(overflows(e)).toHaveLength(before);
+      expect(e.messages("slop:edit-layers")).toHaveLength(layersBefore);
+      // The toolbar still follows the typing.
+      expect(e.messages("slop:edit-selection").length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(overflows(e).at(-1)!.items).toHaveLength(1);
+      expect(e.messages("slop:edit-layers").length).toBeGreaterThan(layersBefore);
+    });
+
+    it("measures the slide right away once the typing is done", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      e.down(e.$("h1"));
+      e.key("Enter");
+      await frame();
+      const before = overflows(e).length;
+      laidOut(e, { h1: rect(100, 100, 2400, 200) });
+      e.$("h1").dispatchEvent(new e.window.Event("input", { bubbles: true }));
+      e.key("Escape");
+      await frame();
+      expect(overflows(e).length).toBe(before + 1);
+      expect(overflows(e).at(-1)!.items).toHaveLength(1);
+    });
+
     it("outlines text running past the slide's edge and reports it", async () => {
       const e = editor();
       laidOut(e, { h1: rect(100, 1000, 600, 1200) });
@@ -2543,6 +2584,164 @@ describe("slide editor", () => {
         // Left empty, the line goes with the editing.
         e.key("Escape");
         expect(lines.lastChild!.nodeName).toBe("UL");
+      });
+
+      describe("colors", () => {
+        const COLOR_DECK = `<!DOCTYPE html><html><head></head><body>
+<main class="deck">
+  <section class="slide" id="intro">
+    <div id="lines">One<br>Two<br>Three</div>
+    <div id="nested"><ul><li>Top<ul><li>Deep</li></ul></li><li>Next</li></ul></div>
+    <ul id="authored"><li><span style="color: rgb(0, 0, 255);">Key:</span> the rest</li></ul>
+  </section>
+</main></body></html>`;
+        const RED = "rgb(255, 0, 0)";
+        const listOf = (selector: string, list = true) => {
+          const e = editor({ markup: COLOR_DECK });
+          const el = e.$(selector);
+          e.down(el);
+          if (list) e.fromParent({ type: "slop:edit-list", list: "ul" });
+          e.key("Enter");
+          expect(el.getAttribute("contenteditable")).toBe("true");
+          return { e, el, items: () => [...el.querySelectorAll("li")] };
+        };
+        const caretAt = (e: ReturnType<typeof editor>) => {
+          const caret = e.window.getSelection()!.getRangeAt(0);
+          return [caret.startContainer, caret.startOffset];
+        };
+
+        it("gives an item the color of its text, so its bullet shows in it too", () => {
+          const { e, items } = listOf("#lines");
+          selectText(e, e.$("#lines"), 3, 6);
+          style(e, { color: "#ff0000" });
+          // All of "Two": the item takes the color, and no <span> is left to set it.
+          expect(items().map((li) => li.outerHTML)).toEqual([
+            "<li>One</li>",
+            `<li style="color: ${RED};">Two</li>`,
+            "<li>Three</li>",
+          ]);
+          expect(selectedText(e)).toBe("Two");
+          expect(lastReport(e)).toMatchObject({ color: "#ff0000" });
+          // Back in the color around it, the item sets none.
+          style(e, { color: "#000000" });
+          expect(items()[1]!.outerHTML).toBe("<li>Two</li>");
+        });
+
+        it("leaves the bullet alone when only some of the item's text is colored", () => {
+          const { e, items } = listOf("#lines");
+          selectText(e, e.$("#lines"), 3, 5);
+          style(e, { color: "#ff0000" });
+          expect(items()[1]!.outerHTML).toBe(`<li><span style="color: ${RED};">Tw</span>o</li>`);
+          // Coloring the rest makes it all one color, which goes to the item.
+          selectText(e, e.$("#lines"), 5, 6);
+          style(e, { color: "#ff0000" });
+          expect(items()[1]!.outerHTML).toBe(`<li style="color: ${RED};">Two</li>`);
+        });
+
+        it("goes on in the item's color after Enter, bullet and text", () => {
+          const { e, items } = listOf("#lines");
+          selectText(e, e.$("#lines"), 3, 6);
+          style(e, { color: "#ff0000" });
+          selectText(e, e.$("#lines"), 6);
+          e.key("Enter");
+          expect(items().map((li) => li.outerHTML)).toEqual([
+            "<li>One</li>",
+            `<li style="color: ${RED};">Two</li>`,
+            `<li style="color: ${RED};"><br></li>`,
+            "<li>Three</li>",
+          ]);
+          expect(caretAt(e)).toEqual([items()[2], 0]);
+        });
+
+        it("goes on in the formatting the caret was in after Enter at the end of an item", () => {
+          const { e, items } = listOf("#lines");
+          selectText(e, e.$("#lines"), 4, 6);
+          style(e, { color: "#ff0000", bold: true });
+          expect(items()[1]!.innerHTML).toBe(`T<span style="font-weight: 700; color: ${RED};">wo</span>`);
+          selectText(e, e.$("#lines"), 6);
+          e.key("Enter");
+          // The new item's line is inside a copy of the <span>, where typing goes on.
+          const span = items()[2]!.firstElementChild!;
+          expect(items()[2]!.innerHTML).toBe(`<span style="font-weight: 700; color: ${RED};"><br></span>`);
+          expect(caretAt(e)).toEqual([span, 0]);
+          // Left empty, it is an empty item like any other: Enter ends the list there.
+          e.key("Enter");
+          expect(items().map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
+        });
+
+        it("takes the color of a whole item off its <span> on Enter, and keeps the rest of the formatting", () => {
+          const { e, el, items } = listOf("#lines", false);
+          selectText(e, el, 3, 6);
+          style(e, { color: "#ff0000", bold: true });
+          e.fromParent({ type: "slop:edit-list", list: "ul" });
+          expect(items()[0]!.outerHTML).toBe(
+            `<li style="color: ${RED};"><span style="font-weight: 700;">Two</span></li>`,
+          );
+          selectText(e, el, 6);
+          e.key("Enter");
+          expect(items()[1]!.outerHTML).toBe(
+            `<li style="color: ${RED};"><span style="font-weight: 700;"><br></span></li>`,
+          );
+          expect(caretAt(e)).toEqual([items()[1]!.firstElementChild, 0]);
+        });
+
+        it("keeps the color of text that leaves its item, and gives it to the item it becomes", () => {
+          const { e, el, items } = listOf("#lines");
+          selectText(e, el, 3, 6);
+          style(e, { color: "#ff0000" });
+          selectText(e, el, 4);
+          e.fromParent({ type: "slop:edit-list", list: "ul" });
+          expect(el.innerHTML).toMatch(
+            new RegExp(`</ul><span style="color: ${RED.replace(/[()]/g, "\\$&")};">Two</span><ul`),
+          );
+          e.fromParent({ type: "slop:edit-list", list: "ul" });
+          expect(items().map((li) => li.outerHTML)).toEqual([
+            "<li>One</li>",
+            `<li style="color: ${RED};">Two</li>`,
+            "<li>Three</li>",
+          ]);
+        });
+
+        it("keeps each item's color when one moves into or out of another with Tab", () => {
+          const { e, el, items } = listOf("#lines");
+          selectText(e, el, 0, 3);
+          style(e, { color: "#ff0000" });
+          selectText(e, el, 4);
+          e.key("Tab");
+          // "Two" is inside the red item now, in its own color still.
+          const two = items()[1]!;
+          expect(two.parentElement!.parentElement).toBe(items()[0]);
+          expect(e.window.getComputedStyle(two).color).not.toBe(RED);
+          expect(e.window.getComputedStyle(items()[0]!).color).toBe(RED);
+          expect(two.textContent).toBe("Two");
+          e.key("Tab", { shiftKey: true });
+          expect(items().map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
+          expect(items()[1]!.hasAttribute("style")).toBe(false);
+        });
+
+        it("keeps the color of the lists inside an item that takes a color", () => {
+          const { e, el } = listOf("#nested", false);
+          selectText(e, el, 0, 3);
+          style(e, { color: "#ff0000" });
+          const [top, deep] = [...el.querySelectorAll("li")];
+          expect(top!.style.color).toBe(RED);
+          expect(e.window.getComputedStyle(deep!).color).not.toBe(RED);
+          expect(top!.firstChild!.textContent).toBe("Top");
+        });
+
+        it("leaves a list as it was written when its text is only typed in", () => {
+          const e = editor({ markup: COLOR_DECK });
+          const list = e.$("#authored");
+          const before = list.innerHTML;
+          e.down(list);
+          e.key("Enter");
+          selectText(e, list, 13);
+          e.key("Enter");
+          e.key("Escape");
+          // The first words' color is not the item's: its bullet stays as the deck has it.
+          expect(list.querySelector("li")!.outerHTML).toBe(before);
+          expect(list.querySelectorAll("li")).toHaveLength(2);
+        });
       });
 
       it("selects and edits a saved list as one text again, so items can still be added", () => {

@@ -51,6 +51,7 @@ mod stamp;
 mod templates;
 #[cfg(test)]
 mod test_support;
+mod thumbnails;
 mod video;
 mod voice;
 mod watcher;
@@ -112,18 +113,33 @@ pub fn run() {
         .manage(windows::PendingFolders::default())
         .manage(voice::Voice::default())
         .manage(narration::Narration::default())
+        .manage(thumbnails::Thumbnails::default())
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 windows::closed(window);
                 screens::window_closed(window.label());
                 window.state::<voice::Voice>().window_closed(window.label());
+                let others = window.app_handle().webview_windows();
+                if !others
+                    .keys()
+                    .any(|label| label != window.label() && windows::is_app_window(label))
+                {
+                    window.state::<thumbnails::Thumbnails>().close_window();
+                }
             }
         })
         // Answered off the main thread, which routes input: a request reads files and may
         // start `git`, and a deck's previews ask for dozens at once.
         .register_asynchronous_uri_scheme_protocol("slop", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
+            // A thumbnail may wait for its picture to be made (see thumbnails.rs).
+            if thumbnails::preview_path(request.uri().path()).is_some() {
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(thumbnails::respond(app, request).await);
+                });
+                return;
+            }
             tauri::async_runtime::spawn_blocking(move || {
                 responder.respond(protocol::handle(&app, request));
             });
@@ -183,6 +199,8 @@ pub fn run() {
             commands::deck::delete_section_slides,
             commands::deck::delete_slides,
             commands::deck::update_slide,
+            commands::deck::set_background_of_all,
+            commands::deck::forget_thumbnail,
             commands::deck::slide_source,
             commands::deck::save_deck_source,
             commands::history::deck_history,

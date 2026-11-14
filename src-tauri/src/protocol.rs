@@ -13,12 +13,13 @@
 //! With `?pan` in the query, a deck is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
 //! editor (`assets/editor/`), which builds on the pasteboard, so the stage can edit text and
-//! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
+//! move elements in place; a page with `?pan` alone can get it later, from the pasteboard,
+//! without loading again, so it is served as the editor needs it too (every id of the deck). With `?show`, the presenter's whole-deck player gets the pasteboard
 //! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
 //! or an export: the page gets tags that load them from `slop://localhost/.app/<version>/`
 //! (see [`scripts`]). With `?print`, a deck is served with its player runtime brought up to
 //! date, as an export has it, for printing to PDF (see pdf.rs). With `?embed&slide=<id>`, the
-//! previews' query, a deck is served cut down to that slide (see [`html::single_slide`]).
+//! previews' query, a deck is served cut down to that slide (see [`html::single_slide_of`]).
 //!
 //! Responses say how they may be kept (see [`cache`]): the webview asks again by entity tag and
 //! gets a 304 while the file is as it was, and audio and video get the byte ranges they ask for.
@@ -241,7 +242,7 @@ fn content(found: Found, query: Option<&str>, range: Option<&str>) -> Result<Con
     if found.mime.starts_with("text/html") {
         return Ok(Content {
             status: StatusCode::OK,
-            bytes: page_for(query, found.read()?),
+            bytes: page(found, query)?,
             in_parts: false,
             range: None,
         });
@@ -268,25 +269,84 @@ fn content(found: Found, query: Option<&str>, range: Option<&str>) -> Result<Con
     })
 }
 
+/// The page `found` is, as its frame asked for it (see [`page_for`]). A workspace file made
+/// ready for its frame comes from the deck cache (see [`crate::deck_cache`]): the previews of a
+/// deck ask for it once per slide, and each would otherwise read the whole file and look for
+/// its slides again; this way it is read and scanned once for all of them, if at all.
+fn page(found: Found, query: Option<&str>) -> Result<Vec<u8>, StatusCode> {
+    if let (Body::File(path), true) = (&found.body, made_ready(query)) {
+        // A file that is not UTF-8 is not kept there; it is served as before.
+        if let Ok(deck) = crate::deck_cache::get(path) {
+            let slides = || Cow::Borrowed(deck.slides());
+            return Ok(page_from(query, deck.source(), slides).into_bytes());
+        }
+    }
+    Ok(page_for(query, found.read()?))
+}
+
+/// The page a preview at `raw_path` with `query` is served, and the file on disk it comes from
+/// when it has one: what a thumbnail of it is a picture of (see [`crate::thumbnails`]).
+pub(crate) fn preview_page(
+    app: &AppHandle,
+    raw_path: &str,
+    query: Option<&str>,
+) -> Result<(Vec<u8>, Option<PathBuf>), StatusCode> {
+    let found = find(app, raw_path)?;
+    if !found.mime.starts_with("text/html") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let file = match &found.body {
+        Body::File(path) => Some(path.clone()),
+        _ => None,
+    };
+    Ok((page(found, query)?, file))
+}
+
+/// Whether a page asked for with `query` is changed for its frame (see [`page_for`]).
+fn made_ready(query: Option<&str>) -> bool {
+    (has_param(query, "embed") && param(query, "slide").is_some())
+        || has_param(query, "print")
+        || !scripts::for_query(query).is_empty()
+}
+
 /// A page as its frame asked for it: cut down to the one slide a preview shows (`embed` with
 /// `slide`), with its player runtime current for `print`, and with the tags of the app's scripts
 /// for the stage and the show. Without any of those it is the file as it is.
 fn page_for(query: Option<&str>, bytes: Vec<u8>) -> Vec<u8> {
-    let slide = param(query, "slide").filter(|_| has_param(query, "embed"));
-    let print = has_param(query, "print");
-    let added = scripts::for_query(query);
-    if slide.is_none() && !print && added.is_empty() {
+    if !made_ready(query) {
         return bytes;
     }
     let source = String::from_utf8_lossy(&bytes);
-    // The slide editor asks the page whether an id is taken anywhere in the deck.
-    let others = match has_param(query, "edit") {
+    page_from(query, &source, || Cow::Owned(html::find_slides(&source))).into_bytes()
+}
+
+/// [`page_for`] of the page `source`, which is made ready for its frame; `slides` gives its
+/// slides (see [`html::find_slides`]), asked for only to cut it down to one.
+fn page_from<'s>(
+    query: Option<&str>,
+    source: &'s str,
+    slides: impl FnOnce() -> Cow<'s, [html::SlideSpan]>,
+) -> String {
+    // A preview names one slide; the thumbnails made in one go (see thumbnails.rs) several.
+    let kept = match has_param(query, "embed") {
+        true => params(query, "slide"),
+        false => Vec::new(),
+    };
+    let print = has_param(query, "print");
+    let added = scripts::for_query(query);
+    // The slide editor asks the page whether an id is taken anywhere in the deck: the stage's
+    // pages have it from the start (`edit`), or may get it later without loading again (`pan`).
+    let others = match has_param(query, "edit") || has_param(query, "pan") {
         true => html::Others::Ids,
         false => html::Others::Empty,
     };
-    let mut page = match &slide {
-        Some(slide) => html::single_slide(&source, slide, others),
-        None => Cow::Borrowed(source.as_ref()),
+    let mut page = match kept.as_slice() {
+        [] => Cow::Borrowed(source),
+        [slide] => html::single_slide_of(source, &slides(), slide, others),
+        several => {
+            let references: Vec<&str> = several.iter().map(String::as_str).collect();
+            html::slides_of(source, &slides(), &references, others)
+        }
     };
     // An export's hidden window is shown only the slides the export is of.
     if let Some(scoped) = crate::export_scope::page_for(query, &page) {
@@ -298,7 +358,7 @@ fn page_for(query: Option<&str>, bytes: Vec<u8>) -> Vec<u8> {
     if !added.is_empty() {
         page = Cow::Owned(with_scripts(&page, &scripts::tags(&added, origin())));
     }
-    page.into_owned().into_bytes()
+    page.into_owned()
 }
 
 /// Scheme and host of every address the app serves. WebView2 (Windows) exposes custom schemes
@@ -362,14 +422,26 @@ fn has_param(query: Option<&str>, name: &str) -> bool {
 /// `URLSearchParams` decodes it (percent escapes, and `+` for a space); empty for one without
 /// a value.
 fn param(query: Option<&str>, name: &str) -> Option<String> {
-    let value = query?
+    params(query, name).into_iter().next()
+}
+
+/// The values of every parameter `name` in the query string, in order, decoded as [`param`]
+/// decodes one.
+fn params(query: Option<&str>, name: &str) -> Vec<String> {
+    let Some(query) = query else {
+        return Vec::new();
+    };
+    query
         .split('&')
-        .find_map(|p| match p.strip_prefix(name)? {
+        .filter_map(|p| match p.strip_prefix(name)? {
             "" => Some(""),
             rest => rest.strip_prefix('='),
-        })?;
-    let spaced = value.replace('+', " ");
-    Some(percent_decode_str(&spaced).decode_utf8_lossy().into_owned())
+        })
+        .map(|value| {
+            let spaced = value.replace('+', " ");
+            percent_decode_str(&spaced).decode_utf8_lossy().into_owned()
+        })
+        .collect()
 }
 
 /// `html` with `tags` after everything else in `<body>`, so the scripts they load run after the

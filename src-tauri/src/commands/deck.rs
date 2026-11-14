@@ -364,6 +364,24 @@ pub fn update_slide(
     Ok(deck)
 }
 
+/// Gives every slide that is not locked `color` as its own background (None: the deck's own
+/// again), as one change in the deck's history and one write of the deck.
+#[tauri::command(async)]
+pub fn set_background_of_all(id: String, color: Option<String>) -> Result<deck::BackgroundEdit> {
+    changing(
+        &id,
+        Change::new(Source::Edit, "Background of all slides"),
+        |file| deck::set_background_of_all(file, color.as_deref()),
+    )
+}
+
+/// A slide's picture (see thumbnails.rs) is no longer shown where it was asked for at `url`:
+/// unless it is shown elsewhere too, it is not made when its turn comes.
+#[tauri::command]
+pub fn forget_thumbnail(app: tauri::AppHandle, url: String) {
+    crate::thumbnails::forget(&app, &url);
+}
+
 /// The history's entry for an edit of `slide` on the stage, one of the run `group` if any.
 fn slide_edit(slide: &str, group: Option<&str>) -> Change {
     let change = Change::new(Source::Edit, "Edit slide");

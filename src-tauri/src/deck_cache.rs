@@ -169,7 +169,25 @@ impl DeckCache {
     /// Keeps `source`, the text the app just wrote to `file` with `stamp`, so that it is not
     /// read back.
     pub fn put(&self, file: &Path, source: Arc<str>, stamp: Stamp) -> Arc<Cached> {
-        let cached = Arc::new(Cached::new(stamp, source));
+        self.keep(file, Cached::new(stamp, source))
+    }
+
+    /// [`put`](Self::put), with `parsed`, what [`Parsed::of`] gives for `source`, worked out
+    /// by the writer without parsing it all.
+    pub fn put_parsed(
+        &self,
+        file: &Path,
+        source: Arc<str>,
+        stamp: Stamp,
+        parsed: Parsed,
+    ) -> Arc<Cached> {
+        let cached = Cached::new(stamp, source);
+        let _ = cached.parsed.set(parsed);
+        self.keep(file, cached)
+    }
+
+    fn keep(&self, file: &Path, cached: Cached) -> Arc<Cached> {
+        let cached = Arc::new(cached);
         // Just written: its stamp is too young to tell a second write by.
         self.state().insert(key(file), cached.clone(), false);
         cached

@@ -30,15 +30,17 @@ export function finishedAnnouncement(message: ChatMessage | undefined): string {
  * days marks where each day starts; the end of a turn is read out.
  *
  * It takes the messages from the chat itself and renders with each of the agent's events, which
- * is little: each message renders again only when it is another (see `AssistantBlock`), or when
- * it stops or starts being the newest, and staying at the end is the browser's to tell (see
- * `usePinnedScroll`).
+ * is little: a message the event left as it was, in the same place, is handed on as the very
+ * element it was the last time (see `MessageElements`), which React passes over without a look;
+ * each message renders again only when it is another (see `AssistantBlock`), or when it stops or
+ * starts being the newest, and staying at the end is the browser's to tell (see `usePinnedScroll`).
  */
 export const MessageList = memo(function MessageList(props: { children?: React.ReactNode }) {
   const messages = useApp((s) => s.messages);
   const running = useApp((s) => s.running);
   const lastSent = messages.findLast((m) => m.role === "user")?.id;
   const { scroller, content, away, toEnd, onScroll } = usePinnedScroll(lastSent);
+  const [elements] = useState(() => new MessageElements());
 
   const last = messages.at(-1);
   const approval = running && awaitsApproval(last);
@@ -70,20 +72,15 @@ export const MessageList = memo(function MessageList(props: { children?: React.R
         {messages.map((message, index) => {
           const before = messages[index - 1];
           const newDay = spansDays && (!before || dayOf(before.createdAt) !== dayOf(message.createdAt));
-          return (
-            <Fragment key={message.id}>
-              {newDay && <DaySeparator at={message.createdAt} />}
-              {message.role === "user" ? (
-                <UserBubble message={message} latest={message.id === lastSent} />
-              ) : (
-                <AssistantBlock
-                  message={message}
-                  retry={retry && message === last}
-                  asked={message === last && asked?.role === "user" ? asked.id : undefined}
-                />
-              )}
-            </Fragment>
-          );
+          const placed: Placed =
+            message.role === "user"
+              ? { newDay, latest: message.id === lastSent }
+              : {
+                  newDay,
+                  retry: retry && message === last,
+                  asked: message === last && asked?.role === "user" ? asked.id : undefined,
+                };
+          return elements.place(message, placed);
         })}
       </div>
       <p role="status" className="sr-only">
@@ -115,6 +112,47 @@ export const MessageList = memo(function MessageList(props: { children?: React.R
     </div>
   );
 });
+
+/** What a message shows besides itself: the day it starts, and whether it is the newest of its kind. */
+type Placed = { newDay: boolean; latest: boolean } | { newDay: boolean; retry: boolean; asked: string | undefined };
+
+/** Whether a message is placed the same way twice. */
+const samePlace = (a: Placed, b: Placed) =>
+  a.newDay === b.newDay &&
+  ("latest" in a && "latest" in b
+    ? a.latest === b.latest
+    : "retry" in a && "retry" in b && a.retry === b.retry && a.asked === b.asked);
+
+/**
+ * The element each message of the conversation was rendered as last, kept for as long as the
+ * message is the same object. While a reply comes in, every other message stays as it was, and
+ * handing React the same element again tells it there is nothing to do there: a word of the
+ * reply then costs no more in a long chat than in a short one.
+ */
+export class MessageElements {
+  private made = new WeakMap<ChatMessage, { placed: Placed; element: React.ReactElement }>();
+
+  place(message: ChatMessage, placed: Placed): React.ReactElement {
+    const known = this.made.get(message);
+    if (known && samePlace(known.placed, placed)) return known.element;
+    const element = (
+      <Fragment key={message.id}>
+        {placed.newDay && <DaySeparator at={message.createdAt} />}
+        {message.role === "user" ? (
+          <UserBubble message={message} latest={"latest" in placed && placed.latest} />
+        ) : (
+          <AssistantBlock
+            message={message}
+            retry={"retry" in placed && placed.retry}
+            asked={"asked" in placed ? placed.asked : undefined}
+          />
+        )}
+      </Fragment>
+    );
+    this.made.set(message, { placed, element });
+    return element;
+  }
+}
 
 /** Where a day of the conversation starts. */
 function DaySeparator({ at }: { at: number }) {

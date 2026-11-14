@@ -136,7 +136,7 @@
     var other = (computed.backgroundImage || "none") !== "none";
     // Whether the color is the slide's own, set here, and not the deck's.
     var own = !!slide.style.getPropertyValue("background-color");
-    window.parent.postMessage({ type: "slop:edit-background", slide: slide.id, color: color, other: other, own: own }, "*");
+    tellApp({ type: "slop:edit-background", slide: slide.id, color: color, other: other, own: own });
   }
 
   /** The slide's own background, over any image or gradient the deck gives it; null drops it. */
@@ -375,11 +375,11 @@
   var deckFound = null;
 
   function reportColors() {
-    window.parent.postMessage({ type: "slop:edit-colors", slide: slide.id, colors: deckColors(deckFound) }, "*");
+    tellApp({ type: "slop:edit-colors", slide: slide.id, colors: deckColors(deckFound) });
   }
 
   function reportFonts() {
-    window.parent.postMessage({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts(deckFound) }, "*");
+    tellApp({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts(deckFound) });
   }
 
   reportBackground();
@@ -395,4 +395,3 @@
       if (deckFound) reportFonts();
     });
   }
-})();

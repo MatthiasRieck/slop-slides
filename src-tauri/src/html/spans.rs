@@ -11,7 +11,7 @@ use super::edit::with_indent;
 use super::entities::decode_entities;
 use super::scan::{find_ci, has_class, parse_tag, tags, Tag};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlideSpan {
     /// The whole `<section …>…</section>`.
     pub range: Range<usize>,
@@ -32,12 +32,52 @@ pub struct SlideSpan {
     pub narration_start: Option<(Range<usize>, String)>,
 }
 
+/// `range` moved `by` bytes.
+fn shifted(range: &Range<usize>, by: isize) -> Range<usize> {
+    range.start.wrapping_add_signed(by)..range.end.wrapping_add_signed(by)
+}
+
+impl SlideSpan {
+    /// Moves the span `by` bytes, as the slide moves when something before it grows or shrinks.
+    pub fn shift(&mut self, by: isize) {
+        self.range = shifted(&self.range, by);
+        self.tag_name_end = self.tag_name_end.wrapping_add_signed(by);
+        for range in [&mut self.id_value, &mut self.hidden, &mut self.locked]
+            .into_iter()
+            .flatten()
+        {
+            *range = shifted(range, by);
+        }
+        for (range, _) in [
+            &mut self.time,
+            &mut self.duration,
+            &mut self.narration_start,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *range = shifted(range, by);
+        }
+    }
+}
+
+impl SectionSpan {
+    /// Moves the span `by` bytes (see [`SlideSpan::shift`]).
+    pub fn shift(&mut self, by: isize) {
+        self.range = shifted(&self.range, by);
+        self.tag_name_end = self.tag_name_end.wrapping_add_signed(by);
+        if let Some(range) = &mut self.title_value {
+            *range = shifted(range, by);
+        }
+    }
+}
+
 /// Key of the section marker with this document-order index, as used by [`reorder`](super::reorder).
 pub fn section_key(index: usize) -> String {
     format!("section:{index}")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionSpan {
     /// The marker element, including an immediately following `</div>`.
     pub range: Range<usize>,

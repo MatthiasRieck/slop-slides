@@ -1,5 +1,7 @@
 import { type RefObject, useEffect, useMemo } from "react";
 
+import { WARM_ATTR } from "../SlideFrame";
+
 /** Takes a message of one type from the stage's preview: what it posted, and the event it came in. */
 export type FrameHandler = (data: MessageEvent["data"], event: MessageEvent) => void;
 
@@ -14,7 +16,8 @@ export interface FrameMessages {
  * pasteboard's view, the comment tools' picks) to the handlers of their `type`, in the order
  * those asked. A message is looked at once, whoever takes it: a type nobody asked for is dropped
  * unseen, and whether it is one of the area's previews that posted is settled once, by the preview
- * that posted last, without looking through the page again. A drag posts sixty a second.
+ * that posted last, without looking through the page again. A drag posts sixty a second. What a
+ * preview loaded ahead out of sight posts is dropped until it is shown.
  */
 export function frameMessages(area: () => HTMLElement | null) {
   const byType = new Map<string, Set<FrameHandler>>();
@@ -23,9 +26,11 @@ export function frameMessages(area: () => HTMLElement | null) {
   const fromPreview = (source: MessageEventSource | null) => {
     const within = area();
     if (!source || !within) return false;
-    if (known?.contentWindow === source && within.contains(known)) return true;
-    known = Array.from(within.querySelectorAll("iframe")).find((frame) => frame.contentWindow === source) ?? null;
-    return known !== null;
+    if (!(known?.contentWindow === source && within.contains(known))) {
+      known = Array.from(within.querySelectorAll("iframe")).find((frame) => frame.contentWindow === source) ?? null;
+    }
+    // A preview loaded ahead, out of sight, speaks of a slide not shown (see `warm` on SlideFrame).
+    return known !== null && !known.hasAttribute(WARM_ATTR);
   };
 
   const onMessage = (event: MessageEvent) => {

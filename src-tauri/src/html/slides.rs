@@ -174,23 +174,51 @@ pub fn replace_slide(html: &str, id: &str, markup: &str) -> Result<(String, Stri
     Ok(put_slide(html, slide_span(&slides, id)?, markup))
 }
 
-/// [`replace_slide`] of the slide at `span`, one of `html`'s slides already found.
+/// What [`replace_slide_at`] made of a document.
+pub struct ReplacedSlide {
+    /// The new document.
+    pub html: String,
+    /// The slide's markup before.
+    pub previous: String,
+    /// The slide as it is in the new document: the span the whole document's scan would give
+    /// it, found by scanning the new markup alone.
+    pub span: SlideSpan,
+}
+
+/// [`replace_slide`] of the slide at `span`, one of `html`'s slides already found; also says
+/// where the new slide is (see [`ReplacedSlide`]).
 pub fn replace_slide_at(
     html: &str,
     span: &SlideSpan,
     markup: &str,
-) -> Result<(String, String), String> {
+) -> Result<ReplacedSlide, String> {
     let id = span.id.as_deref().unwrap_or_default();
-    let markup = whole_slide(markup, id)?;
-    Ok(put_slide(html, span, markup))
+    let (markup, mut new_span) = whole_slide_span(markup, id)?;
+    // The slide starts where the old one did, where the document's scan is between tags as it
+    // is at the start of the markup alone; and the markup ends that scan between tags too (it
+    // ends with the slide's `</section>`), so everything after it reads as before.
+    new_span.shift(span.range.start as isize);
+    let (html, previous) = put_slide(html, span, markup);
+    Ok(ReplacedSlide {
+        html,
+        previous,
+        span: new_span,
+    })
 }
 
 /// `markup` trimmed, when it is one whole `<section class="slide">` with the id `id`.
 fn whole_slide<'a>(markup: &'a str, id: &str) -> Result<&'a str, String> {
+    whole_slide_span(markup, id).map(|(markup, _)| markup)
+}
+
+/// [`whole_slide`], with the slide's span in the trimmed markup.
+fn whole_slide_span<'a>(markup: &'a str, id: &str) -> Result<(&'a str, SlideSpan), String> {
     let markup = markup.trim();
-    let replacement = find_slides(markup);
+    let mut replacement = find_slides(markup);
     match replacement.as_slice() {
-        [only] if only.range == (0..markup.len()) && only.id.as_deref() == Some(id) => Ok(markup),
+        [only] if only.range == (0..markup.len()) && only.id.as_deref() == Some(id) => {
+            Ok((markup, replacement.remove(0)))
+        }
         _ => Err(format!("The edited markup is not slide `{id}`.")),
     }
 }

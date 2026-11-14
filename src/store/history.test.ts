@@ -35,25 +35,40 @@ describe("undo and redo", () => {
     expect(useApp.getState().history!.redo!.label).toBe("Edit slide");
   });
 
-  it("starts the slide editor again only when the slide shown or the deck's styles changed", async () => {
+  it("asks the stage to load nothing again, whatever changed: it patches the slide it shows, or loads new styles itself", async () => {
     const useApp = await freshStore();
-    const reloads = () => useApp.getState().editReload;
     const undoing = async (deck: Deck) => {
       useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editReload: 0 });
       backend({ undo_deck: () => ({ deck, entry: entry("Edit slide"), status: status() }) });
       await useApp.getState().undo();
     };
-    // Nothing on a slide changed (the order of the slides, say, or a note): the editor goes on.
+    for (const deck of [
+      deckFor(DECK_HTML),
+      changed("outro"),
+      changed("intro"),
+      { ...deckFor(DECK_HTML), shellHash: "restyled" },
+    ]) {
+      await undoing(deck);
+      expect(useApp.getState().editReload).toBe(0);
+      expect(useApp.getState().deck).toEqual(deck);
+    }
+    // Nothing on a slide changed (the order of the slides, say, or a note): the stage stays.
     await undoing(deckFor(DECK_HTML));
-    expect(reloads()).toBe(0);
     expect(useApp.getState().selected).toBe("intro");
-    await undoing(changed("outro"));
-    expect(reloads()).toBe(0);
-    // The slide it shows is another now, and so are the deck's styles: it has to load them.
-    await undoing(changed("intro"));
-    expect(reloads()).toBe(1);
-    await undoing({ ...deckFor(DECK_HTML), shellHash: "restyled" });
-    expect(reloads()).toBe(1);
+  });
+
+  it("forgets what the editor saved of a slide that an undo changed, even back to a version it saved", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    const saved = changed("intro");
+    useApp.setState({ deck: saved, selected: "intro", editSaved: { intro: "new", outro: deck.slides[2]!.hash } });
+    backend({ undo_deck: () => ({ deck, entry: entry("Edit slide"), status: status() }) });
+    await useApp.getState().undo();
+    // What the stage's editor shows is the undo, not its save: it is to be patched in.
+    expect(useApp.getState().editSaved).toEqual({ outro: deck.slides[2]!.hash });
+    backend({ redo_deck: () => ({ deck: saved, entry: entry("Edit slide"), status: status() }) });
+    await useApp.getState().redo();
+    expect(useApp.getState().editSaved).toEqual({ outro: deck.slides[2]!.hash });
   });
 
   it("keeps the selected slide when the change was on it", async () => {
@@ -86,8 +101,8 @@ describe("undo and redo", () => {
     expect(calls("restore_version")).toEqual([{ id, version: "v3" }]);
     expect(useApp.getState().deck!.slides.find((s) => s.id === "intro")!.hash).toBe("new");
     expect(useApp.getState().history!.undo!.label).toBe("Go back to an earlier version");
-    // The slide on show changed under the editor.
-    expect(useApp.getState().editReload).toBe(1);
+    // The stage patches the slide on show itself.
+    expect(useApp.getState().editReload).toBe(0);
   });
 
   it("says why it could not go back to a version, and leaves the deck", async () => {

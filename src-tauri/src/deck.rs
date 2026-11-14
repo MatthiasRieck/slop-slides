@@ -167,6 +167,13 @@ fn write_deck(file: &Path, html: &str) -> Result<Arc<Cached>> {
     Ok(deck_cache::shared().put(file, html.into(), stamp))
 }
 
+/// [`write_deck`] of `html`, whose parse is `parsed` already: it is kept with it.
+fn write_parsed_deck(file: &Path, html: String, parsed: Parsed) -> Result<Arc<Cached>> {
+    let written = atomic_write_stamped(file, html.as_bytes())?;
+    let stamp = Stamp::from_metadata(&written)?;
+    Ok(deck_cache::shared().put_parsed(file, html.into(), stamp, parsed))
+}
+
 /// Everything the app reads out of a deck's source, worked out in two passes over it (the
 /// slides and sections, then what each slide holds) where each question used to scan the
 /// document for itself. The deck cache keeps it with the source (see [`crate::deck_cache`]).
@@ -200,11 +207,43 @@ impl Parsed {
         let (slides, sections) = html::find_spans(source);
         let contents = slides
             .iter()
-            .map(|span| {
-                let markup = &source[span.range.clone()];
-                (html::content_hash(markup), html::slide_content(markup))
-            })
+            .map(|span| slide_contents(&source[span.range.clone()]))
             .collect();
+        Self::around(source, slides, sections, contents)
+    }
+
+    /// What [`of`](Self::of) gives for `source`: the deck this was parsed from with slide `index`
+    /// replaced as [`html::replace_slide_at`] says. Only that slide is read: the others move
+    /// with it and keep what was read of them, and so do the section markers. What is outside
+    /// the slides (title, settings, review marks, comments, the shell's hash) is read again,
+    /// which takes no scan of the slides.
+    fn with_slide_replaced(&self, replaced: &html::ReplacedSlide, index: usize) -> Self {
+        let source = replaced.html.as_str();
+        let old = &self.slides[index].range;
+        let by = replaced.span.range.len() as isize - old.len() as isize;
+        let after = old.end;
+        let mut slides = self.slides.clone();
+        for span in &mut slides[index + 1..] {
+            span.shift(by);
+        }
+        slides[index] = replaced.span.clone();
+        let mut sections = self.sections.clone();
+        for section in sections.iter_mut().filter(|s| s.range.start >= after) {
+            section.shift(by);
+        }
+        let mut contents = self.contents.clone();
+        contents[index] = slide_contents(&source[replaced.span.range.clone()]);
+        Self::around(source, slides, sections, contents)
+    }
+
+    /// The deck `source`, whose slides, section markers and slide contents are known: what is
+    /// read of everything outside them added.
+    fn around(
+        source: &str,
+        slides: Vec<html::SlideSpan>,
+        sections: Vec<html::SectionSpan>,
+        contents: Vec<(String, html::SlideContent)>,
+    ) -> Self {
         Self {
             contents,
             title: html::title(source),
@@ -217,12 +256,14 @@ impl Parsed {
         }
     }
 
+    /// The position of slide `id`.
+    fn index_of(&self, id: &str) -> Option<usize> {
+        self.slides.iter().position(|s| s.id.as_deref() == Some(id))
+    }
+
     /// The slide `id`, with its hash.
     fn slide(&self, id: &str) -> Option<(&html::SlideSpan, &str)> {
-        let index = self
-            .slides
-            .iter()
-            .position(|s| s.id.as_deref() == Some(id))?;
+        let index = self.index_of(id)?;
         Some((&self.slides[index], &self.contents[index].0))
     }
 
@@ -288,6 +329,11 @@ impl Parsed {
             slides,
         }
     }
+}
+
+/// A slide's hash and what the app shows of it.
+fn slide_contents(markup: &str) -> (String, html::SlideContent) {
+    (html::content_hash(markup), html::slide_content(markup))
 }
 
 /// Writes `updated` over the deck unless it is `source`, the text it has now, so the watcher
@@ -659,6 +705,27 @@ pub fn set_slide_locked(
     set_slides_locked(file, session, &[slide.to_string()], locked)
 }
 
+/// What giving every slide a background did: the deck, and how many slides it changed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundEdit {
+    pub deck: Deck,
+    pub changed: usize,
+}
+
+/// Gives every slide that is not locked `color` as its own background (None: the deck's own
+/// again), all in one write; none when no slide changes.
+pub fn set_background_of_all(file: &Path, color: Option<&str>) -> Result<BackgroundEdit> {
+    let current = deck_cache::get(file)?;
+    let (updated, changed) = html::set_background_of_all(current.source(), color);
+    if changed == 0 {
+        let deck = current.parsed().deck(file);
+        return Ok(BackgroundEdit { deck, changed });
+    }
+    let deck = write_deck(file, &updated)?.parsed().deck(file);
+    Ok(BackgroundEdit { deck, changed })
+}
+
 /// Locks or unlocks `slides`, all in one write. Each slide's guard is refreshed as
 /// [`set_slide_locked`] does.
 pub fn set_slides_locked(
@@ -774,26 +841,29 @@ pub fn slide_source(file: &Path, slide: &str) -> Result<SlideSource> {
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
 ///
-/// The deck is read once (not at all when it is the one last looked at), written once, and
-/// the deck returned comes from the text just written.
+/// The deck is read once (not at all when it is the one last looked at) and written once.
+/// The deck as written is not parsed again: only the new slide is read, and the rest of what
+/// was parsed of the deck before carries over (see [`Parsed::with_slide_replaced`]).
 pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Result<(Deck, String)> {
-    let (written, previous) = rewrite(file, |deck| {
-        let (span, current) = deck
-            .parsed()
-            .slide(slide)
-            .ok_or_else(|| format!("Slide not found: {slide}"))?;
-        if span.locked.is_some() {
-            return Err(locked_message(slide));
-        }
-        if current != base {
-            return Err(
-                "The slide changed while you were editing it; your last change was not saved."
-                    .into(),
-            );
-        }
-        html::replace_slide_at(deck.source(), span, markup)
-    })?;
-    Ok((written.parsed().deck(file), previous))
+    let current = deck_cache::get(file)?;
+    let parsed = current.parsed();
+    let index = parsed
+        .index_of(slide)
+        .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
+    let span = &parsed.slides[index];
+    if span.locked.is_some() {
+        return Err(Error::msg(locked_message(slide)));
+    }
+    if parsed.contents[index].0 != base {
+        return Err(Error::msg(
+            "The slide changed while you were editing it; your last change was not saved.",
+        ));
+    }
+    let replaced =
+        html::replace_slide_at(current.source(), span, markup).map_err(Error::Message)?;
+    let next = parsed.with_slide_replaced(&replaced, index);
+    let written = write_parsed_deck(file, replaced.html, next)?;
+    Ok((written.parsed().deck(file), replaced.previous))
 }
 
 /// Puts `slides` back as they are in `version`, an earlier version of the deck, all in one
@@ -2315,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn a_save_and_what_the_frontend_asks_after_it_parse_the_deck_twice_at_most() {
+    fn a_save_and_what_the_frontend_asks_after_it_parse_the_deck_once_at_most() {
         let deck = TempDeck::new(&html::fixtures::big_deck(6));
         let file = deck.file();
         let before = parses();
@@ -2333,14 +2403,14 @@ mod tests {
         let found = find_text(&file, "edited", find::Options::default()).unwrap();
         let source = slide_source(&file, "slide-2").unwrap();
         assert!(
-            parses() - before.0 <= 2,
+            parses() - before.0 <= 1,
             "parsed {} times",
             parses() - before.0
         );
-        // The deck as written is parsed once; the edited markup is scanned to check it is
-        // the slide. The deck as it was came from the cache.
-        assert_eq!(parses() - before.0, 1);
-        assert_eq!(html::scans() - before.1, 2);
+        // The deck as written is not parsed: the edited markup is scanned to check it is the
+        // slide, and what was parsed of the deck as it was (from the cache) carries over.
+        assert_eq!(parses() - before.0, 0);
+        assert_eq!(html::scans() - before.1, 1);
 
         assert_eq!(saved.slides[2].narration, "Said.");
         assert_eq!(hash_of(&loaded, "slide-2"), hash_of(&saved, "slide-2"));
@@ -2356,6 +2426,61 @@ mod tests {
             "{issues:?}"
         );
         assert!(deck.html().contains("<h1>Edited</h1>"));
+    }
+
+    /// Everything [`Parsed`] holds, to tell two parses apart.
+    fn parsed_parts(parsed: &Parsed) -> String {
+        format!(
+            "{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+            parsed.slides,
+            parsed.sections,
+            parsed.contents,
+            parsed.title,
+            parsed.shell_hash,
+            serde_json::to_string(&parsed.review).unwrap(),
+            serde_json::to_string(&parsed.comments).unwrap(),
+            parsed.metas,
+        )
+    }
+
+    #[test]
+    fn a_saved_slide_leaves_the_deck_parsed_as_a_parse_of_all_of_it_would() {
+        let deck = html::fixtures::big_deck(45)
+            .replace(
+                "<title>Big deck</title>",
+                "<title>Big deck</title>\n  <meta name=\"slopslide-template\" content=\"swiss\">",
+            )
+            .replace(
+                "id=\"slide-30\"",
+                "id=\"slide-30\" data-hidden data-duration=\"4.5\" data-narration-start=\"-1\"",
+            )
+            .replace("id=\"slide-41\"", "id=\"slide-41\" data-locked");
+        let source = review::write(
+            &deck,
+            &serde_json::from_str(
+                "{\"slide-3\":[{\"tool\":\"pen\",\"color\":\"#f00\",\"points\":[[1,2],[3,4]]}]}",
+            )
+            .unwrap(),
+        );
+        let parsed = Parsed::of(&source);
+        assert!(!parsed.review.is_empty() && parsed.sections.len() == 2);
+        let edits = [
+            // Shorter, longer, with sections after it, at the ends, with attributes of its own.
+            (0, "<section class=\"slide\" id=\"slide-0\">A</section>".to_string()),
+            (2, "<section class=\"slide\" id=\"slide-2\" data-time=\"9\"><h1 data-moved>Longer &amp; longer</h1><aside class=\"notes\">New notes</aside><aside class=\"narration\">Said.</aside></section>".to_string()),
+            (19, "<section class=\"slide\" id=\"slide-19\"><div class=\"deck-section\" data-title=\"Inside\"></div><style>/* <section class=\"slide\"> */</style><!-- </section> --></section>".to_string()),
+            (30, "<section class=\"slide\" id=\"slide-30\" data-hidden data-duration=\"2\" data-narration-start=\"0.5\"><svg><title>Chart</title></svg></section>".to_string()),
+            (44, format!("<section class=\"slide\" id=\"slide-44\">{}</section>", "x".repeat(5000))),
+        ];
+        for (index, markup) in edits {
+            let replaced = html::replace_slide_at(&source, &parsed.slides[index], &markup).unwrap();
+            let carried = parsed.with_slide_replaced(&replaced, index);
+            assert_eq!(
+                parsed_parts(&carried),
+                parsed_parts(&Parsed::of(&replaced.html)),
+                "slide {index}"
+            );
+        }
     }
 
     #[test]
@@ -2416,6 +2541,34 @@ mod tests {
             html::shell_hash(&source, &spans, &sections)
         );
         assert_eq!(loaded.sections.len(), sections.len());
+    }
+
+    #[test]
+    fn gives_every_unlocked_slide_a_background_in_one_write() {
+        let deck = TempDeck::new(&THREE.replace("id=\"b\"", "id=\"b\" data-locked"));
+        let before = html::scans();
+        let set = set_background_of_all(&deck.file(), Some("#123456")).unwrap();
+        assert_eq!(set.changed, 2, "the locked one keeps its own");
+        // One scan to change them all, one of the deck as written.
+        assert_eq!(html::scans() - before, 2);
+        let written = deck.html();
+        assert_eq!(written.matches("background-color: #123456").count(), 2);
+        assert!(written.contains("<section class=\"slide\" id=\"b\" data-locked>B"));
+        assert_eq!(set.deck.slides.len(), 3);
+        // Again: nothing changes, and the file is not written.
+        let modified = fs::metadata(deck.file()).unwrap().modified().unwrap();
+        let again = set_background_of_all(&deck.file(), Some("#123456")).unwrap();
+        assert_eq!(again.changed, 0);
+        assert_eq!(
+            fs::metadata(deck.file()).unwrap().modified().unwrap(),
+            modified
+        );
+        let cleared = set_background_of_all(&deck.file(), None).unwrap();
+        assert_eq!(cleared.changed, 2);
+        assert_eq!(
+            deck.html(),
+            THREE.replace("id=\"b\"", "id=\"b\" data-locked")
+        );
     }
 
     #[test]

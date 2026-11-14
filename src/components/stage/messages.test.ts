@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { WARM_ATTR } from "../SlideFrame";
 import { frameMessages } from "./messages";
 
 describe("the stage's messages", () => {
@@ -81,6 +82,23 @@ describe("the stage's messages", () => {
     expect(taken).toHaveBeenCalledTimes(1);
     post({ type: "slop:view" }, next.contentWindow);
     expect(taken).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops what a preview loaded ahead out of sight posts, until it is shown", () => {
+    const taken = vi.fn();
+    messages.on({ "slop:edit-overflow": taken });
+    const ahead = document.createElement("iframe");
+    ahead.setAttribute(WARM_ATTR, "");
+    area.appendChild(ahead);
+    post({ type: "slop:edit-overflow" }, ahead.contentWindow);
+    expect(taken).not.toHaveBeenCalled();
+    // The shown one is heard as before, and the one ahead once it is shown.
+    post({ type: "slop:edit-overflow" });
+    expect(taken).toHaveBeenCalledTimes(1);
+    ahead.removeAttribute(WARM_ATTR);
+    post({ type: "slop:edit-overflow" }, ahead.contentWindow);
+    expect(taken).toHaveBeenCalledTimes(2);
+    ahead.remove();
   });
 
   it("stops handing on what a handler no longer asks for, and everything once it stops listening", () => {

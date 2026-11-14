@@ -18,4 +18,11 @@ describe("topBarRoom", () => {
     // The smallest window, 960 wide, with the sidebar open leaves it 580.
     expect(topBarRoom(580)).toEqual({ labels: false, extras: false, tabLabels: false, presentLabel: false });
   });
+
+  it("gives the same object for widths with the same room, so the bar renders only as the room changes", () => {
+    expect(topBarRoom(1200)).toBe(topBarRoom(null));
+    expect(topBarRoom(901)).toBe(topBarRoom(1440));
+    expect(topBarRoom(899)).toBe(topBarRoom(761));
+    expect(topBarRoom(899)).not.toBe(topBarRoom(759));
+  });
 });

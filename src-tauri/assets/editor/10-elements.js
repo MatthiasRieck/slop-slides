@@ -43,7 +43,7 @@
     };
     if (document.readyState !== "complete") {
       waiting++;
-      window.addEventListener("load", arrived);
+      listen(window, "load", arrived);
     }
     if (document.fonts && document.fonts.ready) {
       waiting++;
@@ -64,7 +64,7 @@
    * together (see saveNudges): the app is given it, to keep their saves as one undo step.
    */
   function commit(group) {
-    if (batching || preview) return;
+    if (batching || preview || detached) return;
     followLines([]);
     clearTimeout(nudgeTimer);
     nudgeTimer = null;
@@ -79,7 +79,7 @@
     saved = markup;
     var message = { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) };
     if (typeof group === "string") message.group = group;
-    window.parent.postMessage(message, "*");
+    tellApp(message);
   }
 
   /** Saves the nudges (and tilt steps) that wait for a pause, before anything else changes the slide. */
@@ -291,11 +291,19 @@
     if (parent && parent !== slide && slide.contains(parent)) select(parent);
   }
 
-  /** Tells the app what its toolbar shows for the selection. */
+  /**
+   * Tells the app what its toolbar shows for the selection, unless that is what it was told last:
+   * typing, a caret moving within the same text, a marquee that grows over nothing new mostly
+   * report the same, and each report is a message the app parses and compares.
+   */
   function report() {
     if (reportFrame) window.cancelAnimationFrame(reportFrame);
     reportFrame = 0;
-    window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describeSelection() }, "*");
+    var message = { type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describeSelection() };
+    var key = JSON.stringify(message);
+    if (key === reportedSelection) return;
+    reportedSelection = key;
+    tellApp(message);
   }
 
   /**
@@ -979,22 +987,19 @@
     var size = sizeOf(el);
     var computed = getComputedStyle(el);
     var styles = deckStyles();
-    window.parent.postMessage(
-      {
-        type: "slop:edit-open-svg",
-        slide: slide.id,
-        path: pathOf(el),
-        markup: cleanCopy(el).outerHTML,
-        width: size.w || el.getBoundingClientRect().width / zoom(),
-        height: size.h || el.getBoundingClientRect().height / zoom(),
-        color: computed.color || null,
-        vars: cssVariables(el),
-        css: styles.css,
-        fonts: styles.fonts,
-        ancestors: ancestorsOf(el),
-      },
-      "*",
-    );
+    tellApp({
+      type: "slop:edit-open-svg",
+      slide: slide.id,
+      path: pathOf(el),
+      markup: cleanCopy(el).outerHTML,
+      width: size.w || el.getBoundingClientRect().width / zoom(),
+      height: size.h || el.getBoundingClientRect().height / zoom(),
+      color: computed.color || null,
+      vars: cssVariables(el),
+      css: styles.css,
+      fonts: styles.fonts,
+      ancestors: ancestorsOf(el),
+    });
   }
 
   svgButton.addEventListener("pointerdown", function (event) {

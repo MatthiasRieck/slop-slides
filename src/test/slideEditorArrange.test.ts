@@ -1289,10 +1289,11 @@ describe("keeping up with the pointer", () => {
     expect(counts.map((c) => c.count())).toEqual([3, 3, 1, 1]);
     e.move(e.$("#intro"), 1100, 700);
     e.up(e.$("#intro"), 1100, 700);
-    // The last of it is reported at once.
+    // The last of it is reported at once, unless it says what the last report did: the toolbar
+    // shows the same for a, b and c as for a and b (the app counts them by the geometry).
     expect(e.ids()).toEqual(["a", "b", "c"]);
     expect(e.messages<{ selected: boolean }>("slop:edit-selection").at(-1)!.selected).toBe(true);
-    expect(reports()).toBe(before + 2);
+    expect(reports()).toBe(before + 1);
     expect(e.$("[data-slop-multi]").children).toHaveLength(3);
   });
 

@@ -134,6 +134,7 @@ export function installBrowserMock() {
         // What changes the deck answers with the deck changed, which the preview cannot write.
         case "save_deck_source":
         case "update_slide":
+        case "set_background_of_all":
         case "set_slide_notes":
         case "set_slide_narration":
         case "set_slide_time":
@@ -162,6 +163,7 @@ export function installBrowserMock() {
         case "close_presenter_view":
         case "restore_show_window":
         case "keep_awake":
+        case "forget_thumbnail":
           return null;
         case "list_screens":
         case "screen_previews":

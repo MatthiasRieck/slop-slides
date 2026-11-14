@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FindMatch, ReplacedText } from "../lib/api";
 import { searchHighlight, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { FindBar, useDeckSearch, useFindShortcut } from "./FindReplace";
+import { FindBar, useDeckSearch, useFindShortcut, useSearchHighlight } from "./FindReplace";
 
 /** Find as the stage has it, in View and in Edit alike: its shortcut, its searching and its bar. */
 function Find() {
@@ -406,5 +406,77 @@ describe("replace", () => {
     fireEvent.click(button(/^Replace all/));
     await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
+  });
+});
+
+let stageRenders = 0;
+/** What the stage does for Find: search the deck, and tell the slide what to highlight. */
+function StageSearch({ post }: { post: (message: unknown) => void }) {
+  stageRenders++;
+  useDeckSearch();
+  useSearchHighlight(post);
+  return null;
+}
+
+describe("the stage's part in Find", () => {
+  it("searches and tells the slide what to highlight without rendering the stage as you type", async () => {
+    vi.useFakeTimers();
+    try {
+      found(MATCHES);
+      const post = vi.fn();
+      render(<StageSearch post={post} />);
+      // At once, what there is to highlight: nothing yet.
+      expect(post).toHaveBeenLastCalledWith({
+        type: "slop:search",
+        query: "",
+        matchCase: false,
+        wholeWord: false,
+        active: -1,
+      });
+      const rendered = stageRenders;
+      for (const query of ["h", "he", "hel", "hello"]) act(() => useApp.getState().setSearch({ query }));
+      expect(post).toHaveBeenLastCalledWith({
+        type: "slop:search",
+        query: "hello",
+        matchCase: false,
+        wholeWord: false,
+        active: -1,
+      });
+      // Searched once, as the typing settled.
+      expect(invoke).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(invoke.mock.calls.filter(([cmd]) => cmd === "find_in_deck")).toHaveLength(1);
+      expect(post).toHaveBeenLastCalledWith({
+        type: "slop:search",
+        query: "hello",
+        matchCase: false,
+        wholeWord: false,
+        active: 0,
+      });
+      // What changes nothing on the slide is not told again.
+      const told = post.mock.calls.length;
+      act(() => useApp.setState({ toasts: [] }));
+      expect(post).toHaveBeenCalledTimes(told);
+      expect(stageRenders).toBe(rendered);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("searches again when a slide changes, and ends the search with the stage", async () => {
+    vi.useFakeTimers();
+    try {
+      found(MATCHES);
+      act(() => useApp.getState().setSearch({ query: "hello" }));
+      const { unmount } = render(<StageSearch post={vi.fn()} />);
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      act(() => useApp.setState({ deck: deckFor(DECK_HTML, "2") }));
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(invoke.mock.calls.filter(([cmd]) => cmd === "find_in_deck")).toHaveLength(2);
+      unmount();
+      expect(useApp.getState().search.query).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

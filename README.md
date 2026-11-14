@@ -689,6 +689,8 @@ sessions/<session id>/     one chat about a deck, or about a folder: meta.json (
                            deck file or the folder), chat.json, each provider's session id,
                            rewind.json, sketches/, templates staged for the agent,
                            and Claude Code's generated mcp.json and claude-plugins/
+thumbnails/<key>.png       pictures of slides for the lists of slides (derived from the
+                           decks, kept to 256 MB; safe to delete)
 recent-workspaces.json     the folders opened last, for the start screen
 recent-decks.json          the decks opened last, each with the folder it was open in
 system-prompt.md           the system prompt file Claude Code reads
@@ -735,7 +737,13 @@ and plugins, and Codex its MCP servers.
 
 `deck.html` already plays standalone in a browser. The editor renders individual slides of
 it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
-exported file all use the same player.
+exported file all use the same player. The lists of slides (the slide list, the grid of all
+slides, the start screen's decks, the layout pickers, the Changes list) show pictures of those
+previews rather than a document each: the app makes each picture once, in a hidden window, and
+keeps it in `~/.slopslides/thumbnails` (derived, safe to delete), named by what the slide's
+page and its assets are, so a slide that changes gets a new picture and one that comes back is
+found again. The slides of one deck waiting for pictures are made from one page, each once its
+fonts and images are in; until a slide in view has its picture, its live preview stands in.
 
 Every change to a deck goes into its undo history, whatever made it: one entry per edit
 gesture, rail change, find and replace, code view save, setting, and agent turn (each deck

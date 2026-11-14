@@ -68,6 +68,22 @@ pub(crate) fn open(
     let url = protocol::file_url(file, &query)
         .parse()
         .map_err(|e| cannot_open(&e))?;
+    let (window, signals) = open_url(app, url, canvas, page)?;
+    Ok((window, signals, served))
+}
+
+/// A hidden window showing the page at `url`, its slides `canvas` pixels, as `page` says (its
+/// `query` is the URL's already), with the helper's answers coming in on the returned channel.
+/// The helper runs again on every page the window is sent to.
+pub(crate) fn open_url(
+    app: &AppHandle,
+    url: Url,
+    canvas: (u32, u32),
+    page: Page,
+) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
+    let cannot_open = |e: &dyn std::fmt::Display| {
+        Error::msg(format!("cannot open the deck for {}: {e}", page.purpose))
+    };
     let (window_width, window_height) = window_size(canvas, screen_area(app));
     let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
     let label = format!("{}-{}", page.label, uuid::Uuid::new_v4().simple());
@@ -97,7 +113,7 @@ pub(crate) fn open(
         })
         .build()
         .map_err(|e| cannot_open(&e))?;
-    Ok((window, signals, served))
+    Ok((window, signals))
 }
 
 /// The room on screen for a window, in logical pixels: the main screen's work area.

@@ -23,11 +23,13 @@ vi.mock("./SlideTime", async (original) => {
 import { parseSelection } from "../lib/editTools";
 import { flushReviewSave, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { countRenders } from "../test/renderCounts";
 import { LintStatus } from "./LintStatus";
 import { useRibbonFit } from "./Ribbon";
 import { SlideTime } from "./SlideTime";
 import { Stage } from "./Stage";
 import { useEditorState } from "./stage/editorState";
+import { useStageView } from "./stage/stageView";
 import { useSlideKeyboard } from "./stage/useSlideKeyboard";
 
 /** How often the stage has rendered so far, its toolbar (Edit's or View's), the row under the slide and the notes. */
@@ -222,16 +224,41 @@ describe("what renders on the stage", () => {
     expect(renders()).toEqual(before);
   });
 
-  it("fits the slide to a resized area without rendering the toolbar or the stage", () => {
+  it("fits the slide to a resized area without rendering anything: the browser follows it in CSS", () => {
     const { container } = editing();
     const area = observers.find((observer) => observer.target === screen.getByTestId("stage-area"))!;
-    const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!.style.width;
-    expect(slideBox()).toBe("960px");
+    const slideBox = container.querySelector<HTMLElement>("[data-sketch-target]")!;
+    // As large as fits the area (a size container), in the slide's shape.
+    expect(slideBox.style.width).toBe("min(100cqw, 1.7777777777777777*100cqh)");
+    expect(screen.getByTestId("stage-area").style.containerType).toBe("size");
+    expect(useStageView.getState().fitScale).toBe(0.5);
     const before = renders();
+    const counts = countRenders();
     // A panel's separator dragged: the area narrows tick by tick.
     for (const width of [940, 920, 900, 900, 900.2]) act(() => area.report(width, 540));
-    expect(slideBox()).toBe("900px");
+    counts.stop();
+    // What reads the size the slide fits at follows it.
+    expect(useStageView.getState().fitScale).toBeCloseTo(900.2 / 1920);
     expect(renders()).toEqual(before);
+    for (const name of ["StageArea", "CurrentSlide", "SlideFrame", "InkBox", "AnnotationLayer", "StageInk"]) {
+      expect(counts.of(name), name).toBe(0);
+    }
+  });
+
+  it("moves the ink with a panned slide as the area resizes, and only then", () => {
+    const { frame } = editing();
+    const area = observers.find((observer) => observer.target === screen.getByTestId("stage-area"))!;
+    const ink = () => screen.getByTestId("annotation-view").style;
+    fromFrame(frame, { type: "slop:view", slide: "intro", x: 100, y: 40, k: 2 });
+    nextFrame();
+    // 100 × 40 slide pixels at the 0.5 the slide fits at.
+    expect([ink().left, ink().top, ink().width]).toEqual(["50px", "20px", "200%"]);
+    const counts = countRenders();
+    act(() => area.report(480, 540));
+    counts.stop();
+    expect([ink().left, ink().top, ink().width]).toEqual(["25px", "10px", "200%"]);
+    expect(counts.of("InkBox")).toBe(1);
+    expect(counts.of("StageArea")).toBe(0);
   });
 
   it("looks through the page for the preview at most once for a message, and not for the next from the same one", () => {

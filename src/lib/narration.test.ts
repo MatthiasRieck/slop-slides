@@ -3,15 +3,14 @@ import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
 import {
-  describeGeneration,
   formatDuration,
-  generationSize,
   narrationMark,
   normalizeNarration,
   slidesToScriptFromNotes,
   speakingTime,
   wordCount,
 } from "./narration";
+import { describeGeneration, generationSize } from "./narrationSize";
 
 const slide = (id: string, more: Partial<Slide> = {}): Slide => ({
   id,

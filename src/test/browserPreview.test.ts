@@ -54,6 +54,8 @@ describe("browser preview scripts", () => {
     // Plain scripts: they run where they stand, after the player, as the inlined ones did.
     expect(tags).not.toMatch(/defer|async|module/);
     expect(addresses.map(stageScriptAt)).toEqual([PASTEBOARD, OVERFLOW + EDITOR]);
+    // One version for them all: the pasteboard finds the editor beside its own address.
+    expect(addresses[1]).toBe(addresses[0]!.replace("pasteboard.js", "editor.js"));
     expect(stageScriptAt("/__deck/.app/0000000000000000/editor.js")).toBeNull();
     expect(stageScriptAt(addresses[0]!.replace("pasteboard.js", "other.js"))).toBeNull();
   });
@@ -77,11 +79,12 @@ describe("browser preview: one slide for a preview", () => {
     expect(singleSlide(DECK, "#2", true)).toBe(SECOND_EDITED);
   });
 
-  it("keeps every id of the deck in the editor's page, and only there", () => {
+  it("keeps every id of the deck in the stage's pages, which the editor comes to, and only there", () => {
     const edited = pageFor(DECK, new URLSearchParams("embed&slide=end&v=1&static&pan&edit=0"));
     expect(edited).toContain(`<i id="el-1"></i><i ID='logo'></i></section>`);
     expect(edited).toContain("<i id=clip></i></section>");
     expect(edited).not.toContain("assets/logo.png");
+    expect(pageFor(DECK, new URLSearchParams("embed&slide=end&v=1&pan"))).toContain("<i id=clip></i></section>");
     const thumbnail = pageFor(DECK, new URLSearchParams("embed&slide=end&v=1&static"));
     expect(thumbnail).not.toContain("<i ");
   });

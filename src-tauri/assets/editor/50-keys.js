@@ -2,7 +2,8 @@
 
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
   // to the app for slide navigation).
-  window.addEventListener(
+  listen(
+    window,
     "keydown",
     function (event) {
       var mod = event.metaKey || event.ctrlKey;
@@ -119,7 +120,7 @@
       // The app reads the clipboard's text and answers with slop:edit-insert-text.
       event.preventDefault();
       editRange();
-      window.parent.postMessage({ type: "slop:edit-paste-request", slide: slide.id, plain: true }, "*");
+      tellApp({ type: "slop:edit-paste-request", slide: slide.id, plain: true });
     } else if (event.key === "Escape" || (event.key === "Enter" && mod && !event.shiftKey)) {
       event.preventDefault();
       finishEditing();
@@ -289,7 +290,8 @@
   }
 
   // Each run of typing (or of deleting) is a step, kept as the text was before it.
-  document.addEventListener(
+  listen(
+    document,
     "beforeinput",
     function (event) {
       if (!editing || event.isComposing) return;
@@ -308,7 +310,7 @@
     true,
   );
 
-  window.addEventListener("message", function (event) {
+  listen(window, "message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
     // What the toolbar does to the text being typed is a step to undo, like the typing; going
@@ -317,6 +319,28 @@
     takeMessage(data);
     textStepDone(before);
   });
+
+  /**
+   * The app shows this preview, which it loaded ahead out of sight, or kept loaded since it last
+   * showed it (see `warm` on the app's SlideFrame), and has heard nothing it said meanwhile: it
+   * starts over as a preview that has just loaded does, with nothing selected, and says again
+   * everything it reports about the slide.
+   */
+  function showAgain() {
+    finishEditing();
+    reportedSelection = null;
+    if (selected) select(null);
+    else report();
+    reportBackground();
+    if (deckFound) {
+      reportFonts();
+      reportColors();
+    }
+    reportedLayers = null;
+    scheduleLayers();
+    reportedOverflow = null;
+    scheduleOverflow();
+  }
 
   /** Does what a message of the app asks. */
   function takeMessage(data) {
@@ -328,7 +352,7 @@
       // ⌘Z pressed in the app while typing: the typing's steps first, then the app's.
       if (!stepText(!!data.redo) && !data.redo) {
         finishEditing();
-        window.parent.postMessage({ type: "slop:key", key: "z", mod: true, shift: false }, "*");
+        tellApp({ type: "slop:key", key: "z", mod: true, shift: false });
       }
     } else if (data.type === "slop:edit-select") {
       finishEditing();
@@ -376,6 +400,10 @@
       setLink(data.href);
     } else if (data.type === "slop:edit-finish") {
       finishEditing();
+    } else if (data.type === "slop:edit-show") {
+      showAgain();
+    } else if (data.type === "slop:edit-patch" && typeof data.markup === "string") {
+      tellApp({ type: "slop:edit-patched", slide: slide.id, hash: data.hash, ok: patchSlide(data.markup) });
     } else if (data.type === "slop:edit-insert-text" && typeof data.text === "string") {
       if (editing) insertAtCaret(textFragment(data.text));
     } else if (data.type === "slop:edit-order") {

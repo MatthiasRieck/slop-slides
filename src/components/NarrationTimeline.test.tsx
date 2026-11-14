@@ -10,7 +10,12 @@ vi.mock("../lib/timelinePlayback", async (original) => ({
 // shows, a waveform draws its path, and the timeline is laid out.
 vi.mock("../lib/timeline", async (original) => {
   const actual = await original<typeof import("../lib/timeline")>();
-  return { ...actual, formatShown: vi.fn(actual.formatShown), layoutTimeline: vi.fn(actual.layoutTimeline) };
+  return {
+    ...actual,
+    formatShown: vi.fn(actual.formatShown),
+    formatZoom: vi.fn(actual.formatZoom),
+    layoutTimeline: vi.fn(actual.layoutTimeline),
+  };
 });
 vi.mock("../lib/waveform", async (original) => {
   const actual = await original<typeof import("../lib/waveform")>();
@@ -22,7 +27,7 @@ import { formatKeys } from "../lib/keys";
 import { formatDuration } from "../lib/narrationAudio";
 import { forgetNarration } from "../lib/narrationCache";
 import { getSlideClock, onSlideClock } from "../lib/slideClock";
-import { formatShown, layoutTimeline } from "../lib/timeline";
+import { formatShown, formatZoom, layoutTimeline } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
 import { wavePath } from "../lib/waveform";
 import { useNarration } from "../narrationStore";
@@ -33,6 +38,8 @@ import { NarrationTimeline, rulerStep } from "./NarrationTimeline";
 
 const play = playTimeline as unknown as Mock;
 const shown = formatShown as unknown as Mock;
+/** Called by the timeline's bar, and nothing else: how often the bar renders. */
+const barRenders = formatZoom as unknown as Mock;
 const waved = wavePath as unknown as Mock;
 const laidOut = layoutTimeline as unknown as Mock;
 
@@ -743,6 +750,70 @@ describe("the slides as strips of film", () => {
       scrollTo(12_000);
       expect(pictured()).toEqual(["Slide 50", "Slide 51", "Slide 52", "Slide 53", "Slide 54"]);
       expect(pictures().length).toBeLessThanOrEqual(8);
+    } finally {
+      sizes.track = ["clientWidth", 1500];
+    }
+  });
+  /** A deck of `count` slides, each with five seconds of narration whose ten words are timed. */
+  async function narrated(count: number) {
+    const deck = deckOf();
+    const slides = Array.from({ length: count }, (_, i) => ({ ...deck.slides[0]!, id: `s${i}`, narration: "Said" }));
+    useApp.setState({ deck: { ...deck, slides }, selected: "s0", editing: false });
+    useNarration.setState({
+      audioDeck: deck.id,
+      audio: Object.fromEntries(
+        slides.map((slide) => [slide.id, { slide: slide.id, state: "ready", seconds: 5, timed: true }]),
+      ),
+    });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "narration_peaks") return [0.5, 1];
+      if (command === "narration_words")
+        return Array.from({ length: 10 }, (_, i) => ({ text: `w${i}`, start: i / 2, end: i / 2 + 0.4 }));
+      return null;
+    });
+    render(<NarrationTimeline />);
+    await act(async () => {});
+  }
+  /** The slides whose narration has its words marked, by the number of their slide. */
+  const worded = () =>
+    screen
+      .getAllByRole("button", { name: /^Narration of slide/ })
+      .filter((clip) => clip.querySelector("[data-word]"))
+      .map((clip) => clip.getAttribute("aria-label")?.replace("Narration of slide ", ""));
+
+  it("marks the words of only the narration in sight of a long deck zoomed in", async () => {
+    // A hundred narrations of 240 pixels each, 600 of them in sight.
+    sizes.track = ["clientWidth", 24_000];
+    try {
+      await narrated(100);
+      expect(worded()).toEqual(["1", "2", "3", "4"]);
+      expect(document.querySelectorAll("[data-word]")).toHaveLength(40);
+      scrollTo(12_000);
+      expect(worded()).toEqual(["50", "51", "52", "53", "54"]);
+      expect(document.querySelectorAll("[data-word]").length).toBeLessThanOrEqual(60);
+    } finally {
+      sizes.track = ["clientWidth", 1500];
+    }
+  });
+
+  it("marks every narration's words while the whole timeline is in sight", async () => {
+    sizes.track = ["clientWidth", 600];
+    try {
+      await narrated(5);
+      expect(worded()).toEqual(["1", "2", "3", "4", "5"]);
+    } finally {
+      sizes.track = ["clientWidth", 1500];
+    }
+  });
+
+  it("renders not the bar while the track scrolls under it", () => {
+    sizes.track = ["clientWidth", 24_000];
+    try {
+      long(100);
+      barRenders.mockClear();
+      for (const left of [1000, 4000, 9000, 12_000]) scrollTo(left);
+      expect(pictured()).toEqual(["Slide 50", "Slide 51", "Slide 52", "Slide 53", "Slide 54"]);
+      expect(barRenders).not.toHaveBeenCalled();
     } finally {
       sizes.track = ["clientWidth", 1500];
     }

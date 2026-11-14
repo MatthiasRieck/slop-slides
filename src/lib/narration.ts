@@ -1,5 +1,4 @@
 import type { Slide, SlideAudio } from "./api";
-import { markdownText } from "./markdown";
 
 /** Spoken words per minute, for estimating how long a narration takes to read out. */
 const WORDS_PER_MINUTE = 150;
@@ -62,37 +61,6 @@ export const MARK_LABELS: Record<NarrationMark, string> = {
   stale: "Script changed since the audio",
   recorded: "Your recording",
 };
-
-/** How much there is to say for audio to be made: how many slides, their characters, and about how long it plays. */
-export interface GenerationSize {
-  slides: number;
-  characters: number;
-  seconds: number;
-}
-
-/**
- * What generating the audio of `slides` would send to the narration service: the slides whose
- * audio is missing or out of date, the characters of what is said of their scripts (what the
- * service counts), and about how long that takes to say.
- */
-export function generationSize(slides: Slide[], audio: Record<string, SlideAudio>): GenerationSize {
-  const size = { slides: 0, characters: 0, seconds: 0 };
-  for (const slide of slides) {
-    const state = audio[slide.id]?.state;
-    if (state !== "missing" && state !== "stale") continue;
-    const spoken = markdownText(slide.narration ?? "").trim();
-    size.slides += 1;
-    size.characters += spoken.length;
-    size.seconds += wordsSeconds(spoken);
-  }
-  return size;
-}
-
-/** A size in words: "5 slides, 2,140 characters, about 2:20 of audio". */
-export function describeGeneration(size: GenerationSize): string {
-  const slides = `${size.slides} ${size.slides === 1 ? "slide" : "slides"}`;
-  return `${slides}, ${size.characters.toLocaleString("en-US")} characters, about ${formatDuration(size.seconds)} of audio`;
-}
 
 /** The slides whose speaker notes can become their script: they have notes, no script, and are not locked. */
 export function slidesToScriptFromNotes(slides: Slide[]): Slide[] {

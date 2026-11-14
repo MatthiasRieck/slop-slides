@@ -287,7 +287,7 @@
     var key = JSON.stringify(now);
     if (key === reportedLayers) return;
     reportedLayers = key;
-    window.parent.postMessage({ type: "slop:edit-layers", slide: slide.id, layers: now }, "*");
+    tellApp({ type: "slop:edit-layers", slide: slide.id, layers: now });
   }
 
   function scheduleLayers() {

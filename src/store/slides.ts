@@ -254,7 +254,7 @@ function showDeck(app: AppStore, incoming: Deck): boolean {
  * changed: a deck that is the one shown already does not touch the store.
  */
 function putDeck(app: AppStore, next: Deck): boolean {
-  const { deck: before, selected, railSelected } = app.getState();
+  const { deck: before, selected, railSelected, editSaved } = app.getState();
   const deck = shareDeck(before, next);
   if (deck === before) return false;
   if (deck.slides === before?.slides) {
@@ -266,8 +266,22 @@ function putDeck(app: AppStore, next: Deck): boolean {
     deck,
     selected: selected !== null && ids.has(selected) ? selected : (deck.slides[0]?.id ?? null),
     railSelected: railSelected.every((id) => ids.has(id)) ? railSelected : railSelected.filter((id) => ids.has(id)),
+    editSaved: savesStillShown(editSaved, deck.slides),
   });
   return true;
+}
+
+/**
+ * Of what the stage's editor saved of each slide (see `editSaved`), what the slide still is: any
+ * other change to a slide (an undo, the agent's) is not what the editor shows, even should the
+ * slide come back to a version the editor once saved. The same object when nothing goes.
+ */
+function savesStillShown(saved: Record<string, string>, slides: Deck["slides"]): Record<string, string> {
+  const gone = slides.filter((slide) => slide.id in saved && saved[slide.id] !== slide.hash);
+  if (gone.length === 0) return saved;
+  const kept = { ...saved };
+  for (const slide of gone) delete kept[slide.id];
+  return kept;
 }
 
 /**

@@ -22,6 +22,26 @@ vi.mock("@dnd-kit/sortable", async (original) => {
   };
   return { ...actual, useSortable };
 });
+/** The thumbnails' pictures and quick actions that rendered, by their slide, since it was last emptied. */
+const parts = vi.hoisted(() => ({ pictures: [] as string[], actions: [] as string[] }));
+vi.mock("./SlideImage", async (original) => {
+  const actual = await original<typeof import("./SlideImage")>();
+  const SlideImage: typeof actual.SlideImage = (props) => {
+    parts.pictures.push(props.slideId);
+    return actual.SlideImage(props);
+  };
+  return { ...actual, SlideImage };
+});
+vi.mock("./rail/SlideActions", async (original) => {
+  const actual = await original<typeof import("./rail/SlideActions")>();
+  const Inner = (actual.SlideActions as unknown as { type: (props: never) => React.ReactNode }).type;
+  const { memo } = await import("react");
+  const SlideActions = memo((props: Parameters<typeof actual.SlideActions>[0]) => {
+    parts.actions.push(props.slide.id);
+    return Inner(props as never);
+  });
+  return { ...actual, SlideActions };
+});
 
 const NoLayout = globalThis.ResizeObserver;
 const measured: { target: Element; callback: ResizeObserverCallback }[] = [];
@@ -225,6 +245,51 @@ describe("the rows the rail renders", () => {
     render(<SlideRail />);
     rendered.length = 0;
     act(() => useApp.getState().setDeck(structuredClone(useApp.getState().deck!)));
+    expect(rendered).toEqual([]);
+  });
+
+  it("renders no row, picture or quick action when the mode changes; the tooltips follow by themselves", () => {
+    useApp.setState({ deck: deckOf(50) });
+    render(<SlideRail />);
+    const tooltip = () => rows()[3]!.querySelector("button[data-thumbnail]")!.getAttribute("title");
+    expect(tooltip()).toBe("Slide 4 · S3 · double-click to edit");
+    rendered.length = 0;
+    parts.pictures.length = 0;
+    parts.actions.length = 0;
+    act(() => useApp.getState().setMode("edit"));
+    expect(tooltip()).toBe("Slide 4 · S3");
+    act(() => useApp.getState().setMode("view"));
+    expect(tooltip()).toBe("Slide 4 · S3 · double-click to edit");
+    expect(rendered).toEqual([]);
+    expect(parts).toEqual({ pictures: [], actions: [] });
+  });
+
+  it("renders no row when the deck is read again with its slides as they were, as new objects", () => {
+    useApp.setState({ deck: deckOf(50) });
+    render(<SlideRail />);
+    rendered.length = 0;
+    parts.pictures.length = 0;
+    // As when the deck opens again: nothing shared with the deck shown.
+    act(() => useApp.setState({ deck: structuredClone(useApp.getState().deck!) }));
+    expect(rendered).toEqual([]);
+    expect(parts.pictures).toEqual([]);
+  });
+
+  it("renders the rows a search changes, not their pictures or quick actions", () => {
+    useApp.setState({ deck: deckOf(50) });
+    render(<SlideRail />);
+    const found = (...slides: string[]) =>
+      act(() => useApp.getState().setSearchMatches(slides.map((slide) => ({ slide }) as never)));
+    found("s3", "s3");
+    rendered.length = 0;
+    parts.pictures.length = 0;
+    parts.actions.length = 0;
+    // One more hit on a slide found already, one on a slide that was dimmed.
+    found("s3", "s3", "s3", "s7");
+    expect([...new Set(rendered)].sort()).toEqual(["s3", "s7"]);
+    expect(parts).toEqual({ pictures: [], actions: [] });
+    rendered.length = 0;
+    found("s3", "s3", "s3", "s7");
     expect(rendered).toEqual([]);
   });
 

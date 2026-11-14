@@ -3,11 +3,11 @@ import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_FRAME_LOADS } from "../lib/frameLoads";
-
+import { slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { type Place, placeElements } from "../test/intersection";
-import { SLIDE_SCALE, SlideFrame, useSlideVersion } from "./SlideFrame";
+import { SLIDE_SCALE, SlideFrame, useSlideVersion, WARM_ATTR } from "./SlideFrame";
 
 const NoLayout = globalThis.ResizeObserver;
 let width = 960;
@@ -43,6 +43,27 @@ afterEach(() => {
 });
 
 const frames = (container: HTMLElement) => [...container.querySelectorAll("iframe")];
+/** A CSS value as the browser keeps it once set on `property`. */
+function css(property: "left" | "top" | "width" | "height", value: string) {
+  const probe = document.createElement("div");
+  probe.style[property] = value;
+  return probe.style[property];
+}
+/** How far the preview in `container` is scaled, as its box holds it (see SLIDE_SCALE). */
+const scaleOf = (container: HTMLElement) =>
+  (container.firstElementChild as HTMLElement).style.getPropertyValue(SLIDE_SCALE);
+const SCALED = `scale(var(${SLIDE_SCALE}))`;
+/** Where a pasteboard preview sits around the slide's box, for an arena of `width` × `height` (CSS). */
+const onPasteboard = (width: string, height: string) => ({
+  left: css("left", `calc((100% - max(${width}, 100%)) / 2)`),
+  top: css("top", `calc((100% - max(${height}, 100%)) / 2)`),
+  width: css("width", `calc(max(${width}, 100%) / var(${SLIDE_SCALE}))`),
+  height: css("height", `calc(max(${height}, 100%) / var(${SLIDE_SCALE}))`),
+});
+const boxOf = (frame: HTMLIFrameElement) => {
+  const { left, top, width, height } = frame.style;
+  return { left, top, width, height };
+};
 
 describe("SlideFrame", () => {
   it("renders the slide through the deck's player, scaled to fit", () => {
@@ -53,7 +74,8 @@ describe("SlideFrame", () => {
     expect(frame!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame!.style.width).toBe("1920px");
     expect(frame!.style.height).toBe("1080px");
-    expect(frame!.style.transform).toBe("scale(0.5)");
+    expect(frame!.style.transform).toBe(SCALED);
+    expect(scaleOf(container)).toBe("0.5");
     expect(frame!.style.pointerEvents).toBe("auto");
     expect(frame!.tabIndex).not.toBe(-1);
   });
@@ -94,35 +116,19 @@ describe("SlideFrame", () => {
     );
   });
 
-  const arena = { width: 1200, height: 700 };
+  const arena = { width: "1200px", height: "700px" };
 
-  it("lets the editor's preview fill the arena around the centered slide, keeping the slide's scale", () => {
+  it("lets the editor's preview fill the arena around the centered slide, never smaller than it, at the slide's scale", () => {
     const { container } = render(
       <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="0" arena={arena} />,
     );
     const [frame] = frames(container);
-    expect(frame!.style.width).toBe("2400px");
-    expect(frame!.style.height).toBe("1400px");
-    expect(frame!.style.left).toBe("-120px");
-    expect(frame!.style.top).toBe("-80px");
-    expect(frame!.style.transform).toBe("scale(0.5)");
+    // At a scale of 0.5 the 1200 × 700 arena is 2400 × 1400 of the slide's pixels, the slide in
+    // its middle: 120 and 80 px of the arena to its left and above it. Laid out by the browser.
+    expect(boxOf(frame!)).toEqual(onPasteboard("1200px", "700px"));
+    expect(frame!.style.transform).toBe(SCALED);
+    expect(scaleOf(container)).toBe("0.5");
     expect((container.firstElementChild as HTMLElement).style.overflow).toBe("visible");
-  });
-
-  it("never makes the preview smaller than the slide", () => {
-    const { container } = render(
-      <SlideFrame
-        deckId="/decks/talk/deck.html"
-        slideId="intro"
-        version="v1"
-        editKey="0"
-        arena={{ width: 100, height: 100 }}
-      />,
-    );
-    const [frame] = frames(container);
-    expect(frame!.style.width).toBe("1920px");
-    expect(frame!.style.height).toBe("1080px");
-    expect(frame!.style.left).toBe("0px");
   });
 
   it("puts a preview given an arena on the pasteboard, in view and edit mode", () => {
@@ -131,8 +137,7 @@ describe("SlideFrame", () => {
     );
     const [viewer] = frames(container);
     expect(viewer!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&pan");
-    expect(viewer!.style.width).toBe("2400px");
-    expect(viewer!.style.left).toBe("-120px");
+    expect(boxOf(viewer!)).toEqual(onPasteboard("1200px", "700px"));
     const box = container.firstElementChild as HTMLElement;
     expect(box.style.overflow).toBe("visible");
     // The slide may be panned anywhere, so nothing is painted where it started.
@@ -142,7 +147,7 @@ describe("SlideFrame", () => {
     expect(editor.getAttribute("src")).toBe(
       "/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&static&pan&edit=0",
     );
-    expect(editor.style.width).toBe("2400px");
+    expect(boxOf(editor)).toEqual(onPasteboard("1200px", "700px"));
   });
 
   it("keeps a plain preview and thumbnails to the slide, clipped, with no pasteboard", () => {
@@ -167,11 +172,11 @@ describe("SlideFrame", () => {
     expect(frame!.style.width).toBe("1080px");
     expect(frame!.style.height).toBe("1350px");
     // A 960 px wide box shows the 1080 px canvas at 960 / 1080.
-    expect(frame!.style.transform).toBe(`scale(${960 / 1080})`);
+    expect(scaleOf(container)).toBe(String(960 / 1080));
     // Back to the default size: measured again against the new width.
     rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     expect(box().style.aspectRatio).toBe("1920 / 1080");
-    expect(frames(container)[0]!.style.transform).toBe("scale(0.5)");
+    expect(scaleOf(container)).toBe("0.5");
   });
 
   it("waits for layout before loading anything", () => {
@@ -184,7 +189,7 @@ describe("SlideFrame", () => {
     const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     width = 1920;
     act(() => observers[0]!.callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver));
-    expect(frames(container)[0]!.style.transform).toBe("scale(1)");
+    expect(scaleOf(container)).toBe("1");
   });
 
   it("stops observing when unmounted", () => {
@@ -202,7 +207,7 @@ describe("SlideFrame", () => {
   });
 
   it("shows the final state on request, still taking pointer input", () => {
-    const arena = { width: 1600, height: 900 };
+    const arena = { width: "1600px", height: "900px" };
     const { container } = render(
       <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" still arena={arena} />,
     );
@@ -231,7 +236,7 @@ describe("SlideFrame", () => {
     fireEvent.load(next!);
     expect(frames(container)).toEqual([next]);
     expect(next!.style.visibility).toBe("visible");
-    expect(onFrameReady).toHaveBeenLastCalledWith(next);
+    expect(onFrameReady).toHaveBeenLastCalledWith(next, false);
   });
 
   it("only keeps the newest pending version", () => {
@@ -256,7 +261,83 @@ describe("SlideFrame", () => {
       <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" onFrameReady={onFrameReady} />,
     );
     fireEvent.load(frames(container)[0]!);
-    expect(onFrameReady).toHaveBeenCalledWith(frames(container)[0]);
+    expect(onFrameReady).toHaveBeenCalledWith(frames(container)[0], false);
+  });
+});
+
+describe("SlideFrame loading ahead", () => {
+  const deck = "/decks/talk/deck.html";
+  const at = (slide: string) => slideUrl(deck, slide, "v1", true, "0", true);
+  const arena = { width: "1600px", height: "900px" };
+  const stage = (slide: string, warm: string[], onFrameReady = vi.fn()) => (
+    <SlideFrame
+      deckId={deck}
+      slideId={slide}
+      version="v1"
+      editKey="0"
+      arena={arena}
+      warm={warm}
+      onFrameReady={onFrameReady}
+    />
+  );
+  const byUrl = (container: HTMLElement, url: string) => frames(container).find((f) => f.getAttribute("src") === url);
+
+  it("loads the slides next to it out of sight once it has loaded, and shows one without loading it again", () => {
+    const onFrameReady = vi.fn();
+    const { container, rerender } = render(stage("b", [at("a"), at("c")], onFrameReady));
+    // The slide shown comes first.
+    expect(frames(container)).toHaveLength(1);
+    const b = frames(container)[0]!;
+    fireEvent.load(b);
+    expect(onFrameReady).toHaveBeenCalledTimes(1);
+    expect(frames(container).map((f) => f.getAttribute("src"))).toEqual([at("b"), at("a"), at("c")]);
+    const c = byUrl(container, at("c"))!;
+    expect(c.style.visibility).toBe("hidden");
+    expect(c.hasAttribute(WARM_ATTR)).toBe(true);
+    expect(b.hasAttribute(WARM_ATTR)).toBe(false);
+    // Loaded ahead, it is nobody's to set up yet.
+    fireEvent.load(c);
+    fireEvent.load(byUrl(container, at("a"))!);
+    expect(onFrameReady).toHaveBeenCalledTimes(1);
+
+    // The next slide: the frame that loaded ahead, the same document, shown at once.
+    rerender(stage("c", [at("b"), at("d")], onFrameReady));
+    expect(byUrl(container, at("c"))).toBe(c);
+    expect(c.style.visibility).toBe("visible");
+    expect(c.hasAttribute(WARM_ATTR)).toBe(false);
+    expect(onFrameReady).toHaveBeenCalledTimes(2);
+    expect(onFrameReady).toHaveBeenLastCalledWith(c, true);
+    // The slide it came from stays loaded, as the one before it now; the one two back goes.
+    expect(byUrl(container, at("b"))).toBe(b);
+    expect(b.style.visibility).toBe("hidden");
+    expect(b.hasAttribute(WARM_ATTR)).toBe(true);
+    expect(byUrl(container, at("a"))).toBeUndefined();
+    // And back: as fast.
+    rerender(stage("b", [at("a"), at("c")], onFrameReady));
+    expect(byUrl(container, at("b"))).toBe(b);
+    expect(onFrameReady).toHaveBeenLastCalledWith(b, true);
+    expect(byUrl(container, at("c"))).toBe(c);
+  });
+
+  it("shows a slide still loading ahead once it has loaded, as any other", () => {
+    const onFrameReady = vi.fn();
+    const { container, rerender } = render(stage("b", [at("c")], onFrameReady));
+    fireEvent.load(frames(container)[0]!);
+    const c = byUrl(container, at("c"))!;
+    rerender(stage("c", [at("b")], onFrameReady));
+    // The same frame, now the one that loads behind the shown one.
+    expect(byUrl(container, at("c"))).toBe(c);
+    expect(c.style.visibility).toBe("hidden");
+    expect(c.hasAttribute(WARM_ATTR)).toBe(false);
+    fireEvent.load(c);
+    expect(c.style.visibility).toBe("visible");
+    expect(onFrameReady).toHaveBeenLastCalledWith(c, false);
+  });
+
+  it("loads nothing ahead for thumbnails", () => {
+    const { container } = render(<SlideFrame deckId={deck} slideId="b" version="v1" thumbnail warm={[at("c")]} />);
+    fireEvent.load(frames(container)[0]!);
+    expect(frames(container)).toHaveLength(1);
   });
 });
 

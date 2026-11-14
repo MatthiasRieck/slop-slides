@@ -1,10 +1,18 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The mode tabs, counted: each render of the bar renders them.
+vi.mock("./ModeTabs", async (original) => {
+  const actual = await original<typeof import("./ModeTabs")>();
+  return { ...actual, ModeTabs: vi.fn(actual.ModeTabs) };
+});
+
 import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke, open as openDialog, revealItemInDir, save } from "../test/tauri";
 import { answerUnsaved } from "../test/unsaved";
+import { ModeTabs } from "./ModeTabs";
 import { TopBar } from "./TopBar";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
@@ -698,5 +706,50 @@ describe("breadcrumbs", () => {
     expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
     // The folder's own menu: to open another folder, or close this one.
     expect(fileButton().title).toBe("/decks");
+  });
+});
+
+describe("renders", () => {
+  const barRenders = () => vi.mocked(ModeTabs).mock.calls.length;
+
+  it("renders as its width crosses where its room changes, not at every pixel of a drag", () => {
+    let report: (width: number) => void = () => {};
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          report = (width) =>
+            callback(
+              [{ contentRect: { width, height: 56 } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            );
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    try {
+      render(<TopBar />);
+      act(() => report(1100));
+      const before = barRenders();
+      for (let width = 1099; width >= 900; width--) act(() => report(width));
+      expect(barRenders()).toBe(before);
+      act(() => report(899));
+      expect(barRenders()).toBe(before + 1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows the sidebar's buttons as it closes without rendering the rest of the bar", () => {
+    render(<TopBar />);
+    const before = barRenders();
+    act(() => useApp.setState({ sidebarOpen: false }));
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "App settings…" })).toBeTruthy();
+    act(() => useApp.setState({ sidebarOpen: true }));
+    expect(screen.queryByRole("button", { name: "Show sidebar" })).toBeNull();
+    expect(barRenders()).toBe(before);
   });
 });

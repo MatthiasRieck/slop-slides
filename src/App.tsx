@@ -13,25 +13,25 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { useChatShortcut } from "./components/chat/useChatShortcut";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PptxImport } from "./components/export/PptxImport";
-import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import {
   ChangesRail,
   ChangesView,
   CommandPalette,
   DeckSettings,
+  FileViewer,
   NarrationTimeline,
   Presenter,
   preloadLazyPartsWhenIdle,
   RewindDialog,
+  Sidebar,
+  SlideRail,
+  StageOrOverview,
+  TopBar,
 } from "./components/lazy";
 import { usePresentKeys } from "./components/presenter/present";
 import { ShortcutHelp } from "./components/ShortcutHelp";
-import { Sidebar } from "./components/Sidebar";
-import { StageOrOverview } from "./components/SlideOverview";
-import { SlideRail } from "./components/SlideRail";
 import { TOAST_AREA, Toasts } from "./components/Toasts";
-import { TopBar } from "./components/TopBar";
 import { UnsavedChanges } from "./components/UnsavedChanges";
 import { useCommandMenu } from "./hooks/useCommandMenu";
 import { useShellKeys } from "./hooks/useShellKeys";
@@ -40,6 +40,7 @@ import { api } from "./lib/api";
 import { loadSize, trySaveSize } from "./lib/storage";
 import { cn, isMac } from "./lib/utils";
 import { deckMode, lintKey, showError, useApp } from "./store";
+import type { AppState } from "./store/types";
 
 /**
  * The window: the start screen until a folder is open, then the workbench. Neither shows before
@@ -50,10 +51,6 @@ import { deckMode, lintKey, showError, useApp } from "./store";
 export function App() {
   const hasWorkspace = useApp((s) => s.workspace !== null);
   const booted = useApp((s) => s.booted);
-  const presenting = useApp((s) => s.presenting);
-  const askingRewind = useApp((s) => s.rewindAsk !== null);
-  const deckSettingsOpen = useApp((s) => s.deckSettingsOpen);
-  const paletteOpen = usePalette((s) => s.open);
   useNewWindowKey();
   usePresentKeys();
   useCommandMenu();
@@ -61,25 +58,52 @@ export function App() {
   useWindowTitle();
   useEffect(() => preloadLazyPartsWhenIdle(), []);
 
+  // What comes and goes over the window is shown by a part of its own (`Shown`): opening the
+  // palette or a dialog renders that, not the window and the workbench in it.
   return (
     <>
       {/* A render error anywhere leaves a way on, not an empty window; the parts of the workbench catch their own first. */}
       <ErrorBoundary name="the window" scope="window">
         {hasWorkspace ? <Workbench /> : booted && <Home />}
-        {presenting && <Presenter />}
+        <Shown when={isPresenting}>
+          <Presenter />
+        </Shown>
         <PptxImport />
-        {askingRewind && <RewindDialog />}
-        {deckSettingsOpen && <DeckSettings />}
+        <Shown when={isAskingRewind}>
+          <RewindDialog />
+        </Shown>
+        <Shown when={isDeckSettingsOpen}>
+          <DeckSettings />
+        </Shown>
         <UnsavedChanges />
         <ConfirmDialog />
       </ErrorBoundary>
       <AppSettings />
       {/* The keyboard shortcuts, on the start screen too: `?` or a button opens them. */}
       <ShortcutHelp />
-      {paletteOpen && <CommandPalette />}
+      <PaletteShown>
+        <CommandPalette />
+      </PaletteShown>
       <Toasts />
     </>
   );
+}
+
+const isPresenting = (s: AppState) => s.presenting;
+const isAskingRewind = (s: AppState) => s.rewindAsk !== null;
+const isDeckSettingsOpen = (s: AppState) => s.deckSettingsOpen;
+
+/**
+ * `children` while `when` holds of the app's state. It renders on its own as that changes, and
+ * `children`, made by a parent that does not, stay as they are while it holds.
+ */
+function Shown({ when, children }: { when: (s: AppState) => boolean; children: ReactNode }) {
+  return useApp(when) ? children : null;
+}
+
+/** `children` while the command palette is open. */
+function PaletteShown({ children }: { children: ReactNode }) {
+  return usePalette((s) => s.open) ? children : null;
 }
 
 /** Ctrl+N opens another window; on macOS, ⌘N is File › New Window in the menu bar. */
@@ -119,106 +143,151 @@ export const WIDTH_SAVE_MS = 300;
  */
 function Workbench() {
   useChatShortcut();
+  useShellKeys();
   const hasDeck = useApp((s) => s.deck !== null);
-  const mode = useApp(deckMode);
-  const sidebarOpen = useApp((s) => s.sidebarOpen);
-  const sidebarMaximized = useApp((s) => s.sidebarMaximized);
-  const railOpen = useApp((s) => s.railOpen);
-  const timelineOpen = useApp((s) => s.timelineOpen);
   const rail = usePanelRef();
   const sidebar = usePanelRef();
-  useShellKeys();
-  // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
+  // The parts below each follow the state they show (a panel's open, the mode, the timeline),
+  // and the panels' contents are made here, once: a toggle renders the part it changes, not the
+  // top bar, the slide list, the stage and the sidebar with it.
+  return (
+    <>
+      <Relint />
+      <Group orientation="horizontal" className="h-full">
+        <Panel id="main" minSize={480}>
+          <div className="flex h-full flex-col">
+            <ErrorBoundary name="the top bar">
+              <TopBar />
+            </ErrorBoundary>
+            <Group orientation="horizontal" className="min-h-0 flex-1">
+              {hasDeck && (
+                <>
+                  <SidePanel
+                    id="rail"
+                    panelRef={rail}
+                    isOpen={isRailOpen}
+                    onOpenChange={useApp.getState().setRailOpen}
+                    widthKey={RAIL_WIDTH_KEY}
+                    defaultSize={RAIL_WIDTH.initial}
+                    minSize={RAIL_WIDTH.min}
+                    maxSize={RAIL_WIDTH.max}
+                  >
+                    <ErrorBoundary name="the slide list">
+                      <RailBody>
+                        <SlideRail />
+                      </RailBody>
+                    </ErrorBoundary>
+                  </SidePanel>
+                  <ResizeHandle panel={rail} width={RAIL_WIDTH.initial} />
+                </>
+              )}
+              <Panel id="stage" minSize={360}>
+                <ErrorBoundary name="the slide">
+                  {hasDeck ? (
+                    <DeckBody>
+                      <StageOrOverview />
+                    </DeckBody>
+                  ) : (
+                    <div {...{ [TOAST_AREA]: "" }} className="h-full">
+                      <FileViewer />
+                    </div>
+                  )}
+                </ErrorBoundary>
+              </Panel>
+            </Group>
+          </div>
+        </Panel>
+        <ResizeHandle panel={sidebar} width={SIDEBAR_WIDTH.initial} />
+        <SidePanel
+          id="sidebar"
+          panelRef={sidebar}
+          isOpen={isSidebarOpen}
+          onOpenChange={useApp.getState().setSidebarOpen}
+          widthKey={SIDEBAR_WIDTH_KEY}
+          defaultSize={SIDEBAR_WIDTH.initial}
+          minSize={SIDEBAR_WIDTH.min}
+          // Up to two thirds of the window, however wide it is, the slides keeping the rest.
+          maxSize={SIDEBAR_MAX_SIZE}
+        >
+          <SidebarBody>
+            <ErrorBoundary name="the sidebar">
+              <Sidebar />
+            </ErrorBoundary>
+          </SidebarBody>
+        </SidePanel>
+      </Group>
+    </>
+  );
+}
+
+const isRailOpen = (s: AppState) => s.railOpen;
+const isSidebarOpen = (s: AppState) => s.sidebarOpen;
+const inGitMode = (s: AppState) => s.deck !== null && deckMode(s) === "git";
+/** The deck's timeline shows under the slide while it is open, whatever the sidebar shows, in View and Edit. */
+const timelineShown = (s: AppState) => {
+  const mode = deckMode(s);
+  return s.timelineOpen && (mode === "view" || mode === "edit");
+};
+
+/** Checks the deck again whenever its file changes (the agent, the HTML view, slide operations); it shows nothing. */
+function Relint() {
   const deckVersion = useApp((s) => lintKey(s.deck));
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-lint whenever the deck's content changes
   useEffect(() => {
     useApp.getState().lintChanged();
   }, [deckVersion]);
+  return null;
+}
+
+/** The slide list (`children`) and, in Changes mode, the list of changes in its place. */
+function RailBody({ children }: { children: ReactNode }) {
+  const git = useApp(inGitMode);
   return (
-    <Group orientation="horizontal" className="h-full">
-      <Panel id="main" minSize={480}>
-        <div className="flex h-full flex-col">
-          <ErrorBoundary name="the top bar">
-            <TopBar />
-          </ErrorBoundary>
-          <Group orientation="horizontal" className="min-h-0 flex-1">
-            {hasDeck && (
-              <>
-                <SidePanel
-                  id="rail"
-                  panelRef={rail}
-                  open={railOpen}
-                  onOpenChange={useApp.getState().setRailOpen}
-                  widthKey={RAIL_WIDTH_KEY}
-                  defaultSize={RAIL_WIDTH.initial}
-                  minSize={RAIL_WIDTH.min}
-                  maxSize={RAIL_WIDTH.max}
-                >
-                  <ErrorBoundary name="the slide list">
-                    {/* The slide list stays mounted so its thumbnails do not load all over again. */}
-                    <div className={cn("h-full", mode === "git" && "hidden")}>
-                      <SlideRail />
-                    </div>
-                    {mode === "git" && <ChangesRail />}
-                  </ErrorBoundary>
-                </SidePanel>
-                <ResizeHandle panel={rail} width={RAIL_WIDTH.initial} />
-              </>
-            )}
-            <Panel id="stage" minSize={360}>
-              <ErrorBoundary name="the slide">
-                {hasDeck ? (
-                  <div className="flex h-full flex-col">
-                    {/* The toasts sit at the bottom of this, over the slide and clear of the sidebar. */}
-                    <div {...{ [TOAST_AREA]: "" }} className="min-h-0 flex-1">
-                      {mode === "git" ? <ChangesView /> : <StageOrOverview />}
-                    </div>
-                    {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
-                    {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
-                  </div>
-                ) : (
-                  <div {...{ [TOAST_AREA]: "" }} className="h-full">
-                    <FileViewer />
-                  </div>
-                )}
-              </ErrorBoundary>
-            </Panel>
-          </Group>
-        </div>
-      </Panel>
-      <ResizeHandle panel={sidebar} width={SIDEBAR_WIDTH.initial} />
-      <SidePanel
-        id="sidebar"
-        panelRef={sidebar}
-        open={sidebarOpen}
-        onOpenChange={useApp.getState().setSidebarOpen}
-        widthKey={SIDEBAR_WIDTH_KEY}
-        defaultSize={SIDEBAR_WIDTH.initial}
-        minSize={SIDEBAR_WIDTH.min}
-        // Up to two thirds of the window, however wide it is, the slides keeping the rest.
-        maxSize={SIDEBAR_MAX_SIZE}
-      >
-        {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
-        <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-cover bg-background" : "h-full"}>
-          <ErrorBoundary name="the sidebar">
-            <Sidebar />
-          </ErrorBoundary>
-        </div>
-      </SidePanel>
-    </Group>
+    <>
+      {/* The slide list stays mounted so its thumbnails do not load all over again. */}
+      <div className={cn("h-full", git && "hidden")}>{children}</div>
+      {git && <ChangesRail />}
+    </>
+  );
+}
+
+/** The slide (`children`), or in Changes mode what changed, with the deck's timeline under it while it is open. */
+function DeckBody({ children }: { children: ReactNode }) {
+  const git = useApp(inGitMode);
+  const timeline = useApp(timelineShown);
+  return (
+    <div className="flex h-full flex-col">
+      {/* The toasts sit at the bottom of this, over the slide and clear of the sidebar. */}
+      <div {...{ [TOAST_AREA]: "" }} className="min-h-0 flex-1">
+        {git ? <ChangesView /> : children}
+      </div>
+      {timeline && <NarrationTimeline />}
+    </div>
+  );
+}
+
+/** The sidebar's contents; maximized, over the whole window. */
+function SidebarBody({ children }: { children: ReactNode }) {
+  const maximized = useApp((s) => s.sidebarMaximized);
+  return (
+    // Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant.
+    <div data-testid="sidebar-body" className={maximized ? "fixed inset-0 z-cover bg-background" : "h-full"}>
+      {children}
+    </div>
   );
 }
 
 /**
  * A panel beside the stage that collapses rather than unmounting when closed, so opening it
  * again is instant: the slide rail's thumbnails and the chat do not load all over again.
- * Dragging it shut (or open) updates `open` through `onOpenChange`. The width the user gives it
+ * Dragging it shut (or open) updates `isOpen` through `onOpenChange`. The width the user gives it
  * is remembered under `widthKey`, and is the width it has at the next launch.
  */
 function SidePanel(props: {
   id: string;
   panelRef: RefObject<PanelImperativeHandle | null>;
-  open: boolean;
+  /** Whether it is open, of the app's state: the panel follows it by itself. */
+  isOpen: (s: AppState) => boolean;
   onOpenChange: (open: boolean) => void;
   widthKey: string;
   defaultSize: number;
@@ -227,7 +296,8 @@ function SidePanel(props: {
   maxSize: number | string;
   children: ReactNode;
 }) {
-  const { id, panelRef: ref, open, onOpenChange, widthKey, defaultSize, minSize, maxSize, children } = props;
+  const { id, panelRef: ref, isOpen, onOpenChange, widthKey, defaultSize, minSize, maxSize, children } = props;
+  const open = useApp(isOpen);
   // On mount `defaultSize` already matches `open`; after that, follow it.
   const mounted = useRef(false);
   /** The width it had when last open, to reopen at: at first the one remembered, if it still fits the window. */

@@ -1,7 +1,6 @@
 import { Check, ChevronRight, Loader2, X } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
-import { slideNumber, slideNumbers } from "../../lib/slideNumbers";
 import { cn, workspaceChatFileUrl } from "../../lib/utils";
 import { useApp } from "../../store";
 import { ApprovalCard } from "../Permissions";
@@ -20,6 +19,7 @@ import {
   textEdits,
   toolArguments,
 } from "./toolCalls";
+import { type SlideNumbers, useSlideNumbers } from "./useSlideNumbers";
 
 /** No slides: what a group of steps is summed up against without a deck. */
 const NO_SLIDES: ReadonlyMap<string, number> = new Map();
@@ -33,14 +33,16 @@ const sameSteps = (a: { steps: StepPart[] }, b: { steps: StepPart[] }) =>
  * slides, read 2 files") and unfolds into them. While the reply comes in, the steps done gather
  * here; it renders again only when one joins them.
  *
- * What the steps did is read once; summing it up against the deck, which changes with every
- * save, then gives the same text from one save to the next.
+ * What the steps did is read once; summing it up against the deck's slide numbers is done again
+ * only when those change (see `useSlideNumbers`), and gives the same text from one save to the next.
  */
 export const ToolSteps = memo(function ToolSteps({ steps }: { steps: StepPart[] }) {
   const [open, setOpen] = useState(false);
   const deckId = useApp((s) => s.deck?.id ?? "");
   const facts = useMemo(() => stepFacts(steps, deckId), [steps, deckId]);
-  const label = useApp((s) => stepsLabel(facts, s.deck ? slideNumbers(s.deck.slides) : NO_SLIDES));
+  const label = useSlideNumbers(
+    useCallback((numbers: SlideNumbers) => stepsLabel(facts, numbers ?? NO_SLIDES), [facts]),
+  );
   const failed = facts.some((fact) => fact.failed);
   return (
     <div className="flex min-w-0 flex-col gap-2">
@@ -77,14 +79,22 @@ export const ToolSteps = memo(function ToolSteps({ steps }: { steps: StepPart[] 
  * A transcript holds hundreds of these, and the deck changes with every save, in bursts while
  * the agent writes. So a row takes of the deck only what it shows, as plain values that stay the
  * same from one save to the next (the deck's id, the id and number of the slide it edited), and
- * reads its own edit once.
+ * reads its own edit once. The slide and its number are looked up again only when the deck's
+ * slide numbers change, not on every update of the store (see `useSlideNumbers`).
  */
 export const ToolRow = memo(function ToolRow({ part }: { part: ToolPart }) {
   const deckId = useApp((s) => s.deck?.id ?? "");
   const { icon: Icon, label, target } = useMemo(() => describeTool(part, deckId), [part, deckId]);
   const edited = useMemo(() => editedIds(part, target, deckId), [part, target, deckId]);
-  const slide = useApp((s) => (s.deck && edited.length > 0 ? editedSlide(edited, slideNumbers(s.deck.slides)) : null));
-  const number = useApp((s) => slideNumber(s.deck, slide));
+  const slide = useSlideNumbers(
+    useCallback(
+      (numbers: SlideNumbers) => (numbers && edited.length > 0 ? editedSlide(edited, numbers) : null),
+      [edited],
+    ),
+  );
+  const number = useSlideNumbers(
+    useCallback((numbers: SlideNumbers) => (numbers && slide ? (numbers.get(slide) ?? 0) : 0), [slide]),
+  );
   const [open, setOpen] = useState(false);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">

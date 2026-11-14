@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 
-import { codeSpans } from "../../lib/markdown";
+import { codeSpans } from "../../lib/codeSpans";
 import { CopyButton } from "./CopyButton";
 
 /**

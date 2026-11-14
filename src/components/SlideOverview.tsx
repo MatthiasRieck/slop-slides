@@ -62,7 +62,7 @@ type DropPlace = { key: string; side: "before" | "after" };
 /**
  * Every slide of the deck as a grid, in the place of the stage: the whole deck at a glance, to
  * restructure it. It is the slide list laid out wide, and works as the list does: the same
- * thumbnails (which load only near the view, see `SlideFrame`'s `lazy`), the same picks, menus
+ * thumbnails (which load only near the view, see `SlideImage`'s `lazy`), the same picks, menus
  * and keys, sections as headed groups that fold, and slides and sections moved by dragging or
  * with Space and the arrows. Up and down go a row; a double-click or Enter opens a slide on the
  * stage, and Escape or G goes back to the one that was there.

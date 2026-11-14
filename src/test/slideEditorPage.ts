@@ -30,18 +30,32 @@ export interface EditorPageOptions {
   framed?: boolean;
   /** A script run right before the editor, e.g. to change what the pasteboard offers it. */
   beforeEditor?: string;
+  /**
+   * The page as Edit mode loads it, with the editor from the start; without, as View loads it, to
+   * which the editor comes when the app asks the pasteboard (the editor's script runs then).
+   */
+  edit?: boolean;
 }
 
-export function editorPage({ markup, slide = "intro", framed = true, beforeEditor = "" }: EditorPageOptions) {
+export function editorPage({
+  markup,
+  slide = "intro",
+  framed = true,
+  beforeEditor = "",
+  edit = true,
+}: EditorPageOptions) {
   const posted: Message[] = [];
   const parent = { postMessage: (data: Message) => posted.push(data) };
   const window = openDeck(markup, {
-    url: `https://example.test/deck.html?embed&slide=${slide}&static&edit=0`,
+    url: `https://example.test/deck.html?embed&slide=${slide}${edit ? "&static&edit=0" : "&pan"}`,
     size: [1920, 1080],
     parent: framed ? parent : undefined,
     visual: true,
     scripts: [RUNTIME, PASTEBOARD, OVERFLOW, beforeEditor, EDITOR],
   });
+  // The pasteboard runs the editor's script by its address, which a page made of sources has not.
+  const pasteboard = (window as unknown as { slopPasteboard?: { loadEditor: () => void } }).slopPasteboard;
+  if (pasteboard) pasteboard.loadEditor = () => window.eval(OVERFLOW + EDITOR);
   const doc = window.document;
   const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
   // The pasteboard moves the view once a frame during a wheel turn or a drag. These tests look

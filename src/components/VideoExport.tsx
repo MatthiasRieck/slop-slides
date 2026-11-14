@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 
 import type { Deck } from "../lib/api";
 import { VIDEO_HEIGHTS } from "../lib/exportOptions";
-import { generationSize } from "../lib/narration";
 import { formatDuration } from "../lib/narrationAudio";
+import { generationSize } from "../lib/narrationSize";
 import { pixelsOf } from "../lib/slideSize";
 import { layoutTimeline, spokenSeconds } from "../lib/timeline";
 import { plural } from "../lib/utils";

@@ -114,6 +114,8 @@ export function PresenterPanel(props: {
   const index = deck.slides.findIndex((s) => s.id === id);
   const slide = deck.slides[index];
   const next = deck.slides.slice(index + 1).find((s) => !s.hidden);
+  // The one after it, loaded out of sight: moving on, its picture is there at once.
+  const afterNext = next && deck.slides.slice(deck.slides.indexOf(next) + 1).find((s) => !s.hidden);
   const [budget, setBudget] = useState(loadBudget);
   const [notesSize, setNotesSize] = useState(() => loadNotesSize(place));
   const times = plannedBudget(budget, shown, slide);
@@ -267,12 +269,13 @@ export function PresenterPanel(props: {
         </PanelButton>
       </fieldset>
       {props.window && slide && (
-        <div className="flex min-h-0 flex-[2] gap-3">
-          {/* By slide: the picture that was Next stays, and becomes Now, as the show moves on to it. */}
+        <div className="relative flex min-h-0 flex-[2] gap-3">
+          {/* By slide: the picture that was Next stays, and becomes Now, as the show moves on to it;
+              the one after it waits, loaded and out of sight, to become Next. */}
           <ShowSlide key={slide.id} label="Now" deck={deck} slide={slide} blank={props.remote?.blank ?? null} />
-          {next ? (
-            <ShowSlide key={next.id} label="Next" deck={deck} slide={next} onPress={props.onNext} />
-          ) : (
+          {next && <ShowSlide key={next.id} label="Next" deck={deck} slide={next} onPress={props.onNext} />}
+          {afterNext && <ShowSlide key={afterNext.id} label="Next" deck={deck} slide={afterNext} waiting />}
+          {!next && (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
               <span className="text-xs text-foreground/60">Next</span>
               <TheEnd />
@@ -324,7 +327,12 @@ export function PresenterPanel(props: {
       {!props.window && (
         <div className="flex shrink-0 flex-col gap-1">
           <span className="text-xs text-foreground/60">Next</span>
-          {next ? <SlidePicture deck={deck} slide={next} onPress={props.onNext} /> : <TheEnd />}
+          {/* By slide, as in the window: the one after Next waits, loaded and out of sight, to become Next. */}
+          <div className="relative">
+            {next && <SlidePicture key={next.id} deck={deck} slide={next} onPress={props.onNext} />}
+            {afterNext && <SlidePicture key={afterNext.id} deck={deck} slide={afterNext} waiting />}
+            {!next && <TheEnd />}
+          </div>
         </div>
       )}
     </aside>
@@ -561,9 +569,24 @@ export function fitWidth(size: Pixels): string {
  * their slide, not their place, so when the show moves on, the next slide's picture stays what
  * it is, page and all, and only grows into the place of the one on screen.
  */
-function ShowSlide(props: { label: string; deck: Deck; slide: Slide; blank?: Blank; onPress?: () => void }) {
+function ShowSlide(props: {
+  label: string;
+  deck: Deck;
+  slide: Slide;
+  blank?: Blank;
+  onPress?: () => void;
+  /** It is the slide after Next, loaded where Next is but out of sight (see `WAITING`). */
+  waiting?: boolean;
+}) {
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-col gap-1", props.onPress ? "flex-1" : "flex-[2]")}>
+    <div
+      aria-hidden={props.waiting || undefined}
+      inert={props.waiting}
+      className={cn(
+        "flex min-h-0 min-w-0 flex-col gap-1",
+        props.waiting ? `${WAITING} inset-y-0 right-0 w-1/3` : props.onPress ? "flex-1" : "flex-[2]",
+      )}
+    >
       <span className="text-xs text-foreground/60">{props.label}</span>
       {/* As large as the room allows, keeping the slide's shape: it never overflows. */}
       <div className="min-h-0 flex-1" style={{ containerType: "size" }}>
@@ -592,11 +615,26 @@ function ShowSlide(props: { label: string; deck: Deck; slide: Slide; blank?: Bla
   );
 }
 
-/** A slide's picture; with `onPress`, pressing it moves the show on to that slide. */
-function SlidePicture({ deck, slide, onPress }: { deck: Deck; slide: Slide; onPress?: () => void }) {
+/**
+ * Where the slide after Next waits: laid out as Next is, so its page is loaded and fitted, but out
+ * of sight and out of reach. When the show moves on it becomes Next as it is, page and all, and
+ * the next slide's picture shows at once rather than once its page has loaded.
+ */
+const WAITING = "pointer-events-none invisible absolute";
+
+/**
+ * A slide's picture; with `onPress`, pressing it moves the show on to that slide. `waiting`, it
+ * is the slide after Next, out of sight over it (see `WAITING`).
+ */
+function SlidePicture(props: { deck: Deck; slide: Slide; onPress?: () => void; waiting?: boolean }) {
+  const { deck, slide, onPress } = props;
   const version = useSlideVersion(slide);
   return (
-    <div className="relative">
+    <div
+      aria-hidden={props.waiting || undefined}
+      inert={props.waiting}
+      className={props.waiting ? `${WAITING} inset-x-0 top-0` : "relative"}
+    >
       <SlideFrame
         deckId={deck.id}
         slideId={slide.id}

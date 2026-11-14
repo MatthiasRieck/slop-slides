@@ -1,8 +1,9 @@
 // @vitest-environment node
 /**
  * What the window starts with: the modules src/main.tsx reaches through static imports, which
- * the build puts in the chunk loaded before anything shows. The heavy parts of the app that the
- * first screen does not show are reached only through `import()` (see src/components/lazy.tsx).
+ * the build puts in the chunk loaded before anything shows. The window starts on the start
+ * screen; the workbench around an open folder, and the heavy parts of the app the first screen
+ * does not show, are reached only through `import()` (see src/components/lazy.tsx).
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -67,11 +68,35 @@ describe("what the window loads before it shows anything", () => {
 
   it("is found by following the app's static imports", () => {
     expect(graph.files).toContain("src/App.tsx");
-    expect(graph.files).toContain("src/components/Sidebar.tsx");
-    // The first screen: the chat with its Markdown, and the slide rail.
-    expect(graph.files).toContain("src/components/ChatPanel.tsx");
-    expect(graph.files).toContain("src/components/SlideRail.tsx");
-    expect(graph.packages).toContain("react-markdown");
+    // The first screen: the start screen.
+    expect(graph.files).toContain("src/components/Home.tsx");
+  });
+
+  it("leaves out the workbench, loaded in one chunk right after the first paint", () => {
+    for (const name of [
+      "TopBar",
+      "SlideRail",
+      "SlideOverview",
+      "Stage",
+      "Sidebar",
+      "ChatPanel",
+      "FileViewer",
+      "Ribbon",
+    ]) {
+      expect(graph.files).not.toContain(`src/components/${name}.tsx`);
+    }
+    expect(graph.files).not.toContain("src/components/workbench.ts");
+  });
+
+  it("leaves out the Markdown parser and renderer", () => {
+    expect(graph.files).not.toContain("src/lib/markdown.ts");
+    const markdown = ["react-markdown", "remark-gfm", "remark-parse", "remark-rehype", "unified"];
+    expect(graph.packages.filter((name) => markdown.includes(name))).toEqual([]);
+  });
+
+  it("stays small", () => {
+    // 252 source files before the workbench left it, 124 after; a part that slips back in shows here.
+    expect(graph.files.length).toBeLessThanOrEqual(140);
   });
 
   it("leaves out the code editor", () => {

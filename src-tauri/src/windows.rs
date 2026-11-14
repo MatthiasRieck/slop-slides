@@ -195,6 +195,20 @@ pub fn is_app_window(label: &str) -> bool {
     label == "main" || label.starts_with(LABEL_PREFIX)
 }
 
+/// Whether an event sent to `target` reaches one of the windows `labels`: what an event meant
+/// for some windows only is sent to (see [`tauri::Emitter::emit_filter`]).
+pub fn is_one_of(target: &tauri::EventTarget, labels: &[String]) -> bool {
+    use tauri::EventTarget;
+    match target {
+        EventTarget::AnyLabel { label }
+        | EventTarget::Window { label }
+        | EventTarget::Webview { label }
+        | EventTarget::WebviewWindow { label } => labels.contains(label),
+        EventTarget::Any | EventTarget::App => false,
+        _ => false,
+    }
+}
+
 fn new_label() -> String {
     format!("{LABEL_PREFIX}{}", uuid::Uuid::new_v4().simple())
 }
@@ -366,6 +380,27 @@ pub mod dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_for_some_windows_reaches_those_alone() {
+        use tauri::EventTarget;
+        let windows = ["main".to_string(), "window-2".to_string()];
+        let to = |label: &str| EventTarget::WebviewWindow {
+            label: label.into(),
+        };
+        assert!(is_one_of(&to("main"), &windows));
+        assert!(is_one_of(&to("window-2"), &windows));
+        assert!(!is_one_of(&to("window-3"), &windows));
+        assert!(is_one_of(
+            &EventTarget::AnyLabel {
+                label: "main".into()
+            },
+            &windows
+        ));
+        assert!(!is_one_of(&EventTarget::App, &windows));
+        assert!(!is_one_of(&EventTarget::Any, &windows));
+        assert!(!is_one_of(&to("main"), &[]));
+    }
 
     #[test]
     fn only_a_dark_system_changes_the_background_a_window_starts_with() {

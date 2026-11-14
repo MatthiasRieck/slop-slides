@@ -1,8 +1,15 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// A toast's dismiss button, counted: each render of the toasts renders it.
+vi.mock("./Button", async (original) => {
+  const actual = await original<typeof import("./Button")>();
+  return { ...actual, ToolButton: vi.fn(actual.ToolButton) };
+});
+
 import { openLayer } from "../lib/layers";
 import { showError, showInfo, showSuccess, useApp } from "../store";
+import { ToolButton } from "./Button";
 import { TOAST_AREA, TOAST_EXIT_MS, TOAST_MS, Toasts } from "./Toasts";
 
 const texts = () => useApp.getState().toasts.map((toast) => toast.text);
@@ -216,6 +223,19 @@ describe("Toasts", () => {
       expect(style.bottom).toBe(`${window.innerHeight - 700 + 56}px`);
       // No wider than the area, with a margin.
       expect(style.maxWidth).toBe("768px");
+    });
+
+    it("renders again as its area moves, not for a report of the place it already has", () => {
+      const area = slideArea({ left: 220, width: 800, bottom: 700 });
+      render(<Toasts />);
+      act(() => showError("disk full"));
+      const renders = vi.mocked(ToolButton).mock.calls.length;
+      for (let i = 0; i < 5; i++) act(() => void window.dispatchEvent(new Event("resize")));
+      expect(vi.mocked(ToolButton).mock.calls.length).toBe(renders);
+      area.getBoundingClientRect = () => ({ ...new DOMRect(), left: 220, width: 600, bottom: 700 }) as DOMRect;
+      act(() => void window.dispatchEvent(new Event("resize")));
+      expect(vi.mocked(ToolButton).mock.calls.length).toBeGreaterThan(renders);
+      expect(screen.getByTestId("toasts").style.left).toBe("520px");
     });
 
     it("sits at the bottom centre of the window without that area, or with it covered", () => {

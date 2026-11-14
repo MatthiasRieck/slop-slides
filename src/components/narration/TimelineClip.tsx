@@ -19,10 +19,11 @@ export interface ClipHandlers {
 
 /**
  * A slide's narration on the audio track, from `left` and `width` wide (as parts of the track),
- * with its waveform once it has audio. Pressing it selects its slide and moves the playhead to
- * where it starts; double-clicking it goes to its script in the Narration tab; in Edit it is
- * dragged (or moved with the arrows) to start earlier or later, a bubble over it saying where it
- * starts while it is `dragging`. Audio whose script changed since it was made shows as a warning.
+ * with its waveform once it has audio, and its words once their times are known (while it is in
+ * sight). Pressing it selects its slide and moves the playhead to where it starts;
+ * double-clicking it goes to its script in the Narration tab; in Edit it is dragged (or moved with
+ * the arrows) to start earlier or later, a bubble over it saying where it starts while it is
+ * `dragging`. Audio whose script changed since it was made shows as a warning.
  * Rendered again only when something of its own changes: `on` stays the same, so the playhead
  * passing over it redraws nothing.
  */
@@ -37,6 +38,12 @@ export const TimelineClip = memo(function TimelineClip(props: {
   start: number;
   end: number;
   audio: SlideAudio | undefined;
+  /**
+   * Whether it is in sight, or nearly: only then are its words marked on it. Zoomed in on a long
+   * deck, thousands of words lie along the track, and each would be laid out again with every
+   * change of zoom.
+   */
+  worded: boolean;
   /** Whether it may move: in Edit, on a slide that is not locked. */
   movable: boolean;
   dragging: boolean;
@@ -82,7 +89,7 @@ export const TimelineClip = memo(function TimelineClip(props: {
     >
       <span className="absolute inset-0 overflow-hidden rounded-md">
         {peaks.length > 0 && <Waveform peaks={peaks} />}
-        {words.length > 0 && seconds !== null && <Words words={words} seconds={seconds} />}
+        {props.worded && words.length > 0 && seconds !== null && <Words words={words} seconds={seconds} />}
       </span>
       {props.dragging && (
         <span

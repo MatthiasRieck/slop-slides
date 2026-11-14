@@ -1,5 +1,9 @@
 import { afterEach, vi } from "vitest";
+import { installRenderHook } from "./renderCounts";
 import * as tauri from "./tauri";
+
+// Before React DOM loads, which looks for it once: tests may count renders (see ./renderCounts.ts).
+installRenderHook();
 
 // Every test runs against the shared Tauri stand-ins in ./tauri.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke, Channel: tauri.Channel }));

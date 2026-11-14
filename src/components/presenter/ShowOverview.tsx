@@ -22,6 +22,10 @@ const ARROWS: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, ArrowDown
  * one, so the audience sees nothing of it). The slide on screen is ringed and has the focus; the
  * arrows move it, Enter or a press goes to the slide, Escape or G closes it. Each slide carries
  * the number the slide list gives it, and the first of a section the section's name.
+ *
+ * It opens over a show that goes on: a picture's page is made only once it is in sight or near
+ * it, a few at a time (see `SlideFrame`'s `lazy`), so a long deck does not load all its slides
+ * at once in front of the audience.
  */
 export function ShowOverview(props: {
   deck: Deck;
@@ -131,6 +135,7 @@ function OverviewSlide(props: {
           version={version}
           size={pixelsOf({ size: deck.size })}
           thumbnail
+          lazy
           className="pointer-events-none"
         />
       </button>

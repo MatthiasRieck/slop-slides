@@ -30,6 +30,7 @@ import {
 } from "../lib/sections";
 import { cn, plural } from "../lib/utils";
 import { railSelection, useApp } from "../store";
+import type { AppState } from "../store/types";
 import { ToolButton } from "./Button";
 import { BulkActions } from "./rail/BulkActions";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
@@ -44,6 +45,7 @@ import { SectionLabel } from "./SectionLabel";
 
 /** What a double-click on a slide of the list says it does, in View; in Edit the slide is being edited already. */
 const EDIT_HINT = "double-click to edit";
+const editHint = (app: AppState) => (app.editing ? undefined : EDIT_HINT);
 
 /** A double-click on a slide of the list: on to editing it. */
 function editSlide(slide: string) {
@@ -86,8 +88,6 @@ const NONE_FOLDED: ReadonlySet<string> = new Set();
  */
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
-  // In Edit the slide on the stage is being edited already; in View a double-click goes there.
-  const editing = useApp((s) => s.editing);
   const header = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, POINTER_DRAG), useSensor(KeyboardSensor, KEYBOARD_DRAG));
   const { menu, openSlideMenu, openSectionMenu, editingSection, setEditingSection, startSection } = useRailMenus();
@@ -238,7 +238,7 @@ export function SlideRail() {
                       still={!!moving || settling}
                       draggedAlong={dragged.length > 1 && dragged.includes(item.slide.id)}
                       matches={found?.get(item.slide.id)}
-                      hint={editing ? undefined : EDIT_HINT}
+                      hint={editHint}
                       onMenu={openSlideMenu}
                       onOpen={editSlide}
                     />

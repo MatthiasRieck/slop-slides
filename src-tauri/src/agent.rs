@@ -21,6 +21,7 @@ use crate::mcp;
 use crate::permissions::{Approval, Approvals, LiveMode, PermissionMode};
 use crate::rewind;
 use crate::sessions::Sessions;
+use crate::workspace::OpenWorkspace;
 use crate::{claude, codex, copilot};
 
 mod deltas;
@@ -432,10 +433,15 @@ impl AgentManager {
         }
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
-            let (emitter, key) = (app.clone(), chat.clone());
-            // Streamed text goes out once a frame, not once per piece (see `deltas`).
+            let (emitter, key, root) = (app.clone(), chat.clone(), dir.clone());
+            // Streamed text goes out once a frame, not once per piece (see `deltas`), and only
+            // to the windows on the turn's folder, one of which shows its chat.
             let events = deltas::Deltas::per_frame(move |event| {
-                let _ = emitter.emit("agent-event", Envelope { chat: &key, event });
+                let windows = emitter.state::<OpenWorkspace>().windows_in(&root);
+                let envelope = Envelope { chat: &key, event };
+                let _ = emitter.emit_filter("agent-event", envelope, |target| {
+                    crate::windows::is_one_of(target, &windows)
+                });
             });
             let turn = Turn {
                 emit: Box::new(move |event| events.emit(event)),

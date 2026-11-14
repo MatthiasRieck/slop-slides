@@ -552,7 +552,7 @@
     var key = JSON.stringify([items, paths]);
     if (key === reportedOverflow) return;
     reportedOverflow = key;
-    window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items, paths: paths }, "*");
+    tellApp({ type: "slop:edit-overflow", slide: slide.id, items: items, paths: paths });
   }
 
   /** Whether a drag, adding an element with a tool, or a marquee is under way: the pointer is down and has moved. */

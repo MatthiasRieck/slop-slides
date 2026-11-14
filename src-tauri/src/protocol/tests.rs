@@ -206,7 +206,24 @@ fn a_preview_gets_its_slide_alone() {
 }
 
 #[test]
-fn the_editor_gets_the_ids_of_the_other_slides_and_a_thumbnail_does_not() {
+fn a_page_for_thumbnails_keeps_each_slide_it_names_whole() {
+    let page = |query: &str| String::from_utf8(page_for(Some(query), THREE.into())).unwrap();
+    let several = page("embed&slide=c%20d&slide=a&static");
+    assert!(several.contains("assets/a.png") && several.contains("assets/c.png"));
+    assert!(
+        !several.contains("assets/b.png"),
+        "the others are stand-ins"
+    );
+    assert_eq!(html::find_slides(&several).len(), 3);
+    assert_eq!(
+        params(Some("embed&slide=a&v=1&slide=%232&slide"), "slide"),
+        ["a", "#2", ""]
+    );
+    assert!(params(None, "slide").is_empty());
+}
+
+#[test]
+fn the_stage_gets_the_ids_of_the_other_slides_for_the_editor_and_a_thumbnail_does_not() {
     let deck = THREE.replace(
         "<img src=\"assets/b.png\">",
         "<img id=\"el-7\" src=\"assets/b.png\">",
@@ -215,6 +232,10 @@ fn the_editor_gets_the_ids_of_the_other_slides_and_a_thumbnail_does_not() {
     let edited = page("embed&slide=a&v=1&static&pan&edit=0");
     assert!(edited.contains("<section class=\"slide\"><i id=\"el-7\"></i></section>"));
     assert!(!edited.contains("assets/b.png"));
+    // The stage's page in View: the editor may come to it later, without a load.
+    let viewed = page("embed&slide=a&v=1&pan");
+    assert!(viewed.contains("<section class=\"slide\"><i id=\"el-7\"></i></section>"));
+    assert!(viewed.contains("/pasteboard.js\"></script>") && !viewed.contains("/editor.js"));
     let thumbnail = page("embed&slide=a&v=1&static");
     assert!(thumbnail.contains("<section class=\"slide\"></section>"));
     assert!(!thumbnail.contains("el-7"));
@@ -686,4 +707,78 @@ fn serves_a_template_with_its_runtime_and_a_tag() {
         find_in_template(&root, "swiss", "assets/logo.svg").unwrap_err(),
         StatusCode::NOT_FOUND
     );
+}
+
+#[test]
+fn the_previews_of_a_deck_read_and_scan_it_once_for_all_of_them() {
+    let root = TempDir::new("proto");
+    let deck = crate::html::fixtures::big_deck(30);
+    let file = root.write("talk/deck.html", &deck);
+    // Written a while ago: a file written just now is read again to compare (see
+    // `deck_cache`), though still not scanned again.
+    let written = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(written)
+        .unwrap();
+    let page = |query: &str| {
+        let found = Found::file(file.clone(), "text/html").unwrap();
+        String::from_utf8(
+            respond(found, Some(query), &HeaderMap::new())
+                .into_body()
+                .into_owned(),
+        )
+        .unwrap()
+    };
+    let before = (crate::deck_cache::reads(), html::scans());
+    let previews: Vec<String> = (0..30)
+        .map(|n| page(&format!("embed&slide=slide-{n}&v={n}")))
+        .collect();
+    // The stage asks for its slide with the editor's scripts, and a print for all of it.
+    let stage = page("pan&edit&embed&slide=slide-4");
+    let printed = page("print");
+    assert_eq!(
+        (
+            crate::deck_cache::reads() - before.0,
+            html::scans() - before.1
+        ),
+        (1, 1),
+        "the deck is read and its slides found once, not once per preview"
+    );
+    // Each is what the file read for it alone gives.
+    for (n, preview) in previews.iter().enumerate() {
+        let query = format!("embed&slide=slide-{n}&v={n}");
+        assert_eq!(
+            *preview,
+            String::from_utf8(page_for(Some(&query), deck.clone().into())).unwrap()
+        );
+    }
+    assert_eq!(
+        stage,
+        String::from_utf8(page_for(
+            Some("pan&edit&embed&slide=slide-4"),
+            deck.clone().into()
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        printed,
+        String::from_utf8(page_for(Some("print"), deck.clone().into())).unwrap()
+    );
+    // A page served as it is still comes from the file.
+    assert_eq!(page("v=1"), deck);
+}
+
+#[test]
+fn a_page_that_is_not_text_is_made_ready_from_its_bytes() {
+    let root = TempDir::new("proto");
+    let mut bytes = THREE.as_bytes().to_vec();
+    bytes.extend_from_slice(b"<!-- \xff -->");
+    let file = root.write("odd.html", &bytes);
+    let found = Found::file(file, "text/html").unwrap();
+    let answer = respond(found, Some("embed&slide=c%20d"), &HeaderMap::new());
+    let page = String::from_utf8_lossy(answer.body()).into_owned();
+    assert!(page.contains("assets/c.png") && !page.contains("assets/a.png"));
 }

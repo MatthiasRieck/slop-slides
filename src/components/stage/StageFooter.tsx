@@ -11,7 +11,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { useMenuKeys } from "../../hooks/useMenuKeys";
 import type { Slide } from "../../lib/api";
@@ -22,33 +22,34 @@ import { EDIT_ONLY } from "../editOnly";
 import { LintStatus } from "../LintStatus";
 import { Popover } from "../Popover";
 import { LayoutPicker } from "../Templates";
-import { type PasteboardView, ZOOM_LEVELS, ZOOM_STEP } from "./usePasteboard";
+import { useSlideReport } from "./editorState";
+import { isMoved, useShownView, useStageView } from "./stageView";
+import { ZOOM_LEVELS, ZOOM_STEP } from "./usePasteboard";
 
 /**
  * The row under the slide: on the left the search, in the middle the arrows between slides and
  * where this one is (a field to jump to another), and on the right the zoom, what is wrong with
  * the slide or special about it (hidden, locked), its layout tools and the lint status.
+ *
+ * What the slide editor found running past the slide, and how far the slide is zoomed, it reads
+ * for itself, where they show.
  */
-export function StageFooter(props: {
+export const StageFooter = memo(function StageFooter(props: {
   /** The current slide's place in the deck, -1 without one. */
   index: number;
   count: number;
   slide: Slide | undefined;
-  /** The pasteboard's view, when it is panned or zoomed. */
-  view: PasteboardView | null;
-  /** How many screen pixels one of the slide's takes when the whole slide fits the stage. */
-  fitScale: number;
   onResetView: () => void;
   onZoomBy: (factor: number) => void;
   /** Zooms to `k` times the size the slide fits the stage at. */
   onZoomTo: (k: number) => void;
-  /** What runs past the slide or is cut off, as the editor found. */
-  overflow: string[];
-  running: boolean;
   /** Takes the selection out of the preview, for the screenshot Tidy layout sends. */
   onClearSelection: () => void;
 }) {
-  const { index, count, slide, overflow, running } = props;
+  const { index, count, slide } = props;
+  // What runs past the slide or is cut off, as the editor found.
+  const overflow = useSlideReport((report) => report.overflow);
+  const running = useApp((s) => s.running);
   const editable = useApp((s) => s.editing);
   const locked = !!slide?.locked;
   return (
@@ -85,15 +86,7 @@ export function StageFooter(props: {
         </ToolButton>
       </div>
       <div className="flex items-center justify-end">
-        {slide && (
-          <ZoomControls
-            view={props.view}
-            fitScale={props.fitScale}
-            onFit={props.onResetView}
-            onZoomBy={props.onZoomBy}
-            onZoomTo={props.onZoomTo}
-          />
-        )}
+        {slide && <ZoomControls onFit={props.onResetView} onZoomBy={props.onZoomBy} onZoomTo={props.onZoomTo} />}
         {overflow.length > 0 && (
           <span
             title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
@@ -154,7 +147,7 @@ export function StageFooter(props: {
       </div>
     </div>
   );
-}
+});
 
 /**
  * Where the slide shown is in the deck, "3 / 20". Pressed, the 3 becomes a field: a number and
@@ -216,21 +209,19 @@ const percent = (zoom: number) => `${Math.round(zoom * 100)}%`;
 /**
  * The stage's zoom: out, in, and between them how far it is zoomed, which opens the levels to go
  * to. "Fit" is the whole slide in the stage, where every slide starts; the percentages are the
- * slide's own pixels against the screen's, so 100% shows it at its real size.
+ * slide's own pixels against the screen's, so 100% shows it at its real size. It follows the
+ * pasteboard's view by itself, and renders when the zoom changes, not as the slide is panned.
  */
-function ZoomControls(props: {
-  view: PasteboardView | null;
-  fitScale: number;
-  onFit: () => void;
-  onZoomBy: (factor: number) => void;
-  onZoomTo: (k: number) => void;
-}) {
-  const { view, fitScale } = props;
+function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => void; onZoomTo: (k: number) => void }) {
+  // How far the view is zoomed once it is panned or zoomed; null while it shows the whole slide.
+  const zoomed = useShownView((view) => (view && isMoved(view) ? view.k : null));
+  const fitScale = useStageView((s) => s.fitScale);
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const menu = useMenuKeys();
-  const zoom = (view?.k ?? 1) * fitScale;
-  const level = view ? percent(zoom) : "Fit";
+  const moved = zoomed !== null;
+  const zoom = (zoomed ?? 1) * fitScale;
+  const level = moved ? percent(zoom) : "Fit";
   const item =
     "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5";
   const pick = (go: () => void) => {
@@ -275,15 +266,15 @@ function ZoomControls(props: {
             <button
               type="button"
               role="menuitemradio"
-              aria-checked={!view}
+              aria-checked={!moved}
               onClick={() => pick(props.onFit)}
               className={item}
             >
               <span className="flex-1">Fit</span>
-              {!view && <Check className="text-muted-foreground" />}
+              {!moved && <Check className="text-muted-foreground" />}
             </button>
             {ZOOM_LEVELS.map((to) => {
-              const here = !!view && percent(zoom) === percent(to);
+              const here = moved && percent(zoom) === percent(to);
               return (
                 <button
                   key={to}

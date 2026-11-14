@@ -17,10 +17,20 @@ import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
 import { keepFocus, toolButtonClass } from "./Button";
 
+/** What pops up from a ribbon and is placed by it: a collapsed section's flyout, and the tools' own panels. */
+const FLYOUTS = "[data-flyout]";
+// A `Popover` places itself, against the window.
+const PANELS = "[role=dialog]:not([data-popover])";
+
 /**
  * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
  * collapsed section. Collapsed sections stay in the page, hidden, so they can still be measured.
  * Also keeps what pops up from the ribbon inside the bar around it, as the panel clips the rest.
+ *
+ * A ribbon resizes with every tick of a panel's separator being dragged, so a resize reads as
+ * little of the layout as it can: the sections' widths are measured once and again only after
+ * what is in the ribbon changed, and what pops up is put back and measured together, not one by
+ * one with a layout of the page for each.
  */
 export function useRibbonFit() {
   const ref = useRef<HTMLDivElement>(null);
@@ -29,33 +39,52 @@ export function useRibbonFit() {
   useLayoutEffect(() => {
     const ribbon = ref.current;
     if (!ribbon) return;
-    const place = () => {
-      const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
-      // A `Popover` places itself, against the window.
-      const popups = "[data-ribbon-body], [role=dialog]:not([data-popover])";
-      for (const el of ribbon.querySelectorAll<HTMLElement>(popups)) {
-        el.style.marginLeft = "";
-        if (!el.matches("[data-flyout], [role=dialog]")) continue;
-        const box = el.getBoundingClientRect();
+    // Each section's width, with one more pixel for the line between sections; null until
+    // measured, and once the ribbon's content changed.
+    let widths: number[] | null = null;
+    // The width the sections were last fit to.
+    let room = -1;
+    const shifted = new Set<HTMLElement>();
+    /** Moves each of `popups` back inside `bounds`, reading where all of them are before moving any. */
+    const shift = (popups: HTMLElement[], bounds: DOMRect) => {
+      const boxes = popups.map((el) => el.getBoundingClientRect());
+      popups.forEach((el, i) => {
+        const box = boxes[i]!;
         el.style.marginLeft = `${popupShift(box.left, box.right, bounds.left, bounds.right)}px`;
-      }
+        shifted.add(el);
+      });
     };
-    const measure = () => {
-      const bodies = [...ribbon.querySelectorAll<HTMLElement>("[data-ribbon-body]")];
-      // One more pixel for the line between sections.
-      const widths = bodies.map((body) => body.offsetWidth + 1);
-      setCollapsedFrom(bodies.length - sectionsToCollapse(widths, ribbon.clientWidth));
+    const place = () => {
+      for (const el of shifted) el.style.marginLeft = "";
+      shifted.clear();
+      const flyouts = [...ribbon.querySelectorAll<HTMLElement>(FLYOUTS)];
+      const panels = [...ribbon.querySelectorAll<HTMLElement>(PANELS)];
+      if (flyouts.length + panels.length === 0) return;
+      const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
+      // The flyouts first: a panel in one moves with it.
+      shift(flyouts, bounds);
+      shift(panels, bounds);
+    };
+    const fitSections = () => {
+      const width = ribbon.clientWidth;
+      if (widths && width === room) return;
+      widths ??= [...ribbon.querySelectorAll<HTMLElement>("[data-ribbon-body]")].map((body) => body.offsetWidth + 1);
+      room = width;
+      setCollapsedFrom(widths.length - sectionsToCollapse(widths, width));
       place();
     };
-    measure();
-    const resize = new ResizeObserver(measure);
+    fitSections();
+    const resize = new ResizeObserver(fitSections);
     resize.observe(ribbon);
     // Popups come and go as their buttons are pressed, and a section's button with its collapsing.
-    const popups = new MutationObserver(place);
-    popups.observe(ribbon, { childList: true, subtree: true });
+    const changes = new MutationObserver(() => {
+      widths = null;
+      place();
+    });
+    changes.observe(ribbon, { childList: true, characterData: true, subtree: true });
     return () => {
       resize.disconnect();
-      popups.disconnect();
+      changes.disconnect();
     };
   }, []);
 

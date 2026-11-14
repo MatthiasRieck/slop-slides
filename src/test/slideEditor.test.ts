@@ -23,7 +23,8 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" id="outro"><p>Bye</p></section>
 </main></body></html>`;
 
-const editor = ({ slide = "intro", framed = true, markup = DECK } = {}) => editorPage({ markup, slide, framed });
+const editor = ({ slide = "intro", framed = true, markup = DECK, beforeEditor = "" } = {}) =>
+  editorPage({ markup, slide, framed, beforeEditor });
 
 describe("slide editor", () => {
   it("does nothing outside the app's preview", () => {
@@ -922,6 +923,161 @@ describe("slide editor", () => {
     e.drag(e.$("#outro p"), 30, 0);
     expect(e.commits()[0]).toMatchObject({ slide: "outro", select: [0] });
   });
+  describe("hovering", () => {
+    /** What the browser would find under the pointer: `top`, then the slide. */
+    const under = (e: ReturnType<typeof editor>, top: () => Element) => {
+      let picks = 0;
+      e.doc.elementsFromPoint = () => {
+        picks++;
+        return [top(), e.$("#intro"), e.doc.body];
+      };
+      return () => picks;
+    };
+
+    it("picks what is under the pointer at most once per frame", async () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      const picks = under(e, () => h1);
+      for (let i = 0; i < 20; i++) e.move(h1, 100 + i, 100);
+      expect(picks()).toBe(0);
+      expect(h1.hasAttribute("data-slop-hover")).toBe(false);
+      await e.frame();
+      expect(picks()).toBe(1);
+      expect(h1.hasAttribute("data-slop-hover")).toBe(true);
+    });
+
+    it("does not pick again while the pointer stays on the element it picked", async () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      let top: Element = h1;
+      const picks = under(e, () => top);
+      e.move(h1, 100, 100);
+      await e.frame();
+      e.move(h1, 140, 100);
+      await e.frame();
+      expect(picks()).toBe(1);
+      // Another element is picked anew, and so is the same one once something changed.
+      top = e.$(".shape");
+      e.move(top, 400, 400);
+      await e.frame();
+      expect(picks()).toBe(2);
+      expect(e.$(".shape").hasAttribute("data-slop-hover")).toBe(true);
+      e.click(top);
+      e.move(top, 410, 400);
+      await e.frame();
+      expect(picks()).toBeGreaterThan(2);
+    });
+
+    it("picks at every spot of a see-through element, where what shows under it may differ", async () => {
+      const e = editor();
+      const zone = e.$(".zone");
+      const picks = under(e, () => zone);
+      e.move(zone, 100, 100);
+      await e.frame();
+      e.move(zone, 300, 100);
+      await e.frame();
+      expect(picks()).toBe(2);
+    });
+
+    it("lets go of what it hovered when the pointer leaves, also before the frame", async () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.move(h1, 100, 100);
+      e.doc.documentElement.dispatchEvent(new e.window.PointerEvent("pointerleave"));
+      await e.frame();
+      expect(h1.hasAttribute("data-slop-hover")).toBe(false);
+    });
+  });
+
+  describe("starting up", () => {
+    const COUNTING = `
+      window.__sheetReads = 0;
+      var sheets = document.styleSheets;
+      Object.defineProperty(document, "styleSheets", {
+        configurable: true,
+        get: function () {
+          window.__sheetReads++;
+          return sheets;
+        },
+      });
+      window.__clones = 0;
+      var slide = document.querySelector(".deck > .slide.active");
+      var clone = slide.cloneNode;
+      slide.cloneNode = function (deep) {
+        window.__clones++;
+        return clone.call(this, deep);
+      };
+      Object.defineProperty(document, "fonts", {
+        configurable: true,
+        value: { ready: new Promise(function (resolve) { window.__fontsReady = resolve; }) },
+      });`;
+    const counts = (e: ReturnType<typeof editor>) =>
+      e.window as unknown as { __sheetReads: number; __clones: number; __fontsReady: () => void };
+
+    it("walks the deck's style rules once for both its fonts and its colors, after the slide has shown", async () => {
+      const e = editor({ beforeEditor: COUNTING });
+      expect(counts(e).__sheetReads).toBe(0);
+      expect(e.messages("slop:edit-background")).toHaveLength(1);
+      await e.frame();
+      expect(counts(e).__sheetReads).toBe(1);
+      expect(e.messages("slop:edit-fonts")).toHaveLength(1);
+      expect(e.messages("slop:edit-colors")).toHaveLength(1);
+      // Fonts that came in later are added without another walk.
+      counts(e).__fontsReady();
+      await e.frame();
+      expect(e.messages("slop:edit-fonts")).toHaveLength(2);
+      expect(counts(e).__sheetReads).toBe(1);
+    });
+
+    it("does not copy the slide before it has shown, and still knows a change from none", async () => {
+      const e = editor({ beforeEditor: COUNTING });
+      expect(counts(e).__clones).toBe(0);
+      await e.frame();
+      expect(counts(e).__clones).toBe(1);
+      e.click(e.$("h1"));
+      expect(e.commits()).toEqual([]);
+      e.drag(e.$(".shape"), 40, 0);
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    it("knows the slide as it was when it is changed before it has shown", () => {
+      const e = editor({ beforeEditor: COUNTING });
+      // The settings the app sends as the slide loads change nothing on it.
+      e.fromParent({ type: "slop:edit-snap", on: true });
+      e.fromParent({ type: "slop:edit-size-mode", mode: "resize" });
+      e.fromParent({ type: "slop:edit-keep-ratio", on: false });
+      e.fromParent({ type: "slop:edit-tool", tool: "select", style: {} });
+      e.fromParent({ type: "slop:edit-select", path: [0] });
+      expect(counts(e).__clones).toBe(0);
+      e.fromParent({ type: "slop:edit-style", style: { opacity: 0.5 } });
+      expect(e.commits()).toHaveLength(1);
+      expect(e.commits()[0]!.markup).toContain("opacity: 0.5");
+    });
+
+    it("knows the slide as it was when the pointer changes it before it has shown", () => {
+      const e = editor({ beforeEditor: COUNTING });
+      e.click(e.$("h1"));
+      expect(counts(e).__clones).toBe(1);
+      expect(e.commits()).toEqual([]);
+      e.drag(e.$(".shape"), 40, 0);
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    it("looks for overflow once right away, and once more when the page and its fonts are all in", async () => {
+      const e = editor({ beforeEditor: COUNTING });
+      const find = vi.spyOn(
+        (e.window as unknown as { __slopOverflow: { find: () => unknown[] } }).__slopOverflow,
+        "find",
+      );
+      if (e.doc.readyState !== "complete") await new Promise((resolve) => e.window.addEventListener("load", resolve));
+      await e.frame();
+      expect(find).toHaveBeenCalledTimes(1);
+      counts(e).__fontsReady();
+      await e.frame();
+      expect(find).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("scale and rotate handles", () => {
     /** Selects the heading, laid out as a 200×100 box centered at (500, 300). */
     function withHeading(mode: "resize" | "stretch" = "stretch") {
@@ -1604,8 +1760,7 @@ describe("slide editor", () => {
     it("moves elements by slide pixels however far the view is zoomed", () => {
       const e = editor();
       const h1 = e.$("h1");
-      e.$("#intro").getBoundingClientRect = () => ({ width: 960 }) as DOMRect;
-      Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
+      e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
       e.drag(h1, 100, -50);
       expect(h1.style.translate).toBe("200px -100px");
     });
@@ -3370,6 +3525,28 @@ describe("slide editor", () => {
         const saved = e.commits().at(-1)!.markup;
         expect(saved).toContain(`<p id="p" style="height: 100px; font-size: 40px;" data-autofit="shrink">`);
       });
+
+      it("fits the text of a shrinking box again when the typing pauses, not with every key", async () => {
+        const e = editor({ markup: TEXT_DECK });
+        const p = e.$("#p");
+        e.down(p);
+        style(e, { autofit: "shrink" });
+        e.key("Enter");
+        const fit = vi.spyOn((e.window as unknown as { slopAutofit: { fit: () => void } }).slopAutofit, "fit");
+        for (let i = 0; i < 5; i++) {
+          p.firstChild!.textContent += "!";
+          p.dispatchEvent(new e.window.Event("input", { bubbles: true }));
+        }
+        expect(fit).not.toHaveBeenCalled();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(fit).toHaveBeenCalledTimes(1);
+        // Done typing, it is fitted at once.
+        p.dispatchEvent(new e.window.Event("input", { bubbles: true }));
+        e.key("Escape");
+        expect(fit).toHaveBeenCalledTimes(2);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(fit).toHaveBeenCalledTimes(2);
+      });
     });
 
     describe("pasting into text", () => {
@@ -3405,8 +3582,10 @@ describe("slide editor", () => {
       });
     });
 
-    it("tells the app which fonts the deck uses", () => {
+    it("tells the app which fonts the deck uses, once the slide has shown", async () => {
       const e = editor({ markup: TEXT_DECK });
+      expect(e.messages("slop:edit-fonts")).toEqual([]);
+      await e.frame();
       expect(e.posted()).toContainEqual({
         type: "slop:edit-fonts",
         slide: "intro",
@@ -3686,12 +3865,14 @@ describe("slide editor: shapes, styling and media", () => {
       expect(e.selected()).toEqual([]);
     });
 
-    it("glows along a hovered line instead of outlining its box, and saves none of it", () => {
+    it("glows along a hovered line instead of outlining its box, and saves none of it", async () => {
       const { e, under, over } = crossing();
       at(e, "pointermove", 150, 150);
+      await e.frame();
       expect(under.getAttribute("data-slop-hover")).toBe("line");
       expect(over.hasAttribute("data-slop-hover")).toBe(false);
       at(e, "pointermove", 200, 120);
+      await e.frame();
       expect(under.hasAttribute("data-slop-hover")).toBe(false);
       expect(e.commits().at(-1)!.markup).not.toContain("data-slop-hover");
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
@@ -4214,6 +4395,137 @@ describe("slide editor: shapes, styling and media", () => {
       expect(ends(line)[1]).toEqual([610, 380]);
     });
 
+    /** Counts how often `el` is measured from now on. */
+    const measured = (el: HTMLElement) => {
+      const measure = el.getBoundingClientRect;
+      let calls = 0;
+      el.getBoundingClientRect = function (this: HTMLElement) {
+        calls++;
+        return measure.call(this);
+      };
+      return () => calls;
+    };
+    /** A line stuck to `a`, and another stuck to `b`. */
+    const twoLines = () => {
+      const { e, line, a, b } = setup();
+      pull(e, handles(e)[1]!, [600, 380]);
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [1050, 650], [1300, 900]);
+      const other = added(e)[1]!;
+      expect(other.getAttribute("data-from")).toBe(b.id);
+      return { e, line, other, a, b };
+    };
+
+    it("follows only the lines stuck to what is dragged, measuring nothing else", () => {
+      const { e, line, other, a, b } = twoLines();
+      e.down(a);
+      e.move(a, 110, 100, { metaKey: true });
+      const counts = [measured(b), measured(other)];
+      for (let i = 2; i <= 10; i++) e.move(a, 100 + i * 10, 100, { metaKey: true });
+      // The line stuck to it follows every move; the other line and its element are left alone.
+      expect(ends(line)[1]).toEqual([700, 380]);
+      expect(counts.map((count) => count())).toEqual([0, 0]);
+      e.up(a, 200, 100);
+      expect(ends(other)[0]).toEqual([1050, 650]);
+      expect(e.commits().at(-1)!.markup).toContain('data-to="a" data-to-at="50% 80%"');
+    });
+
+    it("follows only the lines stuck to what a handle resizes", () => {
+      const { e, line, other, a, b } = twoLines();
+      click(e, a);
+      const handle = e.$('[data-slop-ui] [data-dir="1 0"]');
+      e.down(handle, 700, 350);
+      e.move(handle, 710, 350, { metaKey: true });
+      const counts = [measured(b), measured(other)];
+      for (let i = 2; i <= 10; i++) e.move(handle, 700 + i * 10, 350, { metaKey: true });
+      expect(a.style.width).toBe("300px");
+      // Halfway across the box, which is 100 wider now.
+      expect(ends(line)[1]).toEqual([650, 380]);
+      expect(counts.map((count) => count())).toEqual([0, 0]);
+      e.up(handle, 800, 350);
+    });
+
+    it("finds the lines that follow a run of nudges once", () => {
+      const { e, line, other, a } = twoLines();
+      click(e, a);
+      e.key("ArrowRight");
+      const count = measured(other);
+      for (let i = 0; i < 5; i++) e.key("ArrowRight");
+      expect(ends(line)[1]).toEqual([606, 380]);
+      expect(count()).toBe(0);
+    });
+
+    it("measures what an end can stick to once per drag of it", () => {
+      const { e, line, a, b } = setup();
+      const handle = handles(e)[1]!;
+      const [x, y] = spot(handle);
+      handle.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      at(e, "pointermove", 400, 250, { metaKey: true });
+      const counts = [measured(a), measured(b)];
+      for (let i = 0; i < 10; i++) at(e, "pointermove", 560 + i * 4, 380);
+      expect(counts.map((count) => count())).toEqual([0, 0]);
+      at(e, "pointerup", 600, 380);
+      expect(line.getAttribute("data-to")).toBe("a");
+      expect(line.getAttribute("data-to-at")).toBe("50% 80%");
+    });
+
+    it("draws the preview of where an end sticks once per element, moving only the spot on its edge", () => {
+      const { e } = setup();
+      const handle = handles(e)[1]!;
+      const [x, y] = spot(handle);
+      handle.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      const preview = e.$("[data-slop-edge]");
+      // Along a's top edge: its outline, the sites lines connect to, and the spot on the edge.
+      at(e, "pointermove", 540, 302);
+      const nodes = [...preview.childNodes];
+      expect(nodes).toHaveLength(6);
+      const dot = nodes[5] as Element;
+      expect(dot.getAttribute("cx")).toBe("540");
+      at(e, "pointermove", 560, 302);
+      expect([...preview.childNodes].every((node, i) => node === nodes[i])).toBe(true);
+      expect(dot.getAttribute("cx")).toBe("560");
+      // Inside it there is no outline to show: drawn anew, once.
+      at(e, "pointermove", 600, 350);
+      const inside = [...preview.childNodes];
+      expect(inside).toHaveLength(4);
+      at(e, "pointermove", 610, 360);
+      expect([...preview.childNodes].every((node, i) => node === inside[i])).toBe(true);
+      at(e, "pointerup", 610, 360);
+      expect(preview.childNodes).toHaveLength(0);
+    });
+
+    it("measures what a connector can stick to once while it is drawn", () => {
+      const e = editor({ markup: BOXES });
+      layOut(e);
+      const a = e.$("#a");
+      const b = e.$(".b");
+      e.fromParent({ type: "slop:edit-tool", tool: "elbow", style: LINE_STYLE });
+      at(e, "pointerdown", 600, 350);
+      at(e, "pointermove", 700, 450);
+      const counts = [measured(a), measured(b)];
+      for (let i = 0; i < 10; i++) at(e, "pointermove", 800 + i * 25, 500 + i * 15);
+      expect(counts.map((count) => count())).toEqual([0, 0]);
+      at(e, "pointerup", 1050, 650);
+      const line = added(e)[0]!;
+      expect([line.getAttribute("data-from"), line.getAttribute("data-to")]).toEqual(["a", b.id]);
+    });
+
     it("lets go of an element that is deleted, leaving the line where it is", () => {
       const { e, line, a } = setup();
       pull(e, handles(e)[1]!, [600, 380]);
@@ -4683,6 +4995,71 @@ describe("slide editor: shapes, styling and media", () => {
       expect(e.commits().at(-1)!.markup).toContain("data-shape=");
     });
 
+    // A figure drawn in the frame's callbacks is set right before the webview paints, which has
+    // no image for it yet: the figure would show blank, in every frame of a resize.
+    it("reads a figure's paint once per resize, and redraws it with every step, waiting for no frame", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "bubble", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      const handle = e.$('[data-slop-ui] [data-dir="1 1"]');
+      e.down(handle, 400, 300);
+      const frames = vi.spyOn(e.window, "requestAnimationFrame");
+      e.move(handle, 410, 310, { metaKey: true });
+      expect(drawn(shape)).toContain("viewBox='0 0 310 210'");
+      const decode = vi.spyOn(e.window, "decodeURIComponent");
+      for (let i = 2; i <= 12; i++) {
+        e.move(handle, 400 + i * 10, 300 + i * 10, { metaKey: true });
+        // The image is drawn anew with the box, and not read for it.
+        expect(drawn(shape)).toContain(`viewBox='0 0 ${300 + i * 10} ${200 + i * 10}'`);
+      }
+      expect([shape.style.width, shape.style.height]).toEqual(["420px", "320px"]);
+      expect(decode).not.toHaveBeenCalled();
+      // Nothing the frames run draws a figure: the handles, the geometry and the checks only.
+      const drawnAt = drawn(shape);
+      for (const [callback] of frames.mock.calls) callback(0);
+      expect(drawn(shape)).toBe(drawnAt);
+      e.move(handle, 540, 440, { metaKey: true });
+      e.up(handle, 540, 440);
+      // Exactly as it ends up, in what is saved.
+      expect(drawn(shape)).toContain("viewBox='0 0 440 340'");
+      expect(e.commits().at(-1)!.markup).toContain("width: 440px; height: 340px");
+      expect(e.commits().at(-1)!.markup).toContain("0 0 440 340");
+      expect(pads(shape)).toEqual([20, 22, 88, 22]);
+    });
+
+    it("redraws a figure in a group with every step as the group is resized", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "diamond", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [300, 300]);
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: SHAPE_STYLE });
+      dragOut(e, [400, 100], [500, 300]);
+      const [diamond, box] = added(e);
+      const boxes: [HTMLElement, number[]][] = [
+        [diamond!, [100, 100, 200, 200]],
+        [box!, [400, 100, 100, 200]],
+      ];
+      for (const [el, [x, y, w, h]] of boxes) el.getBoundingClientRect = () => new e.window.DOMRect(x, y, w, h);
+      e.fromParent({ type: "slop:edit-select-all" });
+      e.fromParent({ type: "slop:edit-select", path: [5], also: [[6]] });
+      e.fromParent({ type: "slop:edit-group" });
+      const group = e.$("[data-group]");
+      expect(group.style.width).toBe("400px");
+      const handle = e.$('[data-slop-ui] [data-dir="1 0"]');
+      e.down(handle, 500, 200);
+      e.move(handle, 600, 200, { metaKey: true });
+      expect(drawn(diamond!)).toContain("viewBox='0 0 250 200'");
+      const decode = vi.spyOn(e.window, "decodeURIComponent");
+      for (let i = 2; i <= 4; i++) e.move(handle, 500 + i * 100, 200, { metaKey: true });
+      expect(group.style.width).toBe("800px");
+      expect(diamond!.style.width).toBe("400px");
+      expect(decode).not.toHaveBeenCalled();
+      expect(drawn(diamond!)).toContain("viewBox='0 0 400 200'");
+      e.up(handle, 900, 200);
+      expect(drawn(diamond!)).toContain("viewBox='0 0 400 200'");
+      expect(e.commits().at(-1)!.markup).toContain("0 0 400 200");
+    });
+
     it("redraws an old clip-path cut-out as a figure when it is restyled or resized", () => {
       const e = editor({
         markup: DECK.replace(
@@ -4804,8 +5181,11 @@ describe("slide editor: shapes, styling and media", () => {
   describe("deck colors", () => {
     const colors = (e: ReturnType<typeof editor>) => e.messages<{ colors: unknown }>("slop:edit-colors")[0]!.colors;
 
-    it("reports the colors in the deck's CSS variables once, skipping non-colors, the app's own and repeats", () => {
+    it("reports the colors in the deck's CSS variables once, skipping non-colors, the app's own and repeats", async () => {
       const e = editor({ markup: IMAGE });
+      expect(e.messages("slop:edit-colors")).toEqual([]);
+      await e.frame();
+      expect(e.messages("slop:edit-colors")).toHaveLength(1);
       expect(colors(e)).toEqual([
         { name: "brand", value: "#ff0000" },
         { name: "brand-dark", value: "#0000ff" },
@@ -4813,8 +5193,10 @@ describe("slide editor: shapes, styling and media", () => {
       ]);
     });
 
-    it("reports none for a deck without variables", () => {
-      expect(colors(editor())).toEqual([]);
+    it("reports none for a deck without variables", async () => {
+      const e = editor();
+      await e.frame();
+      expect(colors(e)).toEqual([]);
     });
 
     it("leaves nothing behind in the document", () => {

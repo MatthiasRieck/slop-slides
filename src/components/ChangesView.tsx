@@ -23,7 +23,7 @@ import { formatKeys, keepsKey } from "../lib/keys";
 import { scrollBehavior } from "../lib/motion";
 import { pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl, plural } from "../lib/utils";
-import { useApp } from "../store";
+import { lintKey, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
 import {
   actionsOf,
@@ -342,7 +342,8 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
               .join(", ")}
             onClick={() => useChanges.getState().pick(row.key)}
             className={cn(
-              "block w-full overflow-hidden rounded-md shadow-thumbnail transition-shadow",
+              // No transition on the ring: it would repaint the slide under it for its whole length.
+              "block w-full overflow-hidden rounded-md shadow-thumbnail",
               picked
                 ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
                 : marks[0]
@@ -360,6 +361,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
                 url={headSlideUrl(deck.id, row.oldId, commit)}
                 size={pixelsOf({ size: deck.size })}
                 thumbnail
+                lazy
                 className="opacity-60 grayscale"
               />
             ) : null}
@@ -517,6 +519,7 @@ function LiveThumbnail({ deck, slide, faded }: { deck: Deck; slide: Slide; faded
       version={version}
       size={pixelsOf({ size: deck.size })}
       thumbnail
+      lazy
       className={cn(faded && "opacity-50")}
     />
   );
@@ -524,9 +527,8 @@ function LiveThumbnail({ deck, slide, faded }: { deck: Deck; slide: Slide; faded
 
 /** Reads the changes when the deck does, and on coming back to the window after a commit elsewhere. */
 function useRefreshChanges(deck: string) {
-  const content = useApp((s) =>
-    [s.assetsRev, s.deck?.shellHash, ...(s.deck?.slides ?? []).map((x) => `${x.id}:${x.hash}`)].join("|"),
-  );
+  // The deck's key is worked out once per deck object, not on every update of the store.
+  const content = useApp((s) => `${s.assetsRev}|${lintKey(s.deck)}`);
   // biome-ignore lint/correctness/useExhaustiveDependencies: read again whenever the deck's content changes
   useEffect(() => {
     void useChanges.getState().refresh(deck);

@@ -207,25 +207,33 @@
     });
   }
 
-  /** The CSS variables the deck's stylesheets define (not the app's own), with the value each first has. */
-  function cssVariableNames() {
+  /**
+   * What the deck's stylesheets say, from one walk through their rules: the CSS variables they
+   * define (not the app's own) as `names`, with the value each first has in `scoped`, and the
+   * font stacks they name, in `stacks`.
+   */
+  function deckRules() {
     var names = [];
     var scoped = {};
+    var stacks = [];
     forEachDeckRule(function (rule) {
-      var props = rule.style || [];
+      var props = rule.style;
+      if (!props) return;
+      // Not an @font-face rule, which names the font it defines.
+      if (rule.type !== 5 && props.fontFamily) stacks.push(props.fontFamily);
       for (var i = 0; i < props.length; i++) {
         var name = props[i];
-        if (!/^--/.test(name) || /^--slop-/.test(name) || names.indexOf(name) >= 0) continue;
+        if (!/^--/.test(name) || /^--slop-/.test(name) || Object.prototype.hasOwnProperty.call(scoped, name)) continue;
         names.push(name);
         scoped[name] = props.getPropertyValue(name);
       }
     });
-    return { names: names, scoped: scoped };
+    return { names: names, scoped: scoped, stacks: stacks };
   }
 
   /** The values of the deck's CSS variables as `el` sees them, for showing it outside the slide. */
   function cssVariables(el) {
-    var found = cssVariableNames();
+    var found = deckRules();
     var computed = getComputedStyle(el);
     var vars = {};
     found.names.slice(0, MAX_SVG_VARS).forEach(function (name) {
@@ -292,35 +300,41 @@
     return chain;
   }
 
-  /** The colors in the deck's CSS variables, for the color popover's deck swatches. */
-  function deckColors() {
-    var found = cssVariableNames();
-    var names = found.names;
-    var scoped = found.scoped;
-    var probe = document.createElement("span");
-    probe.setAttribute("data-slop-ui", "");
-    document.body.appendChild(probe);
-    var seen = {};
-    var colors = [];
-    names.forEach(function (name) {
-      var value = String(getComputedStyle(slide).getPropertyValue(name) || scoped[name] || "").trim();
+  /**
+   * The colors in the deck's CSS variables (`found`, from deckRules), for the color popover's
+   * deck swatches. A plain color is read as it is written; anything else (a color's name, hsl(),
+   * another variable) is given to an element for the browser to work out.
+   */
+  function deckColors(found) {
+    var computed = getComputedStyle(slide);
+    var probe = null;
+    var worked = function (value) {
+      if (!probe) {
+        probe = document.createElement("span");
+        probe.setAttribute("data-slop-ui", "");
+        document.body.appendChild(probe);
+      }
       probe.style.color = "";
       probe.style.color = value;
-      var hex = value && probe.style.color ? toHex(getComputedStyle(probe).color) : null;
-      if (!hex || seen[hex] || colors.length >= MAX_DECK_COLORS) return;
+      return probe.style.color ? toHex(getComputedStyle(probe).color) : null;
+    };
+    var seen = {};
+    var colors = [];
+    for (var i = 0; i < found.names.length && colors.length < MAX_DECK_COLORS; i++) {
+      var name = found.names[i];
+      var value = String(computed.getPropertyValue(name) || found.scoped[name] || "").trim();
+      var hex = toHex(value);
+      if (hex === null && value) hex = worked(value);
+      if (!hex || seen[hex]) continue;
       seen[hex] = true;
       colors.push({ name: name.slice(2), value: hex });
-    });
-    document.body.removeChild(probe);
+    }
+    if (probe) document.body.removeChild(probe);
     return colors;
   }
 
-  function reportColors() {
-    window.parent.postMessage({ type: "slop:edit-colors", slide: slide.id, colors: deckColors() }, "*");
-  }
-
-  /** The font stacks the deck's styles name, by their first family, for the toolbar's font list. */
-  function deckFonts() {
+  /** The font stacks the deck's styles name (`found`, from deckRules), by their first family, for the toolbar's font list. */
+  function deckFonts(found) {
     var fonts = [];
     var seen = {};
     var add = function (stack) {
@@ -329,9 +343,7 @@
       seen[name.toLowerCase()] = true;
       fonts.push({ name: name, stack: String(stack).trim() });
     };
-    forEachDeckRule(function (rule) {
-      if (rule.style && rule.type !== 5 && rule.style.fontFamily) add(rule.style.fontFamily);
-    });
+    found.stacks.forEach(add);
     if (document.fonts && document.fonts.forEach) {
       document.fonts.forEach(function (face) {
         add('"' + firstFamily(face.family) + '"');
@@ -343,11 +355,28 @@
     return fonts;
   }
 
-  function reportFonts() {
-    window.parent.postMessage({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts() }, "*");
+  // What the deck's stylesheets say (see deckRules), read once for the fonts and the colors.
+  var deckFound = null;
+
+  function reportColors() {
+    window.parent.postMessage({ type: "slop:edit-colors", slide: slide.id, colors: deckColors(deckFound) }, "*");
   }
-  reportFonts();
-  reportColors();
+
+  function reportFonts() {
+    window.parent.postMessage({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts(deckFound) }, "*");
+  }
+
   reportBackground();
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(reportFonts);
+  // The deck's fonts and colors take a walk through every style rule: after the slide has shown.
+  afterPaint(function () {
+    deckFound = deckRules();
+    reportFonts();
+    reportColors();
+  });
+  // Fonts that came in later join the list.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(function () {
+      if (deckFound) reportFonts();
+    });
+  }
 })();

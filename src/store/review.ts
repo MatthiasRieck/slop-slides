@@ -1,6 +1,7 @@
 import { api, type Deck } from "../lib/api";
 import { type CommentScope, type PlacedComment, placeComments, type SlideComment } from "../lib/comments";
 import type { Stroke } from "../lib/ink";
+import { memoizeLast } from "../lib/memo";
 import { loadFlag, saveFlag } from "../lib/storage";
 import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
@@ -59,18 +60,53 @@ export interface ReviewSlice {
 const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
 const COMMENT_TEXTS_KEY = "slopslide.commentTexts";
 
+// What the store's readers derive from the review is asked for on every update of the store, by
+// selectors, and is the same until the review or the deck's slides change: each is worked out
+// once for the comments, marks and slides it was last asked about, and handed out again after.
+const NO_COMMENTS: PlacedComment[] = [];
+const placed = memoizeLast(placeComments);
+const onSlide = memoizeLast((all: PlacedComment[], slide: string | null) => all.filter((c) => c.slide === slide));
+const notHeld = memoizeLast(
+  (comments: PlacedComment[], held: Record<string, string>) => comments.filter((c) => held[c.id] !== c.text).length,
+);
+const someIn = (review: Record<string, unknown[]>) => Object.values(review).some((items) => items.length > 0);
+const someMarks = memoizeLast(someIn);
+const someComments = memoizeLast(someIn);
+
+/** Every comment on the open deck's slides, in deck order. */
+export function deckComments(state: Pick<AppState, "deck" | "comments">): PlacedComment[] {
+  return state.deck ? placed(state.comments, state.deck.slides) : NO_COMMENTS;
+}
+
 /** The comments the composer offers to send: the selected slide's or the deck's, in deck order. */
 export function commentsInScope(
   state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible">,
 ): PlacedComment[] {
-  if (!state.deck || !state.reviewVisible) return [];
-  const placed = placeComments(state.comments, state.deck.slides);
-  return state.commentScope === "deck" ? placed : placed.filter((c) => c.slide === state.selected);
+  if (!state.reviewVisible) return NO_COMMENTS;
+  const all = deckComments(state);
+  return state.commentScope === "deck" ? all : onSlide(all, state.selected);
 }
 
 /** Whether a comment stays out of the next message: it has not changed since it last went out. */
 export function heldComment(state: Pick<AppState, "commentsHeld">, comment: SlideComment): boolean {
   return state.commentsHeld[comment.id] === comment.text;
+}
+
+/** How many of the comments in scope go out with the next message: those not held back. */
+export function commentsToSend(
+  state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible" | "commentsHeld">,
+): number {
+  return notHeld(commentsInScope(state), state.commentsHeld);
+}
+
+/** Whether any slide has a comment. */
+export function hasComments(state: Pick<AppState, "comments">): boolean {
+  return someComments(state.comments);
+}
+
+/** Whether there is any review to show or hide: a mark or a comment on any slide. */
+export function hasReview(state: Pick<AppState, "sketches" | "comments">): boolean {
+  return someMarks(state.sketches) || hasComments(state);
 }
 
 export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({

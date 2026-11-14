@@ -1,11 +1,12 @@
 // The chat's messages as the chat shows them, the helpers that settle them, and saving them.
 import { api } from "../lib/api";
 import type { PlacedComment } from "../lib/comments";
-import type { ContextUsage } from "../lib/context";
+import { type ContextUsage, latestContext } from "../lib/context";
 import type { EditElement } from "../lib/editTools";
+import { memoizeLast } from "../lib/memo";
 import type { Provider } from "../lib/models";
 import type { Approval } from "../lib/permissions";
-import type { AppStore } from "./types";
+import type { AppState, AppStore } from "./types";
 
 export type ChatPart =
   | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
@@ -171,6 +172,18 @@ export function sendOptionsOf(message: UserMessage): SendOptions {
 export function lastSentText(messages: readonly ChatMessage[]): string | null {
   const last = messages.findLast((m) => m.role === "user" && !m.command);
   return last?.role === "user" ? last.text : null;
+}
+
+const contextIn = memoizeLast(latestContext);
+
+/**
+ * How full the selected provider's context is, as its newest reply in the chat says; null until
+ * it reports. A selector: asked on every update of the store, it looks through the messages
+ * only when they or the provider changed, as a provider that reports nothing has it look at
+ * every one of them.
+ */
+export function chatContext(state: Pick<AppState, "messages" | "selection">): ContextUsage | null {
+  return contextIn(state.messages, state.selection.provider);
 }
 
 /** Saves the chat as it is now to its session. */

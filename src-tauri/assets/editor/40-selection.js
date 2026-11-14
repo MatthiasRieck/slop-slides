@@ -9,6 +9,10 @@
   var batching = false;
   var reportedGeometry = "null";
   var geometryFrame = 0;
+  // Where the drag's readout goes (by the pointer, in the window's pixels), while one shows.
+  var readoutAt = null;
+  // The guide lines drawn, as one string, so a move that leaves them be draws nothing.
+  var drawnGuides = "";
   // How close, in screen pixels, a dragged edge or center comes before it snaps.
   var SNAP_PX = 6;
   // Never part of the slide's visible content.
@@ -56,21 +60,26 @@
     extras = [];
   }
 
-  /** Selects just `list`, the first one primary; an element goes along with one that holds it. */
-  function selectMany(list) {
+  /**
+   * Selects just `list`, the first one primary; an element goes along with one that holds it.
+   * With `soon` (a marquee growing with every pointer move), the handles and the report to the
+   * app follow next frame.
+   */
+  function selectMany(list, soon) {
     var unique = list.filter(function (el, i) {
       return el && list.indexOf(el) === i && !list.some(function (other) {
         return other && other !== el && other.contains(el);
       });
     });
     if (unique.length === allSelected().length && unique.every(isSelected)) return;
-    select(unique[0] || null);
-    extras = unique.slice(1);
-    extras.forEach(function (el) {
-      mark(el, "data-slop-selected", true);
-    });
-    placeHandles();
-    report();
+    setSelection(unique[0] || null, unique.slice(1));
+    if (soon) {
+      scheduleHandles();
+      scheduleReport();
+    } else {
+      placeHandles();
+      report();
+    }
   }
 
   /** Shift- or ⌘-click: takes `el` out of the selection, or adds it instead of what holds it or it holds. */
@@ -108,8 +117,7 @@
     });
     selected = primary;
     batching = false;
-    placeHandles();
-    report();
+    restyled();
     commit();
   }
 
@@ -133,8 +141,7 @@
     selected = primary;
     extras = others;
     batching = false;
-    placeHandles();
-    report();
+    restyled();
     commit();
   }
 
@@ -179,13 +186,12 @@
   /** The bounds of `el` on screen, in slide pixels from the slide's top left. */
   function boxOf(el) {
     var rect = el.getBoundingClientRect();
-    var origin = slide.getBoundingClientRect();
-    var k = zoom();
+    var at = camera();
     return {
-      left: (rect.left - origin.left) / k,
-      top: (rect.top - origin.top) / k,
-      right: (rect.right - origin.left) / k,
-      bottom: (rect.bottom - origin.top) / k,
+      left: (rect.left - at.left) / at.k,
+      top: (rect.top - at.top) / at.k,
+      right: (rect.right - at.left) / at.k,
+      bottom: (rect.bottom - at.top) / at.k,
     };
   }
 
@@ -202,26 +208,24 @@
   /** The box of `el` before it is turned, in slide pixels from the slide's top left. */
   function frameOf(el) {
     var center = centerOf(el);
-    var origin = slide.getBoundingClientRect();
+    var at = camera();
     var size = sizeOf(el);
     var scale = scaleOf(el);
-    var k = zoom();
     var w = size.w * scale.x;
     var h = size.h * scale.y;
-    var left = (center.x - origin.left) / k - w / 2;
-    var top = (center.y - origin.top) / k - h / 2;
+    var left = (center.x - at.left) / at.k - w / 2;
+    var top = (center.y - at.top) / at.k - h / 2;
     return { left: left, top: top, right: left + w, bottom: top + h };
   }
 
   /** A frame around each of several selected elements, turned with it. */
   function placeFrames() {
-    frames.textContent = "";
-    if (!extras.length || editing) return;
-    allSelected().forEach(function (el) {
-      var at = shownFrame(el);
-      var frame = document.createElement("div");
-      frame.style.cssText = "left:" + (at.x - at.w / 2) + "px;top:" + (at.y - at.h / 2) + "px;width:" + at.w + "px;height:" + at.h + "px;transform:rotate(" + at.angle + "deg)";
-      frames.appendChild(frame);
+    var group = !extras.length || editing ? [] : allSelected();
+    // Every element is measured before any frame is written, so the layout is worked out once.
+    var shown = group.map(shownFrame);
+    var nodes = fitChildren(frames, shown.length, newDiv);
+    shown.forEach(function (at, i) {
+      nodes[i].style.cssText = "left:" + (at.x - at.w / 2) + "px;top:" + (at.y - at.h / 2) + "px;width:" + at.w + "px;height:" + at.h + "px;transform:rotate(" + at.angle + "deg)";
     });
   }
 
@@ -231,8 +235,8 @@
     if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return false;
     if (!rect.width || !rect.height) return false;
     event.preventDefault();
-    hover(null);
-    marquee = { x: event.clientX, y: event.clientY, picked: picked, add: add, base: add ? allSelected() : [], moved: false };
+    dropHover();
+    marquee = { x: event.clientX, y: event.clientY, picked: picked, add: add, base: add ? allSelected() : [], moved: false, items: null };
     try {
       document.documentElement.setPointerCapture(event.pointerId);
     } catch (e) {
@@ -241,16 +245,28 @@
     return true;
   }
 
-  /** The outermost elements fully inside `area`, in slide pixels. */
-  function elementsIn(area) {
+  /**
+   * What a marquee can select in `root`, measured once for all of its pointer moves: each
+   * element that is not locked with its box in slide pixels (null when it is not one to select
+   * on its own) and what it holds, which is looked at where the element is not selected whole.
+   */
+  function marqueeItems(root) {
+    var items = [];
+    walkContent(root, function (el) {
+      if (!isLocked(el)) items.push({ el: el, box: arrangeable(el) ? boxOf(el) : null, inner: marqueeItems(el) });
+      return true;
+    });
+    return items;
+  }
+
+  /** The outermost elements of `items` (see marqueeItems) fully inside `area`, in slide pixels. */
+  function elementsIn(area, items) {
     var found = [];
-    walkContent(slide, function (el) {
-      if (isLocked(el)) return true;
-      if (!arrangeable(el)) return false;
-      var box = boxOf(el);
-      var inside = box.right > box.left && box.bottom > box.top && box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
-      if (inside) found.push(el);
-      return inside;
+    items.forEach(function (item) {
+      var box = item.box;
+      var inside = !!box && box.right > box.left && box.bottom > box.top && box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
+      if (inside) found.push(item.el);
+      else found = found.concat(elementsIn(area, item.inner));
     });
     return found;
   }
@@ -266,11 +282,11 @@
     var w = Math.abs(dx);
     var h = Math.abs(dy);
     marqueeBox.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px";
-    var origin = slide.getBoundingClientRect();
-    var k = zoom();
-    var x = (left - origin.left) / k;
-    var y = (top - origin.top) / k;
-    selectMany(marquee.base.concat(elementsIn({ left: x, top: y, right: x + w / k, bottom: y + h / k })));
+    if (!marquee.items) marquee.items = marqueeItems(slide);
+    var at = camera();
+    var x = (left - at.left) / at.k;
+    var y = (top - at.top) / at.k;
+    selectMany(marquee.base.concat(elementsIn({ left: x, top: y, right: x + w / at.k, bottom: y + h / at.k }, marquee.items)), true);
   }
 
   function finishMarquee() {
@@ -278,13 +294,16 @@
     marquee = null;
     marqueeBox.style.display = "none";
     if (!done.moved && !done.add) select(done.picked);
+    // What the marquee selected last shows right away, and the app is told.
+    flushHandles();
+    if (reportFrame) report();
   }
 
   /** ⌘A: everything on the slide, wrappers giving way to what they hold. */
   function selectAll() {
     if (tool !== "select") return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var found = [];
     walkContent(slide, function (el) {
       if (isLocked(el)) return true;
@@ -297,7 +316,7 @@
 
   /** Tab: the next element in the slide's order, inner ones too, or with -1 the one before. */
   function cycleSelection(step) {
-    if (nudgeTimer) commit();
+    saveNudges();
     var list = [];
     walkContent(slide, function (el) {
       if (isLocked(el)) return true;
@@ -316,7 +335,7 @@
    */
   function duplicateSelected(offset) {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var copies = inDocumentOrder(allSelected()).map(function (el) {
       var header = clipHeader(el);
       var copy = cleanCopy(el);
@@ -399,7 +418,7 @@
   function alignSelection(to, target) {
     if (ALIGN_TO.indexOf(to) < 0) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var group = movable();
     if (!group.length) return;
     var bySlide = target === "slide" || group.length === 1;
@@ -417,7 +436,7 @@
   function matchSize(axis) {
     if (axis !== "w" && axis !== "h") return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     if (!selected || !extras.length) return;
     var frame = frameOf(selected);
     var size = axis === "w" ? frame.right - frame.left : frame.bottom - frame.top;
@@ -434,7 +453,7 @@
   /** Evens out the gaps between three or more elements along an axis, the outer two staying put. */
   function distributeSelection(axis) {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var group = movable();
     if (group.length < 3) return;
     var across = axis === "h";
@@ -462,20 +481,35 @@
   function geometry() {
     var group = allSelected();
     if (!group.length) return null;
-    var box = group.length > 1 ? boundsOf(group) : frameOf(group[0]);
+    return geometryOf(group.length > 1 ? boundsOf(group) : frameOf(group[0]), group.length, group.length > 1 ? null : angleOf(group[0]));
+  }
+
+  function geometryOf(box, count, rotation) {
     return {
-      count: group.length,
+      count: count,
       x: Math.round(box.left),
       y: Math.round(box.top),
       w: Math.round(box.right - box.left),
       h: Math.round(box.bottom - box.top),
-      rotation: group.length > 1 ? null : angleOf(group[0]),
+      rotation: rotation,
     };
+  }
+
+  /**
+   * The selection's geometry while it is dragged along: where it started (see startMove), moved
+   * as far as the drag moved it, without measuring anything. Null when no move is under way.
+   */
+  function movedGeometry() {
+    var from = drag && drag.mode === "move" && drag.by ? drag.frame : null;
+    if (!from) return null;
+    var box = { left: from.box.left + drag.by.x, top: from.box.top + drag.by.y, right: from.box.right + drag.by.x, bottom: from.box.bottom + drag.by.y };
+    return geometryOf(box, from.count, from.rotation);
   }
 
   function reportGeometry() {
     geometryFrame = 0;
-    var now = geometry();
+    var now = movedGeometry() || geometry();
+    fillReadout(now);
     var key = JSON.stringify(now);
     if (key === reportedGeometry) return;
     reportedGeometry = key;
@@ -494,30 +528,21 @@
     var sx = w === null ? scale.x : w / size.w;
     var sy = h === null ? scale.y : h / size.h;
     var shift = { x: (size.w * (sx - scale.x)) / 2, y: (size.h * (sy - scale.y)) / 2 };
-    var resize = sizeMode === "resize";
     var offset = offsetOf(el);
-    drag = {
-      el: el,
-      size: size,
-      scale: scale,
-      offset: offset,
-      zoom: zoom(),
-      vectors: resize && el.getAttribute(ADDED) === "drawing" ? vectorShapes(el) : null,
-      members: resize && isGroup(el) ? memberBoxes(el) : null,
-    };
-    if (resize) {
-      resizeTo(sx, sy, shift);
+    if (sizeMode === "resize") {
+      var state = { el: el, size: size, scale: scale, offset: offset, zoom: zoom() };
+      holdContents(state);
+      resizeTo(state, sx, sy, shift);
     } else {
       scaleTo(el, sx, sy);
       moveTo(el, offset.x + shift.x, offset.y + shift.y);
     }
-    drag = null;
   }
 
   /** Applies typed numbers (see slop:edit-geometry in 00-header.js). */
   function setGeometry(data) {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var given = function (n) {
       return typeof n === "number" && isFinite(n);
     };
@@ -556,8 +581,7 @@
       if (!data.reset) tiltTo(el, now.x + (Number(data.x) || 0), now.y + (Number(data.y) || 0));
       else if (now.x || now.y) tiltTo(el, 0, 0);
     });
-    clearTimeout(nudgeTimer);
-    nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
+    saveSoon(null);
   }
 
   /** The lines to snap to on each axis: the slide's and other elements' edges and centers. */
@@ -605,27 +629,39 @@
     };
   }
 
+  /** Draws the guide lines a snap hit (`xs` upright, `ys` level), each reaching to `box`; nothing when they are drawn already. */
   function drawGuides(xs, ys, box) {
-    guides.textContent = "";
-    var origin = slide.getBoundingClientRect();
-    var k = zoom();
+    var at = camera();
+    var lines = [];
     var line = function (left, top, w, h) {
-      var el = document.createElement("div");
-      el.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px";
-      guides.appendChild(el);
+      lines.push("left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px");
     };
     xs.forEach(function (hit) {
       var from = Math.min(hit.from, box.top);
-      line(origin.left + hit.at * k, origin.top + from * k, 1, (Math.max(hit.to, box.bottom) - from) * k);
+      line(at.left + hit.at * at.k, at.top + from * at.k, 1, (Math.max(hit.to, box.bottom) - from) * at.k);
     });
     ys.forEach(function (hit) {
       var from = Math.min(hit.from, box.left);
-      line(origin.left + from * k, origin.top + hit.at * k, (Math.max(hit.to, box.right) - from) * k, 1);
+      line(at.left + from * at.k, at.top + hit.at * at.k, (Math.max(hit.to, box.right) - from) * at.k, 1);
+    });
+    var key = lines.join("|");
+    if (key === drawnGuides) return;
+    drawnGuides = key;
+    var nodes = fitChildren(guides, lines.length, newDiv);
+    lines.forEach(function (css, i) {
+      nodes[i].style.cssText = css;
     });
   }
 
+  function clearGuides() {
+    if (!drawnGuides) return;
+    drawnGuides = "";
+    fitChildren(guides, 0, newDiv);
+  }
+
   function clearDragMarks() {
-    guides.textContent = "";
+    clearGuides();
+    readoutAt = null;
     readout.style.display = "none";
   }
 
@@ -641,7 +677,7 @@
   function snapMove(dx, dy, event) {
     var box = drag.box;
     if (!snaps(event) || box.right <= box.left || box.bottom <= box.top) {
-      guides.textContent = "";
+      clearGuides();
       return { x: dx, y: dy };
     }
     var tolerance = SNAP_PX / drag.zoom;
@@ -663,7 +699,7 @@
     }
     var box = drag.box;
     if (!snaps(event) || keepsRatio(event) || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
-      guides.textContent = "";
+      clearGuides();
       return { x: dx, y: dy };
     }
     var d = drag.dir;
@@ -694,18 +730,14 @@
       return { el: el, from: offsetOf(el) };
     });
     drag.box = boundsOf(group);
-    // Lines stuck to the group move with it, so they are nothing to snap to.
-    var stuck = Array.prototype.filter.call(slide.querySelectorAll("[data-from], [data-to]"), function (line) {
-      return ENDS.some(function (end) {
-        var target = stuckTo(line, end);
-        return target && group.some(function (el) {
-          return el.contains(target);
-        });
-      });
-    });
-    drag.targets = snapTargets(group.concat(stuck));
+    // What the readout and the app are told while it moves: this, moved along (see movedGeometry).
+    drag.frame = {
+      box: group.length > 1 ? drag.box : frameOf(group[0]),
+      count: group.length,
+      rotation: group.length > 1 ? null : angleOf(group[0]),
+    };
     // A line dragged on its own lets go of what it is not dragged along with.
-    drag.lines = group.filter(function (el) {
+    var lines = group.filter(function (el) {
       ENDS.forEach(function (end) {
         var target = stuckTo(el, end);
         var along = target && group.some(function (other) {
@@ -715,6 +747,18 @@
       });
       return !!lineOf(el);
     });
+    // The other lines stuck to the group follow it, so they are nothing to snap to.
+    drag.followers = linesFollowing(group, lines);
+    var stuck = drag.followers.filter(function (follower) {
+      return follower.targets.some(function (target) {
+        return target && group.some(function (el) {
+          return el.contains(target);
+        });
+      });
+    }).map(function (follower) {
+      return follower.el;
+    });
+    drag.targets = snapTargets(group.concat(stuck));
   }
 
   function moveDrag(event, dx, dy) {
@@ -730,19 +774,31 @@
     drag.group.forEach(function (item) {
       moveTo(item.el, item.from.x + by.x, item.from.y + by.y);
     });
-    followLines(drag.lines);
+    // How far the move went, as the translate rounds it to whole pixels.
+    var first = drag.group[0];
+    drag.by = { x: Math.round(first.from.x + by.x) - first.from.x, y: Math.round(first.from.y + by.y) - first.from.y };
+    followStuck(drag.followers);
     showReadout(event);
   }
 
-  /** The position and size (or turn) next to the pointer while dragging. */
+  /**
+   * Shows the position and size (or turn) next to the pointer while dragging. It is filled in
+   * with the geometry reported next frame (see fillReadout), so a pointer move measures nothing for it.
+   */
   function showReadout(event) {
-    var now = geometry();
-    if (!now || drag.mode === "tilt" || drag.mode === "adjust") return;
+    if (drag.mode === "tilt" || drag.mode === "adjust") return;
+    readoutAt = { x: event.clientX + 14, y: event.clientY + 18 };
+    scheduleGeometry();
+  }
+
+  /** Fills in the drag's readout, when one shows, with the selection's geometry `now`. */
+  function fillReadout(now) {
+    if (!readoutAt || !drag || !now) return;
     readout.textContent =
       drag.mode === "rotate" ? now.rotation + "°"
       : drag.mode === "point" ? "X " + drag.at.x + "  Y " + drag.at.y
       : "X " + now.x + "  Y " + now.y + "  W " + now.w + "  H " + now.h;
-    readout.style.cssText = "left:" + (event.clientX + 14) + "px;top:" + (event.clientY + 18) + "px";
+    readout.style.cssText = "left:" + readoutAt.x + "px;top:" + readoutAt.y + "px";
   }
 
   /** Handles the app's messages for this section; true when `data` was one. */

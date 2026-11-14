@@ -1,9 +1,13 @@
 import { act, fireEvent, render, renderHook } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { MAX_FRAME_LOADS } from "../lib/frameLoads";
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { type Place, placeElements } from "../test/intersection";
+import { SLIDE_SCALE, SlideFrame, useSlideVersion } from "./SlideFrame";
 
 const NoLayout = globalThis.ResizeObserver;
 let width = 960;
@@ -64,12 +68,15 @@ describe("SlideFrame", () => {
           {} as ResizeObserver,
         ),
       );
+    // A thumbnail's scale is its container's to hold (see SLIDE_SCALE).
+    const scale = () => (container.firstElementChild as HTMLElement).style.getPropertyValue(SLIDE_SCALE);
+    expect(frame.style.transform).toBe(`scale(var(${SLIDE_SCALE}))`);
     report(0);
     expect(frames(container)).toEqual([frame]);
-    expect(frame.style.transform).toBe("scale(0.5)");
+    expect(scale()).toBe("0.5");
     report(192);
     expect(frames(container)).toEqual([frame]);
-    expect(frame.style.transform).toBe("scale(0.1)");
+    expect(scale()).toBe("0.1");
   });
 
   it("loads the slide editor (on the final animation frame) in edit mode", () => {
@@ -234,6 +241,15 @@ describe("SlideFrame", () => {
     expect(frames(container).map((f) => f.getAttribute("src")!.split("v=")[1])).toEqual(["v1", "v3"]);
   });
 
+  it("gives up a version loading behind when the one on show is wanted again", () => {
+    const { container, rerender } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
+    const [current] = frames(container);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v2" />);
+    expect(frames(container)).toHaveLength(2);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
+    expect(frames(container)).toEqual([current]);
+  });
+
   it("reports the first load too", () => {
     const onFrameReady = vi.fn();
     const { container } = render(
@@ -241,6 +257,163 @@ describe("SlideFrame", () => {
     );
     fireEvent.load(frames(container)[0]!);
     expect(onFrameReady).toHaveBeenCalledWith(frames(container)[0]);
+  });
+});
+
+describe("a lazy preview, one of a list that scrolls", () => {
+  const DECK_ID = "/decks/talk/deck.html";
+  const thumb = (slide: string, version = "v1") => (
+    <div data-slide={slide}>
+      <SlideFrame deckId={DECK_ID} slideId={slide} version={version} thumbnail lazy />
+    </div>
+  );
+  /** Puts the previews where `places` says, by slide; in view when not said. */
+  const scroll = (places: Record<string, Place>) =>
+    act(() =>
+      placeElements((element) => {
+        const slide = element.closest<HTMLElement>("[data-slide]")?.dataset.slide ?? "";
+        return slide in places ? places[slide]! : 0;
+      }),
+    );
+  const versions = (container: HTMLElement) => frames(container).map((f) => f.getAttribute("src")!.split("v=")[1]);
+
+  it("has no document until the list is about to show it, its box keeping its shape", () => {
+    scroll({ intro: 6 });
+    const { container } = render(thumb("intro"));
+    const box = container.querySelector<HTMLElement>("[data-slide] > div")!;
+    expect(frames(container)).toEqual([]);
+    expect(box.style.aspectRatio).toBe("1920 / 1080");
+    scroll({ intro: 2 });
+    expect(frames(container)).toEqual([]);
+    scroll({ intro: 0.5 });
+    expect(frames(container)).toHaveLength(1);
+    expect(frames(container)[0]!.style.visibility).toBe("visible");
+  });
+
+  it("keeps its document a few screenfuls off, so coming back shows it at once, and lets it go far away", () => {
+    const { container } = render(thumb("intro"));
+    const [frame] = frames(container);
+    fireEvent.load(frame!);
+    scroll({ intro: 2 });
+    expect(frames(container)).toEqual([frame]);
+    scroll({ intro: 0 });
+    expect(frames(container)).toEqual([frame]);
+    scroll({ intro: 6 });
+    expect(frames(container)).toEqual([]);
+    scroll({ intro: 0.5 });
+    expect(frames(container)).toHaveLength(1);
+  });
+
+  it("keeps its document while it takes no space: a folded section, a closed panel", () => {
+    const { container } = render(thumb("intro"));
+    const [frame] = frames(container);
+    scroll({ intro: null });
+    expect(frames(container)).toEqual([frame]);
+  });
+
+  it("loads nothing where it takes no space", () => {
+    scroll({ intro: null });
+    const { container } = render(thumb("intro"));
+    expect(frames(container)).toEqual([]);
+  });
+
+  it("follows a new version only once it is back near the view", () => {
+    const { container, rerender } = render(thumb("intro"));
+    fireEvent.load(frames(container)[0]!);
+    scroll({ intro: 2 });
+    rerender(thumb("intro", "v2"));
+    rerender(thumb("intro", "v3"));
+    expect(versions(container)).toEqual(["v1&static"]);
+    scroll({ intro: 0.5 });
+    // The version it has stays on show while the newest loads behind it.
+    expect(versions(container)).toEqual(["v1&static", "v3&static"]);
+    fireEvent.load(frames(container)[1]!);
+    expect(versions(container)).toEqual(["v3&static"]);
+  });
+
+  it("starts with the current version when it comes into view with nothing loaded", () => {
+    scroll({ intro: 6 });
+    const { container, rerender } = render(thumb("intro"));
+    rerender(thumb("intro", "v2"));
+    scroll({ intro: 0 });
+    expect(versions(container)).toEqual(["v2&static"]);
+  });
+
+  it("loads a few at a time, the ones in view before the ones near it", () => {
+    const slides = ["a", "b", "c", "d", "e", "f"];
+    scroll({ a: 0.5, b: 0.5, c: 0.5, d: 0.5, e: 0.5, f: 0 });
+    const { container } = render(
+      <div>
+        {slides.map((slide) => (
+          <div key={slide}>{thumb(slide)}</div>
+        ))}
+      </div>,
+    );
+    const loading = () => frames(container).map((f) => f.title);
+    expect(loading()).toHaveLength(MAX_FRAME_LOADS);
+    expect(loading()).toEqual(["a", "b", "c"]);
+    fireEvent.load(frames(container)[0]!);
+    // The one in view, though it asked last.
+    expect(loading()).toEqual(["a", "b", "c", "f"]);
+    fireEvent.load(frames(container)[1]!);
+    expect(loading()).toEqual(["a", "b", "c", "d", "f"]);
+  });
+
+  it("gives its place up when it goes before it has loaded", () => {
+    const slides = ["a", "b", "c", "d"];
+    const { container, rerender } = render(
+      <div>
+        {slides.map((slide) => (
+          <div key={slide}>{thumb(slide)}</div>
+        ))}
+      </div>,
+    );
+    expect(frames(container).map((f) => f.title)).toEqual(["a", "b", "c"]);
+    rerender(
+      <div>
+        {slides.slice(1).map((slide) => (
+          <div key={slide}>{thumb(slide)}</div>
+        ))}
+      </div>,
+    );
+    expect(frames(container).map((f) => f.title)).toEqual(["b", "c", "d"]);
+  });
+
+  it("waits while the slide on the stage loads, which does not wait for anything", () => {
+    const { container } = render(
+      <>
+        <div data-stage>
+          <SlideFrame deckId={DECK_ID} slideId="intro" version="v1" />
+        </div>
+        {thumb("intro")}
+      </>,
+    );
+    const stage = container.querySelector("[data-stage] iframe")!;
+    expect(stage).toBeTruthy();
+    expect(container.querySelector("[data-slide] iframe")).toBeNull();
+    fireEvent.load(stage);
+    expect(container.querySelector("[data-slide] iframe")).toBeTruthy();
+  });
+
+  it("is resized by its container's scale alone, without rendering", () => {
+    const commits = vi.fn();
+    const { container } = render(
+      <Profiler id="thumb" onRender={commits}>
+        {thumb("intro")}
+      </Profiler>,
+    );
+    const box = container.querySelector<HTMLElement>("[data-slide] > div")!;
+    commits.mockClear();
+    for (const w of [200, 220, 240]) {
+      act(() =>
+        observers[0]!.callback(
+          [{ target: box, contentRect: { width: w } } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        ),
+      );
+    }
+    expect(box.style.getPropertyValue(SLIDE_SCALE)).toBe("0.125");
+    expect(commits).not.toHaveBeenCalled();
   });
 });
 

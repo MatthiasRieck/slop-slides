@@ -291,6 +291,19 @@ describe("Popover", () => {
     expect([style.left, style.bottom, style.top, style.maxHeight]).toEqual(["40px", `${768 - 700 + 6}px`, "", "684px"]);
   });
 
+  it("comes in from the anchor's side, once placed", () => {
+    const { unmount } = render(
+      <Harness rect={new DOMRect(40, 100, 20, 20)} placement="below" width={200} onClose={vi.fn()} />,
+    );
+    expect(panel().style.visibility).not.toBe("hidden");
+    expect(panel().classList.contains("enter-below")).toBe(true);
+    expect(panel().classList.contains("enter-above")).toBe(false);
+    unmount();
+    render(<Harness rect={new DOMRect(40, 700, 20, 20)} placement="above" width={200} onClose={vi.fn()} />);
+    expect(panel().classList.contains("enter-above")).toBe(true);
+    expect(panel().classList.contains("enter-below")).toBe(false);
+  });
+
   it("takes the side with more room on auto, with the menu's gap", () => {
     const { unmount } = render(
       <Harness rect={new DOMRect(40, 600, 20, 20)} variant="menu" width={200} onClose={vi.fn()} />,

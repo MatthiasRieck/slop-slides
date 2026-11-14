@@ -54,7 +54,8 @@ export interface ShowRemote {
  * the speaker notes of the slide on screen and the next slide to be shown, which a press goes to.
  * Beside the slide it is a narrow column; in a window of its own (`window`, on a second screen)
  * it also shows the slide itself, names its buttons, and has a row that operates the show
- * (`remote`).
+ * (`remote`). There, the next slide's picture is the one that shows the slide once the show
+ * moves on to it (see `ShowSlide`), so going on loads one page, not two.
  *
  * The teleprompter listens to the presenter and follows them through the slide's narration, or
  * its notes when it has none, fading what was said (see src/lib/teleprompter.ts). The record
@@ -226,14 +227,16 @@ export function PresenterPanel(props: {
       {props.remote && <RemoteRow remote={props.remote} onNext={props.onNext} />}
       {props.window && slide && (
         <div className="flex min-h-0 flex-[2] gap-3">
-          <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-1">
-            <span className="text-xs text-foreground/60">Now</span>
-            <FittedSlide deck={deck} slide={slide} />
-          </div>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-            <span className="text-xs text-foreground/60">Next</span>
-            {next ? <FittedSlide deck={deck} slide={next} onPress={props.onNext} /> : <TheEnd />}
-          </div>
+          {/* By slide: the picture that was Next stays, and becomes Now, as the show moves on to it. */}
+          <ShowSlide key={slide.id} label="Now" deck={deck} slide={slide} />
+          {next ? (
+            <ShowSlide key={next.id} label="Next" deck={deck} slide={next} onPress={props.onNext} />
+          ) : (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+              <span className="text-xs text-foreground/60">Next</span>
+              <TheEnd />
+            </div>
+          )}
         </div>
       )}
       <TeleprompterNotice teleprompter={teleprompter} />
@@ -258,13 +261,7 @@ export function PresenterPanel(props: {
       {!props.window && (
         <div className="flex shrink-0 flex-col gap-1">
           <span className="text-xs text-foreground/60">Next</span>
-          {next ? (
-            <NextSlide onPress={props.onNext}>
-              <SlidePreview deck={deck} slide={next} />
-            </NextSlide>
-          ) : (
-            <TheEnd />
-          )}
+          {next ? <SlidePicture deck={deck} slide={next} onPress={props.onNext} /> : <TheEnd />}
         </div>
       )}
     </aside>
@@ -275,8 +272,12 @@ function TheEnd() {
   return <p className="rounded-lg bg-foreground/5 p-3 text-sm text-foreground/40">The end of the show.</p>;
 }
 
-/** The next slide's picture as a button: pressing it moves the show on to it. */
-function NextSlide(props: { onPress: () => void; children: ReactNode }) {
+/**
+ * Over the next slide's picture, all of it a button: pressing it moves the show on to that slide.
+ * It lies over the picture rather than around it, so the picture is the same thing with it and
+ * without (see `ShowSlide`).
+ */
+function NextSlide(props: { onPress: () => void }) {
   return (
     <button
       type="button"
@@ -285,10 +286,8 @@ function NextSlide(props: { onPress: () => void; children: ReactNode }) {
       // Keep keyboard focus where it was, so Space still advances the slide.
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onPress}
-      className="block w-full rounded-lg text-left ring-foreground/40 hover:ring-2 focus-visible:ring-2"
-    >
-      {props.children}
-    </button>
+      className="absolute inset-0 rounded-lg ring-foreground/40 hover:ring-2 focus-visible:ring-2"
+    />
   );
 }
 
@@ -416,29 +415,41 @@ export function fitWidth(size: Pixels): string {
   return `min(100cqw, ${(100 * size.width) / size.height}cqh)`;
 }
 
-/** A slide as large as the room it is given allows, keeping its shape: it never overflows. With `onPress`, a button. */
-function FittedSlide({ deck, slide, onPress }: { deck: Deck; slide: Slide; onPress?: () => void }) {
-  const preview = <SlidePreview deck={deck} slide={slide} />;
+/**
+ * A slide of the show in the presenter view's window, under its `label`: the one on screen, large,
+ * or the next one (with `onPress`, which goes to it), smaller beside it. The two are told apart by
+ * their slide, not their place, so when the show moves on, the next slide's picture stays what
+ * it is, page and all, and only grows into the place of the one on screen.
+ */
+function ShowSlide(props: { label: string; deck: Deck; slide: Slide; onPress?: () => void }) {
   return (
-    <div className="min-h-0 flex-1" style={{ containerType: "size" }}>
-      <div data-testid="fitted-slide" style={{ width: fitWidth(pixelsOf({ size: deck.size })) }}>
-        {onPress ? <NextSlide onPress={onPress}>{preview}</NextSlide> : preview}
+    <div className={cn("flex min-h-0 min-w-0 flex-col gap-1", props.onPress ? "flex-1" : "flex-[2]")}>
+      <span className="text-xs text-foreground/60">{props.label}</span>
+      {/* As large as the room allows, keeping the slide's shape: it never overflows. */}
+      <div className="min-h-0 flex-1" style={{ containerType: "size" }}>
+        <div data-testid="fitted-slide" style={{ width: fitWidth(pixelsOf({ size: props.deck.size })) }}>
+          <SlidePicture deck={props.deck} slide={props.slide} onPress={props.onPress} />
+        </div>
       </div>
     </div>
   );
 }
 
-function SlidePreview({ deck, slide }: { deck: Deck; slide: Slide }) {
+/** A slide's picture; with `onPress`, pressing it moves the show on to that slide. */
+function SlidePicture({ deck, slide, onPress }: { deck: Deck; slide: Slide; onPress?: () => void }) {
   const version = useSlideVersion(slide);
   return (
-    <SlideFrame
-      deckId={deck.id}
-      slideId={slide.id}
-      version={version}
-      size={pixelsOf({ size: deck.size })}
-      thumbnail
-      className="overflow-hidden rounded-lg"
-    />
+    <div className="relative">
+      <SlideFrame
+        deckId={deck.id}
+        slideId={slide.id}
+        version={version}
+        size={pixelsOf({ size: deck.size })}
+        thumbnail
+        className="overflow-hidden rounded-lg"
+      />
+      {onPress && <NextSlide onPress={onPress} />}
+    </div>
   );
 }
 

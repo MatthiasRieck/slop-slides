@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { EditGeometry } from "../lib/arrange";
 import { type EditSelection, parseSelection } from "../lib/editTools";
 import { SWATCHES } from "../lib/palette";
 import { useApp } from "../store";
+import { DECK_HTML, deckFor } from "../test/fixtures";
 import { EditToolbar } from "./EditToolbar";
+import { reportFromEditor, resetEditorState } from "./stage/editorState";
 
 const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Slide", "Arrange", "Timeline"];
 const SECTION_WIDTH = 200;
@@ -13,13 +16,26 @@ let resize: ResizeObserverCallback | null = null;
 let ribbonWidth = 0;
 const NoLayout = globalThis.ResizeObserver;
 
-function toolbar(overrides: Partial<Parameters<typeof EditToolbar>[0]> = {}) {
+/**
+ * The toolbar, with what the slide editor last reported about the slide it is at work on: its
+ * `selection` and where that is (`geometry`), which the toolbar's controls read for themselves.
+ */
+function toolbar({
+  selection = null,
+  geometry = null,
+  ...overrides
+}: Partial<Parameters<typeof EditToolbar>[0]> & {
+  selection?: EditSelection | null;
+  geometry?: EditGeometry | null;
+} = {}) {
+  act(() => {
+    reportFromEditor("intro", "selection", selection);
+    reportFromEditor("intro", "geometry", geometry);
+  });
   return (
     <EditToolbar
-      sizeMode="resize"
       onSizeMode={() => {}}
       tool="select"
-      selection={null}
       styles={{ text: {}, shape: {}, line: {} } as never}
       onTool={() => {}}
       onStyle={() => {}}
@@ -37,6 +53,13 @@ function widen(width: number) {
 }
 
 const collapsedButton = (section: string) => screen.queryByRole("button", { name: `${section} tools` });
+
+// The slide editor is at work on the deck's first slide.
+beforeEach(() => useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editing: true }));
+afterEach(() => {
+  resetEditorState();
+  useApp.setState({ editing: false });
+});
 
 describe("EditToolbar ribbon", () => {
   beforeEach(() => {
@@ -84,6 +107,61 @@ describe("EditToolbar ribbon", () => {
     expect(screen.queryByRole("combobox", { name: "Size mode" })).toBeNull();
     // The timeline's tools are the same as in the view ribbon.
     expect(inGroup("Timeline", "Show the timeline under the slide")).toBeTruthy();
+  });
+
+  it("measures its sections once, and fits them to each new width from that", () => {
+    render(toolbar());
+    const widths = vi.mocked(Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!.get!);
+    const measured = widths.mock.calls.length;
+    expect(measured).toBe(SECTIONS.length);
+    // A panel's separator dragged: the ribbon is a little narrower with every tick, and nothing in it changes.
+    for (const width of [5000, 4990, 4980, 4970, 4970]) widen(width);
+    expect(widths.mock.calls.length).toBe(measured);
+    for (const name of SECTIONS) expect(collapsedButton(name)).toBeNull();
+  });
+
+  it("measures its sections again once what is in them changed, when it next resizes", async () => {
+    render(toolbar());
+    widen(4 * SECTION_WIDTH);
+    expect(collapsedButton("Arrange")).toBeTruthy();
+    // The sections that collapsed got their buttons: the ribbon's content changed.
+    await act(async () => {});
+    const widths = vi.mocked(Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth")!.get!);
+    const measured = widths.mock.calls.length;
+    widen(4 * SECTION_WIDTH - 10);
+    expect(widths.mock.calls.length).toBe(measured + SECTIONS.length);
+    widen(4 * SECTION_WIDTH - 20);
+    expect(widths.mock.calls.length).toBe(measured + SECTIONS.length);
+  });
+
+  it("puts what pops up back in the bar reading the layout once for all of it, not once for each", () => {
+    const { container } = render(<div>{toolbar()}</div>);
+    widen(100);
+    const flyouts = container.querySelectorAll<HTMLElement>("[data-flyout]");
+    expect(flyouts.length).toBe(SECTIONS.length);
+    // Reads and writes in the order they happen: every flyout is read before any is moved.
+    const order: string[] = [];
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches("[data-flyout]")) order.push("read");
+      return new DOMRect(this.matches("[data-flyout]") ? 900 : 0, 0, this.matches("[data-flyout]") ? 300 : 1000, 40);
+    });
+    for (const flyout of flyouts) {
+      const style = flyout.style;
+      const set = style.setProperty.bind(style);
+      Object.defineProperty(style, "marginLeft", {
+        configurable: true,
+        get: () => style.getPropertyValue("margin-left"),
+        set: (value: string) => {
+          if (value) order.push("write");
+          set("margin-left", value);
+        },
+      });
+    }
+    widen(90);
+    const firstWrite = order.indexOf("write");
+    expect(order.filter((step) => step === "read")).toHaveLength(flyouts.length);
+    expect(order.slice(firstWrite).every((step) => step === "write")).toBe(true);
+    expect(flyouts[0]!.style.marginLeft).toBe("-204px");
   });
 
   it("keeps every section open while there is room, and with no layout to go by", () => {

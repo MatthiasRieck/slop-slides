@@ -93,6 +93,36 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().editedSlides).toEqual(["intro"]);
   });
 
+  it("names the run of nudges a save belongs to, so the history keeps them as one step", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED, "nudge:0.1");
+    expect(calls("update_slide")).toEqual([
+      { id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1", group: "nudge:0.1" },
+    ]);
+  });
+
+  it("notes an editor's save in one update of the store, before the deck shows it, and nothing when nothing is new", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const session: string[] = [];
+    const stop = useApp.subscribe((now, before) => {
+      const noted = now.editSaved !== before.editSaved || now.editedSlides !== before.editedSlides;
+      if (noted) session.push(`${JSON.stringify(now.editSaved)} ${now.editedSlides} ${now.deck!.slides[0]!.hash}`);
+    });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    // Whose the new version is and that the slide was edited arrive together, ahead of the version itself.
+    expect(session).toEqual(['{"intro":"intro-2"} intro intro-1']);
+    // The same markup saved again gives the same slide: there is nothing to note.
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    expect(session).toHaveLength(1);
+    await useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
+    expect(session).toEqual(['{"intro":"intro-2"} intro intro-1', '{"intro":"intro-3"} intro intro-2']);
+    stop();
+  });
+
   it("saves edits one after another, each on top of the last", async () => {
     const useApp = await freshStore();
     const disk = slideBackend();
@@ -212,6 +242,21 @@ describe("editing slides on the stage", () => {
     const editedSlides = ["intro", "outro", "gone"];
     expect(editedSlidesOf({ deck, editBase, editedSlides })).toEqual(["intro"]);
     expect(editedSlidesOf({ deck, editBase: null, editedSlides })).toEqual([]);
+  });
+
+  it("gives the same list of edited slides until the deck's slides or the session's edits change", () => {
+    const deck = deckFor(DECK_HTML, "2");
+    const editBase = { version: "v1", hashes: { intro: "intro-1", outro: "outro-2" } };
+    const editedSlides = ["intro", "outro"];
+    const first = editedSlidesOf({ deck, editBase, editedSlides });
+    // Asked again with every update of the store: the same answer, not another list like it.
+    expect(editedSlidesOf({ deck: { ...deck, title: "Renamed" }, editBase, editedSlides })).toBe(first);
+    expect(editedSlidesOf({ deck, editBase, editedSlides: [...editedSlides] })).not.toBe(first);
+    expect(editedSlidesOf({ deck: deckFor(DECK_HTML, "3"), editBase, editedSlides })).toEqual(["intro", "outro"]);
+    // With nothing edited there is nothing to look through, and always the same nothing.
+    expect(editedSlidesOf({ deck, editBase, editedSlides: [] })).toBe(
+      editedSlidesOf({ deck, editBase: null, editedSlides }),
+    );
   });
 
   it("reports a discard that failed and stays in edit mode", async () => {

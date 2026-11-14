@@ -24,6 +24,7 @@ export { SKETCH_TARGET_ATTR } from "./store/capture";
 export { COMPACT_COMMAND } from "./store/chat";
 export { type DeckMode, deckMode, editedSlidesOf, editingSlide } from "./store/editing";
 export { lastError, toastTexts } from "./store/errors";
+export { lintKey } from "./store/lint";
 export type {
   AssistantMessage,
   ChatMessage,
@@ -45,7 +46,7 @@ export {
   tidyPrompt,
   withRevertNotes,
 } from "./store/prompts";
-export { commentsInScope, heldComment } from "./store/review";
+export { commentsInScope, commentsToSend, deckComments, hasComments, hasReview, heldComment } from "./store/review";
 export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
 export { listedSlides, railSelection } from "./store/slides";

@@ -187,6 +187,110 @@ describe("workspaces", () => {
     expect(lastError(useApp.getState())).toBe("not a folder: /nope");
   });
 
+  describe("reopening the deck last open in a folder", () => {
+    const remembered = () => localStorage.setItem("slopslide.lastFile:/ws", "talks/q3.html");
+
+    it("loads the deck's chat only: the folder's own would give way to it at once", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ load_chat: ({ id }) => (id === TALK.id ? [userMessage("about the talk")] : null) });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(calls("load_chat")).toEqual([{ id: TALK.id }]);
+      expect(calls("session_provider")).toEqual([{ id: TALK.id }]);
+      expect(calls("open_deck")).toEqual([{ id: TALK.id, keepChat: false, quiet: true }]);
+      expect(useApp.getState()).toMatchObject({
+        workspace: WS,
+        openedFile: { path: "talks/q3.html", kind: "deck" },
+        deck: TALK,
+        selected: TALK.slides[0]!.id,
+        chatKey: TALK.id,
+        messages: [userMessage("about the talk")],
+      });
+    });
+
+    it("shows the folder and its deck together, never the folder without the deck", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      remembered();
+      /** What the main area would have shown, at every change of the store. */
+      const shown = new Set<string>();
+      useApp.subscribe(({ workspace, deck }) => shown.add(workspace ? (deck ? "deck" : "no deck") : "start screen"));
+      await useApp.getState().openWorkspace("/ws");
+      expect([...shown]).toEqual(["deck"]);
+      // The tab on show stays: only a folder with nothing to reopen starts at its files.
+      expect(useApp.getState().sidebarTab).not.toBe("files");
+    });
+
+    it("asks what the file is and whether the folder's agent works at the same time", async () => {
+      const useApp = await freshStore(false);
+      const asked: string[] = [];
+      let answer = () => {};
+      const held = new Promise<void>((resolve) => (answer = resolve));
+      workspaceBackend({
+        open_file: async ({ path }) => {
+          asked.push("open_file");
+          await held;
+          return opened(String(path), "deck");
+        },
+        agent_running: async () => {
+          asked.push("agent_running");
+          await held;
+          return false;
+        },
+      });
+      remembered();
+      const opening = useApp.getState().openWorkspace("/ws");
+      await vi.waitFor(() => expect(asked).toEqual(["open_file", "agent_running"]));
+      answer();
+      await opening;
+      expect(useApp.getState().deck).toEqual(TALK);
+    });
+
+    it("keeps the folder's chat on show while its agent is still at work", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ agent_running: ({ id }) => id === "/ws" });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(calls("open_deck")).toEqual([]);
+      expect(calls("load_chat")).toEqual([{ id: "/ws" }]);
+      expect(useApp.getState()).toMatchObject({ workspace: WS, deck: null, chatKey: "/ws", running: true });
+      expect(useApp.getState().sidebarTab).toBe("files");
+      // The deck is still the one to come back to.
+      expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("talks/q3.html");
+    });
+
+    it("starts at the files, with the folder's chat, when the deck is open in another window", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ open_deck: () => Promise.reject("open in another window") });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(useApp.getState()).toMatchObject({ workspace: WS, deck: null, openedFile: null, chatKey: "/ws" });
+      expect(useApp.getState().sidebarTab).toBe("files");
+      expect(lastError(useApp.getState())).toBeNull();
+    });
+
+    it("shows a page that is no deck with the folder, in one step, beside the folder's chat", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      localStorage.setItem("slopslide.lastFile:/ws", "site/index.html");
+      const shown = new Set<string>();
+      useApp.subscribe(({ workspace, openedFile }) => workspace && shown.add(openedFile?.path ?? "no file"));
+      await useApp.getState().openWorkspace("/ws");
+      expect([...shown]).toEqual(["site/index.html"]);
+      expect(calls("load_chat")).toEqual([{ id: "/ws" }]);
+      expect(useApp.getState().chatKey).toBe("/ws");
+    });
+
+    it("forgets a file that is gone since", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      localStorage.setItem("slopslide.lastFile:/ws", "gone.html");
+      await useApp.getState().openWorkspace("/ws");
+      expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
+      expect(useApp.getState()).toMatchObject({ workspace: WS, openedFile: null, sidebarTab: "files" });
+    });
+  });
+
   it("creates decks in the open folder and opens them", async () => {
     const useApp = await freshStore(false);
     workspaceBackend({ open_deck: ({ id }) => ({ ...TALK, id, path: id }) });

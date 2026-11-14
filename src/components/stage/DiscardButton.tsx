@@ -1,6 +1,5 @@
 import { X } from "lucide-react";
 import { useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 
 import { plural } from "../../lib/utils";
 import { editedSlidesOf, useApp } from "../../store";
@@ -22,7 +21,7 @@ export function discardLabel(edited: string[], selected: string | null): string 
  */
 export function DiscardButton() {
   const selected = useApp((s) => s.selected);
-  const edited = useApp(useShallow(editedSlidesOf));
+  const edited = useApp(editedSlidesOf);
   const [asking, setAsking] = useState(false);
   if (edited.length === 0) return null;
   const app = useApp.getState;

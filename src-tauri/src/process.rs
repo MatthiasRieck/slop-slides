@@ -12,6 +12,8 @@ const WORKER_FLAG: &str = "--agent-process";
 
 /// An agent command, including automatic cleanup on cancellation or an early return.
 pub fn command(program: &Path) -> std::io::Result<Command> {
+    // The CLI gets the environment of the user's shell (see [`crate::env`]).
+    crate::env::ready();
     #[cfg(not(windows))]
     let mut command = Command::new(program);
     #[cfg(windows)]

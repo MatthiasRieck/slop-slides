@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::cloud::{Provider, DEFAULT_PROVIDER};
 use crate::deck;
+use crate::html::AppMetas;
 
 /// A language narration can be said in.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -81,11 +82,24 @@ pub struct Settings {
 
 impl Settings {
     pub fn of(html: &str) -> Self {
-        let provider = provider_of(html);
-        let voice = crate::html::narration_voice(html)
+        Self::from_metas(&AppMetas::read(html))
+    }
+
+    /// The settings `metas`, a document's app settings read in one pass, name.
+    pub fn from_metas(metas: &AppMetas) -> Self {
+        let provider = metas
+            .narration_provider
+            .as_deref()
+            .and_then(Provider::parse)
+            .unwrap_or(DEFAULT_PROVIDER);
+        let voice = metas
+            .narration_voice
+            .clone()
             .filter(|v| provider.accepts_voice(v))
             .unwrap_or_else(|| provider.default_voice().into());
-        let language = crate::html::narration_language(html)
+        let language = metas
+            .narration_language
+            .clone()
             .filter(|l| language(l).is_some())
             .unwrap_or_else(|| DEFAULT_LANGUAGE.into());
         Settings {
@@ -93,6 +107,15 @@ impl Settings {
             voice,
             language,
         }
+    }
+
+    /// The provider and language these settings name, which are always known ones.
+    pub(super) fn resolved(&self) -> (Provider, &str, &'static Language) {
+        (
+            Provider::parse(&self.provider).expect("a known provider"),
+            &self.voice,
+            language(&self.language).expect("a known language"),
+        )
     }
 }
 
@@ -108,11 +131,8 @@ pub fn provider_of(html: &str) -> Provider {
 pub(super) fn settings(file: &Path) -> (Provider, String, &'static Language) {
     let html = deck::read_html(file).unwrap_or_default();
     let settings = Settings::of(&html);
-    (
-        Provider::parse(&settings.provider).expect("a known provider"),
-        settings.voice,
-        language(&settings.language).expect("a known language"),
-    )
+    let (provider, voice, language) = settings.resolved();
+    (provider, voice.to_string(), language)
 }
 
 #[cfg(test)]

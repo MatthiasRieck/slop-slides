@@ -82,11 +82,12 @@ describe("Dialog", () => {
   it("shows its heading and body in a named modal dialog over a scrim, in the body", () => {
     const { container } = open();
     expect(dialog().getAttribute("aria-modal")).toBe("true");
-    expect(dialog().className).toBe("box");
+    // Its own classes, after the one it comes in with.
+    expect(dialog().className).toBe("enter-pop box");
     expect(screen.getByRole("heading", { level: 2, name: "The things" })).toBeTruthy();
     expect(dialog().textContent).toBe("The thingsBody");
     const scrim = screen.getByTestId(BACKDROP);
-    expect(scrim.className).toBe("fixed inset-0 z-50 flex items-center justify-center bg-scrim");
+    expect(scrim.className).toBe("enter-fade fixed inset-0 z-50 flex items-center justify-center bg-scrim");
     // Rendered into the body: nothing it is used in clips it, and the app under it can go inert.
     expect(scrim.parentElement).toBe(document.body);
     expect(container.contains(scrim)).toBe(false);

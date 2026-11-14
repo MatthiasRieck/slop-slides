@@ -8,6 +8,7 @@ import {
   type EditTool,
   type ToolFamily,
 } from "../lib/editTools";
+import { memoizeLast } from "../lib/memo";
 import { withRecentColor } from "../lib/palette";
 import { loadFlag, saveFlag } from "../lib/storage";
 import { captureSlide } from "./capture";
@@ -80,8 +81,12 @@ export interface EditingSlice {
   setMode: (mode: DeckMode) => void;
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
-  /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
-  saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  /**
+   * Saves `markup` as the new version of `slide`, after any edits still being saved. `group` is
+   * the editor's name for a run of small edits (arrow-key nudges of the same elements), whose
+   * saves the deck's history keeps as one step to undo.
+   */
+  saveSlideEdit: (slide: string, markup: string, group?: string) => Promise<void>;
   /**
    * Saves `slide` of the open deck as `change` makes its markup in the file, after any edits still
    * being saved; false (with the error shown) when `change` throws or the save fails.
@@ -138,23 +143,38 @@ export function editingSlide(state: Pick<AppState, "editing" | "deck" | "selecte
   return state.editing && !selectedSlide(state)?.locked;
 }
 
-/** The slides edited since edit mode started that are not as they were then any more. */
+const NO_SLIDES: string[] = [];
+
+/** Those of `edited` whose slide in `slides` is not as `hashes` has it. */
+const changedSince = memoizeLast((slides: Deck["slides"], hashes: Record<string, string>, edited: string[]) => {
+  const now = new Map(slides.map((slide) => [slide.id, slide.hash]));
+  return edited.filter((id) => now.has(id) && now.get(id) !== hashes[id]);
+});
+
+/**
+ * The slides edited since edit mode started that are not as they were then any more. The same
+ * list until the deck's slides or the session's edits change: it is asked for on every update
+ * of the store.
+ */
 export function editedSlidesOf(state: Pick<AppState, "deck" | "editBase" | "editedSlides">): string[] {
   const { deck, editBase, editedSlides } = state;
-  if (!deck || !editBase) return [];
-  return editedSlides.filter((id) => {
-    const hash = deck.slides.find((s) => s.id === id)?.hash;
-    return hash !== undefined && hash !== editBase.hashes[id];
-  });
+  if (!deck || !editBase || editedSlides.length === 0) return NO_SLIDES;
+  return changedSince(deck.slides, editBase.hashes, editedSlides);
 }
 
-/** Shows the deck a slide edit saved, and counts the slide as edited in this session. */
+/**
+ * Shows the deck a slide edit saved, and counts the slide as edited in this session. What the
+ * session notes of the edit goes into the store in one update, and only when there is something
+ * new to note: every update asks everything that reads the store, and a drag saves many times.
+ */
 function showEdited(app: AppStore, slide: string, next: Deck, fromEditor = false) {
   const hash = next.slides.find((s) => s.id === slide)?.hash;
+  const { editSaved, editedSlides } = app.getState();
+  const saved = fromEditor && hash && editSaved[slide] !== hash ? { ...editSaved, [slide]: hash } : editSaved;
+  const edited = editedSlides.includes(slide) ? editedSlides : [...editedSlides, slide];
   // Before the deck, so the stage never sees the new version without knowing whose it is.
-  if (fromEditor && hash) app.setState((s) => ({ editSaved: { ...s.editSaved, [slide]: hash } }));
+  if (saved !== editSaved || edited !== editedSlides) app.setState({ editSaved: saved, editedSlides: edited });
   app.getState().setDeck(next);
-  app.setState((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));
 }
 
 /** Hands the composer `text` about `element`, with a screenshot once any edit still being saved has landed. */
@@ -238,13 +258,13 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
       }
     }),
 
-  saveSlideEdit: (slide, markup) =>
+  saveSlideEdit: (slide, markup, group) =>
     queueEdit(async () => {
       const { deck } = get();
       const base = deck?.slides.find((s) => s.id === slide)?.hash;
       if (!deck || !base) return;
       try {
-        const next = await api.updateSlide(deck.id, slide, markup, base);
+        const next = await api.updateSlide(deck.id, slide, markup, base, group);
         if (get().deck?.id === deck.id) showEdited(app, slide, next, true);
       } catch (error) {
         showErrorIn(app, error);

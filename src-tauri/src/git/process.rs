@@ -9,6 +9,8 @@ use crate::error::{Error, Result};
 use super::Commit;
 
 fn command(dir: &Path, args: &[&str]) -> Command {
+    // `git` is found on the PATH of the user's shell (see [`crate::env`]).
+    crate::env::ready();
     let mut command = Command::new("git");
     command.args(args).current_dir(dir);
     #[cfg(windows)]
@@ -69,6 +71,15 @@ pub fn read_at_head(file: &Path) -> Option<Vec<u8>> {
         dir,
         &["cat-file", "--filters", &format!("HEAD:./{relative}")],
     )
+}
+
+/// The id of the last commit of the repository around `dir`; None without a repository or a
+/// commit. What a commit holds never changes, so its files can be kept by this (see
+/// `protocol/head.rs`).
+pub fn head_oid(dir: &Path) -> Option<String> {
+    let out = git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])?;
+    let oid = String::from_utf8_lossy(&out).trim().to_string();
+    (!oid.is_empty()).then_some(oid)
 }
 
 /// The last commit of the repository around `dir`.

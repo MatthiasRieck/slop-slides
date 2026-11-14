@@ -57,8 +57,11 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       app.getState().setDeck(done.deck);
       adoptReview(app, done.deck);
       historyRun++;
-      app.setState((s) => ({ history: done.status, editReload: s.editReload + 1 }));
       const { selected } = app.getState();
+      // The slide editor starts again only when what it shows changed under it: the slide on the
+      // stage, or the deck's styles. A change to another slide leaves it running.
+      const reloads = done.deck.shellHash !== deck.shellHash || (selected !== null && changed.includes(selected));
+      app.setState((s) => ({ history: done.status, editReload: reloads ? s.editReload + 1 : s.editReload }));
       if (changed[0] && !(selected && changed.includes(selected))) app.getState().select(changed[0]);
       const entry = done.entry;
       if (entry?.source === "chat" && entry.message) {

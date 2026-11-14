@@ -11,7 +11,11 @@ import { Dialog } from "./Dialog";
  */
 export function RewindDialog() {
   const entry = useApp((s) => s.rewindAsk);
-  const message = useApp((s) => s.messages.find((m) => m.id === s.rewindAsk?.message));
+  // Looked for only while the question is asked: the messages change with every event of the agent's.
+  const message = useApp((s) => {
+    const asked = s.rewindAsk;
+    return asked ? s.messages.find((m) => m.id === asked.message) : undefined;
+  });
   const [remember, setRemember] = useState(false);
   if (!entry || message?.role !== "user") return null;
   const answer = (picked: RewindChoice | null) => {

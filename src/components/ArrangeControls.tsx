@@ -33,7 +33,7 @@ import {
   StretchVertical,
   Ungroup,
 } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useEffect, useRef, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import {
   type AlignTarget,
@@ -41,13 +41,11 @@ import {
   type ArrangeMessage,
   type DistributeAxis,
   type EditGeometry,
-  type EditLayer,
   type GeometryField,
   parseGeometryValue,
   quarterTurn,
   TILT_STEP,
 } from "../lib/arrange";
-import type { EditSelection } from "../lib/editTools";
 import { formatKeys } from "../lib/keys";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
@@ -56,6 +54,7 @@ import { DraftInput } from "./Field";
 import { DropdownPanel } from "./Popover";
 import { RibbonSelect } from "./Ribbon";
 import { SectionLabel } from "./SectionLabel";
+import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 
 const DISTRIBUTE: { axis: DistributeAxis; label: string; title: string; icon: ReactNode }[] = [
   {
@@ -118,11 +117,12 @@ function alignLabel(edges: string, many: boolean, target: AlignTarget) {
 /**
  * Lines the selection up and spaces it out, at the ribbon's top level: one element aligns with
  * the slide; several align with each other, or each with the slide while the toggle is on; three
- * or more can be distributed.
+ * or more can be distributed. Of where the selection is, it reads only how many elements that
+ * are, which a drag does not change.
  */
-export function AlignControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
+export const AlignControls = memo(function AlignControls(props: { onArrange?: (message: ArrangeMessage) => void }) {
   const [toSlide, setToSlide] = useState(false);
-  const count = props.geometry?.count ?? 0;
+  const count = useSlideReport((report) => report.geometry?.count ?? 0);
   const off = count === 0;
   const many = count > 1;
   const target: AlignTarget = many && !toSlide ? "selection" : "slide";
@@ -170,7 +170,7 @@ export function AlignControls(props: { geometry: EditGeometry | null; onArrange?
       ))}
     </>
   );
-}
+});
 
 /**
  * The selection's exact place and size, in one popover: how the handles change its size, its
@@ -179,60 +179,10 @@ export function AlignControls(props: { geometry: EditGeometry | null; onArrange?
  * type. The panel stays open for one change after another, also through the preview's reload
  * after each save, which clears the selection until the editor restores it.
  */
-export function PositionControls(props: {
-  geometry: EditGeometry | null;
-  /** The selected element's look, for flipping it. */
-  selection?: EditSelection | null;
-  onArrange?: (message: ArrangeMessage) => void;
-  onDone: () => void;
-  sizeMode: "resize" | "stretch";
-  onSizeMode: (mode: "resize" | "stretch") => void;
-  /** Resizes keep the aspect ratio: by the handles, and a typed width or height brings the other along. */
-  keepRatio?: boolean;
-  onKeepRatio?: (on: boolean) => void;
-}) {
+export const PositionControls = memo(function PositionControls(props: PositionProps) {
   const { open, ref, toggle } = useDropdown();
-  // What the panel shows while the selection is away, so it does not jump or close.
-  const shown = useRef<EditGeometry | null>(null);
-  if (props.geometry) shown.current = props.geometry;
-  const geometry = props.geometry ?? shown.current;
-  const off = !props.geometry;
-  // A number typed while the preview reloads after a save (Tab from one field to the next
-  // applies the first), for the selection the editor restores. The fields stay enabled through
-  // the reload, so the one being typed in keeps its focus. A selection that does not come back
-  // soon is gone, and what was typed for it goes too.
-  const pending = useRef<{ message: ArrangeMessage; at: number }[]>([]);
-  const onArrange = useRef(props.onArrange);
-  onArrange.current = props.onArrange;
-  useEffect(() => {
-    if (!props.geometry) return;
-    const queued = pending.current.filter((p) => Date.now() - p.at <= RELOAD_MS);
-    pending.current = [];
-    for (const p of queued) onArrange.current?.(p.message);
-  }, [props.geometry]);
-  const arrangeField = (message: ArrangeMessage) => {
-    if (off) pending.current.push({ message, at: Date.now() });
-    else props.onArrange?.(message);
-  };
-  const many = (geometry?.count ?? 0) > 1;
-  const selection = props.selection ?? null;
-  // Each of several elements flips if it can; one says itself whether it does.
-  const flips = !off && (many || !!selection?.flippable || !!selection?.group);
-  const flipReason = off ? NOTHING_SELECTED : "Text and plain boxes have nothing to flip";
-  const rotation = geometry?.rotation ?? null;
-  const tilt = (t: (typeof TILTS)[number]) => (
-    <ToolButton
-      keepFocus
-      key={t.side}
-      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
-      disabled={off}
-      disabledReason={NOTHING_SELECTED}
-      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
-    >
-      {t.icon}
-    </ToolButton>
-  );
-
+  // The button only says whether there is a selection; where it is, the open panel follows.
+  const off = useSlideReport((report) => report.geometry === null);
   return (
     <div ref={ref} className="relative">
       <ToolButton
@@ -247,138 +197,201 @@ export function PositionControls(props: {
       >
         <Scaling />
       </ToolButton>
-      {open && geometry && (
-        <DropdownPanel role="dialog" aria-label="Position and size" className="flex w-max flex-col gap-2 text-xs">
-          <div className="flex items-center gap-1.5">
-            {FIELDS.map((f) => (
-              <Fragment key={f.field}>
-                <GeometryInput
-                  {...f}
-                  value={f.field === "rotation" ? geometry.rotation : geometry[f.field]}
-                  disabled={many && f.field !== "x" && f.field !== "y"}
-                  onChange={(value) => arrangeField({ type: "slop:edit-geometry", [f.field]: value })}
-                  onDone={props.onDone}
-                />
-                {f.field === "w" && (
-                  <ToolButton
-                    keepFocus
-                    label="Lock aspect ratio"
-                    title={
-                      props.keepRatio
-                        ? "Resizes keep the aspect ratio (Shift frees it); a typed width or height brings the other along"
-                        : "Keep the aspect ratio when resizing, without holding Shift"
-                    }
-                    active={!!props.keepRatio}
-                    onClick={() => props.onKeepRatio?.(!props.keepRatio)}
-                  >
-                    {props.keepRatio ? <Link2 /> : <Link2Off />}
-                  </ToolButton>
-                )}
-              </Fragment>
-            ))}
-          </div>
-          {many && (
-            <p className="text-muted-foreground">
-              {geometry.count} elements selected: they move together; group them to size or turn them as one
-            </p>
-          )}
-          <div className="flex items-center gap-2">
-            <label htmlFor="edit-size-mode" className="text-muted-foreground">
-              Handles
-            </label>
-            <RibbonSelect
-              id="edit-size-mode"
-              label="Size mode"
-              title="Resize changes the box; Stretch scales its contents too"
-              value={props.sizeMode}
-              onPick={(mode) => props.onSizeMode(mode as "resize" | "stretch")}
-              onDone={props.onDone}
-              className="border"
-            >
-              <option value="resize">Resize the box</option>
-              <option value="stretch">Stretch the contents</option>
-            </RibbonSelect>
-          </div>
-          <div className="flex items-center gap-0.5">
-            <ToolButton
-              keepFocus
-              label="Match width"
-              title="Give the others the first selected element's width"
-              disabled={off || !many}
-              disabledReason="Select two or more elements"
-              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "w" })}
-            >
-              <StretchHorizontal />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Match height"
-              title="Give the others the first selected element's height"
-              disabled={off || !many}
-              disabledReason="Select two or more elements"
-              onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "h" })}
-            >
-              <StretchVertical />
-            </ToolButton>
-            <div className="mx-1 h-4 w-px bg-border" />
-            <ToolButton
-              keepFocus
-              label="Flip horizontally"
-              shortcut="mod+shift+h"
-              active={flips && !many && !!selection?.flipX}
-              disabled={!flips}
-              disabledReason={flipReason}
-              onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "x" })}
-            >
-              <FlipHorizontal2 />
-            </ToolButton>
-            <ToolButton
-              keepFocus
-              label="Flip vertically"
-              shortcut="mod+shift+v"
-              active={flips && !many && !!selection?.flipY}
-              disabled={!flips}
-              disabledReason={flipReason}
-              onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "y" })}
-            >
-              <FlipVertical2 />
-            </ToolButton>
-            <div className="mx-1 h-4 w-px bg-border" />
-            {([-1, 1] as const).map((step) => (
-              <ToolButton
-                key={step}
-                keepFocus
-                label={step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise"}
-                disabled={off || rotation === null}
-                disabledReason={off ? NOTHING_SELECTED : "Select one element"}
-                onClick={() =>
-                  rotation !== null &&
-                  props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
-                }
-              >
-                {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
-              </ToolButton>
-            ))}
-          </div>
-          <div className="flex items-start gap-2">
-            <SectionLabel>3D rotate</SectionLabel>
-            <fieldset aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
-              {TILTS.slice(0, 4).map(tilt)}
-              <ToolButton
-                keepFocus
-                label="Reset the 3D rotation"
-                disabled={off}
-                disabledReason={NOTHING_SELECTED}
-                onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
-              >
-                <RotateCcw />
-              </ToolButton>
-              {TILTS.slice(4).map(tilt)}
-            </fieldset>
-          </div>
-        </DropdownPanel>
-      )}
+      {open && <PositionPanel {...props} />}
     </div>
+  );
+});
+
+interface PositionProps {
+  onArrange?: (message: ArrangeMessage) => void;
+  onDone?: () => void;
+  onSizeMode: (mode: SizeMode) => void;
+  /** Resizes keep the aspect ratio: by the handles, and a typed width or height brings the other along. */
+  onKeepRatio?: (on: boolean) => void;
+}
+
+/**
+ * The open Position and size popover. It reads where the selection is by itself, so the numbers
+ * follow a drag frame by frame while nothing else of the toolbar renders.
+ */
+function PositionPanel(props: PositionProps) {
+  const reported = useSlideReport((report) => report.geometry);
+  // The selected element's look, for flipping it.
+  const selection = useSlideReport((report) => report.selection);
+  const sizeMode = useEditorState((s) => s.sizeMode);
+  const keepRatio = useEditorState((s) => s.keepRatio);
+  // What the panel shows while the selection is away, so it does not jump or close.
+  const shown = useRef<EditGeometry | null>(null);
+  if (reported) shown.current = reported;
+  const geometry = reported ?? shown.current;
+  const off = !reported;
+  // A number typed while the preview reloads after a save (Tab from one field to the next
+  // applies the first), for the selection the editor restores. The fields stay enabled through
+  // the reload, so the one being typed in keeps its focus. A selection that does not come back
+  // soon is gone, and what was typed for it goes too.
+  const pending = useRef<{ message: ArrangeMessage; at: number }[]>([]);
+  const onArrange = useRef(props.onArrange);
+  onArrange.current = props.onArrange;
+  useEffect(() => {
+    if (!reported) return;
+    const queued = pending.current.filter((p) => Date.now() - p.at <= RELOAD_MS);
+    pending.current = [];
+    for (const p of queued) onArrange.current?.(p.message);
+  }, [reported]);
+  if (!geometry) return null;
+  const arrangeField = (message: ArrangeMessage) => {
+    if (off) pending.current.push({ message, at: Date.now() });
+    else props.onArrange?.(message);
+  };
+  const onDone = () => props.onDone?.();
+  const many = geometry.count > 1;
+  // Each of several elements flips if it can; one says itself whether it does.
+  const flips = !off && (many || !!selection?.flippable || !!selection?.group);
+  const flipReason = off ? NOTHING_SELECTED : "Text and plain boxes have nothing to flip";
+  const rotation = geometry.rotation;
+  const tilt = (t: (typeof TILTS)[number]) => (
+    <ToolButton
+      keepFocus
+      key={t.side}
+      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
+      disabled={off}
+      disabledReason={NOTHING_SELECTED}
+      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
+    >
+      {t.icon}
+    </ToolButton>
+  );
+
+  return (
+    <DropdownPanel role="dialog" aria-label="Position and size" className="flex w-max flex-col gap-2 text-xs">
+      <div className="flex items-center gap-1.5">
+        {FIELDS.map((f) => (
+          <Fragment key={f.field}>
+            <GeometryInput
+              {...f}
+              value={f.field === "rotation" ? geometry.rotation : geometry[f.field]}
+              disabled={many && f.field !== "x" && f.field !== "y"}
+              onChange={(value) => arrangeField({ type: "slop:edit-geometry", [f.field]: value })}
+              onDone={onDone}
+            />
+            {f.field === "w" && (
+              <ToolButton
+                keepFocus
+                label="Lock aspect ratio"
+                title={
+                  keepRatio
+                    ? "Resizes keep the aspect ratio (Shift frees it); a typed width or height brings the other along"
+                    : "Keep the aspect ratio when resizing, without holding Shift"
+                }
+                active={keepRatio}
+                onClick={() => props.onKeepRatio?.(!keepRatio)}
+              >
+                {keepRatio ? <Link2 /> : <Link2Off />}
+              </ToolButton>
+            )}
+          </Fragment>
+        ))}
+      </div>
+      {many && (
+        <p className="text-muted-foreground">
+          {geometry.count} elements selected: they move together; group them to size or turn them as one
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <label htmlFor="edit-size-mode" className="text-muted-foreground">
+          Handles
+        </label>
+        <RibbonSelect
+          id="edit-size-mode"
+          label="Size mode"
+          title="Resize changes the box; Stretch scales its contents too"
+          value={sizeMode}
+          onPick={(mode) => props.onSizeMode(mode as SizeMode)}
+          onDone={onDone}
+          className="border"
+        >
+          <option value="resize">Resize the box</option>
+          <option value="stretch">Stretch the contents</option>
+        </RibbonSelect>
+      </div>
+      <div className="flex items-center gap-0.5">
+        <ToolButton
+          keepFocus
+          label="Match width"
+          title="Give the others the first selected element's width"
+          disabled={off || !many}
+          disabledReason="Select two or more elements"
+          onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "w" })}
+        >
+          <StretchHorizontal />
+        </ToolButton>
+        <ToolButton
+          keepFocus
+          label="Match height"
+          title="Give the others the first selected element's height"
+          disabled={off || !many}
+          disabledReason="Select two or more elements"
+          onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "h" })}
+        >
+          <StretchVertical />
+        </ToolButton>
+        <div className="mx-1 h-4 w-px bg-border" />
+        <ToolButton
+          keepFocus
+          label="Flip horizontally"
+          shortcut="mod+shift+h"
+          active={flips && !many && !!selection?.flipX}
+          disabled={!flips}
+          disabledReason={flipReason}
+          onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "x" })}
+        >
+          <FlipHorizontal2 />
+        </ToolButton>
+        <ToolButton
+          keepFocus
+          label="Flip vertically"
+          shortcut="mod+shift+v"
+          active={flips && !many && !!selection?.flipY}
+          disabled={!flips}
+          disabledReason={flipReason}
+          onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "y" })}
+        >
+          <FlipVertical2 />
+        </ToolButton>
+        <div className="mx-1 h-4 w-px bg-border" />
+        {([-1, 1] as const).map((step) => (
+          <ToolButton
+            key={step}
+            keepFocus
+            label={step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise"}
+            disabled={off || rotation === null}
+            disabledReason={off ? NOTHING_SELECTED : "Select one element"}
+            onClick={() =>
+              rotation !== null &&
+              props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
+            }
+          >
+            {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
+          </ToolButton>
+        ))}
+      </div>
+      <div className="flex items-start gap-2">
+        <SectionLabel>3D rotate</SectionLabel>
+        <fieldset aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
+          {TILTS.slice(0, 4).map(tilt)}
+          <ToolButton
+            keepFocus
+            label="Reset the 3D rotation"
+            disabled={off}
+            disabledReason={NOTHING_SELECTED}
+            onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
+          >
+            <RotateCcw />
+          </ToolButton>
+          {TILTS.slice(4).map(tilt)}
+        </fieldset>
+      </div>
+    </DropdownPanel>
   );
 }
 
@@ -437,13 +450,11 @@ function GeometryInput(props: {
  * Groups the selection, takes a group apart, and locks or unlocks the selection so it cannot be
  * picked, moved or deleted by accident.
  */
-export function GroupControls(props: {
-  geometry: EditGeometry | null;
-  selection: EditSelection | null;
-  onArrange?: (message: ArrangeMessage) => void;
-}) {
-  const count = props.geometry?.count ?? 0;
-  const locked = !!props.selection?.locked;
+export const GroupControls = memo(function GroupControls(props: { onArrange?: (message: ArrangeMessage) => void }) {
+  const count = useSlideReport((report) => report.geometry?.count ?? 0);
+  const selected = useSlideReport((report) => report.selection !== null);
+  const group = useSlideReport((report) => !!report.selection?.group);
+  const locked = useSlideReport((report) => !!report.selection?.locked);
   return (
     <>
       <ToolButton
@@ -461,7 +472,7 @@ export function GroupControls(props: {
         keepFocus
         label="Ungroup"
         shortcut="mod+shift+g"
-        disabled={!props.selection?.group}
+        disabled={!group}
         disabledReason="Select a group"
         onClick={() => props.onArrange?.({ type: "slop:edit-ungroup" })}
       >
@@ -477,7 +488,7 @@ export function GroupControls(props: {
             : "Lock, so it cannot be picked, moved or deleted by accident (right-click it or use Layers to unlock it)"
         }
         active={locked}
-        disabled={!props.selection}
+        disabled={!selected}
         disabledReason={NOTHING_SELECTED}
         onClick={() => props.onArrange?.({ type: "slop:edit-lock", locked: !locked })}
       >
@@ -485,16 +496,16 @@ export function GroupControls(props: {
       </ToolButton>
     </>
   );
-}
+});
 
 /**
  * What is on the slide, the top-most first, and in a group what it holds: pick one to select it
  * (also one that is locked or covered by others), lock or unlock it, or move it up or down past
  * the next one. The panel stays open through the preview's reload after each change.
  */
-export function LayersPanel(props: { layers: EditLayer[]; onArrange?: (message: ArrangeMessage) => void }) {
+export const LayersPanel = memo(function LayersPanel(props: { onArrange?: (message: ArrangeMessage) => void }) {
   const { open, ref, toggle } = useDropdown();
-  const { layers } = props;
+  const layers = useSlideReport((report) => report.layers);
   const send = (message: ArrangeMessage) => props.onArrange?.(message);
   return (
     <div ref={ref} className="relative">
@@ -574,7 +585,7 @@ export function LayersPanel(props: { layers: EditLayer[]; onArrange?: (message: 
       )}
     </div>
   );
-}
+});
 
 /** Whether two layers sit in the same group (or both on the slide), by their paths. */
 function samePlace(a: number[], b: number[]) {

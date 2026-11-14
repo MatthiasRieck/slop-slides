@@ -23,6 +23,8 @@ use crate::rewind;
 use crate::sessions::Sessions;
 use crate::{claude, codex, copilot};
 
+mod deltas;
+
 /// The most of a tool's output the chat keeps, in characters: it is shown on demand and saved
 /// with the chat.
 pub(crate) const TOOL_OUTPUT_LIMIT: usize = 20_000;
@@ -48,15 +50,54 @@ pub(crate) fn tool_output(value: &Value) -> Option<String> {
     if text.trim().is_empty() {
         return None;
     }
-    let total = text.chars().count();
-    if total <= TOOL_OUTPUT_LIMIT {
-        return Some(text.to_string());
+    Some(cut_short(text).unwrap_or_else(|| text.to_string()))
+}
+
+/// `text` cut to its first [`TOOL_OUTPUT_LIMIT`] characters, saying how many more there were;
+/// None when it is no longer than that.
+fn cut_short(text: &str) -> Option<String> {
+    // No more bytes than the limit means no more characters either: nothing to count.
+    if text.len() <= TOOL_OUTPUT_LIMIT {
+        return None;
     }
-    let kept: String = text.chars().take(TOOL_OUTPUT_LIMIT).collect();
-    Some(format!(
-        "{kept}\n… ({} more characters)",
-        total - TOOL_OUTPUT_LIMIT
-    ))
+    let (cut, _) = text.char_indices().nth(TOOL_OUTPUT_LIMIT)?;
+    let more = text[cut..].chars().count();
+    Some(format!("{}\n… ({more} more characters)", &text[..cut]))
+}
+
+/// A tool's input as the chat shows and keeps it: `input` with every long text in it cut to
+/// [`TOOL_OUTPUT_LIMIT`], like a tool's output; None when nothing in it is that long. The agent
+/// writes a whole deck as one argument of a `Write`, and the chat is saved with every tool call
+/// in it after each turn. The start of each text stays, where an edit names the slide it is of
+/// (the chat finds the slide by the `id` in `new_string`), and short arguments like `file_path`
+/// are as they were.
+pub(crate) fn tool_input(input: &Value) -> Option<Value> {
+    match input {
+        Value::String(text) => cut_short(text).map(Value::String),
+        Value::Array(items) => {
+            let cut: Vec<Option<Value>> = items.iter().map(tool_input).collect();
+            cut.iter().any(Option::is_some).then(|| {
+                let kept = cut.into_iter().zip(items);
+                Value::Array(
+                    kept.map(|(cut, item)| cut.unwrap_or_else(|| item.clone()))
+                        .collect(),
+                )
+            })
+        }
+        Value::Object(fields) => {
+            let cut: Vec<Option<Value>> = fields.values().map(tool_input).collect();
+            cut.iter().any(Option::is_some).then(|| {
+                let kept = cut.into_iter().zip(fields);
+                Value::Object(
+                    kept.map(|(cut, (name, value))| {
+                        (name.clone(), cut.unwrap_or_else(|| value.clone()))
+                    })
+                    .collect(),
+                )
+            })
+        }
+        _ => None,
+    }
 }
 
 /// The images in a tool's output, as `data:` URLs: `value` is its content blocks, or an object
@@ -392,10 +433,12 @@ impl AgentManager {
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
             let (emitter, key) = (app.clone(), chat.clone());
+            // Streamed text goes out once a frame, not once per piece (see `deltas`).
+            let events = deltas::Deltas::per_frame(move |event| {
+                let _ = emitter.emit("agent-event", Envelope { chat: &key, event });
+            });
             let turn = Turn {
-                emit: Box::new(move |event| {
-                    let _ = emitter.emit("agent-event", Envelope { chat: &key, event });
-                }),
+                emit: Box::new(move |event| events.emit(event)),
                 dir,
                 app_home,
                 session_dir,
@@ -427,9 +470,14 @@ impl AgentManager {
                 });
             }
             // A deck's chat answers for its deck alone: other chats may be at work beside it.
-            let only = subject.is_file().then_some(subject.as_path());
-            let guard =
-                crate::safety::Guard::start(&turn.dir, only, &turn.session_dir, &turn.app_home);
+            let only = subject.is_file().then(|| subject.clone());
+            let guard = crate::safety::start(
+                turn.dir.clone(),
+                only,
+                turn.session_dir.clone(),
+                turn.app_home.clone(),
+            )
+            .await;
             let change = crate::history::Change::chat(
                 args.label.as_deref().unwrap_or(""),
                 args.message.clone(),
@@ -437,7 +485,7 @@ impl AgentManager {
             let interrupted = match guard {
                 Ok(guard) => {
                     let interrupted = turn.run_with_open_requests(&args.prompt, cancel_rx).await;
-                    match guard.finish(&change) {
+                    match crate::safety::finish(guard, change).await {
                         Ok(restored) => {
                             for (file, ids) in restored {
                                 turn.emit(&AgentEvent::Error {
@@ -595,9 +643,18 @@ impl Turn {
     }
 
     /// Reports `event`; the images of a tool's output are saved in the session first, and
-    /// reported as those files (one that cannot be saved is left out).
+    /// reported as those files (one that cannot be saved is left out), and the long texts of a
+    /// tool's input are cut short (see [`tool_input`]).
     fn emit(&self, event: &AgentEvent) {
         match event {
+            AgentEvent::ToolUse { id, name, input } => match tool_input(input) {
+                Some(input) => (self.emit)(&AgentEvent::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input,
+                }),
+                None => (self.emit)(event),
+            },
             AgentEvent::ToolResult {
                 id,
                 is_error,
@@ -879,6 +936,61 @@ mod tests {
         );
         let exact = "x".repeat(TOOL_OUTPUT_LIMIT);
         assert_eq!(tool_output(&json!(exact)), Some(exact));
+    }
+
+    #[test]
+    fn cuts_the_long_texts_of_a_tool_input_and_leaves_the_rest() {
+        let slide = "<section class=\"slide\" id=\"pricing\">";
+        let long = format!("{slide}{}", "é".repeat(TOOL_OUTPUT_LIMIT));
+        let input = json!({
+            "file_path": "/d/talk/deck.html",
+            "new_string": long,
+            "old_string": "<p>short</p>",
+            "replace_all": false,
+            "edits": [{ "old_string": "a", "new_string": "x".repeat(TOOL_OUTPUT_LIMIT + 3) }],
+        });
+        let cut = tool_input(&input).expect("something was long");
+        assert_eq!(cut["file_path"], "/d/talk/deck.html");
+        assert_eq!(cut["old_string"], "<p>short</p>");
+        assert_eq!(cut["replace_all"], false);
+        let new_string = cut["new_string"].as_str().unwrap();
+        assert!(
+            new_string.starts_with(slide),
+            "the start stays, where the edit names its slide"
+        );
+        let note = format!("\n… ({} more characters)", slide.chars().count());
+        assert!(new_string.ends_with(&note), "as a tool's output is cut");
+        assert_eq!(
+            new_string.chars().count(),
+            TOOL_OUTPUT_LIMIT + note.chars().count()
+        );
+        assert_eq!(cut["edits"][0]["old_string"], "a");
+        assert_eq!(
+            cut["edits"][0]["new_string"],
+            format!("{}\n… (3 more characters)", "x".repeat(TOOL_OUTPUT_LIMIT))
+        );
+        let keys = |value: &Value| {
+            value
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&cut), keys(&input), "the arguments keep their order");
+    }
+
+    #[test]
+    fn a_tool_input_without_long_text_is_not_copied() {
+        let exact = "x".repeat(TOOL_OUTPUT_LIMIT);
+        for input in [
+            json!({ "file_path": "/d/deck.html", "content": exact, "limit": 3 }),
+            json!({ "edits": [{ "old_string": "a", "new_string": "b" }] }),
+            json!(null),
+            json!("ls"),
+        ] {
+            assert_eq!(tool_input(&input), None, "{input}");
+        }
     }
 
     #[test]
@@ -1470,6 +1582,37 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 "{image:?}"
             );
             assert_eq!(fs::read(image).unwrap(), b"\x89PNG\r\n\x1a\n");
+        }
+
+        /// A deck written whole is one argument of the tool call: the chat gets its start.
+        #[tokio::test]
+        async fn reports_a_tool_call_with_its_long_input_cut_short() {
+            let content = format!(
+                "<section class=\"slide\" id=\"a\">{}",
+                "x".repeat(TOOL_OUTPUT_LIMIT)
+            );
+            let fx = Fixture::new(&format!(
+                r#"{INIT}
+echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Write","input":{{"file_path":"/d/deck.html","content":"{}"}}}}]}}}}'
+{OK}"#,
+                content.replace('"', r#"\""#)
+            ));
+            fx.run("Write it", None).await;
+            let events = fx.events();
+            let Some(AgentEvent::ToolUse { input, .. }) = events
+                .iter()
+                .find(|e| matches!(e, AgentEvent::ToolUse { .. }))
+            else {
+                panic!("no tool call: {events:?}");
+            };
+            assert_eq!(input["file_path"], "/d/deck.html");
+            let shown = input["content"].as_str().unwrap();
+            assert!(shown.starts_with("<section class=\"slide\" id=\"a\">"));
+            assert!(
+                shown.ends_with("\n… (30 more characters)"),
+                "{}",
+                &shown[shown.len() - 40..]
+            );
         }
 
         #[tokio::test]

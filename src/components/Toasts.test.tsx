@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openLayer } from "../lib/layers";
 import { showError, showInfo, showSuccess, useApp } from "../store";
-import { TOAST_MS, Toasts } from "./Toasts";
+import { TOAST_EXIT_MS, TOAST_MS, Toasts } from "./Toasts";
 
 const texts = () => useApp.getState().toasts.map((toast) => toast.text);
 const pressEscape = (target: Element | Document = document.body) => fireEvent.keyDown(target, { key: "Escape" });
@@ -59,6 +59,43 @@ describe("Toasts", () => {
     expect(dismiss[0]!.getAttribute("title")).toBe("Dismiss");
     fireEvent.click(dismiss[0]!);
     expect(texts()).toEqual(["busy"]);
+  });
+
+  it("rises in, and sinks out for a moment once dismissed, out of reach meanwhile", () => {
+    render(<Toasts />);
+    act(() => {
+      showError("disk full");
+      showInfo("Imported");
+    });
+    const cards = () => [...screen.getByTestId("toasts").children] as HTMLElement[];
+    expect(cards().map((card) => card.classList.contains("toast-enter"))).toEqual([true, true]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]!);
+    expect(texts()).toEqual(["Imported"]);
+    // Still there, in its place, on its way out: not announced, not to be pressed.
+    expect(cards().map((card) => card.textContent)).toEqual(["disk full", "Imported"]);
+    const leaving = cards()[0]!;
+    expect(leaving.classList.contains("toast-exit")).toBe(true);
+    expect(leaving.classList.contains("pointer-events-auto")).toBe(false);
+    expect(leaving.hasAttribute("inert")).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
+    expect(cards().map((card) => card.textContent)).toEqual(["Imported"]);
+    // The last one takes the stack with it.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByTestId("toasts")).toBeTruthy();
+    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
+    expect(screen.queryByTestId("toasts")).toBeNull();
+  });
+
+  it("is gone at once for those who asked for less motion", () => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) => ({ matches: query.includes("reduce") }) as MediaQueryList,
+    );
+    render(<Toasts />);
+    act(() => showError("disk full"));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("toasts")).toBeNull();
+    vi.restoreAllMocks();
   });
 
   it("scrolls a long message rather than growing over the window", () => {

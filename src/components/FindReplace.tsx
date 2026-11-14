@@ -1,8 +1,9 @@
 import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWord, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { ReplacedText } from "../lib/api";
+import type { ReplacedText, Slide } from "../lib/api";
 import { formatKeys, isMod } from "../lib/keys";
+import { memoizeLast } from "../lib/memo";
 import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
@@ -196,13 +197,16 @@ export function useFindShortcut() {
   }, []);
 }
 
+/** What the deck's slides hold, as one key: worked out once per list of slides, however often it is asked for. */
+const slidesVersion = memoizeLast((slides: Slide[] | undefined) => slides?.map((slide) => slide.hash).join(",") ?? "");
+
 /**
  * Searches the deck for the query in the store once typing settles, and again whenever a slide
  * changes, as after a replace. Leaving the stage (for the deck's settings, say) ends the search.
  */
 export function useDeckSearch() {
   const deckId = useApp((s) => s.deck?.id ?? "");
-  const version = useApp((s) => s.deck?.slides.map((slide) => slide.hash).join(",") ?? "");
+  const version = useApp((s) => slidesVersion(s.deck?.slides));
   const query = useApp((s) => s.search.query);
   const options = useApp((s) => s.search.options);
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are what a search depends on

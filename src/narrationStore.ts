@@ -12,6 +12,7 @@ import {
   type SlideAudio,
   type SpeechStatus,
 } from "./lib/api";
+import { forgetNarration } from "./lib/narrationCache";
 import { dirname } from "./lib/utils";
 import { showError, useApp } from "./store";
 
@@ -57,105 +58,160 @@ function fail(error: unknown) {
   if (message !== NARRATION_CANCELLED) showError(message);
 }
 
-/** The state for `audio`, the audio of deck `deck`'s slides as the backend lists it. */
-function audioOf(deck: string, audio: SlideAudio[]): Pick<NarrationState, "audio" | "audioDeck"> {
-  return { audio: Object.fromEntries(audio.map((a) => [a.slide, a])), audioDeck: deck };
+/** Whether two slides' audio is the same in all that is known of it. */
+function sameAudio(a: SlideAudio, b: SlideAudio): boolean {
+  return (
+    a.slide === b.slide &&
+    a.state === b.state &&
+    a.seconds === b.seconds &&
+    !a.recorded === !b.recorded &&
+    !a.imported === !b.imported &&
+    !a.timed === !b.timed
+  );
 }
 
-export const useNarration = create<NarrationState>((set, get) => ({
-  speech: null,
-  accountVoices: {},
-  audio: {},
-  audioDeck: null,
-  render: null,
-  timing: null,
-
-  loadSpeech: async () => {
-    try {
-      set({ speech: await api.speechStatus() });
-    } catch (error) {
-      fail(error);
+/**
+ * What `listed`, the audio of deck `deck`'s slides as the backend lists it, makes of what is
+ * `known`: the `state` to set, null when it is all as known, and the slides whose audio `changed`
+ * (or is gone). What did not change stays the very object it was: a slide whose audio is as
+ * before keeps its entry, and when that goes for all of them nothing is set at all, so reading
+ * the audio again tells nobody who shows it.
+ */
+function audioAfter(known: Pick<NarrationState, "audio" | "audioDeck">, deck: string, listed: SlideAudio[]) {
+  const before = known.audioDeck === deck ? known.audio : {};
+  const audio: Record<string, SlideAudio> = {};
+  const changed = Object.keys(before).filter((slide) => !listed.some((entry) => entry.slide === slide));
+  for (const entry of listed) {
+    const was = before[entry.slide];
+    if (was && sameAudio(was, entry)) audio[entry.slide] = was;
+    else {
+      audio[entry.slide] = entry;
+      changed.push(entry.slide);
     }
-  },
+  }
+  const same = known.audioDeck === deck && changed.length === 0;
+  return { state: same ? null : { audio, audioDeck: deck }, changed };
+}
 
-  loadVoices: async (provider) => {
-    try {
-      const voices = await api.speechVoices(provider);
-      if (voices.length > 0) set((s) => ({ accountVoices: { ...s.accountVoices, [provider]: voices } }));
-    } catch {
-      // Offline or a key it does not accept: the built-in voices do, and saying narration tells why.
-    }
-  },
+/** What tells that a deck's audio may be other than it was: the slides, what is said over each, and who says it. */
+export function audioKey(deck: Deck): string {
+  return JSON.stringify([
+    deck.id,
+    deck.narration ?? null,
+    deck.slides.map((slide) => [slide.id, slide.narration ?? ""]),
+  ]);
+}
 
-  setKey: async (provider, key) => {
-    try {
-      set({ speech: await api.setSpeechKey(provider, key) });
-    } catch (error) {
-      fail(error);
-      return false;
-    }
-    set((s) => {
-      const { [provider]: _, ...rest } = s.accountVoices;
-      return { accountVoices: rest };
-    });
-    return true;
-  },
+export const useNarration = create<NarrationState>((set, get) => {
+  /**
+   * Takes in the audio of `deck`'s slides as the backend lists it. What was read of a slide whose
+   * audio changed is forgotten (see ./lib/narrationCache.ts), so it is read anew.
+   */
+  const take = (deck: string, listed: SlideAudio[]) => {
+    const { state, changed } = audioAfter(get(), deck, listed);
+    for (const slide of changed) forgetNarration(deck, slide);
+    if (state) set(state);
+  };
+  return {
+    speech: null,
+    accountVoices: {},
+    audio: {},
+    audioDeck: null,
+    render: null,
+    timing: null,
 
-  refreshAudio: async (deck) => {
-    try {
-      set(audioOf(deck, await api.narrationAudio(deck)));
-    } catch {
-      // The deck file is mid-write or gone; the next change refreshes it.
-    }
-  },
-
-  renderAudio: async (deck, slides) => {
-    set({ render: { deck, slide: null, done: 0, total: 0 } });
-    try {
-      const audio = await api.renderNarration(deck, slides);
-      set(audioOf(deck, audio));
-      return true;
-    } catch (error) {
-      fail(error);
-      await get().refreshAudio(deck);
-      return false;
-    } finally {
-      set({ render: null });
-    }
-  },
-
-  cancelRender: async () => {
-    await api.cancelNarration();
-  },
-
-  timeWords: async (deck, slides) => {
-    if (get().timing) return false;
-    set({ timing: { deck, slide: null, done: 0, total: 0 } });
-    try {
-      if (!(await api.voiceStatus()).modelReady) {
-        set({ timing: { deck, slide: null, done: 0, total: 0, downloading: true } });
-        await api.downloadVoiceModel();
+    loadSpeech: async () => {
+      try {
+        set({ speech: await api.speechStatus() });
+      } catch (error) {
+        fail(error);
       }
-      const audio = await api.timeNarration(deck, slides);
-      set(audioOf(deck, audio));
-      return true;
-    } catch (error) {
-      fail(error);
-      await get().refreshAudio(deck);
-      return false;
-    } finally {
-      set({ timing: null });
-    }
-  },
+    },
 
-  deleteRecording: async (deck, slide) => {
-    try {
-      set(audioOf(deck, await api.deleteRecordedNarration(deck, slide)));
-    } catch (error) {
-      fail(error);
-    }
-  },
-}));
+    loadVoices: async (provider) => {
+      try {
+        const voices = await api.speechVoices(provider);
+        if (voices.length > 0) set((s) => ({ accountVoices: { ...s.accountVoices, [provider]: voices } }));
+      } catch {
+        // Offline or a key it does not accept: the built-in voices do, and saying narration tells why.
+      }
+    },
+
+    setKey: async (provider, key) => {
+      try {
+        set({ speech: await api.setSpeechKey(provider, key) });
+      } catch (error) {
+        fail(error);
+        return false;
+      }
+      set((s) => {
+        const { [provider]: _, ...rest } = s.accountVoices;
+        return { accountVoices: rest };
+      });
+      return true;
+    },
+
+    refreshAudio: async (deck) => {
+      try {
+        take(deck, await api.narrationAudio(deck));
+      } catch {
+        // The deck file is mid-write or gone; the next change refreshes it.
+      }
+    },
+
+    renderAudio: async (deck, slides) => {
+      set({ render: { deck, slide: null, done: 0, total: 0 } });
+      try {
+        const audio = await api.renderNarration(deck, slides);
+        // Said again, a slide's audio may be as long as it was and still be other audio.
+        if (slides) for (const slide of slides) forgetNarration(deck, slide);
+        else forgetNarration(deck);
+        take(deck, audio);
+        return true;
+      } catch (error) {
+        fail(error);
+        await get().refreshAudio(deck);
+        return false;
+      } finally {
+        set({ render: null });
+      }
+    },
+
+    cancelRender: async () => {
+      await api.cancelNarration();
+    },
+
+    timeWords: async (deck, slides) => {
+      if (get().timing) return false;
+      set({ timing: { deck, slide: null, done: 0, total: 0 } });
+      try {
+        if (!(await api.voiceStatus()).modelReady) {
+          set({ timing: { deck, slide: null, done: 0, total: 0, downloading: true } });
+          await api.downloadVoiceModel();
+        }
+        const audio = await api.timeNarration(deck, slides);
+        take(deck, audio);
+        return true;
+      } catch (error) {
+        fail(error);
+        await get().refreshAudio(deck);
+        return false;
+      } finally {
+        set({ timing: null });
+      }
+    },
+
+    deleteRecording: async (deck, slide) => {
+      try {
+        const audio = await api.deleteRecordedNarration(deck, slide);
+        forgetNarration(deck, slide);
+        take(deck, audio);
+      } catch (error) {
+        fail(error);
+      }
+    },
+  };
+});
 
 /** Who says the deck's narration: its provider, or the default (the first) when the deck names none (or one unknown). */
 export function deckProvider(deck: Deck, speech: SpeechStatus): NarrationProvider | undefined {
@@ -178,26 +234,37 @@ export function touchesNarration(paths: string[], deckPath: string): boolean {
   return paths.some((path) => path.startsWith(audio));
 }
 
-/** Keeps the narration state in step with backend events and the open deck. */
+/**
+ * Keeps the narration state in step with backend events and the open deck. The deck's audio is
+ * read again when something it depends on changed (see `audioKey`), not for every other edit of
+ * the deck: each saved slide brings a new deck.
+ */
 export async function initNarrationEvents() {
-  await listen<NarrationRenderProgress>("narration-render", ({ payload }) => {
-    // Renders started in another window, or by a video export, show here too.
-    useNarration.setState({ render: payload.slide === null ? null : payload });
-    if (payload.deck === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload.deck);
-  });
-  await listen<NarrationTimingProgress>("narration-timing", ({ payload }) => {
-    // Only the window timing the words shows its progress.
-    if (useNarration.getState().timing?.deck === payload.deck && payload.slide !== null) {
-      useNarration.setState({ timing: payload });
-    }
-    if (payload.deck === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload.deck);
-  });
-  // Recorded in the presenter view, maybe in its own window.
-  await listen<string>("narration-recorded", ({ payload }) => {
-    if (payload === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload);
-  });
+  const refresh = (deck: string) => void useNarration.getState().refreshAudio(deck);
+  const open = () => useApp.getState().deck?.id;
+  // Listening starts for all three at once: none waits for the one before.
+  await Promise.all([
+    listen<NarrationRenderProgress>("narration-render", ({ payload }) => {
+      // Renders started in another window, or by a video export, show here too.
+      useNarration.setState({ render: payload.slide === null ? null : payload });
+      if (payload.deck === open()) refresh(payload.deck);
+    }),
+    listen<NarrationTimingProgress>("narration-timing", ({ payload }) => {
+      // Only the window timing the words shows its progress.
+      if (useNarration.getState().timing?.deck === payload.deck && payload.slide !== null) {
+        useNarration.setState({ timing: payload });
+      }
+      if (payload.deck === open()) refresh(payload.deck);
+    }),
+    // Recorded in the presenter view, maybe in its own window: other audio, however long.
+    listen<string>("narration-recorded", ({ payload }) => {
+      forgetNarration(payload);
+      if (payload === open()) refresh(payload);
+    }),
+  ]);
   // A changed deck (a script, the voice or language) changes which audio is up to date.
   let last: Deck | null = null;
+  let key: string | null = null;
   // Audio written outside the app, such as by the agent, changes it too.
   let change = useApp.getState().workspaceChange;
   useApp.subscribe((state) => {
@@ -205,10 +272,15 @@ export async function initNarrationEvents() {
     change = state.workspaceChange;
     if (state.deck !== last) {
       last = state.deck;
-      if (state.deck) void useNarration.getState().refreshAudio(state.deck.id);
+      const next = state.deck ? audioKey(state.deck) : null;
+      if (next === key) return;
+      key = next;
+      if (state.deck) refresh(state.deck.id);
     } else if (changed && state.deck && state.openedFile && change) {
-      if (touchesNarration(change.paths, state.openedFile.path))
-        void useNarration.getState().refreshAudio(state.deck.id);
+      if (touchesNarration(change.paths, state.openedFile.path)) {
+        forgetNarration(state.deck.id);
+        refresh(state.deck.id);
+      }
     }
   });
 }

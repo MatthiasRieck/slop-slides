@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { api, type NarrationWord, type SlideAudio } from "../lib/api";
+import { narrationPeaks } from "../lib/narrationCache";
+import { wavePath } from "../lib/waveform";
 
 /**
  * How loud a slide's narration audio is along its length, for its waveform; empty without audio
- * or while it loads. Shared by the timeline's clips and the Narration tab.
+ * or while it loads. Shared by the timeline's clips and the Narration tab, which read it once
+ * between them (see ../lib/narrationCache.ts).
  */
 export function usePeaks(deck: string, slide: string, audio: SlideAudio | undefined): number[] {
   const [peaks, setPeaks] = useState<number[]>([]);
@@ -17,7 +20,7 @@ export function usePeaks(deck: string, slide: string, audio: SlideAudio | undefi
     const show = (found: number[] | null) => {
       if (current) setPeaks(found ?? []);
     };
-    api.narrationPeaks(deck, slide).then(show, () => show(null));
+    narrationPeaks(deck, slide).then(show, () => show(null));
     return () => {
       current = false;
     };
@@ -44,8 +47,11 @@ export function useWords(deck: string, slide: string, audio: SlideAudio | undefi
   return words;
 }
 
-/** `words` along audio `seconds` long, each at its start, cut off where the next begins. */
-export function Words({ words, seconds }: { words: NarrationWord[]; seconds: number }) {
+/**
+ * `words` along audio `seconds` long, each at its start, cut off where the next begins. Drawn
+ * again only for other words: a playhead moving over them changes nothing of theirs.
+ */
+export const Words = memo(function Words({ words, seconds }: { words: NarrationWord[]; seconds: number }) {
   const at = (time: number) => (Math.min(time, seconds) / seconds) * 100;
   return (
     <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5">
@@ -64,11 +70,11 @@ export function Words({ words, seconds }: { words: NarrationWord[]; seconds: num
       })}
     </span>
   );
-}
+});
 
-/** `peaks`, one bar each, mirrored around the middle and stretched to fit. */
-export function Waveform({ peaks }: { peaks: number[] }) {
-  const bars = peaks.map((peak, i) => `M${i} ${1 - peak}V${1 + peak}`).join("");
+/** `peaks`, one bar each, mirrored around the middle and stretched to fit. Drawn again only for other peaks. */
+export const Waveform = memo(function Waveform({ peaks }: { peaks: number[] }) {
+  const bars = wavePath(peaks);
   return (
     <svg
       aria-hidden="true"
@@ -81,4 +87,4 @@ export function Waveform({ peaks }: { peaks: number[] }) {
       <path d={bars} strokeWidth="0.8" />
     </svg>
   );
-}
+});

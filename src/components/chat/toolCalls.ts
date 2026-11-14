@@ -84,49 +84,75 @@ export function toolArguments(part: ToolPart): { name: string; value: string }[]
     .map(([name, value]) => ({ name, value: typeof value === "string" ? value : JSON.stringify(value, null, 2) }));
 }
 
+/** No ids: what {@link editedIds} gives for every tool call that is not an edit of the deck file. */
+const NO_IDS: readonly string[] = [];
+
 /**
- * The slide of the deck a tool call edited, when its `target` (see {@link describeTool}) is the
- * deck file: found via an `id="…"` of one of `slideIds` in the edited text.
+ * The ids (`id="…"`) written in the text a tool call edited, in the order to look for a slide
+ * among them: those of the new text, then those of the text it took the place of. Empty unless
+ * its `target` (see {@link describeTool}) is the deck file. Reading them takes a search through
+ * the edit, so a tool call is asked once (see `ToolRow`), not each time the deck changes.
  */
-export function editedSlide(part: ToolPart, target: string, deckId: string, slideIds: string[]): string | null {
-  if (target !== basename(deckId)) return null;
+export function editedIds(part: ToolPart, target: string, deckId: string): readonly string[] {
+  if (target !== basename(deckId)) return NO_IDS;
+  const ids: string[] = [];
   for (const key of ["new_string", "old_string"]) {
     const text = part.input[key];
     if (typeof text !== "string") continue;
     for (const match of text.matchAll(/\bid=["']([^"']+)["']/g)) {
-      if (match[1] && slideIds.includes(match[1])) return match[1];
+      if (match[1]) ids.push(match[1]);
     }
   }
-  return null;
+  return ids.length > 0 ? ids : NO_IDS;
 }
 
-/** A reply's parts as the transcript lays them out: tool calls in a row are one group of steps. */
-export type PartGroup = { kind: "part"; part: ChatPart; index: number } | { kind: "steps"; tools: ToolPart[] };
+/** The slide a tool call edited: the first of the `ids` its edit names that is a slide. */
+export function editedSlide(ids: readonly string[], slides: ReadonlyMap<string, number>): string | null {
+  return ids.find((id) => slides.has(id)) ?? null;
+}
 
 /**
- * Puts tool calls that follow one another into one group of steps, so that a turn of thirty edits
- * is one line. A tool call on its own stays as it is, as does everything else. Text that is blank
- * does not show, so it does not part two tool calls either.
+ * A reply's parts as the transcript lays them out: tool calls in a row are one group of steps.
+ * `key` tells a part from the others of its reply for as long as the reply lasts.
  */
-export function groupParts(parts: ChatPart[]): PartGroup[] {
+export type PartGroup = { kind: "part"; part: ChatPart; key: string } | { kind: "steps"; tools: ToolPart[] };
+
+/** What tells a part that has a name of its own from the others of its reply. */
+function partKey(part: Exclude<ChatPart, { kind: "text" }>): string {
+  return part.kind === "approval" ? part.approval.id : part.id;
+}
+
+/**
+ * Lays out a reply's parts. With `fold`, tool calls that follow one another go into one group
+ * of steps, so that a turn of thirty edits is one line; without it (while the reply comes in)
+ * each shows as it happens. A tool call on its own stays as it is, as does everything else. Text
+ * that is blank does not show, so it does not part two tool calls either.
+ *
+ * A text has no name, so its key is its place among the texts that show. That place stays: text
+ * only comes in at the end, while a blank text before it may go at any time (the agent takes it
+ * out when it calls a tool), which is why its place among all parts would not do.
+ */
+export function groupParts(parts: ChatPart[], fold = true): PartGroup[] {
   const groups: PartGroup[] = [];
   let run: ToolPart[] = [];
-  let runStart = 0;
+  let texts = 0;
   const close = () => {
     const [first] = run;
     if (run.length > 1) groups.push({ kind: "steps", tools: run });
-    else if (first) groups.push({ kind: "part", part: first, index: runStart });
+    else if (first) groups.push({ kind: "part", part: first, key: first.id });
     run = [];
   };
-  parts.forEach((part, index) => {
-    if (part.kind === "tool") {
-      if (run.length === 0) runStart = index;
+  for (const part of parts) {
+    if (part.kind === "tool" && fold) {
       run.push(part);
-    } else if (part.kind !== "text" || part.text.trim()) {
+    } else if (part.kind !== "text") {
       close();
-      groups.push({ kind: "part", part, index });
+      groups.push({ kind: "part", part, key: partKey(part) });
+    } else if (part.text.trim()) {
+      close();
+      groups.push({ kind: "part", part, key: `text-${texts++}` });
     }
-  });
+  }
   close();
   return groups;
 }

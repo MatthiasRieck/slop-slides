@@ -1,6 +1,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, Pencil, Ungroup } from "lucide-react";
+import { memo } from "react";
 
 import type { Section } from "../../lib/api";
 import { cn, plural } from "../../lib/utils";
@@ -9,8 +10,11 @@ import { SectionLabel } from "../SectionLabel";
 import { REMOVE_SECTION } from "./menus";
 import { noLayoutAnimation } from "./Thumbnail";
 
-/** Divider row that names a section. Only the editor shows it; the player never does. */
-export function SectionHeader(props: {
+/**
+ * Divider row that names a section. Only the editor shows it; the player never does. Memoized,
+ * with the same functions for every header, so it renders when its section changes.
+ */
+export const SectionHeader = memo(function SectionHeader(props: {
   itemKey: string;
   section: Section;
   /** Edit mode: the section can be renamed, removed and moved. */
@@ -27,17 +31,19 @@ export function SectionHeader(props: {
   /** How many slides the section holds. */
   count: number;
   editing: boolean;
-  onEditing: (editing: boolean) => void;
-  onMenu: (event: React.MouseEvent) => void;
+  /** The section whose title is being typed, by its index; null when that ends. */
+  onEditing: (section: number | null) => void;
+  /** A right-click on the row `key`. */
+  onMenu: (event: React.MouseEvent, key: string) => void;
 }) {
-  const { section, editing, onEditing } = props;
+  const { section, editing, onEditing, onMenu, itemKey } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.itemKey,
     animateLayoutChanges: props.still ? noLayoutAnimation : undefined,
   });
 
   const commit = async (title: string) => {
-    onEditing(false);
+    onEditing(null);
     const next = title.trim();
     if (!next) {
       // A section without a name would be a line nobody can tell from another.
@@ -55,7 +61,7 @@ export function SectionHeader(props: {
       data-section-key={props.itemKey}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1", isDragging && "opacity-0")}
-      onContextMenu={editing ? undefined : props.onMenu}
+      onContextMenu={editing ? undefined : (event) => onMenu(event, itemKey)}
       {...attributes}
       {...listeners}
     >
@@ -100,7 +106,7 @@ export function SectionHeader(props: {
           {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
           <SectionLabel
             title={props.editable ? "Double-click to rename" : undefined}
-            onDoubleClick={() => props.editable && onEditing(true)}
+            onDoubleClick={() => props.editable && onEditing(section.index)}
             className={cn("min-w-0 truncate", !section.title && "italic")}
           >
             {section.title || "Untitled section"}
@@ -119,7 +125,7 @@ export function SectionHeader(props: {
               )}
               {props.editable && (
                 <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-                  <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+                  <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
                     <Pencil className="size-3" />
                   </SectionAction>
                   <SectionAction
@@ -136,7 +142,7 @@ export function SectionHeader(props: {
       )}
     </li>
   );
-}
+});
 
 function SectionAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (

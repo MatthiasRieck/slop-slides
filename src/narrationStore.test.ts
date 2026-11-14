@@ -9,7 +9,9 @@ listen.mockImplementation(async (event: string, handler: (event: { payload: unkn
 });
 
 import type { SpeechStatus } from "./lib/api";
+import { forgetNarration, narrationPeaks } from "./lib/narrationCache";
 import {
+  audioKey,
   canSpeakWith,
   deckProvider,
   initNarrationEvents,
@@ -132,6 +134,103 @@ describe("narration store", () => {
     expect(invoke).not.toHaveBeenCalledWith("download_voice_model");
     expect(lastError(useApp.getState())).toBe("Slide intro: Transcription failed");
     expect(useNarration.getState().timing).toBeNull();
+  });
+});
+
+describe("reading the deck's audio again", () => {
+  const READY = [
+    { slide: "intro", state: "ready", seconds: 3 },
+    { slide: "outro", state: "missing", seconds: null },
+  ];
+  const audioAsked = () => invoke.mock.calls.filter(([command]) => command === "narration_audio").length;
+  const peaksAsked = () => invoke.mock.calls.filter(([command]) => command === "narration_peaks").length;
+
+  beforeEach(() => forgetNarration());
+
+  it("tells nobody when the audio is as it was", async () => {
+    invoke.mockImplementation(async () => READY.map((audio) => ({ ...audio })));
+    await useNarration.getState().refreshAudio(deck.id);
+    const before = useNarration.getState().audio;
+    const told = vi.fn();
+    const stop = useNarration.subscribe(told);
+    await useNarration.getState().refreshAudio(deck.id);
+    await useNarration.getState().refreshAudio(deck.id);
+    expect(told).not.toHaveBeenCalled();
+    expect(useNarration.getState().audio).toBe(before);
+    stop();
+  });
+
+  it("keeps the slides whose audio did not change as they were, and forgets what was read of one that did", async () => {
+    invoke.mockImplementation(async (command: string) => (command === "narration_peaks" ? [0.5] : READY));
+    await useNarration.getState().refreshAudio(deck.id);
+    const before = useNarration.getState().audio;
+    await Promise.all([narrationPeaks(deck.id, "intro"), narrationPeaks(deck.id, "outro")]);
+    expect(peaksAsked()).toBe(2);
+    invoke.mockImplementation(async (command: string) =>
+      command === "narration_peaks" ? [1] : [READY[0], { slide: "outro", state: "ready", seconds: 2 }],
+    );
+    await useNarration.getState().refreshAudio(deck.id);
+    const after = useNarration.getState().audio;
+    expect(after).not.toBe(before);
+    expect(after.intro).toBe(before.intro);
+    expect(after.outro).toEqual({ slide: "outro", state: "ready", seconds: 2 });
+    // Only the changed slide's waveform is read anew.
+    await Promise.all([narrationPeaks(deck.id, "intro"), narrationPeaks(deck.id, "outro")]);
+    expect(peaksAsked()).toBe(3);
+  });
+
+  it("sets it for another deck, and for a slide that is gone", async () => {
+    invoke.mockResolvedValue(READY);
+    await useNarration.getState().refreshAudio(deck.id);
+    await useNarration.getState().refreshAudio("other");
+    expect(useNarration.getState().audioDeck).toBe("other");
+    invoke.mockResolvedValue([READY[0]]);
+    await useNarration.getState().refreshAudio("other");
+    expect(Object.keys(useNarration.getState().audio)).toEqual(["intro"]);
+  });
+
+  it("forgets audio said again, though it is as long as before", async () => {
+    invoke.mockImplementation(async (command: string) => (command === "narration_peaks" ? [0.5] : READY));
+    await useNarration.getState().refreshAudio(deck.id);
+    await narrationPeaks(deck.id, "intro");
+    await useNarration.getState().renderAudio(deck.id, ["intro"]);
+    await narrationPeaks(deck.id, "intro");
+    expect(peaksAsked()).toBe(2);
+  });
+
+  it("only when what the audio depends on changed, not for every new deck", async () => {
+    await initNarrationEvents();
+    invoke.mockResolvedValue(READY);
+    await act(async () => useApp.setState({ deck }));
+    const asked = audioAsked();
+    expect(asked).toBeGreaterThan(0);
+    // A slide saved: another deck object, another markup, the same words in the same voice.
+    const saved = { ...deck, slides: deck.slides.map((slide) => ({ ...slide, hash: `${slide.hash}'` })) };
+    expect(audioKey(saved)).toBe(audioKey(deck));
+    await act(async () => useApp.setState({ deck: saved }));
+    expect(audioAsked()).toBe(asked);
+    // Other words over a slide, or another voice.
+    const said = { ...saved, slides: saved.slides.map((slide, i) => (i ? slide : { ...slide, narration: "Hi." })) };
+    await act(async () => useApp.setState({ deck: said }));
+    expect(audioAsked()).toBeGreaterThan(asked);
+    const again = audioAsked();
+    await act(async () => useApp.setState({ deck: { ...said, narration: { voice: "coral", language: "en" } } }));
+    expect(audioAsked()).toBeGreaterThan(again);
+  });
+
+  it("starts listening to the backend's events together", () => {
+    listen.mockClear();
+    const pending = new Promise<() => void>(() => {});
+    listen.mockImplementationOnce(() => pending);
+    listen.mockImplementationOnce(() => pending);
+    listen.mockImplementationOnce(() => pending);
+    void initNarrationEvents();
+    // None waits for the one before to be registered.
+    expect(listen.mock.calls.map(([event]) => event)).toEqual([
+      "narration-render",
+      "narration-timing",
+      "narration-recorded",
+    ]);
   });
 });
 

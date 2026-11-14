@@ -1,5 +1,5 @@
 import { Blend, Crop, Paintbrush, Replace } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
@@ -11,6 +11,7 @@ import {
   FIT_POSITIONS,
   type ImageFit,
 } from "../lib/editTools";
+import { perFrame } from "../lib/perFrame";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
 import { DraftInput } from "./Field";
@@ -145,7 +146,8 @@ function AppearanceButton(props: {
 
 /**
  * A slider with its value as a number to type beside it. While it is dragged the value shows in
- * the slide (`onPreview`); the one it is let go at is applied, once (`onCommit`). A drag that
+ * the slide (`onPreview`), once per animation frame however fast it moves, and always the last
+ * one before it is let go; the one it is let go at is applied, once (`onCommit`). A drag that
  * never lands (Escape, or the slider going away under the pointer) is taken back (`onCancel`).
  * A typed number applies on Enter or when the field loses focus, within the slider's range.
  */
@@ -171,23 +173,28 @@ function Slider(props: {
   const previewing = useRef(false);
   const latest = useRef(props);
   latest.current = props;
+  // The slider reports every value it passes; the slide need not draw more of them than the screen shows.
+  const preview = useMemo(() => perFrame<number>((value) => latest.current.onPreview(value)), []);
   // React's onChange fires all along the drag; the browser's own `change` only when it ends.
   useEffect(() => {
     const el = input.current;
     if (!el) return;
     const commit = () => {
+      preview.flush();
       previewing.current = false;
       latest.current.onCommit(Number(el.value));
     };
     el.addEventListener("change", commit);
     return () => {
       el.removeEventListener("change", commit);
+      preview.cancel();
       if (previewing.current) latest.current.onCancel();
     };
-  }, []);
+  }, [preview]);
   const cancel = () => {
     if (!previewing.current) return;
     previewing.current = false;
+    preview.cancel();
     setDraft(props.value);
     props.onCancel();
   };
@@ -208,7 +215,7 @@ function Slider(props: {
             const value = Number(event.target.value);
             setDraft(value);
             previewing.current = true;
-            props.onPreview(value);
+            preview.push(value);
           }}
           onKeyDown={(event) => {
             if (event.key !== "Escape" || !previewing.current) return;

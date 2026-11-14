@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
-import { FileTree } from "./FileTree";
+import { FileTree, TREE_RELOAD_DELAY } from "./FileTree";
 
 const entry = (path: string, kind: WorkspaceEntry["kind"]): WorkspaceEntry => ({
   name: path.split("/").pop()!,
@@ -32,6 +32,9 @@ beforeEach(() => {
     workspace: { path: "/ws", name: "ws" },
     openedFile: null,
     workspaceChange: null,
+    // The tree is on show: the sidebar is open on its tab.
+    sidebarOpen: true,
+    sidebarTab: "files",
     openPath: vi.fn(async () => {}),
     toasts: [],
   });
@@ -93,6 +96,70 @@ describe("FileTree", () => {
     act(() => useApp.setState({ workspaceChange: { paths: ["new.html", "elsewhere/x.png"], rev: 1 } }));
     await waitFor(() => expect(items()).toContain("new.html"));
     expect(listed()).toEqual(["", ""]);
+  });
+
+  describe("following a burst of changes", () => {
+    /** The tree with `talks` open, and the listings so far forgotten. */
+    async function shownTree() {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      fireEvent.click(item("talks"));
+      await waitFor(() => expect(items()).toHaveLength(5));
+      invoke.mockClear();
+      vi.useFakeTimers();
+    }
+    /** What the watcher reports: ten batches, 5 ms apart. */
+    const burst = () => {
+      for (let rev = 1; rev <= 10; rev++) {
+        const paths = [`talks/slide-${rev}.png`, "notes.md", `talks/q3/asset-${rev}.png`];
+        act(() => useApp.setState({ workspaceChange: { paths, rev } }));
+        act(() => void vi.advanceTimersByTime(5));
+      }
+    };
+    afterEach(() => vi.useRealTimers());
+
+    it("lists each folder on show once, after the reports pause", async () => {
+      await shownTree();
+      burst();
+      expect(listed()).toEqual([]);
+      await act(async () => void (await vi.advanceTimersByTimeAsync(TREE_RELOAD_DELAY)));
+      // The root and the open folder; `talks/q3` was never listed, so there is nothing to refresh.
+      expect(listed()).toEqual(["", "talks"]);
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1000)));
+      expect(listed()).toEqual(["", "talks"]);
+    });
+
+    it("forgets a collapsed folder instead of listing it, and lists it when it opens again", async () => {
+      await shownTree();
+      fireEvent.click(item("talks"));
+      act(() => useApp.setState({ workspaceChange: { paths: ["talks/new.html"], rev: 1 } }));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(TREE_RELOAD_DELAY)));
+      expect(listed()).toEqual([]);
+      folders.talks = [...folders.talks!, entry("talks/new.html", "deck")];
+      fireEvent.click(item("talks"));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+      expect(listed()).toEqual(["talks"]);
+      expect(items()).toContain("new.html");
+    });
+
+    it("lists nothing while the tree is out of sight, and catches up once as it shows", async () => {
+      await shownTree();
+      act(() => useApp.setState({ sidebarOpen: false }));
+      burst();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1000)));
+      expect(listed()).toEqual([]);
+      act(() => useApp.setState({ sidebarOpen: true }));
+      await act(async () => void (await vi.advanceTimersByTimeAsync(TREE_RELOAD_DELAY)));
+      expect(listed()).toEqual(["", "talks"]);
+    });
+
+    it("does not list again for a report from before the tree was there", async () => {
+      useApp.setState({ workspaceChange: { paths: ["notes.md"], rev: 7 } });
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      await act(async () => void (await new Promise((resolve) => setTimeout(resolve, TREE_RELOAD_DELAY + 30))));
+      expect(listed()).toEqual([""]);
+    });
   });
 
   it("refreshes every loaded folder on request", async () => {

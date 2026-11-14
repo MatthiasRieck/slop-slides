@@ -582,3 +582,51 @@ fn steers_claude_with_priority_now() {
     ));
     assert!(!is_steer_abort(&json!({"type": "result"})));
 }
+
+#[test]
+fn skips_unshown_deltas_without_reading_them_and_nothing_else() {
+    // As the CLI writes them: compact, the line's type first.
+    let line = |event: Value| {
+        format!(
+            r#"{{"type":"stream_event","event":{event},"session_id":"s","parent_tool_use_id":null,"uuid":"u"}}"#
+        )
+    };
+    let skipped = [
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"content\":\"<section"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"x"}}),
+    ];
+    for event in skipped {
+        let line = line(event);
+        assert!(is_unshown_delta(&line), "{line}");
+        // Skipping loses nothing: read in full, the line maps to no event either.
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert!(parse_line(&value).is_empty(), "{line}");
+        assert_eq!(session_id_of_init(&value), None);
+        assert!(!is_missing_session(&value));
+    }
+
+    let shown = [
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}),
+        // Text that quotes the marks: inside a string their quotes are escaped.
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta",
+            "text":"it sends {\"type\":\"input_json_delta\"} lines"}}),
+    ];
+    for event in shown {
+        let line = line(event);
+        assert!(!is_unshown_delta(&line), "{line}");
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parse_line(&value).len(), 1, "{line}");
+    }
+    // Other lines that merely mention one are read in full.
+    let result =
+        r#"{"type":"result","subtype":"success","result":"{\"type\":\"thinking_delta\"}"}"#;
+    assert!(!is_unshown_delta(result));
+    let spaced = r#"{ "type": "stream_event", "event": {"delta": {"type": "input_json_delta"}} }"#;
+    assert!(
+        !is_unshown_delta(spaced),
+        "spelled another way, it is parsed as before"
+    );
+}

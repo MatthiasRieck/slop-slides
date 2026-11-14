@@ -8,11 +8,17 @@ window.__slopOverflow = (function () {
   var DELETED = "data-delete-placeholder";
   // Invisible layout slots the editor leaves behind; never selected or checked for overflow.
   var SLOTS = "[" + PLACEHOLDER + "], [" + DELETED + "]";
+  // Parts of a slide that are never checked for overflow, with all they hold.
+  var ASIDES = ".notes, .narration, " + SLOTS;
   var TOLERANCE = 2;
 
   /** Whether `el` shows anything: text, media, a background, a border, or a shadow. */
   function paints(el) {
-    var style = getComputedStyle(el);
+    return paintsWith(el, getComputedStyle(el));
+  }
+
+  /** `paints` for an element whose computed `style` is at hand. */
+  function paintsWith(el, style) {
     if (style.visibility === "hidden" || style.opacity === "0") return false;
     if (el.hasAttribute(ADDED)) return true;
     if (el.textContent.trim() || /^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
@@ -45,39 +51,45 @@ window.__slopOverflow = (function () {
 
   /** Whether `el` itself holds text or media, as opposed to decoration like a glow that bleeds off the edge. */
   function hasContent(el) {
-    if (el.closest("[aria-hidden=true]")) return false;
     if (/^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
     return Array.prototype.some.call(el.childNodes, function (node) {
       return node.nodeType === 3 && node.textContent.trim();
     });
   }
 
-  /** How many screen pixels one pixel of `slide` takes up. */
-  function zoom(slide) {
-    var value = slide.getBoundingClientRect().width / slide.offsetWidth;
+  /** How many screen pixels one pixel of `slide` takes up; `bounds` is its box on screen, when already measured. */
+  function zoom(slide, bounds) {
+    var value = (bounds || slide.getBoundingClientRect()).width / slide.offsetWidth;
     return isFinite(value) && value > 0 ? value : 1;
   }
 
   /** Elements that run past `slide`'s edge or are cut off by their own box; the innermost ones. */
   function find(slide) {
     var bounds = slide.getBoundingClientRect();
-    var k = zoom(slide);
+    var k = zoom(slide, bounds);
     var hits = [];
-    Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
-      var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes, .narration, " + SLOTS)) return;
-      var rect = el.getBoundingClientRect();
-      if (!rect.width && !rect.height) return;
-      var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
-      var style = getComputedStyle(el);
-      var clips = style.overflowX !== "visible" || style.overflowY !== "visible";
-      var cut = clips && (el.scrollWidth > el.clientWidth + TOLERANCE || el.scrollHeight > el.clientHeight + TOLERANCE);
-      if (past.length || cut) hits.push({ el: el, rect: rect, past: past, cut: cut });
-    });
-    return hits.filter(function (hit) {
-      return !hits.some(function (other) {
-        return other !== hit && hit.el.contains(other.el);
+    // `hidden`: inside something `aria-hidden`, whose content does not count as running past the edge.
+    var visit = function (parent, hidden) {
+      Array.prototype.forEach.call(parent.children, function (el) {
+        // Nothing in the notes, the narration or a layout slot is checked.
+        if (el.matches(ASIDES)) return;
+        var out = hidden || el.getAttribute("aria-hidden") === "true";
+        var rect = el.getBoundingClientRect();
+        if (rect.width || rect.height) {
+          var style = getComputedStyle(el);
+          var past = !out && hasContent(el) && paintsWith(el, style) ? pastEdges(rect, bounds, k) : [];
+          var clips = style.overflowX !== "visible" || style.overflowY !== "visible";
+          var cut = clips && (el.scrollWidth > el.clientWidth + TOLERANCE || el.scrollHeight > el.clientHeight + TOLERANCE);
+          if (past.length || cut) hits.push({ el: el, rect: rect, past: past, cut: cut });
+        }
+        // A drawing is checked whole, not shape by shape.
+        if (!/^svg$/i.test(el.tagName)) visit(el, out);
       });
+    };
+    visit(slide, !!slide.closest("[aria-hidden=true]"));
+    // The hits are in the document's order, so what an element holds comes right after it.
+    return hits.filter(function (hit, i) {
+      return !(hits[i + 1] && hit.el.contains(hits[i + 1].el));
     });
   }
 

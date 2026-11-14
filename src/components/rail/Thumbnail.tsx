@@ -1,8 +1,9 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 
+import { useSettled } from "../../hooks/useSettled";
 import type { Slide } from "../../lib/api";
 import { scrollBehavior } from "../../lib/motion";
 import { pixelsOf } from "../../lib/slideSize";
@@ -14,6 +15,12 @@ import { SlideFrame, useSlideVersion } from "../SlideFrame";
 const MARK_TRANSITION = "transition duration-200";
 
 export const noLayoutAnimation = () => false;
+
+/**
+ * How long a slide being edited stays as it is before its thumbnail follows. The editor saves
+ * after every change; a thumbnail loading each of them would load documents nobody gets to see.
+ */
+export const EDITED_THUMBNAIL_DELAY = 400;
 
 /** What a screen reader says of a slide's row: "Slide 3, hidden, locked, 2 comments". */
 export function slideLabel(index: number, slide: Slide, comments: number): string {
@@ -33,8 +40,11 @@ export function slideLabel(index: number, slide: Slide, comments: number): strin
  * right-click for the slide's menu. Over it, what there is to know about the slide (hidden, locked,
  * how many comments, how many matches of the search) and, in Edit, its quick actions, which show
  * under the pointer and while the focus is in the row.
+ *
+ * Memoized, and given nothing that changes with the other rows: picking another slide or saving
+ * one renders the rows concerned, not the whole rail.
  */
-export function Thumbnail(props: {
+export const Thumbnail = memo(function Thumbnail(props: {
   deckId: string;
   slide: Slide;
   index: number;
@@ -47,13 +57,16 @@ export function Thumbnail(props: {
   draggedAlong: boolean;
   /** How many matches of the search the slide has; undefined while none is on. */
   matches?: number;
-  onMenu: (event: React.MouseEvent) => void;
+  /** A right-click on the slide; the same function for every row. */
+  onMenu: (event: React.MouseEvent, slide: string) => void;
 }) {
-  const { deckId, slide, index, filteredOut, folded } = props;
+  const { deckId, slide, index, filteredOut, folded, onMenu } = props;
   const selected = useApp((s) => s.selected === slide.id);
   const picked = useApp((s) => s.railSelected.includes(slide.id));
   const comments = useApp((s) => s.comments[slide.id]?.length ?? 0);
-  const version = useSlideVersion(slide);
+  // The editor's own saves come in bursts; anything else (the agent, an undo) shows at once.
+  const ownSave = useApp((s) => s.editing && s.editSaved[slide.id] === slide.hash);
+  const version = useSettled(useSlideVersion(slide), ownSave ? EDITED_THUMBNAIL_DELAY : 0);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id,
     animateLayoutChanges: props.still ? noLayoutAnimation : undefined,
@@ -131,9 +144,10 @@ export function Thumbnail(props: {
           title={props.editable ? `Slide ${index + 1}` : `Slide ${index + 1} · double-click to edit`}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
-          onContextMenu={props.onMenu}
+          onContextMenu={(event) => onMenu(event, slide.id)}
           className={cn(
-            "block w-full overflow-hidden rounded-md shadow-thumbnail transition-shadow",
+            // No transition on the ring: it would repaint the slide under it for its whole length.
+            "block w-full overflow-hidden rounded-md shadow-thumbnail",
             "focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
             // The offset gap keeps the ring visible against dark slides.
             selected
@@ -149,6 +163,7 @@ export function Thumbnail(props: {
             version={version}
             size={pixelsOf({ size: deckSize })}
             thumbnail
+            lazy
             className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
         </button>
@@ -204,7 +219,7 @@ export function Thumbnail(props: {
       </div>
     </li>
   );
-}
+});
 
 /** A small count over a thumbnail's corner, with an icon saying of what. */
 function Badge(props: { testId: string; title: string; children: React.ReactNode }) {

@@ -50,7 +50,7 @@ describe("what is said over the slides", () => {
     backend({ set_slide_notes: () => next });
     await useApp.getState().setNotes("intro", "Pause here");
     expect(calls("set_slide_notes")).toEqual([{ id: DECK.id, slide: "intro", text: "Pause here" }]);
-    expect(useApp.getState().deck).toBe(next);
+    expect(useApp.getState().deck).toEqual(next);
   });
 });
 

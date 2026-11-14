@@ -1,7 +1,6 @@
-import { ChevronLeft, ChevronRight, Maximize, PanelRight, Pause, Play, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, PanelRight, Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { zoomBox } from "../lib/ink";
 import { dismissTopLayer, hasOpenLayer } from "../lib/layers";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock } from "../lib/slideClock";
@@ -11,8 +10,9 @@ import { useApp } from "../store";
 import { ToolButton } from "./Button";
 import { LevelDot, RecordingTime } from "./NarrationRecorder";
 import { PresenterPanel } from "./PresenterPanel";
-import { AnnotationLayer, InkTools, useAnnotations } from "./PresenterTools";
+import { InkTools, useAnnotations } from "./PresenterTools";
 import { ShowKeys } from "./presenter/ShowKeys";
+import { fitSlide, ShowZoom } from "./presenter/ShowZoom";
 import { useAutoplay } from "./presenter/useAutoplay";
 import { usePresenterFeed } from "./presenter/usePresenterFeed";
 import { useShowControls } from "./presenter/useShowControls";
@@ -62,6 +62,11 @@ function startSlide(): string | null {
  * it is, for a call to share, and the presenter view opens in a window of its own. The show's
  * clocks, the teleprompter and the narration recorder belong to the show, not to that panel (see
  * `useShowSession`): closed, they go on, and a pill over the slide says the microphone records.
+ *
+ * The editor is still there under the show. The slide on screen is the show's own to know while
+ * it runs: the editor is told once, when the show ends, and lands on the slide it ended on. Told
+ * of every slide, it would load each one on its covered stage and scroll its rail along. How the
+ * slide is zoomed is `ShowZoom`'s to know, which alone follows every move of that.
  */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
@@ -73,9 +78,6 @@ export function Presenter() {
   const [current, setCurrent] = useState<string | null>(null);
   // Ink belongs to the slide it was drawn on.
   const annotations = useAnnotations(index === null ? "" : String(index));
-  // How the slide is zoomed and panned; the ink goes along with it.
-  const [zoom, setZoom] = useState({ x: 0, y: 0, k: 1 });
-  const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
   const [panelOpen, setPanelOpen] = useState(() => loadFlag(PANEL_KEY, false));
   const [keysOpen, setKeysOpen] = useState(false);
   useEffect(() => saveFlag(PANEL_KEY, panelOpen), [panelOpen]);
@@ -114,6 +116,8 @@ export function Presenter() {
   };
   const keys = useRef({ handle, press, wake: controls.wake });
   keys.current = { handle, press, wake: controls.wake };
+  // The last slide the player said is on screen: where the editor goes when the show ends.
+  const endedOn = useRef<string | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -142,15 +146,10 @@ export function Presenter() {
         });
       }
       if (data?.type === "slop:pointer") keys.current.wake();
-      if (data?.type === "slop:zoom") {
-        const { x, y, k } = data;
-        if ([x, y, k].every(Number.isFinite)) setZoom({ x, y, k });
-      }
       if (data?.type === "slop:slide") {
         if (typeof data.index === "number") setIndex(data.index);
         setCurrent(data.id ? String(data.id) : null);
-        // Keep the editor's selection in step so leaving the show lands on the same slide.
-        if (data.id) useApp.getState().select(String(data.id));
+        if (data.id) endedOn.current = String(data.id);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -158,6 +157,9 @@ export function Presenter() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
+      // The show is over: the editor lands on the slide it ended on.
+      const slide = endedOn.current;
+      if (slide !== null && slide !== useApp.getState().selected) useApp.getState().select(slide);
     };
   }, []);
 
@@ -203,27 +205,8 @@ export function Presenter() {
           }}
           className="size-full border-0"
         />
-        <div
-          data-testid="annotation-zoom"
-          className="pointer-events-none absolute"
-          style={zoomBox(zoom.x, zoom.y, zoom.k)}
-        >
-          <AnnotationLayer annotations={annotations} zoom={zoom.k} />
-        </div>
+        <ShowZoom frame={frameRef} annotations={annotations} />
         {!panelShown && <MicrophonePill session={session} />}
-        {moved && (
-          <button
-            type="button"
-            title="Back to the slide, fit to the screen (0)"
-            // Keep keyboard focus where it was, so Space still advances the slide.
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => fitSlide(frameRef.current)}
-            className="dark absolute right-4 bottom-20 z-10 flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-overlay px-2.5 py-1.5 text-xs text-foreground/80 tabular-nums shadow-lg backdrop-blur hover:text-foreground [&_svg]:size-3.5"
-          >
-            <Maximize />
-            {Math.round(zoom.k * 100)}%
-          </button>
-        )}
         {/* Only as wide as the bar: the slide beside it still takes a press. */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
           <div
@@ -347,9 +330,4 @@ function MicrophonePill({ session }: { session: ShowSession }) {
       <RecordingTime since={session.recorder.since} />
     </div>
   );
-}
-
-/** Asks the show's pasteboard to fit the slide to the screen again. */
-function fitSlide(frame: HTMLIFrameElement | null) {
-  frame?.contentWindow?.postMessage({ type: "slop:camera", home: true }, "*");
 }

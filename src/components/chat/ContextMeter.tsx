@@ -1,6 +1,7 @@
-import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../../lib/context";
+import { COMPACT_THRESHOLD, contextPercent, formatTokens, windowTokens } from "../../lib/context";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
+import { chatContext } from "../../store/messages";
 
 /**
  * How much of the agent's context window the conversation fills, with a way to compact it
@@ -9,7 +10,7 @@ import { useApp } from "../../store";
 export function ContextMeter() {
   const provider = useApp((s) => s.selection.provider);
   const selectedWindow = useApp((s) => s.selection.contextWindow);
-  const context = useApp((s) => latestContext(s.messages, s.selection.provider));
+  const context = useApp(chatContext);
   const running = useApp((s) => s.running);
   if (!context) return null;
 
@@ -37,12 +38,13 @@ export function ContextMeter() {
         aria-valuenow={percent === null ? undefined : Math.round(percent)}
         className="h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-border"
       >
+        {/* As wide as its track and moved into it from the left: moving takes no layout, a width changing does. */}
         <div
           className={cn(
-            "h-full rounded-full transition-[width] duration-500",
+            "h-full rounded-full transition-transform duration-500",
             percent === null || percent < 70 ? "bg-primary/70" : percent < 90 ? "bg-warning" : "bg-destructive",
           )}
-          style={{ width: `${percent ?? 0}%` }}
+          style={{ transform: `translateX(${(percent ?? 0) - 100}%)` }}
         />
       </div>
       <span className="flex min-w-0 items-baseline gap-1.5">

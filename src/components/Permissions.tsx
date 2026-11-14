@@ -1,6 +1,6 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, Shield, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { PROVIDERS } from "../lib/models";
@@ -151,8 +151,9 @@ function focusIsIdle(): boolean {
  * The agent asking to be allowed something, in the transcript. While it waits it stands out and
  * is read out, and its accepting button takes the keyboard focus if that is on nothing else; only
  * a key pressed on the card itself answers it. Stop, which ends the whole turn, sits apart.
+ * Like the rest of a reply, it renders again only when its part is another.
  */
-export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approval" }> }) {
+export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approval" }> }) {
   const deckId = useApp((s) => s.chatKey);
   const running = useApp((s) => s.running);
   const [submitted, setSubmitted] = useState<ApprovalDecision | null>(null);
@@ -251,9 +252,13 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
       )}
     </section>
   );
-}
+});
 
-export function ApprovalReview({ part }: { part: Extract<ChatPart, { kind: "approvalReview" }> }) {
+/** What an automatic review of the agent's request came to. */
+export const ApprovalReview = memo(function ApprovalReview(props: {
+  part: Extract<ChatPart, { kind: "approvalReview" }>;
+}) {
+  const { part } = props;
   const status =
     (
       {
@@ -271,4 +276,4 @@ export function ApprovalReview({ part }: { part: Extract<ChatPart, { kind: "appr
       {part.detail && <p className="mt-1 text-muted-foreground">{part.detail}</p>}
     </div>
   );
-}
+});

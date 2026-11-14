@@ -9,13 +9,12 @@ import {
   type CommentScope,
   type CommentSpot,
   commentTime,
-  placeComments,
 } from "../lib/comments";
 import { toFraction } from "../lib/ink";
 import { formatKeys } from "../lib/keys";
 import { cn, plural } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
-import { commentsInScope, heldComment, useApp } from "../store";
+import { commentsInScope, commentsToSend, deckComments, hasComments, heldComment, useApp } from "../store";
 import { Button } from "./Button";
 import { Popover } from "./Popover";
 import { type OpenComment, type SlideComments, useSlideComments } from "./stage/useSlideComments";
@@ -373,8 +372,8 @@ const SCOPES: { id: CommentScope; label: string; title: string }[] = [
  */
 export function ComposerComments() {
   const scope = useApp((s) => s.commentScope);
-  const visible = useApp((s) => s.reviewVisible && Object.values(s.comments).some((c) => c.length > 0));
-  const count = useApp((s) => commentsInScope(s).filter((c) => !heldComment(s, c)).length);
+  const visible = useApp((s) => s.reviewVisible && hasComments(s));
+  const count = useApp(commentsToSend);
   const [listOpen, setListOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setListOpen(false), []);
@@ -475,10 +474,8 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
  * "Send to agent" has the next message take them all along and goes to the chat to write it.
  */
 export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLElement | null>; onClose: () => void }) {
-  const slides = useApp((s) => s.deck?.slides);
-  const all = useApp((s) => s.comments);
+  const comments = useApp(deckComments);
   const selected = useApp((s) => s.selected);
-  const comments = placeComments(all, slides ?? []);
   const numbers = [...new Set(comments.map((c) => c.slideNumber))];
   const send = () => {
     const app = useApp.getState();

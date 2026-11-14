@@ -11,9 +11,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use tauri::window::Color;
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
-use tauri::{AppHandle, LogicalPosition, Manager, WebviewWindowBuilder, Window};
+use tauri::{
+    AppHandle, LogicalPosition, Manager, Theme, WebviewWindow, WebviewWindowBuilder, Window,
+};
 
 use crate::agent::AgentManager;
 use crate::error::{Error, Result};
@@ -218,10 +221,32 @@ fn build(app: &AppHandle, label: &str) -> Result<()> {
     if let Some(at) = cascaded_position(app) {
         builder = builder.position(at.x, at.y);
     }
-    builder
+    let window = builder
         .build()
         .map_err(|e| Error::msg(format!("cannot open a window: {e}")))?;
+    paint(&window);
     Ok(())
+}
+
+/// The app's dark background (`--background` under `.dark` in src/index.css), for a window to
+/// show before its page has drawn anything.
+const DARK_BACKGROUND: Color = Color(10, 10, 10, 255);
+
+/// What an empty window shows on a system with `theme`: None is the light background the
+/// window's configuration already gives it.
+fn background_for(theme: Theme) -> Option<Color> {
+    matches!(theme, Theme::Dark).then_some(DARK_BACKGROUND)
+}
+
+/// Gives a new window the background of the system's theme, so a dark system sees no light
+/// flash before the page loads. The page's own choice of appearance takes over once it runs.
+pub fn paint(window: &WebviewWindow) {
+    let Some(color) = window.theme().ok().and_then(background_for) else {
+        return;
+    };
+    if let Err(e) = window.set_background_color(Some(color)) {
+        eprintln!("cannot set the window background: {e}");
+    }
 }
 
 /// Just down and right of the focused app window, so the new one does not hide it exactly.
@@ -364,6 +389,16 @@ pub mod dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_dark_system_changes_the_background_a_window_starts_with() {
+        assert_eq!(background_for(Theme::Light), None);
+        assert_eq!(background_for(Theme::Dark), Some(DARK_BACKGROUND));
+        // The colour the page itself draws in the dark, in index.html and src/index.css.
+        let page = include_str!("../../index.html");
+        assert!(page.contains("html.dark { background: oklch(0.145 0 0)"));
+        assert_eq!(DARK_BACKGROUND, Color(10, 10, 10, 255));
+    }
     use crate::test_support::TempDir;
 
     #[test]

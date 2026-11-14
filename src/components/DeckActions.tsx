@@ -32,10 +32,10 @@ import {
 import { reportingErrors, showError, useApp } from "../store";
 import { Button, withShortcut } from "./Button";
 import { showSaved } from "./exportSaved";
+import { VideoExportPanel } from "./lazy";
 import { Popover } from "./Popover";
 import { PRESENT_KEYS, usePresent } from "./presenter/present";
 import { ScreenPicker } from "./ScreenPicker";
-import { VideoExportPanel } from "./VideoExport";
 
 /** Why the deck can be neither exported nor presented while it has no slide. */
 const EMPTY_DECK = "Add a slide first";
@@ -206,7 +206,7 @@ function PresentButton({ empty }: { empty: boolean }) {
         <div
           role="menu"
           {...menu}
-          className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg outline-none"
+          className="enter-below absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg outline-none"
         >
           <MenuItem
             icon={SkipBack}
@@ -288,7 +288,7 @@ function ExportMenu(props: {
         <div
           role="menu"
           {...menu}
-          className="absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border bg-card p-1 shadow-lg outline-none"
+          className="enter-below absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border bg-card p-1 shadow-lg outline-none"
         >
           <MenuItem
             icon={FileCode2}

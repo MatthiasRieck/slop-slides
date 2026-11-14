@@ -77,8 +77,9 @@ pub fn classify(source: &str) -> FileKind {
     if is_deck {
         return FileKind::Deck;
     }
-    let lower = source.to_ascii_lowercase();
-    if SLIDESHOW_MARKERS.iter().any(|m| lower.contains(m)) {
+    // In whatever case, compared in place: the folder scan asks this of every page whole.
+    let has = |marker: &str| html::find_ci(source, 0, marker).is_some();
+    if SLIDESHOW_MARKERS.iter().copied().any(has) {
         return FileKind::Slideshow;
     }
     FileKind::Webpage
@@ -341,13 +342,18 @@ impl OpenWorkspace {
         }
     }
 
-    /// Whether `path` is an existing file inside a folder some window has open.
+    /// Whether `path` is an existing file inside a folder some window has open. The folders
+    /// were resolved when they were opened ([`OpenWorkspace::set`]), so only `path` is resolved
+    /// here, once: the protocol asks this for every file it serves.
     pub fn contains(&self, path: &Path) -> bool {
+        let Ok(path) = path.canonicalize() else {
+            return false;
+        };
         self.0
             .lock()
             .unwrap()
             .values()
-            .any(|open| inside(&open.root, path))
+            .any(|open| path.starts_with(&open.root))
     }
 }
 

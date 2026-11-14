@@ -8,7 +8,8 @@ use crate::error::Result;
 use crate::history::{Change, Source};
 use crate::templates;
 
-#[tauri::command]
+/// The templates there are. Off the main thread: each of the user's own is read.
+#[tauri::command(async)]
 pub fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
     Ok(templates::list(&templates::user_root()?))
 }
@@ -49,8 +50,9 @@ pub fn add_template_slide(
     Ok(CreatedSlide { deck, slide })
 }
 
-/// Saves the deck as a new user template, with placeholder text in place of its content.
-#[tauri::command]
+/// Saves the deck as a new user template, with placeholder text in place of its content. Off
+/// the main thread: the deck's assets are copied along.
+#[tauri::command(async)]
 pub fn create_template(id: String, name: String) -> Result<templates::TemplateSummary> {
     templates::create_from_deck(&deck::deck_file(&id)?, &templates::user_root()?, &name)
 }

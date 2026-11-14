@@ -1,6 +1,6 @@
 //! Placeholder (lorem ipsum) text in place of a deck's own, for templates.
 
-use super::scan::{find_ci, parse_tag};
+use super::scan::parse_tag;
 use super::spans::find_slides;
 
 /// Replaces every word of the slides' text with placeholder (lorem ipsum) words of about
@@ -24,11 +24,8 @@ pub fn with_placeholder_text(html: &str) -> String {
                 s[next..].find("-->").map_or(s.len(), |e| next + e + 3)
             } else {
                 match parse_tag(s, next) {
-                    Some(tag)
-                        if !tag.closing
-                            && matches!(tag.name.as_str(), "script" | "style" | "textarea") =>
-                    {
-                        find_ci(s, tag.end, &format!("</{}", tag.name)).unwrap_or(s.len())
+                    Some(tag) if !tag.closing && tag.is_any(&["script", "style", "textarea"]) => {
+                        tag.end_tag().unwrap_or(s.len())
                     }
                     Some(tag) => tag.end,
                     None => next + 1,

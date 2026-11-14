@@ -320,7 +320,8 @@ fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
 
 /// Every slide's audio, in slide order.
 pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
-    let (provider, voice, language) = settings(file);
+    // The deck names who says it: the file is not read for that again.
+    let (provider, voice, language) = deck.narration.resolved();
     let manifest = Manifest::read(&audio_dir(file));
     deck.slides
         .iter()
@@ -336,7 +337,7 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
                 _ if recorded => AudioState::Ready,
                 _ if text.is_empty() => AudioState::None,
                 None => AudioState::Missing,
-                Some(e) if e.fingerprint == fingerprint(provider, &text, &voice, language.id) => {
+                Some(e) if e.fingerprint == fingerprint(provider, &text, voice, language.id) => {
                     AudioState::Ready
                 }
                 Some(_) => AudioState::Stale,

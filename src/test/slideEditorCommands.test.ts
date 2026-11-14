@@ -199,10 +199,21 @@ describe("clear formatting", () => {
 describe("locked elements", () => {
   const LOCKED = DECK.replace('id="a" data-added="shape"', 'id="a" data-added="shape" data-lock=""');
 
+  it("selects a locked element on a click, so it can be unlocked", () => {
+    const e = editor(LOCKED);
+    e.click(e.$("#a"));
+    expect(e.selected()).toEqual([e.$("#a")]);
+    // Something in a locked element is as locked: the click selects what holds the lock.
+    const held = e.doc.createElement("p");
+    held.textContent = "Held";
+    e.$("#a").append(held);
+    e.click(e.$("#b"));
+    e.click(held);
+    expect(e.selected()).toEqual([e.$("#a")]);
+  });
+
   it("selects a locked element on a right-click, so the menu can unlock it", () => {
     const e = editor(LOCKED);
-    e.down(e.$("#a"));
-    expect(e.selected()).toEqual([]);
     e.rightClick(e.$("#a"));
     expect(e.selected()).toEqual([e.$("#a")]);
     expect(e.menu()).toMatchObject({ locked: true, editable: false });
@@ -284,6 +295,30 @@ describe("previewing a restyle", () => {
     e.fromParent({ type: "slop:edit-style", style: { bold: true } });
     expect(e.commits()).toHaveLength(1);
     expect(e.commits()[0]!.markup).not.toContain("border-radius");
+  });
+
+  it("reports the selection once per frame while it previews, however many elements are selected", async () => {
+    const e = editor();
+    e.pick("#a", "#b", "#pic");
+    const reports = () => e.messages<{ selection: { opacity: number } }>("slop:edit-selection");
+    const before = reports().length;
+    for (const opacity of [0.8, 0.7, 0.6]) {
+      e.fromParent({ type: "slop:edit-style", style: { opacity }, preview: true });
+    }
+    // It shows on every element with every tick; the toolbar hears of it with the frame.
+    expect(e.$("#pic").style.opacity).toBe("0.6");
+    expect(reports()).toHaveLength(before);
+    await e.frame();
+    expect(reports()).toHaveLength(before + 1);
+    expect(reports().at(-1)!.selection.opacity).toBe(0.6);
+    // Applied for good, it is reported at once, and once for all three.
+    e.fromParent({ type: "slop:edit-style", style: { opacity: 0.5 }, preview: true });
+    e.fromParent({ type: "slop:edit-style", style: { opacity: 0.4 } });
+    expect(reports()).toHaveLength(before + 2);
+    expect(reports().at(-1)!.selection.opacity).toBe(0.4);
+    await e.frame();
+    expect(reports()).toHaveLength(before + 2);
+    expect(e.commits()).toHaveLength(1);
   });
 
   it("keeps a preview the app never finished, saving it with the next thing done on the slide", () => {

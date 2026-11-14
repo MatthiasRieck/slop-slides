@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::html::{self, find_ci, parse_tag, VOID_ELEMENTS};
+use crate::html::{self, parse_tag, VOID_ELEMENTS};
 
 /// How the query matches.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -61,14 +61,27 @@ const OFF_SLIDE: &[&str] = &[html::NOTES_CLASS, html::NARRATION_CLASS];
 /// The slide's text as characters, each with the source bytes it came from.
 type Chars = Vec<(char, Range<usize>)>;
 
-/// Every match of `query` in the deck's slides, in deck order.
+/// Every match of `query` in the deck's slides, in deck order: [`find_in`] of a deck given
+/// as its source alone, for tests.
+#[cfg(test)]
 pub fn find(source: &str, query: &str, options: Options) -> Vec<Match> {
+    find_in(source, &html::find_slides(source), query, options)
+}
+
+/// Every match of `query` in `slides`, the slides of `source` (see [`html::find_slides`]), in
+/// deck order.
+pub fn find_in(
+    source: &str,
+    slides: &[html::SlideSpan],
+    query: &str,
+    options: Options,
+) -> Vec<Match> {
     let needle = normalize_query(query, options);
     if needle.is_empty() {
         return Vec::new();
     }
     let mut found = Vec::new();
-    for (index, slide) in html::find_slides(source).iter().enumerate() {
+    for (index, slide) in slides.iter().enumerate() {
         let Some(id) = slide.id.clone() else { continue };
         let locked = slide.locked.is_some();
         let off_slide = off_slide_ranges(source, slide.range.clone());
@@ -212,11 +225,10 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
         }
         if bytes[i] == b'<' {
             if let Some(tag) = parse_tag(source, i) {
-                let void =
-                    VOID_ELEMENTS.contains(&tag.name.as_str()) || source[..tag.end].ends_with("/>");
-                if !tag.closing && RAW_TEXT.contains(&tag.name.as_str()) {
-                    let close = find_ci(source, tag.end, &format!("</{}", tag.name));
-                    i = close
+                let void = tag.is_any(VOID_ELEMENTS) || source[..tag.end].ends_with("/>");
+                if !tag.closing && tag.is_any(RAW_TEXT) {
+                    i = tag
+                        .end_tag()
                         .and_then(|c| source[c..].find('>').map(|e| c + e + 1))
                         .unwrap_or(range.end);
                     continue;
@@ -230,9 +242,8 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
                 } else if !tag.closing
                     && !void
                     && tag
-                        .attrs
-                        .iter()
-                        .any(|(n, ..)| PLACEHOLDERS.contains(&n.as_str()))
+                        .attrs()
+                        .any(|a| PLACEHOLDERS.iter().any(|name| a.is(name)))
                 {
                     skipping = 1;
                 }
@@ -263,9 +274,9 @@ fn off_slide_ranges(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
             continue;
         };
         i = tag.end;
-        let off_slide = tag.attrs.iter().any(|(name, value, ..)| {
-            name == "class" && value.split_whitespace().any(|c| OFF_SLIDE.contains(&c))
-        });
+        let off_slide = tag
+            .attrs()
+            .any(|a| a.is("class") && a.value.split_whitespace().any(|c| OFF_SLIDE.contains(&c)));
         if tag.closing || !off_slide {
             continue;
         }
@@ -279,7 +290,7 @@ fn off_slide_ranges(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
             i = next + 1;
             if let Some(inner) = parse_tag(source, next) {
                 i = inner.end;
-                if inner.name == tag.name {
+                if inner.is(tag.raw_name()) {
                     depth = if inner.closing { depth - 1 } else { depth + 1 };
                 }
             }

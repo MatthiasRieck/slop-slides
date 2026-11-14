@@ -2,6 +2,8 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
+import { forgetNarration } from "../lib/narrationCache";
+import { wavePath } from "../lib/waveform";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -13,6 +15,12 @@ vi.mock("../lib/narrationAudio", async (original) => ({
   ...(await original<typeof import("../lib/narrationAudio")>()),
   playNarration: (...args: unknown[]) => playNarration(...args),
 }));
+
+// Counted, to tell when a waveform is drawn again.
+vi.mock("../lib/waveform", async (original) => {
+  const actual = await original<typeof import("../lib/waveform")>();
+  return { wavePath: vi.fn(actual.wavePath) };
+});
 
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
 
@@ -66,6 +74,7 @@ function audioOf(entries: SlideAudio[]) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  forgetNarration();
   setNarration.mockClear();
   invoke.mockReset();
   // A backend that knows nothing, until a test says what it answers.
@@ -238,13 +247,13 @@ describe("NarrationPanel audio", () => {
     const first = playing(3);
     await act(async () => fireEvent.click(wave(), { clientX: 100 }));
     expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 2);
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("75%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(75%)");
     // Pressed again elsewhere, it starts over from there.
     const second = playing(1);
     await act(async () => fireEvent.click(wave(), { clientX: 50 }));
     expect(first.stop).toHaveBeenCalled();
     expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 1);
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(25%)");
     expect(second.stop).not.toHaveBeenCalled();
     expect(playNarration).toHaveBeenCalledTimes(2);
   });
@@ -300,11 +309,65 @@ describe("NarrationPanel audio", () => {
     let at = 1;
     playNarration.mockResolvedValueOnce({ ended: new Promise<void>(() => {}), stop: vi.fn(), time: () => at });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(25%)");
     at = 9;
     await act(async () => void vi.advanceTimersByTime(60));
     // Never past the end of the audio.
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("100%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(100%)");
+  });
+
+  it("moves the line every frame without drawing the waveform or the words again", async () => {
+    await withAudio({ timed: true });
+    let at = 0;
+    playNarration.mockResolvedValueOnce({ ended: new Promise<void>(() => {}), stop: vi.fn(), time: () => at });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    vi.mocked(wavePath).mockClear();
+    const words = [...wave().querySelectorAll("[data-word]")];
+    const places = new Set<string>();
+    for (let i = 0; i < 60; i++) {
+      at += 1 / 60;
+      await act(async () => void vi.advanceTimersByTime(17));
+      places.add(screen.getByTestId("wave-playhead").style.transform);
+    }
+    expect(places.size).toBeGreaterThan(10);
+    expect(wavePath).not.toHaveBeenCalled();
+    expect([...wave().querySelectorAll("[data-word]")]).toEqual(words);
+  });
+
+  it("scrolls on only when the line runs out of sight, and stands still while paused", async () => {
+    await withAudio({ timed: true });
+    // 800 pixels of waveform over four seconds, 200 of them in sight.
+    const scroller = wave().parentElement!;
+    const scrolls: number[] = [];
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, get: () => 200 });
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, get: () => 800 });
+    Object.defineProperty(scroller, "scrollLeft", {
+      configurable: true,
+      get: () => scrolls.at(-1) ?? 0,
+      set: (to: number) => void scrolls.push(to),
+    });
+    let at = 0;
+    const playback = { ended: new Promise<void>(() => {}), stop: vi.fn(), pause: vi.fn(), time: () => at };
+    playNarration.mockResolvedValueOnce(playback);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    for (at = 0.1; at < 0.9; at += 0.1) await act(async () => void vi.advanceTimersByTime(17));
+    expect(scrolls).toEqual([]);
+    // 1.5 s in, the line is at 300: a page on, the line near its left.
+    for (at = 1.5; at < 2.2; at += 0.1) await act(async () => void vi.advanceTimersByTime(17));
+    expect(scrolls).toEqual([280]);
+    // Paused, nothing asks the audio where it is any more.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Pause" })));
+    const time = vi.spyOn(playback, "time");
+    await act(async () => void vi.advanceTimersByTime(500));
+    expect(time).not.toHaveBeenCalled();
+  });
+
+  it("reads the waveform once, however often the slide is shown", async () => {
+    const view = await withAudio();
+    view.unmount();
+    await withAudio();
+    expect(wave().querySelector("path")).toBeTruthy();
+    expect(invoke.mock.calls.filter(([command]) => command === "narration_peaks")).toHaveLength(1);
   });
 });
 

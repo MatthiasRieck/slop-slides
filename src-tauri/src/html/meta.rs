@@ -4,7 +4,7 @@ use crate::size::{self, SlideSize};
 
 use super::edit::{insert_after_head, remove};
 use super::entities::{decode_entities, escape, escape_attr};
-use super::scan::{find_ci, tags, Tag};
+use super::scan::{find_ci, rfind_ci, tags, Tag};
 
 pub fn title(html: &str) -> Option<String> {
     let start = find_ci(html, 0, "<title")?;
@@ -31,24 +31,94 @@ pub const TEMPLATE_META: &str = "slopslide-template";
 
 /// The first `<meta name="<name>">` tag (an app setting such as [`TEMPLATE_META`]): where it
 /// starts and its parsed tag.
-fn app_meta(html: &str, name: &str) -> Option<(usize, Tag)> {
-    tags(html).find(|(_, tag)| {
-        !tag.closing
-            && tag.name == "meta"
-            && tag
-                .attrs
-                .iter()
-                .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name))
-    })
+fn app_meta<'a>(html: &'a str, name: &str) -> Option<(usize, Tag<'a>)> {
+    metas(html).find(|(_, tag)| names(tag, name))
+}
+
+/// Every `<meta>` tag of the document, with where it starts. A document's metas sit in its
+/// head, so the scan stops at the last place `<meta` is written instead of reading every slide
+/// after it; nothing further on can be one.
+fn metas(html: &str) -> impl Iterator<Item = (usize, Tag<'_>)> {
+    let last = rfind_ci(html, "<meta");
+    tags(html)
+        .take_while(move |(at, _)| last.is_some_and(|last| *at <= last))
+        .filter(|(_, tag)| !tag.closing && tag.is("meta"))
+}
+
+/// Whether the meta `tag` is the app setting `name`.
+fn names(tag: &Tag, name: &str) -> bool {
+    tag.attrs()
+        .any(|a| a.is("name") && a.value.trim().eq_ignore_ascii_case(name))
+}
+
+/// The decoded, trimmed `content` of the meta `tag`; None when it is missing or empty.
+fn content(tag: &Tag) -> Option<String> {
+    let value = decode_entities(tag.attr("content")?.value.trim());
+    (!value.is_empty()).then_some(value)
 }
 
 /// The decoded, trimmed `content` of the app setting `<meta name="<name>">`; None when it is
 /// missing or empty.
 pub(crate) fn app_meta_content(html: &str, name: &str) -> Option<String> {
-    let (_, tag) = app_meta(html, name)?;
-    let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content")?;
-    let value = decode_entities(content.1.trim());
-    (!value.is_empty()).then_some(value)
+    content(&app_meta(html, name)?.1)
+}
+
+/// Every app setting a document names, read in one pass over its metas: loading a deck asks
+/// for all of them, and most decks name none, which each lookup of its own only finds out at
+/// the end of the document.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AppMetas {
+    /// See [`template`].
+    pub template: Option<String>,
+    /// The content of the [`size::SIZE_META`] tag (see [`AppMetas::slide_size`]).
+    pub size: Option<String>,
+    /// See [`narration_provider`].
+    pub narration_provider: Option<String>,
+    /// See [`narration_voice`].
+    pub narration_voice: Option<String>,
+    /// See [`narration_language`].
+    pub narration_language: Option<String>,
+}
+
+impl AppMetas {
+    pub fn read(html: &str) -> Self {
+        // The first tag of each setting counts, whatever its content, as in `app_meta`.
+        let mut found: [Option<Option<String>>; 5] = Default::default();
+        const NAMES: [&str; 5] = [
+            TEMPLATE_META,
+            size::SIZE_META,
+            NARRATION_PROVIDER_META,
+            NARRATION_VOICE_META,
+            NARRATION_LANGUAGE_META,
+        ];
+        for (_, tag) in metas(html) {
+            for (slot, name) in found.iter_mut().zip(NAMES) {
+                if slot.is_none() && names(&tag, name) {
+                    *slot = Some(content(&tag));
+                }
+            }
+            if found.iter().all(Option::is_some) {
+                break;
+            }
+        }
+        let [template, size, narration_provider, narration_voice, narration_language] =
+            found.map(Option::flatten);
+        Self {
+            template,
+            size,
+            narration_provider,
+            narration_voice,
+            narration_language,
+        }
+    }
+
+    /// The deck's slide size (see [`slide_size`]).
+    pub fn slide_size(&self) -> SlideSize {
+        self.size
+            .as_deref()
+            .and_then(SlideSize::parse)
+            .unwrap_or_default()
+    }
 }
 
 /// Sets the app setting `<meta name="<name>">` (new ones go right after `<title>`), or removes
@@ -70,7 +140,9 @@ fn set_app_meta(html: &str, name: &str, content: Option<&str>) -> String {
     }
 }
 
-/// Id of the template the deck's design comes from (see [`TEMPLATE_META`]).
+/// Id of the template the deck's design comes from (see [`TEMPLATE_META`]). The app reads it
+/// with the deck's other settings (see [`AppMetas`]); this is the lookup by itself, for tests.
+#[cfg(test)]
 pub fn template(html: &str) -> Option<String> {
     app_meta_content(html, TEMPLATE_META)
 }
@@ -126,7 +198,9 @@ pub fn set_narration_voice(html: &str, voice: &str) -> String {
     set_app_meta(html, NARRATION_VOICE_META, Some(voice))
 }
 
-/// The language the deck's `<meta>` names for its narration, if any.
+/// The language the deck's `<meta>` names for its narration, if any. The app reads it with
+/// the deck's other settings (see [`AppMetas`]); this is the lookup by itself, for tests.
+#[cfg(test)]
 pub fn narration_language(html: &str) -> Option<String> {
     app_meta_content(html, NARRATION_LANGUAGE_META)
 }
@@ -220,6 +294,65 @@ mod tests {
             untitled,
             "<html><head>\n  <meta name=\"slopslide-template\" content=\"x\"></head></html>"
         );
+    }
+
+    /// The settings as five lookups of their own read them.
+    fn separately(html: &str) -> AppMetas {
+        AppMetas {
+            template: template(html),
+            size: app_meta_content(html, crate::size::SIZE_META),
+            narration_provider: narration_provider(html),
+            narration_voice: narration_voice(html),
+            narration_language: narration_language(html),
+        }
+    }
+
+    #[test]
+    fn one_pass_reads_every_setting_like_the_lookups_of_their_own() {
+        assert_eq!(AppMetas::read(STYLED), AppMetas::default());
+        let all = set_narration_language(
+            &set_narration_voice(
+                &set_narration_provider(
+                    &set_slide_size(
+                        &set_template(STYLED, Some("swiss")),
+                        SlideSize::parse("1080x1080").unwrap(),
+                    ),
+                    Some("elevenlabs"),
+                ),
+                "nova",
+            ),
+            "de",
+        );
+        let metas = AppMetas::read(&all);
+        assert_eq!(metas, separately(&all));
+        assert_eq!(metas.template.as_deref(), Some("swiss"));
+        assert_eq!(metas.narration_language.as_deref(), Some("de"));
+        assert_eq!(metas.slide_size(), slide_size(&all));
+        for html in [
+            // The first tag of a setting counts, even an empty one.
+            "<meta name=\"slopslide-template\" content=\"\"><meta name=\"slopslide-template\" content=\"late\">",
+            "<META NAME=\" SlopSlide-Template \" CONTENT=\" a &amp; b \"><meta name=slopslide-size content=huge>",
+            // Not in markup: a comment, a script.
+            "<!-- <meta name=\"slopslide-template\" content=\"ghost\"> --><script>'<meta name=\"slopslide-size\" content=\"1x1\">'</script>",
+            "<meta name=\"slopslide-template\">",
+            "",
+        ] {
+            assert_eq!(AppMetas::read(html), separately(html), "{html}");
+        }
+    }
+
+    #[test]
+    fn settings_in_the_body_are_read_too() {
+        // Lint reports a meta outside <head> as misplaced, but the app has always read it.
+        let html = "<html><head><title>T</title></head><body><main class=\"deck\">\n<section class=\"slide\" id=\"a\">A</section>\n</main>\n<meta name=\"slopslide-template\" content=\"swiss\">\n<meta name=\"slopslide-narration-language\" content=\"fr\"></body></html>";
+        assert_eq!(template(html).as_deref(), Some("swiss"));
+        let metas = AppMetas::read(html);
+        assert_eq!(metas, separately(html));
+        assert_eq!(metas.narration_language.as_deref(), Some("fr"));
+        // Also one inside a slide.
+        let inside = "<section class=\"slide\" id=\"a\"><meta name=\"slopslide-size\" content=\"1080x1080\"></section>";
+        assert_eq!(AppMetas::read(inside).slide_size(), slide_size(inside));
+        assert_ne!(slide_size(inside), SlideSize::default());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isEditTool, toolMessage } from "./editKeys";
-import { fromFrameIn, toAppPoint, toFramePoint } from "./frames";
+import { toAppPoint, toFramePoint } from "./frames";
 
 /** A preview 1920 px wide inside, shown at `width` app pixels from (`left`, `top`). */
 function shownFrame(left: number, top: number, width: number) {
@@ -24,17 +24,6 @@ describe("the stage's previews", () => {
     unlaid.getBoundingClientRect = () => new DOMRect(10, 20, 0, 0);
     expect(toAppPoint(unlaid, 5, 5)).toEqual({ x: 15, y: 25 });
     expect(toFramePoint(unlaid, 15, 25)).toEqual({ x: 5, y: 5 });
-  });
-
-  it("tells messages from the previews in an area from any other", () => {
-    const area = document.createElement("div");
-    const frame = document.createElement("iframe");
-    area.append(frame);
-    document.body.append(area);
-    expect(fromFrameIn(area, frame.contentWindow)).toBe(true);
-    expect(fromFrameIn(area, window)).toBe(false);
-    expect(fromFrameIn(null, frame.contentWindow)).toBe(false);
-    area.remove();
   });
 });
 

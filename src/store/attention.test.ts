@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { chatAttention, chatVisible } from "./attention";
 import type { AssistantMessage, ChatMessage, ChatPart } from "./messages";
@@ -52,6 +52,20 @@ describe("chatAttention", () => {
     expect(chatAttention({ messages: [user, assistant([approval("expired")])], running: false })).toBeNull();
     const earlier = [user, assistant([approval("pending")]), user, assistant([])];
     expect(chatAttention({ messages: earlier, running: true })).toBe("working");
+  });
+});
+
+describe("chatAttention, asked on every update of the store", () => {
+  it("looks through the messages only when they changed", () => {
+    const messages = [user, assistant([approval("pending")])];
+    const findLast = vi.spyOn(messages, "findLast");
+    expect(chatAttention({ messages, running: true })).toBe("approval");
+    for (let update = 0; update < 50; update++) chatAttention({ messages, running: update % 2 === 0 });
+    expect(findLast).toHaveBeenCalledOnce();
+    // Whether a turn runs is read each time all the same.
+    const resting = [user, assistant([])];
+    expect(chatAttention({ messages: resting, running: true })).toBe("working");
+    expect(chatAttention({ messages: resting, running: false })).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatKeys, isMod } from "../lib/keys";
+import { memoizeLast } from "../lib/memo";
 import {
   contextWindowLabel,
   effortLabel,
@@ -305,6 +306,14 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
   );
 }
 
+/**
+ * What a provider says of one of its models. Asked on every update of the store, a word of the
+ * agent's included; looked up only when the providers or the selection changed.
+ */
+const modelOf = memoizeLast((providers: ProviderInfo[] | undefined, provider: Provider, model: string) =>
+  providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model),
+);
+
 /** Reasoning effort and context window for the selected model, like T3 Code's traits menu. */
 export function EffortPicker() {
   const selection = useApp((s) => s.selection);
@@ -312,9 +321,7 @@ export function EffortPicker() {
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
 
-  const model = useApp((s) =>
-    s.providers?.find((p) => p.id === s.selection.provider)?.models.find((m) => m.id === s.selection.model),
-  );
+  const model = useApp((s) => modelOf(s.providers, s.selection.provider, s.selection.model));
   const efforts = model?.efforts ?? [];
   const contextWindows = model?.contextWindows ?? [];
   if (efforts.length === 0 && contextWindows.length === 0) return null;

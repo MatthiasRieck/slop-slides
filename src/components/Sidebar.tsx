@@ -25,16 +25,16 @@ import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn, isMac } from "../lib/utils";
 import { openShortcutHelp, SIDEBAR_TABS, type SidebarTab, settleUnsavedEdits, useApp } from "../store";
 import { hiddenChatAttention } from "../store/attention";
+import { selectedSlideNarrated } from "../store/chrome";
 import { useSvgEditor } from "../svgStore";
 import { AttentionMark } from "./AttentionMark";
 import { keepFocus, ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
-import { CodePanel } from "./CodeView";
 import { FileTree } from "./FileTree";
+import { CodePanel, SvgEditor } from "./lazy";
 import { NarrationPanel } from "./NarrationPanel";
 import { NotesPanel } from "./NotesPanel";
 import { SettingsPanel } from "./SettingsPanel";
-import { SvgEditor } from "./SvgEditor";
 import { SidebarToggle } from "./TopBar";
 
 interface TabKind {
@@ -43,7 +43,10 @@ interface TabKind {
   icon: typeof Files;
   /** The tab's contents; `active` while it is the tab shown. */
   render: (active: boolean) => ReactNode;
-  /** Stays mounted (hidden) behind the other tabs while open, to keep what it holds, such as unsaved edits. */
+  /**
+   * Once shown, stays mounted (hidden) behind the other tabs while open, to keep what it holds,
+   * such as unsaved edits. Until it first shows it is not mounted, nor its code loaded.
+   */
   keepMounted?: boolean;
   /** Closes the tab, when that takes more than closing it (such as asking about unsaved changes). */
   close?: () => void;
@@ -51,7 +54,13 @@ interface TabKind {
 
 /** What each sidebar tab shows. Add a tab here and to `SIDEBAR_TABS` in the store. */
 const TABS: Record<SidebarTab, TabKind> = {
-  chat: { label: "Chat", hint: "Talk to the agent about the deck", icon: MessageSquare, render: () => <ChatPanel /> },
+  chat: {
+    label: "Chat",
+    hint: "Talk to the agent about the deck",
+    icon: MessageSquare,
+    render: (active) => <ChatPanel active={active} />,
+    keepMounted: true,
+  },
   files: { label: "Files", hint: "The workspace's folders and files", icon: Files, render: () => <FileTree /> },
   narration: {
     label: "Narration",
@@ -106,6 +115,7 @@ export function Sidebar() {
   const tabs = useApp((s) => s.sidebarTabs);
   const active = useApp((s) => s.sidebarTab);
   const maximized = useApp((s) => s.sidebarMaximized);
+  const mounted = useMountedTabs(tabs, active);
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
@@ -130,13 +140,11 @@ export function Sidebar() {
         <SidebarToggle />
       </div>
       <div role="tabpanel" className="min-h-0 flex-1">
-        {tabs
-          .filter((id) => id === active || TABS[id].keepMounted)
-          .map((id) => (
-            <div key={id} className={cn("h-full", id !== active && "hidden")}>
-              {TABS[id].render(id === active)}
-            </div>
-          ))}
+        {mounted.map((id) => (
+          <div key={id} className={cn("h-full", id !== active && "hidden")}>
+            {TABS[id].render(id === active)}
+          </div>
+        ))}
         {!active && <NoTabs />}
       </div>
       <div className="flex h-10 shrink-0 items-center gap-1 border-t px-2">
@@ -162,6 +170,19 @@ export function Sidebar() {
       </div>
     </div>
   );
+}
+
+/**
+ * The open tabs to render, in their order: the one showing, and those that stay mounted behind
+ * it once they have shown (see `TabKind.keepMounted`).
+ */
+function useMountedTabs(tabs: SidebarTab[], active: SidebarTab | null): SidebarTab[] {
+  const [kept, setKept] = useState<SidebarTab[]>([]);
+  const mounted = tabs.filter((id) => id === active || kept.includes(id));
+  const keep = mounted.filter((id) => TABS[id].keepMounted);
+  // Adjusted while rendering, so a tab is kept from the render that first shows it.
+  if (keep.length !== kept.length || keep.some((id, i) => id !== kept[i])) setKept(keep);
+  return mounted;
 }
 
 /** How far a tab strip can scroll each way, in pixels. */
@@ -263,8 +284,7 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
   // A dot on the tab: the HTML has unsaved edits, or the selected slide has narration.
   const mark = useApp((s) => {
     if (id === "code") return s.codeDirty ? "Unsaved changes" : null;
-    if (id !== "narration") return null;
-    return s.deck?.slides.find((slide) => slide.id === s.selected)?.narration ? "This slide has narration" : null;
+    return id === "narration" && selectedSlideNarrated(s) ? "This slide has narration" : null;
   });
   // On the chat's tab while another one shows: the agent works, or waits for an approval.
   const attention = useApp((s) => (id === "chat" ? hiddenChatAttention(s) : null));
@@ -337,7 +357,7 @@ function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
         <div
           role="menu"
           {...menu}
-          className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg outline-none"
+          className="enter-below absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg outline-none"
         >
           {closed.map((id) => {
             const { label, hint, icon: Icon } = TABS[id];

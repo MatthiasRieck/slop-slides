@@ -79,6 +79,8 @@ const LOOKS = {
  * - `initialFocus`: what to focus once the panel shows. It is hidden until placed, and a hidden
  *   field can't take focus, so focusing it on mount does nothing.
  *
+ * Placed, it fades in with a small move from the anchor's side.
+ *
  * Focus: once placed, the focus goes to `initialFocus`, else to what the panel marks `autofocus`
  * (or `data-autofocus`), else into the `role="menu"` it holds (see `useMenuKeys`); a panel with
  * none of these leaves the focus where it is, as the edit ribbon's do, whose buttons keep the
@@ -104,6 +106,8 @@ export function Popover(props: {
   const { gap } = look;
   const panel = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<CSSProperties>({ visibility: "hidden" });
+  /** The anchor's side the panel opened on, once placed: where it comes in from. */
+  const [side, setSide] = useState<"above" | "below" | null>(null);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -114,6 +118,7 @@ export function Popover(props: {
       const below = window.innerHeight - rect.bottom - MARGIN * 2;
       const left = align === "end" ? rect.right - panelWidth : rect.left;
       const opensAbove = placement === "auto" ? above >= below : placement === "above";
+      setSide(opensAbove ? "above" : "below");
       setPosition({
         width: panelWidth,
         left: Math.max(MARGIN, Math.min(left, window.innerWidth - panelWidth - MARGIN)),
@@ -171,7 +176,13 @@ export function Popover(props: {
       data-popover=""
       {...(props.label !== undefined && { role: "dialog", "aria-label": props.label })}
       style={{ width, ...position }}
-      className={`fixed z-50 rounded-xl border bg-card text-foreground ${look.className} ${props.className ?? ""}`}
+      // Placed, it comes in from the anchor's side (see `enter-below` in src/index.css).
+      className={cn(
+        "fixed z-50 rounded-xl border bg-card text-foreground",
+        look.className,
+        side && `enter-${side}`,
+        props.className,
+      )}
     >
       {props.children}
     </div>
@@ -181,7 +192,7 @@ export function Popover(props: {
 
 /** The class of a `DropdownPanel`, for a panel that is not a div (a form, say). */
 export const dropdownPanel =
-  "absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md";
+  "enter-below absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md";
 
 /**
  * A toolbar button's panel, dropping down centered under it. Put it next to the button in a

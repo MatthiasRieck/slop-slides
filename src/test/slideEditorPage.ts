@@ -28,9 +28,11 @@ export interface EditorPageOptions {
   slide?: string;
   /** Inside the app's preview iframe; the editor does nothing outside one. */
   framed?: boolean;
+  /** A script run right before the editor, e.g. to change what the pasteboard offers it. */
+  beforeEditor?: string;
 }
 
-export function editorPage({ markup, slide = "intro", framed = true }: EditorPageOptions) {
+export function editorPage({ markup, slide = "intro", framed = true, beforeEditor = "" }: EditorPageOptions) {
   const posted: Message[] = [];
   const parent = { postMessage: (data: Message) => posted.push(data) };
   const window = openDeck(markup, {
@@ -38,14 +40,21 @@ export function editorPage({ markup, slide = "intro", framed = true }: EditorPag
     size: [1920, 1080],
     parent: framed ? parent : undefined,
     visual: true,
-    scripts: [RUNTIME, PASTEBOARD, OVERFLOW, EDITOR],
+    scripts: [RUNTIME, PASTEBOARD, OVERFLOW, beforeEditor, EDITOR],
   });
   const doc = window.document;
   const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
-  const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) =>
-    target.dispatchEvent(
+  // The pasteboard moves the view once a frame during a wheel turn or a drag. These tests look
+  // right after each event, so for them a frame has passed by then.
+  const frame = () => (window as unknown as { slopPasteboard?: { flush: () => void } }).slopPasteboard?.flush();
+  window.addEventListener("wheel", frame);
+  const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) => {
+    const went = target.dispatchEvent(
       new window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
     );
+    frame();
+    return went;
+  };
   const page = {
     window,
     doc,
@@ -82,6 +91,8 @@ export function editorPage({ markup, slide = "intro", framed = true }: EditorPag
       window.dispatchEvent(event);
     },
     selected: () => [...doc.querySelectorAll("[data-slop-selected]")],
+    /** Resolves once the page has had a frame, and what its scripts left until one had painted has run. */
+    frame: () => new Promise<void>((resolve) => window.requestAnimationFrame(() => window.setTimeout(resolve, 0))),
   };
   return page;
 }

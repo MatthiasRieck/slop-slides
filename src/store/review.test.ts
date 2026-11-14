@@ -89,6 +89,51 @@ describe("review", () => {
 describe("the list of comments", () => {
   const comment = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5 });
 
+  it("places the deck's comments once, however often they are asked for", async () => {
+    const { useApp, commentsInScope, commentsToSend, deckComments, hasComments, hasReview } = await freshModule();
+    useApp.setState({
+      deck: DECK,
+      selected: "intro",
+      comments: { intro: [comment("a", "One")], outro: [comment("b", "Two")], gone: [comment("c", "Lost")] },
+      commentsHeld: { a: "One" },
+      commentScope: "deck",
+      reviewVisible: true,
+    });
+    const all = deckComments(useApp.getState());
+    expect(all.map((c) => [c.id, c.slideNumber])).toEqual([
+      ["a", 1],
+      ["b", 3],
+    ]);
+    // Another part of the store changing leaves the lists as they are: the very same ones.
+    useApp.getState().setCommentTexts(true);
+    expect(deckComments(useApp.getState())).toBe(all);
+    expect(commentsInScope(useApp.getState())).toBe(all);
+    expect(commentsToSend(useApp.getState())).toBe(1);
+
+    useApp.setState({ commentScope: "slide" });
+    const here = commentsInScope(useApp.getState());
+    expect(here.map((c) => c.id)).toEqual(["a"]);
+    expect(commentsInScope(useApp.getState())).toBe(here);
+    expect(commentsToSend(useApp.getState())).toBe(0);
+    useApp.getState().select("outro");
+    expect(commentsInScope(useApp.getState()).map((c) => c.id)).toEqual(["b"]);
+
+    // A comment added shows in all of them.
+    useApp.getState().addComment("outro", comment("d", "Three"));
+    expect(deckComments(useApp.getState()).map((c) => c.id)).toEqual(["a", "b", "d"]);
+    expect(commentsToSend(useApp.getState())).toBe(2);
+    useApp.getState().setReviewVisible(false);
+    expect(commentsInScope(useApp.getState())).toEqual([]);
+    expect(commentsToSend(useApp.getState())).toBe(0);
+
+    expect(hasComments(useApp.getState())).toBe(true);
+    expect(hasReview({ sketches: {}, comments: { intro: [] } })).toBe(false);
+    expect(hasReview({ sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] }, comments: {} })).toBe(
+      true,
+    );
+    expect(hasReview({ sketches: {}, comments: { intro: [comment("a", "One")] } })).toBe(true);
+  });
+
   it("goes to a comment's slide with the review on show, and asks the stage to open it once", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK, selected: "intro", comments: { outro: [comment("c", "Thanks")] } });

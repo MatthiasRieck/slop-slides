@@ -1,4 +1,12 @@
-import { type KeyboardEvent, type PointerEvent, type RefObject, useLayoutEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { SlideTiming } from "../../lib/api";
 import type { Timeline } from "../../lib/timeline";
@@ -28,6 +36,9 @@ interface Drag {
  * longer of the two is. `held` is how long the track was when a drag took off: until it ends, a
  * second stays as wide. `track` is the element the timeline is laid out along. Unless `editable`
  * (Edit mode), nothing moves.
+ *
+ * `layout` and `timeline` are expected to stay the same while what they are made from does: the
+ * preview is laid out once for each move of a drag, not again for every render in between.
  */
 export function useTimingEdits(
   layout: (timing: SlideTiming[]) => Timeline,
@@ -40,7 +51,7 @@ export function useTimingEdits(
   const [held, setHeld] = useState<number | null>(null);
   const drag = useRef<Drag | null>(null);
 
-  const shown = preview ? layout(preview) : timeline;
+  const shown = useMemo(() => (preview ? layout(preview) : timeline), [preview, layout, timeline]);
   const end = Math.max(timeline.end, shown.end);
 
   // Past the end of the panel, the track scrolls to keep what is dragged in sight.

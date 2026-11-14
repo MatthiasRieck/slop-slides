@@ -570,12 +570,21 @@
   // Elements a paste never brings into text.
   var PASTE_SKIP = /^(script|style|meta|link|title|head|template|noscript|img|picture|svg|video|audio|canvas|iframe|object|embed|button|input|select|textarea)$/i;
 
-  var saved = serialize();
+  // The slide's markup as it was last saved, which a change is told from: taken once the page has
+  // painted, or just before the first thing that could change the slide (see keepSaved).
+  var saved = null;
+  // The app's messages that only set how the editor works or what is selected, never the slide.
+  var SETTINGS = /^slop:edit-(select|tool|snap|size-mode|keep-ratio)$/;
   var selected = null;
   var hovered = null;
   var editing = null;
   var drag = null;
   var nudgeTimer = null;
+  // What the pending nudges save as (see saveNudges): one key for a run of nudges of the same
+  // elements, so the app can make their saves one undo step. Null when anything else waits with them.
+  var nudgeGroup = null;
+  // The lines that follow the elements being nudged (see nudgeFollowers), until the nudges are saved.
+  var nudgeLines = null;
   var lastDown = { el: null, at: 0 };
   // The last press on one of a line's points, to tell a double-click.
   var lastPoint = { index: -1, at: 0 };
@@ -583,9 +592,19 @@
   var pointer = null;
   var overflowFrame = 0;
   var reportFrame = 0;
-  // Looks at the whole slide (what overflows, its layers) wait for a pause in the typing.
+  var handlesFrame = 0;
+  var hoverFrame = 0;
+  // Looks at the whole slide (what overflows, its layers) wait for a pause in the typing, and for
+  // the end of a drag, of adding an element and of a marquee.
   var TYPING_PAUSE_MS = 250;
   var slideChecksTimer = null;
+  var slideChecksDue = false;
+  // The text being typed changed since its `data-autofit="shrink"` box was last fitted.
+  var refitDue = false;
+  // What the pasteboard said of the view (see camera), kept until it pans, zooms or the window resizes.
+  var keptCamera = null;
+  // What overflows (see refreshOverflow), each with its box in slide pixels.
+  var overflowBoxes = [];
   // The last caret or text selection in the element being edited, kept while focus is in the app.
   var textRange = null;
   // The next paste goes in as plain text (⌘⇧V).
@@ -608,8 +627,22 @@
   // What "Clear formatting" takes off text: everything inline but its links.
   var CLEARED = { color: null, fontSize: null, fontFamily: null, bold: null, italic: null, underline: null, strike: null, script: null, letterSpacing: null };
   var CLEARED_PROPS = ["color", "font-size", "font-family", "font-weight", "font-style", "text-decoration-line", "text-decoration", "letter-spacing"];
-  // The handles keep to the selection as the view pans and zooms.
-  pasteboard.onChange(placeHandles);
+  // The handles and the overflow wires keep to the slide as the view pans and zooms.
+  pasteboard.onChange(cameraMoved);
+  // Whatever may change the slide comes after its markup was kept: what the user does, and the
+  // app's messages, but for the settings it sends as the slide loads.
+  ["pointerdown", "keydown", "dblclick", "contextmenu", "paste"].forEach(function (type) {
+    window.addEventListener(type, keepSaved, true);
+  });
+  window.addEventListener(
+    "message",
+    function (event) {
+      var type = event.data ? String(event.data.type) : "";
+      if (/^slop:edit-/.test(type) && !SETTINGS.test(type)) keepSaved();
+    },
+    true,
+  );
+  afterPaint(keepSaved);
   // Space and 0 are text while typing, and Space+drag selects it.
   pasteboard.busy = function () {
     return !!editing;

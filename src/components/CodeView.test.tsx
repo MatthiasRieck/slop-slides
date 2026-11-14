@@ -6,7 +6,16 @@ import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { answerUnsaved } from "../test/unsaved";
-import { CodePanel, CodeView } from "./CodeView";
+
+// The real thing, counted: finding the slides reads the whole document.
+vi.mock("../lib/slideSpans", async (original) => {
+  const actual = await original<typeof import("../lib/slideSpans")>();
+  return { ...actual, findSlideSpans: vi.fn(actual.findSlideSpans) };
+});
+
+import { findSlideSpans } from "../lib/slideSpans";
+import { CodePanel, CodeView, DIRTY_CHECK_DELAY } from "./CodeView";
+import { REFIND_DELAY, slideMarks } from "./code/sourceEditor";
 
 /** deck.html as the fake backend currently has it. */
 let disk = DECK_HTML;
@@ -201,7 +210,8 @@ describe("CodeView: showing deck.html", () => {
   });
 
   it("stays hidden but alive when inactive", async () => {
-    const { container, rerender, view } = await renderView(false);
+    const { container, rerender, view } = await renderView();
+    rerender(<CodeView active={false} />);
     expect(container.firstElementChild!.className).toContain("hidden");
     await type(view, "<h1>Hello", " draft");
     rerender(<CodeView active />);
@@ -210,13 +220,112 @@ describe("CodeView: showing deck.html", () => {
   });
 
   it("reveals the slide selected while hidden once shown", async () => {
-    const { rerender, view } = await renderView(false);
+    const { rerender, view } = await renderView();
+    rerender(<CodeView active={false} />);
     await act(async () => useApp.getState().select("outro"));
     const outro = disk.indexOf(`<section class="slide" id="outro">`);
-    // Hidden: highlight updates but the caret is not moved yet.
+    // Hidden, the editor is left alone: neither the highlight nor the caret moves yet.
     expect(view.state.selection.main.head).not.toBe(outro);
+    expect(view.state.field(slideMarks).active).toBe("intro");
     rerender(<CodeView active />);
     await waitFor(() => expect(view.state.selection.main.head).toBe(outro));
+  });
+});
+
+describe("CodeView: behind the other sidebar tabs", () => {
+  it("reads nothing while hidden, however often the file changes, and once when shown again", async () => {
+    const { rerender, view } = await renderView();
+    rerender(<CodeView active={false} />);
+    fetchMock.mockClear();
+    for (const word of ["one", "two", "three"]) await writeDisk(DECK_HTML.replace("Hello", word));
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe(DECK_HTML);
+    rerender(<CodeView active />);
+    await waitFor(() => expect(view.state.doc.toString()).toBe(disk));
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not read the file again when shown with nothing changed", async () => {
+    const { rerender } = await renderView();
+    fetchMock.mockClear();
+    rerender(<CodeView active={false} />);
+    rerender(<CodeView active />);
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("finds the conflict as it shows again, when the file changed under unsaved edits", async () => {
+    const { rerender, view } = await renderView();
+    await type(view, "<h1>Hello", " mine");
+    rerender(<CodeView active={false} />);
+    await writeDisk(DECK_HTML.replace("<p>Bye</p>", "<p>Bye from the agent</p>"));
+    expect(screen.queryByText(/changed on disk while/)).toBeNull();
+    rerender(<CodeView active />);
+    await screen.findByText("deck.html changed on disk while you were editing.");
+    expect(view.state.doc.toString()).toContain("Hello mine");
+    expect(useApp.getState().codeDirty).toBe(true);
+  });
+
+  it("does not move the hidden editor when another slide is selected", async () => {
+    const { rerender, view } = await renderView();
+    rerender(<CodeView active={false} />);
+    const dispatch = vi.spyOn(view, "dispatch");
+    await act(async () => useApp.getState().select("outro"));
+    await act(async () => useApp.getState().select("#2"));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("CodeView: the cost of a key", () => {
+  it("finds the slides again once typing pauses, not for every key", async () => {
+    const { view } = await renderView();
+    await waitFor(() => expect(header()).toContain("lines 4–6"));
+    vi.mocked(findSlideSpans).mockClear();
+    for (const key of "typed") await type(view, "<h1>Hello", key);
+    expect(findSlideSpans).not.toHaveBeenCalled();
+    // Meanwhile the slides found before move with the text.
+    const intro = view.state.field(slideMarks).spans[0]!;
+    expect(view.state.sliceDoc(intro.from, intro.to)).toBe(
+      `<section class="slide" id="intro">\n  <h1>Hellodepyt</h1>\n</section>`,
+    );
+    await act(async () => void (await new Promise((resolve) => setTimeout(resolve, REFIND_DELAY + 20))));
+    expect(findSlideSpans).toHaveBeenCalledOnce();
+  });
+
+  it("moves the slides after an edit along with it, and keeps a slide typed into whole", async () => {
+    const { view } = await renderView();
+    const before = view.state.field(slideMarks).spans.map((span) => view.state.sliceDoc(span.from, span.to));
+    await type(view, "<body>", "\n<!-- a note -->");
+    await type(view, "<p>Second</p>", "<p>More</p>");
+    const after = view.state.field(slideMarks).spans.map((span) => view.state.sliceDoc(span.from, span.to));
+    expect(after).toEqual([before[0], before[1]!.replace("<p>Second</p>", "<p>Second</p><p>More</p>"), before[2]]);
+  });
+
+  it("compares the whole text with the saved one only for text of the same length, once typing pauses", async () => {
+    const { view } = await renderView();
+    vi.useFakeTimers();
+    try {
+      const whole = vi.spyOn(view.state.doc.constructor.prototype, "toString");
+      // A longer text differs for sure: nothing is compared, now or later.
+      act(() => view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" }));
+      expect(useApp.getState().codeDirty).toBe(true);
+      expect(whole).not.toHaveBeenCalled();
+      act(() => void vi.advanceTimersByTime(DIRTY_CHECK_DELAY));
+      // Read once, to find the slides again; not a second time, to compare.
+      expect(whole).toHaveBeenCalledOnce();
+      // Back to the saved length: still unsaved until the pause, when the texts are compared.
+      act(() => view.dispatch({ changes: { from: 0, to: 1 }, userEvent: "delete.backward" }));
+      expect(useApp.getState().codeDirty).toBe(true);
+      act(() => void vi.advanceTimersByTime(DIRTY_CHECK_DELAY));
+      expect(useApp.getState().codeDirty).toBe(false);
+      // The same length with another text stays unsaved.
+      act(() => view.dispatch({ changes: { from: 0, to: 1, insert: "?" }, userEvent: "input.type" }));
+      act(() => void vi.advanceTimersByTime(DIRTY_CHECK_DELAY));
+      expect(useApp.getState().codeDirty).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -251,7 +360,8 @@ describe("CodeView: editing and saving", () => {
       undo(view);
     });
     expect(view.state.doc.toString()).toBe(DECK_HTML);
-    expect(useApp.getState().codeDirty).toBe(false);
+    // As long as the saved text again: compared with it once the typing pauses.
+    await waitFor(() => expect(useApp.getState().codeDirty).toBe(false));
   });
 
   it("re-finds slides while typing", async () => {

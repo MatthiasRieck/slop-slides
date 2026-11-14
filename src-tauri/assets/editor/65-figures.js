@@ -184,9 +184,29 @@
 
   /** Redraws figure `el` (or an old cut-out, made one) at its size, as whenever the box changes size. */
   function fitFigure(el) {
+    var paint = resizedPaint(el);
+    if (paint) fitFigureWith(el, paint);
+  }
+
+  /**
+   * What to redraw `el` with (see fitFigureWith) as its box changes size: its paint, read once
+   * for all the steps of a resize, as reading it takes the figure's image apart. An old cut-out
+   * is made a figure first; null for anything else.
+   */
+  function resizedPaint(el) {
     upgradeCutOut(el);
-    if (!figureOf(el) || !sizeOf(el).w || !sizeOf(el).h) return;
-    paintFigure(el, figurePaint(el));
+    return figureOf(el) ? figurePaint(el) : null;
+  }
+
+  /**
+   * Redraws figure `el` at its size with `paint` (see figurePaint), when it has a size. A resize
+   * draws it in the same step that changes its box, never in the frame's own callbacks: the
+   * webview only has a new image ready some time after it is set, and one set right before the
+   * frame is painted leaves the figure blank in it, so a resize would flicker.
+   */
+  function fitFigureWith(el, paint) {
+    var size = sizeOf(el);
+    if (size.w && size.h) paintFigure(el, paint);
   }
 
   /** A box cut out with a `clip-path` polygon the editor cannot redraw, which shows no border or shadow. */

@@ -8,6 +8,7 @@ import { DEFAULT_DIVIDER } from "../lib/compare";
 import { deckMode, useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { placeElements } from "../test/intersection";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
 const row = (
@@ -124,6 +125,20 @@ describe("ChangesRail", () => {
     for (const name of ["Slide 1, modified", "Slide, removed", "Slide 2", "Slide 3, added"]) {
       expect(screen.getByRole("button", { name }).classList).toContain("shadow-thumbnail");
     }
+  });
+
+  it("loads a row's thumbnail only when the list shows it, and changes its ring without a transition", async () => {
+    const inRow = (element: Element) => element.closest("[data-testid=change-row]") !== null;
+    placeElements((element) => (inRow(element) ? 6 : 0));
+    await show();
+    const thumbnails = () => screen.getAllByTestId("change-row").flatMap((r) => [...r.querySelectorAll("iframe")]);
+    expect(thumbnails()).toEqual([]);
+    // The picked slide beside the list is not one of a list: it loads whatever the list does.
+    expect(frames().length).toBeGreaterThan(0);
+    for (const frame of document.querySelectorAll("iframe")) fireEvent.load(frame);
+    act(() => placeElements(() => 0));
+    expect(thumbnails().length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Slide 1, modified" }).className).not.toMatch(/transition/);
   });
 
   it("shows a removed slide from the commit, with its runtime brought up to date", async () => {

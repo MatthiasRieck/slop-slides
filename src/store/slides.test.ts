@@ -141,7 +141,7 @@ describe("slide rail changes", () => {
       load_deck: () => deck,
     });
     await useApp.getState().moveSlides(1);
-    expect(useApp.getState().deck).toBe(deck);
+    expect(useApp.getState().deck).toEqual(deck);
     expect(lastError(useApp.getState())).toBe("The slides changed while reordering; try again.");
   });
 
@@ -159,7 +159,7 @@ describe("slide rail changes", () => {
     const useApp = await freshStore();
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck, selected: "intro", railSelected: ["intro", "gone"] });
-    useApp.getState().setDeck(deck);
+    useApp.getState().setDeck(deckFor(DECK_HTML, "2"));
     expect(useApp.getState().railSelected).toEqual(["intro"]);
   });
 
@@ -295,6 +295,7 @@ describe("what the rail says after it took something away", () => {
       delete_slides: () => {
         throw "disk full";
       },
+      load_deck: () => DECK,
     });
     await useApp.getState().deleteSlides(["intro"]);
     expect(toastTexts(useApp.getState(), "success")).toEqual([]);
@@ -471,5 +472,194 @@ describe("the rail's other changes", () => {
     const rev = useApp.getState().replayRev;
     useApp.getState().replaySlide();
     expect(useApp.getState()).toMatchObject({ finalState: false, replayRev: rev + 1 });
+  });
+});
+
+describe("what a new deck leaves as it was", () => {
+  const many = (count: number, changed = -1): Deck => ({
+    ...DECK,
+    slides: Array.from({ length: count }, (_, i) => ({
+      id: `s${i}`,
+      hash: i === changed ? "changed" : `h${i}`,
+      hidden: false,
+      locked: false,
+      moved: false,
+    })),
+  });
+
+  it("keeps every slide but the changed one the object it was", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(6), selected: "s0" });
+    const before = useApp.getState().deck!;
+    useApp.getState().setDeck(many(6, 2));
+    const { deck } = useApp.getState();
+    expect(deck!.slides[3]).toBe(before.slides[3]);
+    expect(deck!.slides[2]).not.toBe(before.slides[2]);
+    expect(deck!.slides[2]!.hash).toBe("changed");
+    expect(deck!.sections).toBe(before.sections);
+  });
+
+  it("leaves the store alone, and the deck's history unasked, for a deck that is the one shown", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(6), selected: "s0" });
+    const before = useApp.getState();
+    const told = vi.fn();
+    useApp.subscribe(told);
+    useApp.getState().setDeck(many(6));
+    expect(useApp.getState()).toBe(before);
+    expect(told).not.toHaveBeenCalled();
+    expect(calls("deck_history")).toEqual([]);
+    // One that changed is asked about once.
+    useApp.getState().setDeck(many(6, 1));
+    expect(calls("deck_history")).toHaveLength(1);
+  });
+
+  it("keeps the empty list of picks the same list from one selection to the next", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(6), selected: "s0" });
+    const { railSelected } = useApp.getState();
+    useApp.getState().select("s1");
+    useApp.getState().selectRelative(1);
+    useApp.getState().setDeck(many(5));
+    expect(useApp.getState().railSelected).toBe(railSelected);
+  });
+});
+
+describe("changes to the slides that show before the deck file has them", () => {
+  /** A backend that answers `command` when the test says so. */
+  function held<T>(command: string, others: Record<string, () => unknown> = {}) {
+    let settle: { resolve: (value: T) => void; reject: (error: unknown) => void } | undefined;
+    backend({
+      ...others,
+      [command]: () => new Promise<T>((resolve, reject) => (settle = { resolve, reject })),
+    });
+    // The change waits for the ones before it, so the backend hears of it a moment later.
+    const asked = () => vi.waitFor(() => expect(settle).toBeDefined());
+    return {
+      resolve: async (value: T) => {
+        await asked();
+        settle!.resolve(value);
+      },
+      reject: async (error: unknown) => {
+        await asked();
+        settle!.reject(error);
+      },
+    };
+  }
+  const answer = (deck: Deck) => ({ deck, previous: "<0>", source: "<1>", created: [] });
+  const without = (id: string): Deck => ({ ...DECK, slides: DECK.slides.filter((s) => s.id !== id) });
+  const marked = (id: string, marks: { hidden?: boolean; locked?: boolean }): Deck => ({
+    ...DECK,
+    slides: DECK.slides.map((s) => (s.id === id ? { ...s, ...marks } : s)),
+  });
+  const ids = (useApp: TestStore) => useApp.getState().deck!.slides.map((s) => s.id);
+
+  it("takes a deleted slide out at once, with the next one on the stage, and says so once it is done", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro" });
+    const backend = held("delete_slides");
+    const done = useApp.getState().deleteSlides(["intro"]);
+    expect(ids(useApp)).toEqual(["#2", "outro"]);
+    expect(useApp.getState().selected).toBe("#2");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
+    await backend.resolve(answer(without("intro")));
+    await done;
+    expect(ids(useApp)).toEqual(["#2", "outro"]);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Deleted 1 slide"]);
+    // The history is asked once, when the deck file has the change.
+    expect(calls("deck_history")).toHaveLength(1);
+  });
+
+  it("brings a deleted slide back, on the stage again, when the deck file refused", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro" });
+    const backend = held("delete_slides", { load_deck: () => DECK });
+    const done = useApp.getState().deleteSlides(["intro"]);
+    expect(ids(useApp)).toEqual(["#2", "outro"]);
+    await backend.reject("disk full");
+    await done;
+    expect(ids(useApp)).toEqual(["intro", "#2", "outro"]);
+    expect(useApp.getState().selected).toBe("intro");
+    expect(lastError(useApp.getState())).toBe("disk full");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
+  });
+
+  it("goes back to the deck as it was when the deck file cannot be read either", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "outro" });
+    const backend = held("delete_slides", {
+      load_deck: () => {
+        throw "gone";
+      },
+    });
+    const done = useApp.getState().deleteSlides(["intro"]);
+    await backend.reject("disk full");
+    await done;
+    expect(useApp.getState().deck).toEqual(DECK);
+    expect(lastError(useApp.getState())).toBe("disk full");
+  });
+
+  it.each([
+    ["hides", "set_slides_hidden", { hidden: true }, (deck: Deck) => answer(deck)],
+    ["locks", "set_slides_locked", { locked: true }, (deck: Deck) => deck],
+  ] as const)(
+    "%s a slide at once, and takes it back when the deck file refused",
+    async (_, command, marks, answered) => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      const change = () =>
+        "hidden" in marks
+          ? useApp.getState().setSlidesHidden(["#2"], true)
+          : useApp.getState().setSlidesLocked(["#2"], true);
+      const slide = () => useApp.getState().deck!.slides[1]!;
+
+      const first = held(command);
+      const done = change();
+      expect(slide()).toMatchObject(marks);
+      // The slides that did not change are the objects they were.
+      expect(useApp.getState().deck!.slides[0]).toBe(DECK.slides[0]);
+      await first.resolve(answered(marked("#2", marks)));
+      await done;
+      expect(slide()).toMatchObject(marks);
+      expect(calls("deck_history")).toHaveLength(1);
+
+      useApp.setState({ deck: DECK });
+      const second = held(command, { load_deck: () => DECK });
+      const failed = change();
+      expect(slide()).toMatchObject(marks);
+      await second.reject("disk full");
+      await failed;
+      expect(slide()).toMatchObject({ hidden: false, locked: false });
+      expect(lastError(useApp.getState())).toBe("disk full");
+    },
+  );
+
+  it("keeps a deleted slide out of a deck that arrives before the deletion was made", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "outro" });
+    const backend = held("delete_slides");
+    const done = useApp.getState().deleteSlides(["intro"]);
+    // A slide edit saved before it, or the deck file read again: the file still has the slide.
+    useApp.getState().setDeck(deckFor(DECK_HTML, "2"));
+    expect(ids(useApp)).toEqual(["#2", "outro"]);
+    expect(useApp.getState().deck!.slides[0]!.hash).toBe("#2-2");
+    await backend.resolve(answer({ ...deckFor(DECK_HTML, "2"), slides: deckFor(DECK_HTML, "2").slides.slice(1) }));
+    await done;
+    // Once made, nothing is held back from the decks that follow.
+    useApp.getState().setDeck(deckFor(DECK_HTML, "3"));
+    expect(ids(useApp)).toEqual(["intro", "#2", "outro"]);
+  });
+
+  it("asks the deck's history once for a move, when the deck file has it", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro" });
+    const moved = { ...DECK, slides: [DECK.slides[1]!, DECK.slides[0]!, DECK.slides[2]!] };
+    const backend = held("reorder_slides");
+    const done = useApp.getState().moveSlides(1);
+    expect(ids(useApp)).toEqual(["#2", "intro", "outro"]);
+    expect(calls("deck_history")).toEqual([]);
+    await backend.resolve(answer(moved));
+    await done;
+    expect(calls("deck_history")).toHaveLength(1);
   });
 });

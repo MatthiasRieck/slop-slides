@@ -10,12 +10,14 @@ import { formatElapsed } from "./presenter/time";
 const asText = (seconds: number | undefined) => (seconds ? formatElapsed(seconds * 1000) : "");
 
 /**
- * The Narration tab's field for the time the presenter plans to spend on the selected slide, which
- * the presenter view counts down, and what the planned times of the slides shown add up to.
+ * The field for the time the presenter plans to spend on the selected slide, which the presenter
+ * view counts down, and what the planned times of the slides shown add up to. It is beside the
+ * speaker notes under the slide and in the Narration tab; `compact`, for the notes' header row,
+ * it shows the timer icon in place of its name and leaves the sum to the tooltip.
  * What is typed and is no time stays in the field, marked as that, until it is put right or
  * Escape takes it back: nothing is thrown away unseen.
  */
-export function SlideTime({ deck }: { deck: Deck }) {
+export function SlideTime({ deck, compact = false }: { deck: Deck; compact?: boolean }) {
   const selected = useApp((s) => s.selected);
   const slide = deck.slides.find((s) => s.id === selected);
   const [draft, setDraft] = useState(asText(slide?.time));
@@ -46,7 +48,7 @@ export function SlideTime({ deck }: { deck: Deck }) {
     <div className="relative flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
       <label className="flex items-center gap-1.5">
         <Timer className="size-3.5" />
-        Planned time
+        <span className={cn(compact && "sr-only")}>Planned time</span>
         <input
           key={slide.id}
           value={draft}
@@ -57,7 +59,9 @@ export function SlideTime({ deck }: { deck: Deck }) {
           title={
             slide.locked
               ? "This slide is locked; unlock it in the slide list to change its time"
-              : "How long you plan to spend on this slide, like 1:30 or 2 (minutes). The presenter view counts it down."
+              : `${compact ? "Planned time: how" : "How"} long you plan to spend on this slide, like 1:30 or 2 (minutes). The presenter view counts it down.${
+                  compact && total > 0 ? ` All slides shown: ${formatElapsed(total * 1000)}.` : ""
+                }`
           }
           onChange={(event) => {
             setDraft(event.target.value);
@@ -77,7 +81,7 @@ export function SlideTime({ deck }: { deck: Deck }) {
           )}
         />
       </label>
-      {total > 0 && (
+      {total > 0 && !compact && (
         <span data-testid="deck-time" title="The planned times of all slides shown, added up" className="tabular-nums">
           of {formatElapsed(total * 1000)} planned
         </span>

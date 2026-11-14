@@ -19,7 +19,10 @@ export interface ReviewSlice {
   reviewVisible: boolean;
   /** Every comment's text floats next to its pin, rather than only the one pointed at. */
   commentTexts: boolean;
-  /** Comments on slides, by slide id. Saved in the deck file. Sent to the agent, they are taken off. */
+  /**
+   * Comments on slides, by slide id. Saved in the deck file. One sent to the agent stays, marked
+   * `sent`, until the user resolves it.
+   */
   comments: Record<string, SlideComment[]>;
   /** Which comments the next message takes along. */
   commentScope: CommentScope;
@@ -38,22 +41,35 @@ export interface ReviewSlice {
   setReviewVisible: (visible: boolean) => void;
   setCommentTexts: (shown: boolean) => void;
   addComment: (slide: string, comment: SlideComment) => void;
+  /** Changes what a comment says. A sent one that says something else now is one to send again. */
   updateComment: (slide: string, id: string, text: string) => void;
+  /** Takes a comment off its slide: deleting one not sent yet, resolving one that was. */
   removeComment: (slide: string, id: string) => void;
   /**
-   * Takes comments that went to the agent off their slides, whatever comes of the turn: the chat
-   * keeps what they said. One changed since it was sent stays, and goes out again.
+   * Marks comments that went to the agent as sent, whatever comes of the turn: they stay on
+   * their slides until the user resolves them, and do not go out again. One changed since it
+   * was sent is not marked, and goes out with the next message.
    */
-  removeSentComments: (sent: SlideComment[]) => void;
+  markCommentsSent: (sent: SlideComment[]) => void;
+  /** Makes a sent comment one to send again, with the next message. */
+  resendComment: (slide: string, id: string) => void;
+  /** Takes every sent comment off the slides: the agent has dealt with them. */
+  resolveSentComments: () => void;
   setCommentScope: (scope: CommentScope) => void;
   /** Leaves a comment out of the next messages, or takes it along again. */
   setCommentHeld: (comment: SlideComment, held: boolean) => void;
   holdComments: (comments: SlideComment[]) => void;
+  /**
+   * Has the next message take `comment` along (`going`) or leave it out, whatever slide it is
+   * on: taking along one of another slide widens what goes out to the whole deck, with the
+   * other slides' comments left out as they were.
+   */
+  setCommentGoing: (comment: PlacedComment, going: boolean) => void;
   /** Goes to `slide` with the review on show and asks the stage to open comment `id` there. */
   showComment: (slide: string, id: string) => void;
   /** The stage opened the comment it was asked to, or found it gone. */
   commentShown: () => void;
-  /** Has the next message take every comment of the deck along, those left out before too. */
+  /** Has the next message take every unsent comment of the deck along, those left out before too. */
   takeAllComments: () => void;
 }
 
@@ -66,6 +82,7 @@ const COMMENT_TEXTS_KEY = "slopslide.commentTexts";
 const NO_COMMENTS: PlacedComment[] = [];
 const placed = memoizeLast(placeComments);
 const onSlide = memoizeLast((all: PlacedComment[], slide: string | null) => all.filter((c) => c.slide === slide));
+const notSent = memoizeLast((all: PlacedComment[]) => all.filter((c) => !c.sent));
 const notHeld = memoizeLast(
   (comments: PlacedComment[], held: Record<string, string>) => comments.filter((c) => held[c.id] !== c.text).length,
 );
@@ -78,13 +95,30 @@ export function deckComments(state: Pick<AppState, "deck" | "comments">): Placed
   return state.deck ? placed(state.comments, state.deck.slides) : NO_COMMENTS;
 }
 
-/** The comments the composer offers to send: the selected slide's or the deck's, in deck order. */
+/** The deck's comments still to send to the agent, in deck order: those not marked as sent. */
+export function unsentComments(state: Pick<AppState, "deck" | "comments">): PlacedComment[] {
+  return notSent(deckComments(state));
+}
+
+/**
+ * The comments the composer offers to send: the selected slide's or the deck's, in deck order.
+ * One that was sent already is not among them.
+ */
 export function commentsInScope(
   state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible">,
 ): PlacedComment[] {
   if (!state.reviewVisible) return NO_COMMENTS;
-  const all = deckComments(state);
+  const all = unsentComments(state);
   return state.commentScope === "deck" ? all : onSlide(all, state.selected);
+}
+
+/** Whether `comment` goes out with the next message: it is in scope, not sent yet and not held back. */
+export function commentGoing(
+  state: Pick<AppState, "selected" | "commentScope" | "reviewVisible" | "commentsHeld">,
+  comment: PlacedComment,
+): boolean {
+  if (!state.reviewVisible || comment.sent || heldComment(state, comment)) return false;
+  return state.commentScope === "deck" || comment.slide === state.selected;
 }
 
 /** Whether a comment stays out of the next message: it has not changed since it last went out. */
@@ -102,6 +136,11 @@ export function commentsToSend(
 /** Whether any slide has a comment. */
 export function hasComments(state: Pick<AppState, "comments">): boolean {
   return someComments(state.comments);
+}
+
+/** Whether any slide has a comment still to send. */
+export function hasUnsentComments(state: Pick<AppState, "deck" | "comments">): boolean {
+  return unsentComments(state).length > 0;
 }
 
 /** Whether there is any review to show or hide: a mark or a comment on any slide. */
@@ -151,7 +190,10 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
 
   updateComment: (slide, id, text) => {
     set((s) => ({
-      comments: { ...s.comments, [slide]: (s.comments[slide] ?? []).map((c) => (c.id === id ? { ...c, text } : c)) },
+      comments: {
+        ...s.comments,
+        [slide]: (s.comments[slide] ?? []).map((c) => (c.id === id ? unsent({ ...c, text }) : c)),
+      },
     }));
     scheduleReviewSave(app);
   },
@@ -161,14 +203,38 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
     scheduleReviewSave(app);
   },
 
-  removeSentComments: (sent) => {
+  markCommentsSent: (sent) => {
     if (sent.length === 0) return;
     const texts = new Map(sent.map((c) => [c.id, c.text]));
     set((s) => ({
       comments: Object.fromEntries(
-        Object.entries(s.comments).map(([slide, list]) => [slide, list.filter((c) => texts.get(c.id) !== c.text)]),
+        Object.entries(s.comments).map(([slide, list]) => [
+          slide,
+          list.map((c) => (texts.get(c.id) === c.text ? { ...c, sent: true } : c)),
+        ]),
       ),
       commentsHeld: Object.fromEntries(Object.entries(s.commentsHeld).filter(([id]) => !texts.has(id))),
+    }));
+    scheduleReviewSave(app);
+  },
+
+  resendComment: (slide, id) => {
+    set((s) => {
+      const { [id]: _, ...commentsHeld } = s.commentsHeld;
+      const comments = {
+        ...s.comments,
+        [slide]: (s.comments[slide] ?? []).map((c) => (c.id === id ? unsent(c) : c)),
+      };
+      return { comments, commentsHeld };
+    });
+    scheduleReviewSave(app);
+  },
+
+  resolveSentComments: () => {
+    set((s) => ({
+      comments: Object.fromEntries(
+        Object.entries(s.comments).map(([slide, list]) => [slide, list.filter((c) => !c.sent)]),
+      ),
     }));
     scheduleReviewSave(app);
   },
@@ -186,6 +252,18 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
       commentsHeld: { ...s.commentsHeld, ...Object.fromEntries(comments.map((c) => [c.id, c.text])) },
     })),
 
+  setCommentGoing: (comment, going) => {
+    const state = get();
+    if (!going) return state.setCommentHeld(comment, true);
+    if (!state.reviewVisible) state.setReviewVisible(true);
+    if (state.commentScope === "slide" && comment.slide !== state.selected) {
+      // The other slides' comments were not going: they stay out as the scope widens to them.
+      state.holdComments(unsentComments(state).filter((c) => c.slide !== state.selected));
+      set({ commentScope: "deck" });
+    }
+    get().setCommentHeld(comment, false);
+  },
+
   showComment: (slide, id) => {
     const app = get();
     if (!app.reviewVisible) app.setReviewVisible(true);
@@ -200,6 +278,12 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
     set({ commentScope: "deck", commentsHeld: {} });
   },
 });
+
+/** `comment` as one still to send. */
+function unsent(comment: SlideComment): SlideComment {
+  const { sent: _, ...rest } = comment;
+  return rest;
+}
 
 const REVIEW_SAVE_DELAY = 400;
 let reviewSave: { deckId: string; timer: ReturnType<typeof setTimeout> } | null = null;

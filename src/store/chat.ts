@@ -3,6 +3,7 @@ import { requestAttention } from "../lib/attention";
 import type { SlideComment } from "../lib/comments";
 import { inkBounds, type Stroke } from "../lib/ink";
 import type { Provider } from "../lib/models";
+import type { ApprovalDecision } from "../lib/permissions";
 import { pixelsOf } from "../lib/slideSize";
 import { applyReplyEvent, replyProvider } from "./agentEvents";
 import { captureSlide } from "./capture";
@@ -23,10 +24,11 @@ import {
   sendOptionsOf,
   settleInterrupted,
   settleReply,
+  slideChanges,
   type UserMessage,
 } from "./messages";
 import { followChatProvider, turnSettings } from "./models";
-import { buildPrompt, withRevertNotes } from "./prompts";
+import { buildPrompt, editNote, quoteLabel, withRevertNotes } from "./prompts";
 import { commentsInScope, flushReview, heldComment } from "./review";
 import type { AppState, AppStore, Slice } from "./types";
 
@@ -53,6 +55,10 @@ export interface ChatSlice {
   queue: QueuedMessage[];
   sessionProvider: Provider | null;
   running: boolean;
+  /** The user asked the running turn to stop, and it has not ended yet. */
+  stopping: boolean;
+  /** The name the user gave the conversation on show; null while it goes by its first message. */
+  chatTitle: string | null;
   chatRevision: number;
 
   /** Sends a message to the agent; while it works, the message waits in `queue`. */
@@ -71,6 +77,16 @@ export interface ChatSlice {
    * failed or was stopped (see `retryTarget`).
    */
   retryLast: () => Promise<void>;
+  /**
+   * Sends `text` in the place of the sent message `id`: the chat goes back to before that
+   * message, as does the agent's conversation, and the deck changes of its turn are undone when
+   * they are the deck's newest change. Then the message goes out as any other.
+   */
+  editMessage: (id: string, text: string, options: SendOptions) => Promise<void>;
+  /** Keeps how the user answered approval `id`, so that the chat still says so when it is opened again. */
+  approvalAnswered: (id: string, decision: ApprovalDecision) => void;
+  /** The conversation on show was given the name `title`; null or blank takes the name away. */
+  setChatTitle: (title: string | null) => void;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
   interrupt: () => void;
@@ -84,6 +100,12 @@ export const COMPACT_COMMAND = "/compact";
 /** Steered messages sent to the agent, until it reports taking them (see `steered`). */
 const pendingSteers = new Map<string, UserMessage>();
 
+/**
+ * How each chat's running turn started, by chat: the message that started it and the slides the
+ * deck had then, to say what the turn changed once it is over (see `noteTurnChanges`).
+ */
+const turnStarts = new Map<string, { message: string; slides: { id: string; hash: string }[] }>();
+
 export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   chatKey: null,
   chatFollowsDeck: false,
@@ -91,6 +113,8 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   queue: [],
   sessionProvider: null,
   running: false,
+  stopping: false,
+  chatTitle: null,
   chatRevision: 0,
 
   send: async (text, options) => {
@@ -151,6 +175,48 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     if (message) await get().send(message.text, sendOptionsOf(message));
   },
 
+  editMessage: async (id, text, options) => {
+    const { chatKey: chat, running, messages, history } = get();
+    if (!chat || running) return;
+    const index = messages.findIndex((m) => m.id === id);
+    const message = messages[index];
+    // The message is gone (the chat was rewound since): what was written is a message like any other.
+    if (message?.role !== "user") return get().send(text, options);
+    const undoes = history?.undo?.source === "chat" && history.undo.message === id;
+    const kept = new Set(messages.slice(0, index).map((m) => m.id));
+    set((s) => ({
+      messages: s.messages.slice(0, index),
+      queue: [],
+      revertNotes: s.revertNotes.filter((n) => kept.has(n.message)),
+      rewindAsk: null,
+    }));
+    persistChat(app);
+    try {
+      await api.rewindChat(chat, id, editNote(quoteLabel(message.text), undoes));
+    } catch (error) {
+      showErrorIn(app, error);
+    }
+    // Its message is out of the chat by now, so undoing the turn asks nothing about the chat.
+    if (undoes) await get().undo();
+    if (get().chatKey === chat) await get().send(text, options);
+  },
+
+  approvalAnswered: (id, decision) => {
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.role === "assistant" && m.parts.some((p) => p.kind === "approval" && p.approval.id === id)
+          ? {
+              ...m,
+              parts: m.parts.map((p) => (p.kind === "approval" && p.approval.id === id ? { ...p, decision } : p)),
+            }
+          : m,
+      ),
+    }));
+    persistChat(app);
+  },
+
+  setChatTitle: (title) => set({ chatTitle: title?.trim() || null }),
+
   compact: async () => {
     const { chatKey: chat, running, selection } = get();
     if (!chat || running) return;
@@ -169,9 +235,11 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   },
 
   interrupt: () => {
-    const { chatKey } = get();
+    const { chatKey, running } = get();
     if (chatKey) {
       updateLastAssistant(app, (m) => ({ ...m, parts: expireApprovals(m.parts) }));
+      // Stopping takes the agent a moment: until its turn ends, the chat says so.
+      if (running) set({ stopping: true });
       void api.interruptAgent(chatKey);
     }
   },
@@ -183,10 +251,16 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     const { chatKey: key, messages } = get();
     if (!key || (deck && deck !== key)) return;
     if (messages.length > 0) await api.saveChat(key, messages);
-    const { chat, provider } = await api.selectChatThread(key, thread);
+    const { chat, provider, title } = await api.selectChatThread(key, thread);
     if (get().chatKey !== key) return;
     restoreChat(app, key, chat, false, provider);
-    set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null, rewindAsk: null, revertNotes: [] }));
+    set((s) => ({
+      chatRevision: s.chatRevision + 1,
+      chatTitle: title ?? null,
+      composerFill: null,
+      rewindAsk: null,
+      revertNotes: [],
+    }));
   },
 
   resetChat: async () => {
@@ -198,6 +272,8 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
       messages: [],
       queue: [],
       running: false,
+      stopping: false,
+      chatTitle: null,
       sessionProvider: null,
       composerFill: null,
       rewindAsk: null,
@@ -220,18 +296,23 @@ export async function loadChat(app: AppStore, key: string) {
       messages: [],
       queue: [],
       running: false,
+      stopping: false,
+      chatTitle: null,
       sessionProvider: null,
       rewindAsk: null,
       revertNotes: [],
       chatRevision: s.chatRevision + 1,
     }));
   }
-  const [chat, running, provider] = await Promise.all([
+  const [chat, running, provider, title] = await Promise.all([
     api.loadChat(key),
     api.agentRunning(key),
     api.sessionProvider(key),
+    // A chat whose name cannot be read goes by its first message.
+    api.chatTitle(key).catch(() => null),
   ]);
   restoreChat(app, key, chat, running, provider);
+  if (app.getState().chatKey === key) app.setState({ chatTitle: typeof title === "string" ? title : null });
 }
 
 /**
@@ -286,6 +367,7 @@ function restoreChat(app: AppStore, key: string, chat: unknown, running: boolean
     // A queue belongs to the chat it was typed in.
     queue: [],
     running,
+    stopping: false,
     sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null,
   });
   followChatProvider(app);
@@ -304,8 +386,14 @@ async function startTurn(
   message?: UserMessage,
 ) {
   try {
-    const { workspace } = app.getState();
+    const { workspace, deck } = app.getState();
     if (!workspace) throw new Error("No folder is open.");
+    if (message) {
+      turnStarts.set(chat, {
+        message: message.id,
+        slides: (deck?.slides ?? []).map(({ id, hash }) => ({ id, hash })),
+      });
+    }
     await api.sendMessage(
       workspace.path,
       chat,
@@ -321,8 +409,32 @@ async function startTurn(
       thinking: false,
       error: errorMessage(error),
     }));
-    app.setState({ running: false });
+    turnStarts.delete(chat);
+    app.setState({ running: false, stopping: false });
     persistChat(app);
+  }
+}
+
+/**
+ * Once a turn of chat `chat` is over, puts on its last reply what it changed in the deck (see
+ * `TurnChanges`): the slides as they are in the file now, against those the turn started with.
+ * The deck in the app may still be a save behind, so the file is asked.
+ */
+async function noteTurnChanges(app: AppStore, chat: string) {
+  const start = turnStarts.get(chat);
+  turnStarts.delete(chat);
+  const { deck, messages } = app.getState();
+  const reply = messages.findLast((m) => m.role === "assistant");
+  if (!start || !deck || !reply) return;
+  try {
+    const now = await api.loadDeck(deck.id);
+    if (!Array.isArray(now?.slides)) return;
+    const changes = slideChanges(start.message, start.slides, now.slides);
+    if (!changes || app.getState().chatKey !== chat) return;
+    updateAssistant(app, reply.id, (m) => ({ ...m, changes }));
+    persistChat(app);
+  } catch {
+    // The deck cannot be read just now: the reply goes without saying what it changed.
   }
 }
 
@@ -361,9 +473,11 @@ interface DraftMessage {
 function draftMessage(state: AppState, text: string, options: SendOptions): DraftMessage {
   const { deck, selected } = state;
   const { includeSlide, attachments, screenshot, element } = options;
+  const exists = (id: string) => !!deck?.slides.some((s) => s.id === id);
   // A queued message's slide may be gone by the time it goes out.
-  const kept = options.slide && deck?.slides.some((s) => s.id === options.slide) ? options.slide : null;
+  const kept = options.slide && exists(options.slide) ? options.slide : null;
   const slide = !deck || !includeSlide ? null : options.slide !== undefined ? kept : selected;
+  const slides = [...new Set(options.slides ?? [])].filter((id) => id !== slide && exists(id));
   const strokes = slide ? (state.sketches[slide] ?? []) : [];
   // Marks go out once, while they are on show; they stay on the slide as a review.
   const unsent = !!slide && state.reviewVisible && strokes !== state.sketchesSent[slide];
@@ -374,6 +488,7 @@ function draftMessage(state: AppState, text: string, options: SendOptions): Draf
     role: "user",
     text,
     slide,
+    ...(slides.length > 0 && { slides }),
     attachments,
     sketch: bounds ? { image: null, bounds } : null,
     ...(comments.length > 0 && { comments }),
@@ -386,8 +501,8 @@ function draftMessage(state: AppState, text: string, options: SendOptions): Draf
 
 /** Takes what goes along with `draft` (its sketch, its comments) and builds its prompt. */
 async function readyMessage(app: AppStore, { user, strokes, comments }: DraftMessage): Promise<ReadyMessage> {
-  // Sent, they are dealt with as far as the slides go: off they come, whatever the agent makes of them.
-  app.getState().removeSentComments(comments);
+  // Sent, they do not go out again: they stay on their slides, marked as sent, until the user resolves them.
+  app.getState().markCommentsSent(comments);
   // Let any edit still being saved land first, so the agent sees the final version.
   await editsSaved();
   await flushReview(app);
@@ -460,10 +575,12 @@ export function applyAgentEvent(app: AppStore, event: AgentEvent) {
         failed = !!m.error;
         return { ...m, ...settleReply(m), status: event.interrupted ? "interrupted" : m.error ? "error" : "done" };
       });
-      app.setState({ running: false });
+      app.setState({ running: false, stopping: false });
       persistChat(app);
       // The user may be elsewhere, waiting for this.
       requestAttention();
+      const { chatKey } = app.getState();
+      if (chatKey) void noteTurnChanges(app, chatKey);
       // The turn's changes are in the decks' histories once it finished.
       void refreshHistory(app);
       const next = () => {

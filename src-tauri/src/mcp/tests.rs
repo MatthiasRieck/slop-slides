@@ -655,9 +655,9 @@ fn timeline_tool_places_slides_narration_and_words_on_the_show() {
         .join("timing")
         .join("deck.html.timeline.json");
     let intro = "How deck.html plays in a video export and the self-running show, in seconds from \
-        its start. What a slide does not pin follows the app's default export settings: a slide \
+        its start. What a slide does not pin follows the deck's timing settings: a slide \
         shows at least 5 s, its narration starts 0.5 s in and the slide stays 1 s after it; the \
-        user may export with others, so pin `data-duration` and `data-narration-start` on slides \
+        user may change them, so pin `data-duration` and `data-narration-start` on slides \
         you time to narration. A narration never talks over the one before it: it waits. An \
         animation on a slide starts as the slide shows, so its delay is the time into that slide.\n";
     let slides = "

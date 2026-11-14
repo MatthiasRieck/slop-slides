@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
+import { Tooltips } from "./components/Tooltip";
 import "./index.css";
 import { followAppearance } from "./lib/theme";
 import { initNarrationEvents } from "./narrationStore";
@@ -25,6 +26,7 @@ if (new URLSearchParams(window.location.search).has("presenter")) {
     root.render(
       <React.StrictMode>
         <PresenterWindow />
+        <Tooltips />
       </React.StrictMode>,
     ),
   );
@@ -34,6 +36,7 @@ if (new URLSearchParams(window.location.search).has("presenter")) {
   root.render(
     <React.StrictMode>
       <App />
+      <Tooltips />
     </React.StrictMode>,
   );
 }

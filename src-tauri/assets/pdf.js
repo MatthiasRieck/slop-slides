@@ -4,7 +4,9 @@
 
    Where the engine cannot print transparency (macOS), each slide's look is captured as an
    image with its text hidden (`decor`, `show`), then printed as that image with only the
-   text on top (`paint`, `text`): the text stays real and selectable. */
+   text on top (`paint`, `text`): the text stays real and selectable.
+
+   Asked for, a page with a slide's speaker notes follows that slide (`notes`). */
 (function () {
   // WebView2 finishes canceled signal navigations too; keep the current print state.
   if (window.__slopPdf) return;
@@ -92,6 +94,49 @@
         "}";
       document.head.appendChild(style);
       signal("fit");
+    },
+
+    /**
+     * Puts a page after each slide that has speaker notes: `pages` lists them as
+     * `{ slide, label, text }`, `slide` counting the printed slides from 0. A notes page is
+     * plain text on white, as wide as a slide and as long as its notes; it is only there in
+     * print, so nothing of it is in a capture of the slides.
+     */
+    notes: function (pages) {
+      var style = document.createElement("style");
+      style.setAttribute("data-slop-pdf-notes", "");
+      style.textContent = [
+        ".slop-pdf-notes { display: none; }",
+        "@media print {",
+        "  .slop-pdf-notes {",
+        "    display: block; box-sizing: border-box; width: var(--slop-w, 1920px); margin: 0;",
+        "    padding: calc(var(--slop-w, 1920px) / 16); break-after: page;",
+        "    background: #fff; color: #1a1a1a; text-align: left;",
+        '    font: 400 calc(var(--slop-w, 1920px) / 60) / 1.5 system-ui, -apple-system, "Segoe UI", sans-serif;',
+        "  }",
+        "  .slop-pdf-notes > h2 {",
+        "    margin: 0 0 1em; font: inherit; font-size: 0.75em; font-weight: 600;",
+        "    letter-spacing: 0.04em; text-transform: uppercase; color: #6b6b6b;",
+        "  }",
+        "  .slop-pdf-notes > p { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; }",
+        "}",
+      ].join("\n");
+      document.head.appendChild(style);
+      var all = slides();
+      (pages || []).forEach(function (page) {
+        var slide = all[page.slide];
+        if (!slide) return;
+        var el = document.createElement("div");
+        el.className = "slop-pdf-notes";
+        var label = document.createElement("h2");
+        label.textContent = page.label;
+        var text = document.createElement("p");
+        text.textContent = page.text;
+        el.appendChild(label);
+        el.appendChild(text);
+        slide.parentNode.insertBefore(el, slide.nextSibling);
+      });
+      signal("notes");
     },
 
     /** Hides the text, to capture each slide's decor. */

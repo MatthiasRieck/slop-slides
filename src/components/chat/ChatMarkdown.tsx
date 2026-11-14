@@ -8,14 +8,20 @@ import { showError, useApp } from "../../store";
 
 /**
  * A link in a chat message. It never takes the app's window anywhere: a web address opens in the
- * system's browser, a file of the workspace opens in the app, and anything else does nothing.
+ * system's browser, a file of the workspace opens in the app, a link to a slide of the open deck
+ * (`#<slide id>`, as the agent writes them) goes to that slide, and anything else does nothing.
  */
 function ChatLink({ href, children, title }: ComponentProps<"a">) {
   const open = (event: React.MouseEvent) => {
     event.preventDefault();
     const target = linkTarget(href, useApp.getState().workspace?.path ?? null);
-    if (target?.kind === "url") void openUrl(target.url).catch(showError);
+    if (target?.kind === "url")
+      void openUrl(target.url).catch((error) => showError(error, { doing: "Could not open the link" }));
     else if (target?.kind === "file") void useApp.getState().openPath(target.path);
+    else if (target?.kind === "slide") {
+      const { deck, select } = useApp.getState();
+      if (deck?.slides.some((slide) => slide.id === target.id)) select(target.id);
+    }
   };
   return (
     <a href={href} title={title ?? href} onClick={open} onAuxClick={open}>

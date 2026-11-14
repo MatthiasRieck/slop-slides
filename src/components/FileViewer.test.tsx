@@ -31,27 +31,72 @@ describe("FileViewer", () => {
     expect(screen.getByText(/made with another tool/)).toBeTruthy();
   });
 
-  it("offers the file manager for files it cannot show", () => {
-    useApp.setState({ openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" } });
+  it("offers the system's app and the file manager for files it cannot show", async () => {
+    useApp.setState({ openedFile: { path: "song.mp3", absolute: "/ws/song.mp3", kind: "file" } });
     render(<FileViewer />);
     expect(frame()).toBeNull();
-    expect(screen.getByText("There is no preview for this kind of file yet.")).toBeTruthy();
+    expect(screen.getByText(/cannot show this kind of file/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Show in folder/ }));
-    expect(revealItemInDir).toHaveBeenCalledWith("/ws/notes.md");
+    expect(revealItemInDir).toHaveBeenCalledWith("/ws/song.mp3");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Open in default app" })));
+    expect(invoke).toHaveBeenCalledWith("open_in_default_app", { path: "song.mp3" });
+  });
+
+  it("says why the system's app could not open a file", async () => {
+    invoke.mockRejectedValue("song.mp3 can run as a program");
+    useApp.setState({ toasts: [], openedFile: { path: "song.mp3", absolute: "/ws/song.mp3", kind: "file" } });
+    render(<FileViewer />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Open in default app" })));
+    expect(useApp.getState().toasts.map((t) => t.text)).toEqual([
+      "Could not open song.mp3: song.mp3 can run as a program",
+    ]);
+  });
+
+  it("shows a text file as it is, read-only, and reads it again when it changes", async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === "read_text_file" ? { text: "# Notes\nSay hello", truncated: true } : undefined,
+    );
+    useApp.setState({ openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" } });
+    render(<FileViewer />);
+    await waitFor(() => expect(screen.getByTestId("preview-text").textContent).toBe("# Notes\nSay hello"));
+    expect(screen.getByText(/Only the start of this file is shown/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in default app" })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("read_text_file", { path: "notes.md" });
+    await act(async () => useApp.setState({ fileRev: 1 }));
+    expect(invoke.mock.calls.filter(([c]) => c === "read_text_file")).toHaveLength(2);
+  });
+
+  it("says when a text file turns out not to be text", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "read_text_file") throw "This file is not text.";
+    });
+    useApp.setState({ openedFile: { path: "data.csv", absolute: "/ws/data.csv", kind: "file" } });
+    render(<FileViewer />);
+    await waitFor(() => expect(screen.getByText("This file is not text.")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Open in default app" })).toBeTruthy();
+  });
+
+  it("shows a PDF in the window's own viewer", () => {
+    useApp.setState({ openedFile: { path: "Talk.pdf", absolute: "/ws/Talk.pdf", kind: "file" } });
+    render(<FileViewer />);
+    // The tests run as macOS or Windows would, or as Linux, which has no viewer for PDFs.
+    const shows = /Mac|Windows/.test(navigator.userAgent);
+    expect(frame()?.getAttribute("src") ?? null).toBe(shows ? "/__deck/.file/ws/Talk.pdf?v=0" : null);
+    expect(screen.getByRole("button", { name: "Open in default app" })).toBeTruthy();
   });
 
   it("offers to import a PowerPoint file as a deck", async () => {
-    const importPptx = vi.fn(async () => {});
+    const importPptx = vi.fn(async () => null);
     useApp.setState({ importPptx, openedFile: { path: "talks/q3.pptx", absolute: "/ws/talks/q3.pptx", kind: "file" } });
     render(<FileViewer />);
-    expect(screen.queryByText("There is no preview for this kind of file yet.")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Import as deck" }));
+    expect(screen.queryByText(/cannot show this kind of file/)).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Import as deck" })));
     expect(importPptx).toHaveBeenCalledWith("/ws/talks/q3.pptx");
   });
 
   it("says it is importing, and imports the file once however often the button is pressed", async () => {
     let done = () => {};
-    const importPptx = vi.fn(() => new Promise<void>((resolve) => (done = resolve)));
+    const importPptx = vi.fn(() => new Promise<null>((resolve) => (done = () => resolve(null))));
     useApp.setState({ importPptx, openedFile: { path: "talks/q3.pptx", absolute: "/ws/talks/q3.pptx", kind: "file" } });
     render(<FileViewer />);
     const button = () => screen.getByRole("button", { name: /Import/ }) as HTMLButtonElement;
@@ -59,7 +104,7 @@ describe("FileViewer", () => {
     expect(button().textContent).toBe("Importing q3.pptx…");
     expect(button().disabled).toBe(true);
     expect(button().getAttribute("aria-busy")).toBe("true");
-    fireEvent.click(button());
+    await act(async () => fireEvent.click(button()));
     expect(importPptx).toHaveBeenCalledOnce();
     await act(async () => done());
     expect(button().textContent).toBe("Import as deck");
@@ -74,7 +119,7 @@ describe("FileViewer", () => {
       render(<FileViewer />);
       const image = screen.getByRole("img", { name: `logo.${ext}` }) as HTMLImageElement;
       expect(image.getAttribute("src")).toBe(`/__deck/.file/ws/assets/logo.${ext}?v=0`);
-      expect(screen.queryByText("There is no preview for this kind of file yet.")).toBeNull();
+      expect(screen.queryByText(/cannot show this kind of file/)).toBeNull();
       act(() => useApp.setState({ fileRev: 1 }));
       expect(screen.getByRole("img").getAttribute("src")).toBe(`/__deck/.file/ws/assets/logo.${ext}?v=1`);
       fireEvent.click(screen.getByRole("button", { name: /Show in folder/ }));
@@ -83,7 +128,7 @@ describe("FileViewer", () => {
   );
 
   it("uses the reveal icon, not the open folder's, for the file manager", () => {
-    useApp.setState({ openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" } });
+    useApp.setState({ openedFile: { path: "song.mp3", absolute: "/ws/song.mp3", kind: "file" } });
     render(<FileViewer />);
     const reveal = screen.getByRole("button", { name: /Show in folder/ });
     expect(reveal.querySelector("svg")!.getAttribute("class")).toContain("lucide-folder-search");
@@ -93,7 +138,7 @@ describe("FileViewer", () => {
     render(<FileViewer />);
     expect(screen.getByText("Start a deck")).toBeTruthy();
     expect(screen.getByText(/new folder in ws/)).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Title (optional)" }), { target: { value: "Board" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Create deck/ })));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: null });
     expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
@@ -109,7 +154,7 @@ describe("FileViewer", () => {
   });
 
   it("imports a PowerPoint file into the workspace from where a deck is started", async () => {
-    const importPptx = vi.fn(async () => {});
+    const importPptx = vi.fn(async () => null);
     useApp.setState({ importPptx });
     openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
     render(<FileViewer />);

@@ -1,4 +1,3 @@
-import { ask } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
@@ -6,6 +5,7 @@ import { forgetNarration } from "../lib/narrationCache";
 import { wavePath } from "../lib/waveform";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { confirmAction } from "../store/confirm";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
@@ -21,6 +21,11 @@ vi.mock("../lib/waveform", async (original) => {
   const actual = await original<typeof import("../lib/waveform")>();
   return { wavePath: vi.fn(actual.wavePath) };
 });
+
+vi.mock("../store/confirm", async (original) => ({
+  ...(await original<typeof import("../store/confirm")>()),
+  confirmAction: vi.fn(async () => true),
+}));
 
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
 
@@ -87,7 +92,10 @@ beforeEach(() => {
     audioDeck: null,
     render: null,
     timing: null,
+    settings: {},
+    settingsDeck: null,
   });
+  vi.mocked(confirmAction).mockReset().mockResolvedValue(true);
   useApp.setState({ deck: deckWith({ intro: "Welcome, everyone." }), selected: "intro", setNarration });
 });
 
@@ -378,6 +386,104 @@ describe("NarrationPanel speech", () => {
     await act(async () => {});
     return view;
   }
+  /** Unfolds the deck's voice settings. */
+  const change = () => fireEvent.click(screen.getByRole("button", { name: "Change" }));
+
+  it("shows the deck's voice as one line, unfolding to change it", async () => {
+    backend(SPEECH);
+    useApp.setState({ deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "coral", language: "ko" } } });
+    await show();
+    expect(screen.getByTestId("voice-summary").textContent).toBe("Voice OpenAI · Coral · Korean");
+    expect(screen.queryByRole("combobox", { name: "Narration voice" })).toBeNull();
+    change();
+    expect(screen.getByRole("combobox", { name: "Narration voice" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("combobox", { name: "Narration voice" })).toBeNull();
+  });
+
+  it("asks for a missing API key in the folded line too", async () => {
+    backend(withKey("openai", null));
+    await show();
+    expect(screen.getByText("Add your OpenAI API key to generate audio.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add key" }));
+    expect(screen.getByLabelText("OpenAI API key")).toBeTruthy();
+  });
+
+  it("sets the deck's pace and style, which the audio is said with", async () => {
+    const id = deckFor(DECK_HTML).id;
+    backend(SPEECH, { set_narration_delivery: { pace: "slower", style: "warm" }, narration_audio: [] });
+    useNarration.setState({ settings: {}, settingsDeck: id });
+    await show();
+    change();
+    await act(async () =>
+      fireEvent.change(screen.getByRole("combobox", { name: "Speaking pace" }), { target: { value: "slower" } }),
+    );
+    expect(invoke).toHaveBeenCalledWith("set_narration_delivery", { id, pace: "slower", style: "" });
+    // The audio is read again: it is out of date now.
+    expect(invoke).toHaveBeenCalledWith("narration_audio", { id });
+    expect(screen.getByTestId("voice-summary").textContent).toContain("slower pace");
+    const style = screen.getByRole("textbox", { name: "Speaking style" }) as HTMLInputElement;
+    fireEvent.change(style, { target: { value: " calm " } });
+    await act(async () => fireEvent.blur(style));
+    expect(invoke).toHaveBeenCalledWith("set_narration_delivery", { id, pace: "slower", style: "calm" });
+  });
+
+  it("has no style for a service that takes none, and says so", async () => {
+    backend(withKey("elevenlabs", "saved"), { speech_voices: [] });
+    useApp.setState({
+      deck: {
+        ...deckWith({ intro: "Hi." }),
+        narration: { provider: "elevenlabs", voice: "JBFqnCBsd6RMkjVDRZzb", language: "en" },
+      },
+    });
+    await show();
+    change();
+    const style = screen.getByRole("textbox", { name: "Speaking style" }) as HTMLInputElement;
+    expect(style.disabled).toBe(true);
+    expect(style.placeholder).toBe("ElevenLabs takes no style note");
+    expect((screen.getByRole("combobox", { name: "Speaking pace" }) as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it("plays a sample of the voice, made once and kept", async () => {
+    const played: string[] = [];
+    vi.stubGlobal(
+      "Audio",
+      class extends EventTarget {
+        constructor(public src: string) {
+          super();
+        }
+        async play() {
+          played.push(this.src);
+        }
+        pause() {}
+      },
+    );
+    URL.createObjectURL = vi.fn(() => "blob:sample");
+    backend(SPEECH, { preview_narration_voice: new ArrayBuffer(4) });
+    await show();
+    change();
+    const hear = screen.getByRole("button", { name: "Hear this voice" });
+    await act(async () => fireEvent.click(hear));
+    expect(invoke).toHaveBeenCalledWith("preview_narration_voice", {
+      provider: "openai",
+      voice: "marin",
+      language: "en",
+    });
+    expect(played).toEqual(["blob:sample"]);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop the sample" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Hear this voice" })));
+    // Kept: the service is not asked again.
+    expect(invoke.mock.calls.filter(([name]) => name === "preview_narration_voice")).toHaveLength(1);
+    expect(played).toHaveLength(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("cannot play a sample without the service's key", async () => {
+    backend(withKey("openai", null));
+    await show();
+    change();
+    expect((screen.getByRole("button", { name: "Hear this voice" }) as HTMLButtonElement).disabled).toBe(true);
+  });
 
   it("picks the deck's voice and language", async () => {
     backend(SPEECH);
@@ -389,6 +495,7 @@ describe("NarrationPanel speech", () => {
       setNarrationLanguage,
     });
     await show();
+    change();
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     const language = screen.getByRole("combobox", { name: "Narration language" }) as HTMLSelectElement;
     expect(voice.value).toBe("coral");
@@ -410,6 +517,7 @@ describe("NarrationPanel speech", () => {
     const setNarrationProvider = vi.fn(async () => {});
     useApp.setState({ setNarrationProvider });
     await show();
+    change();
     const provider = screen.getByRole("combobox", { name: "Narration provider" }) as HTMLSelectElement;
     expect(provider.value).toBe("openai");
     expect([...provider.options].map((o) => o.text)).toEqual(["OpenAI", "ElevenLabs"]);
@@ -423,6 +531,7 @@ describe("NarrationPanel speech", () => {
       deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "coral", language: "en" } },
     });
     await show();
+    change();
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     expect(voice.value).toBe("coral");
     expect([...voice.options].map((o) => o.value)).toEqual(["marin", "coral"]);
@@ -430,7 +539,7 @@ describe("NarrationPanel speech", () => {
     expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
     const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
     expect(generate.disabled).toBe(true);
-    expect(generate.title).toBe("Add your OpenAI API key first");
+    expect(generate.title).toBe("Add your OpenAI API key first, under Voice below");
     const key = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
     expect(key.type).toBe("password");
     const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
@@ -452,6 +561,7 @@ describe("NarrationPanel speech", () => {
       deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "marin", language: "en" } },
     });
     await show();
+    change();
     expect(screen.getByText(/OPENAI_API_KEY from your environment/)).toBeTruthy();
     expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
   });
@@ -470,6 +580,7 @@ describe("NarrationPanel speech", () => {
     });
     await show();
     expect(invoke).toHaveBeenCalledWith("speech_voices", { provider: "elevenlabs" });
+    change();
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     expect(voice.value).toBe("zzzzzzzzzzzzzzzzzzzz");
     expect([...voice.options].map((o) => o.text)).toEqual([
@@ -483,13 +594,24 @@ describe("NarrationPanel speech", () => {
     backend(SPEECH);
     await show();
     expect(screen.getByText("No audio yet")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(true);
+    // Nothing to play yet.
+    expect(screen.queryByRole("button", { name: /^Play/ })).toBeNull();
     act(() => audioOf([{ slide: "intro", state: "ready", seconds: 12.4 }]));
     expect(screen.getByText("Audio 0:12")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: /^Play/ }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getByRole("button", { name: /Regenerate/ })).toBeTruthy();
+  });
+
+  it("warns that the audio is out of date, offering to update it", async () => {
+    backend(SPEECH);
+    await show();
     act(() => audioOf([{ slide: "intro", state: "stale", seconds: 75 }]));
-    expect(screen.getByText("Audio 1:15, out of date")).toBeTruthy();
+    expect(screen.getByTestId("audio-stale").textContent).toBe("Script or voice changed · old audio 1:15");
+    expect(screen.getByTestId("audio-stale").className).toContain("text-warning");
+    const update = screen.getByRole("button", { name: "Update audio" });
+    expect(update.className).toContain("bg-primary");
+    await act(async () => fireEvent.click(update));
+    expect(invoke).toHaveBeenCalledWith("render_narration", { id: deckFor(DECK_HTML).id, slides: ["intro"] });
   });
 
   it("saves what was typed, then speaks the slide", async () => {
@@ -521,6 +643,11 @@ describe("NarrationPanel speech", () => {
       ]),
     );
     expect(screen.getByText("2 slides need audio")).toBeTruthy();
+    // How much goes to the service, before anything is sent: "One." and "Three.".
+    expect(screen.getByTestId("generation-size").textContent).toBe("10 characters go to OpenAI, about 0:01 of audio");
+    expect(screen.getByRole("button", { name: /Generate all/ }).title).toMatch(
+      /^Generates the audio of 2 slides, 10 characters/,
+    );
     invoke.mockImplementation((command: string) =>
       command === "render_narration" ? new Promise(() => {}) : Promise.resolve(SPEECH),
     );
@@ -530,7 +657,7 @@ describe("NarrationPanel speech", () => {
     expect(screen.getByText(/Generating audio for slide 2 of 2/)).toBeTruthy();
     // Slide 1 is not the one being generated: its own button waits, saying why.
     expect(screen.getAllByRole("button", { name: /Cancel/ })).toHaveLength(1);
-    expect((screen.getByRole("button", { name: /Regenerate|Generate$/ }) as HTMLButtonElement).title).toBe(
+    expect((screen.getByRole("button", { name: /Update audio|Generate$/ }) as HTMLButtonElement).title).toBe(
       "Audio is being generated for another slide",
     );
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
@@ -603,6 +730,45 @@ describe("NarrationPanel speech", () => {
       }),
     );
     expect(screen.getByText("Downloading the speech model…")).toBeTruthy();
+    act(() =>
+      useNarration.setState({
+        timing: {
+          deck: deckFor(DECK_HTML).id,
+          slide: null,
+          done: 0,
+          total: 0,
+          downloading: true,
+          download: { received: 95_000_000, total: 190_000_000 },
+        },
+      }),
+    );
+    expect(screen.getByText("Downloading the speech model: 95 MB of 190 MB")).toBeTruthy();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
+    // Cancel stops the download, not the hearing that has not begun.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })));
+    expect(invoke).toHaveBeenCalledWith("cancel_voice_download");
+  });
+
+  it("offers the speech model with its size before downloading it to sync words", async () => {
+    backend(SPEECH, { voice_status: { modelReady: false, modelBytes: 190_085_487, downloading: false } });
+    await show();
+    act(() => audioOf([{ slide: "intro", state: "ready", seconds: 1 }]));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sync words to audio" })));
+    expect(screen.getByText(/The model \(190 MB\) is downloaded once/)).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith("download_voice_model");
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByText(/The model \(190 MB\)/)).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Sync words to audio" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download and sync" })));
+    expect(invoke).toHaveBeenCalledWith("download_voice_model");
+  });
+
+  it("stops syncing words before the next slide", async () => {
+    backend(SPEECH);
+    await show();
+    act(() => useNarration.setState({ timing: { deck: deckFor(DECK_HTML).id, slide: "intro", done: 0, total: 2 } }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })));
+    expect(invoke).toHaveBeenCalledWith("cancel_narration_timing");
   });
 
   describe("recordings and cleaning up", () => {
@@ -613,7 +779,6 @@ describe("NarrationPanel speech", () => {
     });
 
     it("shows a recording as the presenter's own, to delete rather than regenerate", async () => {
-      vi.mocked(ask).mockResolvedValue(true);
       useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
       invoke.mockImplementation(async (name: string) =>
         name === "delete_recorded_narration"
@@ -623,13 +788,18 @@ describe("NarrationPanel speech", () => {
       await act(async () => void render(<NarrationPanel />));
       expect(screen.getByText("Your recording 1:12")).toBeTruthy();
       expect(screen.queryByRole("button", { name: /generate/i })).toBeNull();
+      expect(screen.getByRole("button", { name: "Record again" })).toBeTruthy();
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Delete recording" })));
+      expect(vi.mocked(confirmAction).mock.lastCall?.[0]).toMatchObject({
+        title: "Delete your recording?",
+        confirmLabel: "Delete recording",
+        destructive: true,
+      });
       expect(invoke).toHaveBeenCalledWith("delete_recorded_narration", { id: deckFor(DECK_HTML).id, slide: "intro" });
       expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
     });
 
     it("shows audio brought in from elsewhere as such, to remove", async () => {
-      vi.mocked(ask).mockResolvedValue(true);
       const imported = { ...recording, imported: true, timed: true, seconds: 185 };
       useApp.setState({ deck: deckWith({}), selected: "intro" });
       useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: imported } });
@@ -640,12 +810,15 @@ describe("NarrationPanel speech", () => {
       expect(screen.getByText("Imported audio 3:05, words synced")).toBeTruthy();
       expect(screen.queryByText(/Your recording/)).toBeNull();
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove audio" })));
-      expect(vi.mocked(ask).mock.lastCall?.[1]).toMatchObject({ title: "Remove audio", okLabel: "Remove" });
+      expect(vi.mocked(confirmAction).mock.lastCall?.[0]).toMatchObject({
+        title: "Remove this slide's audio?",
+        confirmLabel: "Remove audio",
+      });
       expect(invoke).toHaveBeenCalledWith("delete_recorded_narration", { id: deckFor(DECK_HTML).id, slide: "intro" });
     });
 
     it("keeps the recording unless the deletion is confirmed", async () => {
-      vi.mocked(ask).mockResolvedValue(false);
+      vi.mocked(confirmAction).mockResolvedValue(false);
       useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
       await act(async () => void render(<NarrationPanel />));
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Delete recording" })));
@@ -657,22 +830,29 @@ describe("NarrationPanel speech", () => {
       useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
       await act(async () => void render(<NarrationPanel />));
       expect(screen.getByText("Your recording 1:12")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Clean up" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Polish/ })).toBeNull();
     });
 
     it("asks the agent to clean up the slide or the whole deck, leaving the sending to the user", async () => {
       const original = useApp.getState().cleanNarration;
       const cleanNarration = vi.fn();
+      backend(SPEECH);
       useApp.setState({ cleanNarration });
       await act(async () => void render(<NarrationPanel />));
-      // Both say that they put a request in the chat rather than change anything by themselves.
-      expect(screen.getByRole("button", { name: "Clean up" }).title).toMatch(/Puts a request in the chat.*you send it/);
-      expect(screen.getByRole("button", { name: "Clean up all narration" }).title).toMatch(
-        /Puts a request in the chat.*you send it/,
-      );
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up" })));
+      // Both say that they hand a request to the agent rather than change anything by themselves.
+      const one = screen.getByRole("button", { name: "Polish wording…" });
+      const all = screen.getByRole("button", { name: "Polish all scripts…" });
+      for (const button of [one, all]) {
+        expect(button.title).toMatch(/Opens the chat.*for you to send · asks the agent$/);
+        expect(button.querySelector("svg.text-primary")).toBeTruthy();
+      }
+      // Generating the audio comes first in the deck's actions; polishing is after it.
+      act(() => audioOf([{ slide: "intro", state: "missing", seconds: null }]));
+      const generateAll = screen.getByRole("button", { name: /Generate all/ });
+      expect(generateAll.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      await act(async () => fireEvent.click(one));
       expect(cleanNarration).toHaveBeenLastCalledWith("intro");
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up all narration" })));
+      await act(async () => fireEvent.click(all));
       expect(cleanNarration).toHaveBeenLastCalledWith(null);
       useApp.setState({ cleanNarration: original });
     });
@@ -680,7 +860,123 @@ describe("NarrationPanel speech", () => {
     it("has nothing to clean up without narration or on locked slides", async () => {
       useApp.setState({ deck: deckWith({ intro: "Hello." }, ["intro"]), selected: "intro" });
       await act(async () => void render(<NarrationPanel />));
-      expect(screen.queryByRole("button", { name: /clean up/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /polish/i })).toBeNull();
+    });
+  });
+
+  describe("recording", () => {
+    it("records the slide after a countdown, as a take that replaces the one before", async () => {
+      backend(SPEECH);
+      await show();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
+      // Nothing is recorded during the countdown.
+      expect(screen.getByRole("status").textContent).toBe("3Recording starts…");
+      expect(invoke).not.toHaveBeenCalledWith("start_narration_recording", expect.anything());
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(screen.getByRole("status").textContent).toBe("2Recording starts…");
+      for (const _ of [2, 1]) await act(async () => vi.advanceTimersByTime(1000));
+      expect(invoke).toHaveBeenCalledWith("start_narration_recording", {
+        id: deckFor(DECK_HTML).id,
+        slide: "intro",
+        mode: "audio",
+        replace: true,
+      });
+      expect(screen.getByRole("meter", { name: "Microphone level" })).toBeTruthy();
+      expect(screen.getByTestId("recording-time").textContent).toBe("0:00");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop" })));
+      expect(invoke).toHaveBeenCalledWith("stop_narration_recording");
+      expect(screen.getByRole("button", { name: "Record" })).toBeTruthy();
+    });
+
+    it("calls off a recording during its countdown", async () => {
+      backend(SPEECH);
+      await show();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cancel" })));
+      await act(async () => vi.advanceTimersByTime(5000));
+      expect(invoke).not.toHaveBeenCalledWith("start_narration_recording", expect.anything());
+      expect(screen.getByRole("button", { name: "Record" })).toBeTruthy();
+    });
+
+    it("records a slide that has no script yet, but not a locked one", async () => {
+      backend(SPEECH);
+      useApp.setState({ deck: deckWith({}), selected: "intro" });
+      await show();
+      expect(screen.getByRole("button", { name: "Record" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
+      act(() => useApp.setState({ deck: deckWith({ intro: "Hi." }, ["intro"]) }));
+      expect((screen.getByRole("button", { name: "Record" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("says why it could not record", async () => {
+      backend(SPEECH);
+      invoke.mockImplementation(async (command: string) => {
+        if (command === "start_narration_recording") throw "No microphone was found.";
+        return command === "speech_status" ? SPEECH : null;
+      });
+      await show();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Record" })));
+      for (const _ of [3, 2, 1]) await act(async () => vi.advanceTimersByTime(1000));
+      expect(screen.getByRole("alert").textContent).toBe("Could not record: No microphone was found.");
+    });
+  });
+
+  describe("speaker notes and the whole deck", () => {
+    it("takes the slide's speaker notes as its script", async () => {
+      backend(SPEECH);
+      const deck = deckWith({});
+      useApp.setState({
+        deck: { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, notes: "Say hello." } : s)) },
+      });
+      await show();
+      fireEvent.click(screen.getByRole("button", { name: "Use speaker notes as script" }));
+      expect(box().value).toBe("Say hello.");
+      act(() => vi.advanceTimersByTime(NARRATION_SAVE_DELAY));
+      expect(setNarration.mock.calls).toEqual([["intro", "Say hello."]]);
+      expect(screen.queryByRole("button", { name: "Use speaker notes as script" })).toBeNull();
+    });
+
+    it("takes the notes as the script of every slide without one", async () => {
+      backend(SPEECH);
+      const scriptsFromNotes = vi.fn(async () => {});
+      const deck = deckWith({ intro: "Mine." });
+      useApp.setState({
+        scriptsFromNotes,
+        deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, notes: "Note." })) },
+      });
+      await show();
+      // The first slide keeps its script: two of the three get theirs.
+      fireEvent.click(screen.getByRole("button", { name: "Use speaker notes for 2 empty scripts" }));
+      expect(scriptsFromNotes).toHaveBeenCalled();
+    });
+
+    it("says it is saving the script, and when it is saved", async () => {
+      backend(SPEECH);
+      await show();
+      fireEvent.change(box(), { target: { value: "Welcome back." } });
+      expect(screen.getByText("Saving…")).toBeTruthy();
+      await act(async () => vi.advanceTimersByTime(NARRATION_SAVE_DELAY));
+      expect(screen.getByText("Saved")).toBeTruthy();
+    });
+
+    it("lists every slide's narration, going to a slide from its row", async () => {
+      backend(SPEECH);
+      useApp.setState({ deck: deckWith({ intro: "One.", outro: "Three." }) });
+      await show();
+      act(() =>
+        audioOf([
+          { slide: "intro", state: "stale", seconds: 1 },
+          { slide: "outro", state: "ready", seconds: 2 },
+        ]),
+      );
+      expect(screen.getByTestId("narration-counts").textContent).toBe(
+        "2 of 3 slides have a script · 1 with audio · 1 out of date",
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Every slide/ }));
+      const rows = screen.getByRole("list", { name: "Narration of every slide" }).querySelectorAll("[data-mark]");
+      expect([...rows].map((r) => r.getAttribute("data-mark"))).toEqual(["stale", "none", "ready"]);
+      fireEvent.click(screen.getByTitle("Go to slide 3"));
+      expect(useApp.getState().selected).toBe("outro");
     });
   });
 });

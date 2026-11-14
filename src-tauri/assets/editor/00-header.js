@@ -5,8 +5,14 @@
 
    Click selects an element, drag (or arrow keys) moves it. Its corner and edge handles
    resize its box while the opposite side stays put (Shift keeps the aspect ratio, Alt resizes
-   from the center); the round handle above it rotates it and the diamond next to it tilts it
-   in depth, in 3D with perspective (Shift snaps to 15°). Double-click a handle to reset.
+   from the center); the round handle above it rotates it and the diamond below it tilts it
+   in depth, in 3D with perspective (Shift snaps to 15°). Double-click a handle to reset. Each
+   resize handle's cursor points the way it pulls, turned with the element.
+   What the editor draws over the slide (handles, frames, guides, the readout) and how far a
+   press may move before it drags or an edge comes before it snaps keep their size on screen,
+   however far the app scales the preview down (see `slop:fit` in pasteboard.js): CSS sizes go
+   by `--slop-ui`, the rest by onScreen(). A frame, hovered or selected, is the accent between
+   two light lines, so it shows on any slide.
    Resize keeps text and borders at their size; drawings spread their points, and a group spreads
    what it holds. The toolbar can switch to Stretch, which scales the contents too, and lock the
    aspect ratio ({ type: "slop:edit-keep-ratio", on }), so resizes keep it without Shift (and
@@ -31,7 +37,15 @@
    site, shown as dots while an end is near), the end goes right onto it, a spot kept without
    " edge". Dragging the end off it, or the line on its own, lets go; so does deleting the
    element.
-   Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
+   Double-click (or Enter) edits its text (see "Editing text" below): one text, never a card or a
+   layout around several as one (a double-click there types in the text under the pointer, if
+   any). Typing a character with one element that holds text selected edits it too, the character
+   going in at its end (Space, 0 and ⇧2 / ⇧0 stay the view's). A double-click on an image asks the
+   app to replace it: { type: "slop:edit-request", slide, what: "replace-image" }. ⇧2 zooms the
+   view to the selection (see `frameBox` in pasteboard.js). Escape lets go of the
+   selection (out of a group gone into, back to the group); ⇧Enter selects the parent instead.
+   Escape in the middle of a drag, resize, turn, point drag or marquee calls it off: everything
+   is put back as it was before the press, and nothing is saved.
    A list is selected and edited whole, from any of its items: the text element it was made
    from when the list is all that element holds, otherwise the outermost list.
    A text box or shape the user added is one text, whatever it holds: its lines, lists and the
@@ -44,34 +58,48 @@
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
    centers, with guide lines (hold ⌘ / Ctrl to move freely, or with snapping turned off, to snap;
    Shift-resizes, and turned elements' resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
-   move straight across or straight up and down. Nudges never snap.
-   Shift- or ⌘-click adds to the selection or takes out of it, and dragging from empty space on
-   the slide (or from a see-through wrapper that is not selected) draws a marquee around what to
-   select (with Shift or ⌘, adding to the selection). ⌘A selects everything on the slide and Tab
-   / Shift+Tab go through its elements. Several selected elements move, nudge, restyle, restack,
-   delete, copy and duplicate together; their handles make way for a frame around each.
+   move straight across or straight up and down. Nudges never snap. A move also snaps to even
+   spacing: as far from a neighbour as two others are apart, or halfway between two, with a mark
+   across each equal gap.
+   Shift-click adds to the selection or takes out of it. ⌘ / Ctrl-click selects what lies under
+   the selection at the pointer, one further down with each click and back to the top after the
+   last. Dragging from empty space, on the slide or on the pasteboard around it (or from a
+   see-through wrapper that is not selected), draws a marquee: what it touches is selected, with
+   Alt only what lies fully inside it (with Shift or ⌘, adding to the selection). A wrapper
+   around the slide's content that covers nearly all of it, as a layout with a background of its
+   own does, is the slide's background layer: a press on it is a press on the empty slide, and
+   it is selected from the Layers list, with ⌘-click or from the menu. ⌘A selects everything on
+   the slide and Tab / Shift+Tab go through its elements. Several selected elements move, nudge,
+   restyle, restack, delete, copy and duplicate together: a thin line marks each, and one frame
+   around them all has handles that resize them together (each keeps its place and share of the
+   box; Shift keeps the box's aspect, Alt resizes from its center) and turn them together around
+   its middle, each a single step to undo.
    ⌘D (or { type: "slop:edit-duplicate" } from the app) duplicates the selection, offset so the
-   copy shows; Alt-drag leaves the original and drags a copy.
+   copy shows; when the selection is the copies the last duplicate made and they were moved since,
+   the next copy goes on by as much again. Alt-drag leaves the original and drags a copy; Alt
+   pressed or let go during the drag switches between the two at once.
    ⌘G (or { type: "slop:edit-group" }) puts the selection in a group: a `<div data-group>` at the
    slide's top level, absolutely positioned around what it holds, which sits in it absolutely
    positioned (an element that was in the layout leaves its placeholder slot behind). A click on
    what it holds selects the group, which moves, resizes, turns, copies and restyles (what it
-   holds) as one; a double-click goes into it, to select what it holds, until something outside it
-   is picked. ⇧⌘G (or { type: "slop:edit-ungroup" }) takes it apart, everything staying where it
+   holds) as one; a double-click goes into it, to select what it holds (not yet to type in it),
+   until something outside it is picked, and a dashed line marks it while it is open. ⇧⌘G (or { type: "slop:edit-ungroup" }) takes it apart, everything staying where it
    shows. { type: "slop:edit-lock", locked, path } locks (`data-lock`) or unlocks the selection, or
    the element at `path`: a locked element (and what it holds) is out of the way on the slide: a
    press picks what is under it, and the marquee, ⌘A and Tab pass it by. A click where nothing
    else is to pick selects it (as the Layers panel does), and it then shows its frame without
-   handles and is not moved, aligned or deleted. The editor reports the slide's layers, the
+   handles, with a lock at its corner that unlocks it, and is not moved, aligned or deleted. The editor reports the slide's layers, the
    top-most first, whenever they change: { type: "slop:edit-layers", slide, layers: [{ path, name,
    group, locked, held, selected, depth }] }, `held` when something it is in is locked, `depth` how
    many groups in it is.
    With ⌘ / Ctrl: ] and [ bring the selection forward and send it backward (with Shift, to the
    front and the back); Shift+L / E / R / J align its text left, center, right or justified and
-   Shift+. / Shift+, make it larger or smaller (while typing too); Shift+H / Shift+V flip it;
-   Alt+L locks or unlocks it; Alt+C copies its look and Alt+V pastes the copied one (the app keeps
+   Shift+. / Shift+, make it larger or smaller (while typing too); Alt+Shift+H / Alt+Shift+V flip
+   it (Shift+V alone pastes as plain text, as the app's paste does on the slide); Alt+L locks or unlocks it; Alt+C copies its look and Alt+V pastes the copied one (the app keeps
    it, and is asked for it with { type: "slop:edit-request", slide, what: "paste-style" }); K asks
    the app for its Link popover ({ type: "slop:edit-request", slide, what: "link" }).
+   The arrows, Delete and Backspace pressed with the focus in the app (not in its slide list or
+   a field) come as { type: "slop:edit-key", key, shift } and do what they do in the slide.
    Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
@@ -101,10 +129,12 @@
    editor saves its changes into the deck itself.
 
    A right-click selects what is under it and asks the app for its menu: { type: "slop:edit-menu",
-   slide, x, y, element: { path, markup, name, added } | null, elements, editable, locked }, with
-   (x, y) in the preview's pixels, `elements` every selected element (as `element`), `editable`
-   whether the one selected element holds text to edit, and `locked` whether anything on the slide
-   is locked. With a tool in hand, the tool goes back to Select first. Where nothing unlocked is
+   slide, x, y, element: { path, markup, name, added } | null, elements, editable, locked, under,
+   parent }, with (x, y) in the preview's pixels, `elements` every selected element (as `element`),
+   `editable` whether the one selected element holds text to edit, `locked` whether anything on
+   the slide is locked, `under` what lies at the pointer, the top-most first ({ path, name,
+   selected }), and `parent` what holds the one selected element ({ path, name }, or null), for
+   the menu to select with { type: "slop:edit-select", path }. With a tool in hand, the tool goes back to Select first. Where nothing unlocked is
    under the pointer, the locked element there is selected, so the menu can unlock it.
 
    Images dropped on the slide come from the app (which saved them as assets) as
@@ -141,7 +171,12 @@
      "bracket" / "brace" (an open outline: a drawing, `data-outline`, with one stroke through the
      box), "draw" (freehand), "line" / "arrow" (drag out a straight line, Shift snaps to 45°),
      "elbow" / "curve" (a connector, see "Lines") or "paint" (the format painter: takes the
-     selection's look and gives it to the next element clicked). `style` is what new elements get.
+     selection's look and gives it to the next element clicked). `style` is what new elements get,
+     but for its default ink (DEFAULT_INK, near black) on a dark spot of the slide, where text without a fill and
+     lines take white, so they show. While a box is dragged out its corner snaps to the guides as
+     a resize does (Shift makes it even, Alt draws it from its center), and a line shows its length
+     and angle, by the pointer. The text tool on text that is there types in it, the deck's own too;
+     a new text box starts empty, with a hint (`data-slop-empty`, never saved) until it holds text.
      Added elements are absolutely positioned on the slide with inline styles and carry
      `data-added` ("text", "shape" or "drawing", which lines are too: a stroke <path>, `M L` when
      straight and `M C C …` through its points when curved, and a <path> for each head with
@@ -220,6 +255,10 @@
    fonts the deck uses once: { type: "slop:edit-fonts", slide, fonts: [{ name, stack }] }, and
    the colors in its CSS variables: { type: "slop:edit-colors", slide, colors: [{ name, value }] }.
 
+   Undo while typing goes through the typing's own steps, the toolbar's formatting among them, in
+   the order they were made (a run of typing is one step, until it pauses or turns to deleting):
+   ⌘Z / ⇧⌘Z / ⌘Y, or from the app { type: "slop:edit-undo", redo }; with none left, the text is
+   done and the undo goes on to the app's (as a forwarded ⌘Z).
    Editing text: while typing, the toolbar's text styles, ⌘B / ⌘I / ⌘U and links apply to the
    selected text (wrapped in inline <span> styles, <sup> / <sub> or <a>); with only a caret, to
    the whole element. Editing survives a click on the app's toolbar (the text selection is kept
@@ -236,11 +275,12 @@
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
    { type: "slop:edit-insert-text", text }.
 
-   It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging the empty
-   space around the slide pans too (on the slide, Space+drag or the middle button). The slide no longer clips, so content that runs past its edge stays visible (dimmed
+   It runs on the pasteboard (pasteboard.js), which pans and zooms the view (Space+drag, the
+   middle button, a trackpad swipe). The slide no longer clips, so content that runs past its edge stays visible (dimmed
    outside the slide, in the color of the panel around it), and the slide's frame turns into the
    app's accent color. Content moved far away can always be panned to and dragged back.
    Anything that runs past the slide's edge or is cut off by its own box is outlined with a red
-   dashed wire and reported as { type: "slop:edit-overflow", slide, items } so the app can offer
-   to tidy the layout. */
+   dashed wire and reported as { type: "slop:edit-overflow", slide, items, paths } (what each is,
+   and its child-index path from the slide) so the app can list them, select one and offer to
+   tidy the layout. */
 (function () {

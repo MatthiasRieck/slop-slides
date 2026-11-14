@@ -38,6 +38,22 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
     })
 }
 
+/// Makes `samples` (mono, at `rate`) the slide's recording, in place of whatever audio it had:
+/// a take recorded again. What is recorded after it goes on from its end (see
+/// [`append_recording`]).
+pub fn replace_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) -> Result<()> {
+    let dir = audio_dir(file);
+    fs::create_dir_all(&dir)?;
+    let all = sound::resample(samples, rate, audio::RATE);
+    audio::replace_wav(&audio_file(file, slide), &all, audio::RATE)?;
+    Manifest::update(&dir, |manifest| {
+        let seconds = all.len() as f64 / f64::from(audio::RATE);
+        manifest
+            .slides
+            .insert(slide.to_string(), Entry::recording(seconds, false));
+    })
+}
+
 /// Whether the slide's audio is the presenter's own recording (not audio brought in), which
 /// nothing could make again once it is replaced.
 fn has_own_recording(file: &Path, slide: &str) -> bool {

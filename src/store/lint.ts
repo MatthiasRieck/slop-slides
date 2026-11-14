@@ -1,15 +1,21 @@
 import { api, type Deck, errorMessage, type LintIssue } from "../lib/api";
 import type { Slice } from "./types";
 
-/** The HTML lint of the open deck's file. */
+/** The check of the open deck's file for problems (the HTML lint, src-tauri/src/lint/). */
 export interface LintSlice {
-  /** Lint result for the saved deck file; null until a check finishes, and after one that failed. */
+  /** What the check found in the saved deck file; null until a check finishes, and after one that failed. */
   lint: LintIssue[] | null;
   /** Why the last check gave no result; null while one is under way or when it worked. */
   lintError: string | null;
+  /** The line of the deck file the sidebar's code editor is to show; null once it showed it, and when none was asked for. */
+  codeReveal: number | null;
 
-  /** Checks the deck file now. */
-  refreshLint: () => Promise<void>;
+  /** Checks the deck file now; true when the check ran and its result is the one shown. */
+  refreshLint: () => Promise<boolean>;
+  /** Opens the deck's code in the sidebar on `line` of the deck file. */
+  revealCodeLine: (line: number) => void;
+  /** The code editor showed the line it was asked for. */
+  codeLineShown: () => void;
   /**
    * The deck file changed: checks it again once it has stayed as it is for a moment, as each
    * check reads the whole deck. A deck just opened is checked at once.
@@ -45,22 +51,32 @@ export function lintKey(deck: Deck | null): string {
 export const createLintSlice: Slice<LintSlice> = (set, get) => ({
   lint: null,
   lintError: null,
+  codeReveal: null,
+
+  revealCodeLine: (line) => {
+    set({ codeReveal: line });
+    get().setSidebarTab("code");
+  },
+
+  codeLineShown: () => set({ codeReveal: null }),
 
   refreshLint: async () => {
     clearTimeout(lintTimer);
     const { deck } = get();
-    if (!deck) return;
+    if (!deck) return false;
     const run = ++lintRun;
     // A check that failed is being tried again: it shows as checking, not as failed.
     if (get().lintError !== null) set({ lintError: null });
     try {
       const issues = await api.lintDeck(deck.id);
       // Ignore answers that a newer check (or another deck) has overtaken.
-      if (run !== lintRun || get().deck?.id !== deck.id) return;
+      if (run !== lintRun || get().deck?.id !== deck.id) return false;
       if (Array.isArray(issues)) set({ lint: issues, lintError: null });
       else set({ lint: null, lintError: "The check gave no result." });
+      return Array.isArray(issues);
     } catch (error) {
       if (run === lintRun) set({ lint: null, lintError: errorMessage(error) });
+      return false;
     }
   },
 

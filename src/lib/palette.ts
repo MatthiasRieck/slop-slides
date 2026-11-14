@@ -29,6 +29,9 @@ export function colorLabel(hex: string): string {
   return name ? `${name} (${hex})` : hex;
 }
 
+/** A hex color to show as an example of what the hex field takes. */
+export const HEX_EXAMPLE = "#1a2b3c";
+
 /**
  * The #rrggbb color a typed hex value means: with or without the `#`, three digits or six, in
  * any case. Null when it is not one.
@@ -47,6 +50,29 @@ export const RECENT_COLORS = 6;
 export function withRecentColor(recent: string[], color: string): string[] {
   return [color, ...recent.filter((c) => c !== color)].slice(0, RECENT_COLORS);
 }
+
+/** The recent colors as they were stored: what of it is a list of #rrggbb colors, the latest first. */
+export function parseRecentColors(saved: unknown): string[] {
+  if (!Array.isArray(saved)) return [];
+  return saved.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{6}$/.test(c)).slice(0, RECENT_COLORS);
+}
+
+/** `hex` mixed with white (`amount` above 0) or black (below), by that share: a tint or a shade of it. */
+export function mixColor(hex: string, amount: number): string {
+  const toward = amount > 0 ? 255 : 0;
+  const share = Math.min(1, Math.abs(amount));
+  return `#${[1, 3, 5]
+    .map((start) => {
+      const channel = Number.parseInt(hex.slice(start, start + 2), 16);
+      return Math.round(channel + (toward - channel) * share)
+        .toString(16)
+        .padStart(2, "0");
+    })
+    .join("")}`;
+}
+
+/** The tints and shades the color wells offer of each deck color, row by row: lighter, then darker. */
+export const DECK_COLOR_MIXES = [0.6, -0.35] as const;
 
 /** The `R G B` channels of a #rrggbb color, for `rgb(... / alpha)`. */
 export function rgbChannels(hex: string): string {

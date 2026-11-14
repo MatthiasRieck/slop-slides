@@ -1,4 +1,4 @@
-import { api, type DeckHistory } from "../lib/api";
+import { api, type DeckHistory, type HistoryEntry, type HistoryStep } from "../lib/api";
 import { editsSaved, queueEdit } from "./editQueue";
 import { showErrorIn } from "./errors";
 import { adoptReview, flushReview } from "./review";
@@ -17,6 +17,11 @@ export interface HistorySlice {
   undo: () => Promise<void>;
   /** Makes the change undone last again. */
   redo: () => Promise<void>;
+  /**
+   * Puts the deck back as it was at `version` of its history, as one change of its own: undo
+   * takes the deck to where it was before. False when it could not.
+   */
+  restoreVersion: (version: string) => Promise<boolean>;
   /** Asks the deck's history what undo and redo would do now. */
   refreshHistory: () => Promise<void>;
 }
@@ -41,17 +46,21 @@ export async function refreshHistory(app: AppStore) {
 }
 
 /**
- * Undoes (`back`) or redoes the open deck's newest change, after the edits before it, and shows
- * the first slide it changed. An undone agent turn may take the chat back too (see `turnUndone`).
+ * Moves the open deck to another version of its history as `move` does, after the edits before
+ * it, and shows the first slide that changed. Resolves to the change the history reports (null
+ * for none); undefined when the move failed, which is said, or the deck is no longer the one open.
  */
-function stepHistory(app: AppStore, back: boolean): Promise<void> {
+function moveInHistory(
+  app: AppStore,
+  move: (deck: string) => Promise<HistoryStep>,
+): Promise<HistoryEntry | null | undefined> {
   return queueEdit(async () => {
     await flushReview(app);
     const { deck } = app.getState();
-    if (!deck) return;
+    if (!deck) return undefined;
     try {
-      const done = await (back ? api.undoDeck(deck.id) : api.redoDeck(deck.id));
-      if (app.getState().deck?.id !== deck.id) return;
+      const done = await move(deck.id);
+      if (app.getState().deck?.id !== deck.id) return undefined;
       const before = (id: string | null) => deck.slides.find((s) => s.id === id)?.hash;
       const changed = done.deck.slides.filter((slide) => before(slide.id) !== slide.hash).map((s) => s.id);
       app.getState().setDeck(done.deck);
@@ -63,15 +72,23 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       const reloads = done.deck.shellHash !== deck.shellHash || (selected !== null && changed.includes(selected));
       app.setState((s) => ({ history: done.status, editReload: reloads ? s.editReload + 1 : s.editReload }));
       if (changed[0] && !(selected && changed.includes(selected))) app.getState().select(changed[0]);
-      const entry = done.entry;
-      if (entry?.source === "chat" && entry.message) {
-        if (back) turnUndone(app, entry);
-        else turnRedone(app, entry);
-      }
+      return done.entry;
     } catch (error) {
       showErrorIn(app, error);
+      return undefined;
     }
   });
+}
+
+/**
+ * Undoes (`back`) or redoes the open deck's newest change. An undone agent turn may take the
+ * chat back too (see `turnUndone`).
+ */
+async function stepHistory(app: AppStore, back: boolean): Promise<void> {
+  const entry = await moveInHistory(app, back ? api.undoDeck : api.redoDeck);
+  if (entry?.source !== "chat" || !entry.message) return;
+  if (back) turnUndone(app, entry);
+  else turnRedone(app, entry);
 }
 
 /**
@@ -99,6 +116,9 @@ export const createHistorySlice: Slice<HistorySlice> = (_set, _get, app) => ({
   undo: () => stepHistory(app, true),
 
   redo: () => stepHistory(app, false),
+
+  restoreVersion: async (version) =>
+    (await moveInHistory(app, (deck) => api.restoreVersion(deck, version))) !== undefined,
 
   refreshHistory: () => refreshHistory(app),
 });

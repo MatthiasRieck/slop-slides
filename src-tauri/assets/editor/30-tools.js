@@ -1,11 +1,17 @@
   // ---- Tools and changes: adding text boxes, shapes and drawings with a tool, restyling,
   // restacking and deleting.
 
+  // The tool that stays in hand after it added something (the toolbar's double-click), until Select is picked.
+  var keptTool = null;
+
   /** Picks a tool; `tell` lets the app know, when the editor switched by itself. */
   function useTool(next, tell) {
     tool = TOOLS.indexOf(next) >= 0 ? next : "select";
     painting = tool === "paint" && selected ? paintableStyle(selected) : null;
+    // The look the painter took is the copied look too: ⌘⌥V pastes it, on any slide.
+    if (painting) window.parent.postMessage({ type: "slop:edit-style-copied", slide: slide.id, style: painting }, "*");
     if (tool === "select") {
+      keptTool = null;
       document.documentElement.removeAttribute("data-slop-tool");
     } else {
       document.documentElement.setAttribute("data-slop-tool", tool);
@@ -15,10 +21,15 @@
     if (tell) window.parent.postMessage({ type: "slop:edit-tool", slide: slide.id, tool: tool }, "*");
   }
 
+  /** After the tool added something: back to Select, unless the tool is kept for the next one. */
+  function toolUsed() {
+    if (keptTool !== tool) useTool("select", true);
+  }
+
   /** The style for a new element: what the app sent, with fallbacks. */
   function styleFor(key) {
     var value = toolStyle[key];
-    return value === undefined ? FALLBACK_STYLE[key] : value;
+    return readable(key, value === undefined ? FALLBACK_STYLE[key] : value);
   }
 
   /** Where the pointer at (x, y) is on the slide, in slide pixels. */
@@ -52,9 +63,11 @@
     var width = styleFor("strokeWidth");
     return (
       " display: flex; flex-direction: column; justify-content: " + (JUSTIFY[styleFor("valign")] || "flex-start") +
-      "; text-align: " + styleFor("align") + "; color: " + styleFor("color") + "; font-size: " + styleFor("fontSize") + "px;" +
+      "; text-align: " + styleFor("align") + "; color: " + (styleFor("color") || FALLBACK_STYLE.color) +
+      "; font-size: " + (styleFor("fontSize") || FALLBACK_STYLE.fontSize) + "px;" +
       (styleFor("fontFamily") ? " font-family: " + String(styleFor("fontFamily")).replace(/[;{}<>]/g, "") + ";" : "") +
-      (styleFor("bold") ? " font-weight: 700;" : "") +
+      (styleFor("weight") >= 100 ? " font-weight: " + Math.round(styleFor("weight")) + ";" : styleFor("bold") ? " font-weight: 700;" : "") +
+      (TEXT_CASES[styleFor("textCase")] ? " text-transform: " + TEXT_CASES[styleFor("textCase")] + ";" : "") +
       (styleFor("italic") ? " font-style: italic;" : "") +
       (styleFor("underline") || styleFor("strike")
         ? " text-decoration-line:" + (styleFor("underline") ? " underline" : "") + (styleFor("strike") ? " line-through" : "") + ";"
@@ -74,8 +87,9 @@
     );
     var body = document.createElement("div");
     body.setAttribute(BODY_ATTR, "");
-    body.textContent = "Text";
     el.appendChild(body);
+    // It starts empty, with a hint in its place until something is typed (the editor's mark, never saved).
+    el.setAttribute("data-slop-empty", "");
     return el;
   }
 
@@ -182,9 +196,10 @@
     }
     var at = slidePoint(event.clientX, event.clientY);
     if (tool === "text") {
-      // The text tool types into a text box or shape that is already there.
-      var target = pickable(event.target, event.clientX, event.clientY);
-      if (target && /^(text|shape)$/.test(target.getAttribute(ADDED) || "")) {
+      // The text tool types into text that is already there: a text box, a shape, or the deck's own.
+      var picked = pickable(event.target, event.clientX, event.clientY);
+      var target = picked && !isGroup(picked) && !isLocked(picked) ? textLeafAt(picked, event.clientX, event.clientY) : null;
+      if (target && canEditText(target)) {
         useTool("select", true);
         startEditing(target, event.clientX, event.clientY);
         return;
@@ -207,7 +222,7 @@
   function createTo(event) {
     var dx = event.clientX - create.x;
     var dy = event.clientY - create.y;
-    if (!create.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+    if (!create.moved && Math.abs(dx) < onScreen(DRAG_THRESHOLD) && Math.abs(dy) < onScreen(DRAG_THRESHOLD)) return;
     create.moved = true;
     var at = slidePoint(event.clientX, event.clientY);
     if (create.line) {
@@ -218,6 +233,7 @@
       if (hit && (hit.edge || hit.site) && !event.shiftKey) to = endSpot(hit, [create.at.x, create.at.y], create.el);
       drawLine(create, to, hit);
       previewStick(hit);
+      lineReadout(event, create.at, to);
       return;
     }
     if (create.drawing) {
@@ -228,11 +244,12 @@
       create.drawing.path.setAttribute("d", pathData(points, 0, 0));
       return;
     }
-    var w = Math.abs(at.x - create.at.x);
-    var h = Math.abs(at.y - create.at.y);
-    if (event.shiftKey) w = h = Math.max(w, h);
-    var x = at.x < create.at.x ? create.at.x - w : create.at.x;
-    var y = at.y < create.at.y ? create.at.y - h : create.at.y;
+    // Shift keeps it even, Alt draws it from the center, and its corner snaps (see createBox).
+    var box = createBox(event, at);
+    var w = box.w;
+    var h = box.h;
+    var x = box.x;
+    var y = box.y;
     if (!create.el) create.el = create.tool === "text" ? newText(x, y, w) : newShape(create.tool, x, y, w, h);
     if (OUTLINES[create.tool]) drawOutline(create.el, x, y, w, h);
     else place(create.el, x, y, w, create.tool === "text" ? null : h);
@@ -258,7 +275,7 @@
       });
       // A connector leaves what its ends are stuck to out of their sides.
       if (stuck && routeOf(done.el)) writeLine(done.el, ends, done.heads, true);
-      useTool("select", true);
+      toolUsed();
       select(done.el);
       commit();
       placeHandles();
@@ -275,7 +292,7 @@
       el = done.tool === "text" ? newText(done.at.x, done.at.y) : newShape(done.tool, done.at.x, done.at.y, size.w, size.h);
       fitFigure(el);
     }
-    useTool("select", true);
+    toolUsed();
     select(el);
     // A new text box starts out typing, with its placeholder selected; it is saved when done.
     if (done.tool === "text") startEditing(el);
@@ -336,6 +353,7 @@
     if (has("fontSize")) el.style.fontSize = changes.fontSize > 0 ? Math.round(changes.fontSize) + "px" : "";
     if (has("fontFamily")) el.style.fontFamily = changes.fontFamily || "";
     if (has("bold")) el.style.fontWeight = changes.bold ? "700" : "400";
+    applyTextExtras(el, changes);
     if (has("italic")) el.style.fontStyle = changes.italic ? "italic" : "normal";
     if (has("underline") || has("strike")) {
       removeLine(el, "underline");

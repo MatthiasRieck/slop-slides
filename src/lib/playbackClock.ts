@@ -15,8 +15,8 @@ export interface PlaybackClock {
   rest: () => number;
   /** Stands at `at`. */
   stopAt: (at: number) => void;
-  /** Runs on from `at`, starting now. */
-  runFrom: (at: number) => void;
+  /** Runs on from `at`, starting now, `rate` seconds to the second (1 unless given). */
+  runFrom: (at: number, rate?: number) => void;
   /** Says a running clock is at `at` now, as what plays has it; a standing one stays. */
   sync: (at: number) => void;
   /** Calls `listener` every animation frame while it runs, and whenever it is set; gives back how to stop. */
@@ -30,6 +30,7 @@ export function createPlaybackClock(): PlaybackClock {
   let at = 0;
   let since: number | null = null;
   let rest = 0;
+  let rate = 1;
   let frame: number | null = null;
   const frames = new Set<() => void>();
   const changes = new Set<() => void>();
@@ -51,8 +52,9 @@ export function createPlaybackClock(): PlaybackClock {
     schedule();
     tell(frames);
   };
-  const set = (to: number, runs: boolean) => {
+  const set = (to: number, runs: boolean, speed = 1) => {
     at = to;
+    rate = speed;
     rest = to;
     since = runs ? performance.now() : null;
     schedule();
@@ -61,11 +63,11 @@ export function createPlaybackClock(): PlaybackClock {
   };
 
   return {
-    time: () => (since === null ? at : at + (performance.now() - since) / 1000),
+    time: () => (since === null ? at : at + ((performance.now() - since) / 1000) * rate),
     running: () => since !== null,
     rest: () => rest,
     stopAt: (to) => set(to, false),
-    runFrom: (from) => set(from, true),
+    runFrom: (from, speed) => set(from, true, speed),
     sync: (to) => {
       if (since === null) return;
       at = to;

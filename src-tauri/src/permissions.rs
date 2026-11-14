@@ -101,6 +101,10 @@ pub struct Approval {
     pub details: String,
     pub accept_label: String,
     pub decisions: Vec<Decision>,
+    /// What allowing for the session covers from here on, in words for the user ("commands
+    /// starting with `npm test`"); None when the agent did not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_scope: Option<String>,
 }
 
 impl Approval {
@@ -118,7 +122,97 @@ impl Approval {
             details,
             accept_label: "Allow once".into(),
             decisions,
+            session_scope: None,
         }
+    }
+
+    /// The approval, saying what allowing it for the session covers.
+    pub fn covering(mut self, scope: Option<String>) -> Self {
+        self.session_scope = scope;
+        self
+    }
+}
+
+/// `text` as code in a sentence shown to the user.
+fn code(text: &str) -> String {
+    format!("`{}`", text.replace('`', "'"))
+}
+
+/// What the rules Claude Code suggests for a request (its `permission_suggestions`) would allow
+/// for the rest of the session, in words; None when they say nothing this can read.
+pub fn claude_session_scope(rules: &[Value]) -> Option<String> {
+    let mut covered: Vec<String> = Vec::new();
+    for update in rules {
+        match update["type"].as_str() {
+            Some("addRules") => {
+                for rule in update["rules"].as_array().into_iter().flatten() {
+                    let tool = rule["toolName"].as_str().unwrap_or_default();
+                    let content = rule["ruleContent"].as_str().filter(|c| !c.is_empty());
+                    covered.push(match (tool, content) {
+                        ("Bash", Some(command)) => match command.strip_suffix(":*") {
+                            Some(start) => format!("commands starting with {}", code(start)),
+                            None => format!("the command {}", code(command)),
+                        },
+                        ("Bash", None) => "any command".into(),
+                        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", Some(files)) => {
+                            format!("changes to files matching {}", code(files))
+                        }
+                        ("Edit" | "Write" | "MultiEdit" | "NotebookEdit", None) => {
+                            "changes to any file".into()
+                        }
+                        ("Read" | "Glob" | "Grep", Some(files)) => {
+                            format!("reading files matching {}", code(files))
+                        }
+                        ("Read" | "Glob" | "Grep", None) => "reading any file".into(),
+                        ("WebFetch", Some(site)) => format!(
+                            "pages on {}",
+                            code(site.strip_prefix("domain:").unwrap_or(site))
+                        ),
+                        ("WebFetch" | "WebSearch", None) => "any web page".into(),
+                        ("", _) => continue,
+                        (tool, _) => format!("the tool {}", code(tool)),
+                    });
+                }
+            }
+            Some("setMode") if update["mode"] == "acceptEdits" => {
+                covered.push("changes to files in this folder".into());
+            }
+            Some("addDirectories") => {
+                for dir in update["directories"].as_array().into_iter().flatten() {
+                    if let Some(dir) = dir.as_str() {
+                        covered.push(format!("files in {}", code(dir)));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    covered.dedup();
+    (!covered.is_empty()).then(|| covered.join(", "))
+}
+
+/// What the session approval Copilot is answered with (its `approval`) allows for the rest of
+/// the session, in words.
+pub fn copilot_session_scope(answer: &Value) -> Option<String> {
+    let approval = &answer["approval"];
+    match approval["kind"].as_str()? {
+        "commands" => {
+            let commands: Vec<String> = approval["commandIdentifiers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|command| command.as_str().map(code))
+                .collect();
+            (!commands.is_empty()).then(|| format!("the commands {}", commands.join(", ")))
+        }
+        "write" => Some("changes to any file".into()),
+        "read" => Some("reading any file".into()),
+        "mcp" => Some(format!(
+            "the tool {} of {}",
+            code(approval["toolName"].as_str().unwrap_or("?")),
+            code(approval["serverName"].as_str().unwrap_or("?"))
+        )),
+        _ => None,
     }
 }
 
@@ -354,6 +448,59 @@ mod tests {
         approvals
             .respond("deck-2", &c.id, Decision::Accept)
             .unwrap();
+    }
+
+    #[test]
+    fn says_what_allowing_for_the_session_covers() {
+        let rules = [
+            json!({"type": "addRules", "behavior": "allow", "rules": [
+                {"toolName": "Bash", "ruleContent": "npm run test:*"},
+                {"toolName": "Bash", "ruleContent": "ls"},
+                {"toolName": "Edit", "ruleContent": "/src/**"},
+                {"toolName": "Read"},
+                {"toolName": "WebFetch", "ruleContent": "domain:example.com"},
+                {"toolName": "mcp__files__search"},
+            ]}),
+            json!({"type": "setMode", "mode": "acceptEdits"}),
+            json!({"type": "addDirectories", "directories": ["/tmp/out"]}),
+            json!({"type": "setMode", "mode": "plan"}),
+        ];
+        assert_eq!(
+            claude_session_scope(&rules).unwrap(),
+            "commands starting with `npm run test`, the command `ls`, changes to files matching `/src/**`, \
+             reading any file, pages on `example.com`, the tool `mcp__files__search`, \
+             changes to files in this folder, files in `/tmp/out`"
+        );
+        assert_eq!(claude_session_scope(&[]), None);
+        assert_eq!(claude_session_scope(&[json!({"type": "other"})]), None);
+
+        let copilot = |approval: Value| copilot_session_scope(&json!({"approval": approval}));
+        assert_eq!(
+            copilot(json!({"kind": "commands", "commandIdentifiers": ["ls", "cat"]})).unwrap(),
+            "the commands `ls`, `cat`"
+        );
+        assert_eq!(
+            copilot(json!({"kind": "write"})).unwrap(),
+            "changes to any file"
+        );
+        assert_eq!(
+            copilot(json!({"kind": "mcp", "serverName": "files", "toolName": "search"})).unwrap(),
+            "the tool `search` of `files`"
+        );
+        assert_eq!(
+            copilot(json!({"kind": "commands", "commandIdentifiers": []})),
+            None
+        );
+        assert_eq!(copilot(json!({"kind": "else"})), None);
+
+        // Said with the request, and left out of it when unknown.
+        let approval = approval().covering(Some("any command".into()));
+        assert_eq!(
+            serde_json::to_value(&approval).unwrap()["sessionScope"],
+            "any command"
+        );
+        let plain = serde_json::to_value(super::tests::approval()).unwrap();
+        assert!(plain.get("sessionScope").is_none());
     }
 
     #[test]

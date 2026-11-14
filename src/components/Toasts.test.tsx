@@ -3,15 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openLayer } from "../lib/layers";
 import { showError, showInfo, showSuccess, useApp } from "../store";
-import { TOAST_EXIT_MS, TOAST_MS, Toasts } from "./Toasts";
+import { TOAST_AREA, TOAST_EXIT_MS, TOAST_MS, Toasts } from "./Toasts";
 
 const texts = () => useApp.getState().toasts.map((toast) => toast.text);
 const pressEscape = (target: Element | Document = document.body) => fireEvent.keyDown(target, { key: "Escape" });
 
 beforeEach(() => {
   vi.useFakeTimers();
-  useApp.setState({ toasts: [] });
+  useApp.setState({ toasts: [], presenting: false, sidebarMaximized: false });
 });
+
+/** A stand-in for the slide's area (see ../App.tsx), placed where `rect` says. */
+function slideArea(rect: Partial<DOMRect>) {
+  const area = document.createElement("div");
+  area.setAttribute(TOAST_AREA, "");
+  area.getBoundingClientRect = () => ({ ...new DOMRect(), ...rect }) as DOMRect;
+  document.body.append(area);
+  return area;
+}
 afterEach(() => vi.useRealTimers());
 
 describe("Toasts", () => {
@@ -20,7 +29,7 @@ describe("Toasts", () => {
     expect(screen.queryByTestId("toasts")).toBeNull();
   });
 
-  it("stacks them at the bottom right over everything, the newest last", () => {
+  it("stacks them at the bottom centre over everything, the newest last", () => {
     render(<Toasts />);
     act(() => {
       showError("disk full");
@@ -28,7 +37,11 @@ describe("Toasts", () => {
     });
     const stack = screen.getByTestId("toasts");
     expect(stack.parentElement).toBe(document.body);
-    for (const name of ["fixed", "right-4", "bottom-4", "z-[70]"]) expect(stack.classList.contains(name)).toBe(true);
+    for (const name of ["fixed", "left-1/2", "-translate-x-1/2", "bottom-4", "z-toast"]) {
+      expect(stack.classList.contains(name)).toBe(true);
+    }
+    // Not at the right, where the sidebar's footer and the chat's composer are.
+    expect(stack.className).not.toContain("right-");
     expect([...stack.children].map((toast) => toast.textContent)).toEqual(["disk full", "Imported"]);
   });
 
@@ -100,8 +113,9 @@ describe("Toasts", () => {
 
   it("scrolls a long message rather than growing over the window", () => {
     render(<Toasts />);
-    act(() => showError("x".repeat(5000)));
-    const text = screen.getByText("x".repeat(5000));
+    const long = "word ".repeat(70).trim();
+    act(() => showError(long));
+    const text = screen.getByText(long);
     for (const name of ["max-h-40", "overflow-y-auto", "selectable"]) expect(text.classList.contains(name)).toBe(true);
   });
 
@@ -186,5 +200,117 @@ describe("Toasts", () => {
     closeLayer();
     act(() => void pressEscape());
     expect(texts()).toEqual([]);
+  });
+
+  describe("place", () => {
+    afterEach(() => {
+      for (const area of document.querySelectorAll(`[${TOAST_AREA}]`)) area.remove();
+    });
+
+    it("sits at the bottom centre of the slide's area, clear of the bar under the slide and of the sidebar", () => {
+      slideArea({ left: 220, width: 800, bottom: 700 });
+      render(<Toasts />);
+      act(() => showError("disk full"));
+      const { style } = screen.getByTestId("toasts");
+      expect(style.left).toBe("620px");
+      expect(style.bottom).toBe(`${window.innerHeight - 700 + 56}px`);
+      // No wider than the area, with a margin.
+      expect(style.maxWidth).toBe("768px");
+    });
+
+    it("sits at the bottom centre of the window without that area, or with it covered", () => {
+      render(<Toasts />);
+      act(() => showError("disk full"));
+      expect(screen.getByTestId("toasts").style.left).toBe("");
+      slideArea({ left: 220, width: 800, bottom: 700 });
+      act(() => {
+        useApp.setState({ sidebarMaximized: true });
+        showError("busy");
+      });
+      expect(screen.getByTestId("toasts").style.left).toBe("");
+      expect(screen.getByTestId("toasts").style.bottom).toBe("");
+    });
+  });
+
+  describe("during a slide show", () => {
+    it("shows nothing over the slide, and what waited once the show ends", () => {
+      render(<Toasts />);
+      act(() => {
+        useApp.setState({ presenting: true });
+        showInfo("The agent is done");
+        showError("Could not save");
+      });
+      expect(screen.queryByTestId("toasts")).toBeNull();
+      // Nothing that waits goes away meanwhile.
+      act(() => void vi.advanceTimersByTime(TOAST_MS * 2));
+      expect(texts()).toEqual(["The agent is done", "Could not save"]);
+      act(() => useApp.setState({ presenting: false }));
+      expect(screen.getByRole("status").textContent).toBe("The agent is done");
+      expect(screen.getByRole("alert").textContent).toBe("Could not save");
+      // Its time to go away starts when it shows.
+      act(() => void vi.advanceTimersByTime(TOAST_MS - 1));
+      expect(texts()).toContain("The agent is done");
+      act(() => void vi.advanceTimersByTime(1));
+      expect(texts()).toEqual(["Could not save"]);
+    });
+
+    it("shows an error about the show itself", () => {
+      render(<Toasts />);
+      act(() => {
+        useApp.setState({ presenting: true });
+        showInfo("Exported");
+        showError("No second screen", { doing: "Could not open the presenter view", duringShow: true });
+      });
+      expect(screen.getByRole("alert").textContent).toBe("Could not open the presenter view: No second screen");
+      expect(screen.queryByRole("status")).toBeNull();
+      // Escape dismisses what shows, not what waits.
+      pressEscape();
+      expect(texts()).toEqual(["Exported"]);
+    });
+
+    it("takes what was showing off the slide as the show starts", () => {
+      render(<Toasts />);
+      act(() => showError("disk full"));
+      act(() => useApp.setState({ presenting: true }));
+      act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
+      expect(screen.queryByTestId("toasts")).toBeNull();
+      expect(texts()).toEqual(["disk full"]);
+    });
+  });
+
+  describe("details", () => {
+    const RAW = 'API error 529: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+
+    it("says a service's answer in words, with the raw answer behind Details", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      render(<Toasts />);
+      act(() => showError(RAW, { doing: "Could not make the narration" }));
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toBe("Could not make the narration: API error 529: OverloadedDetails");
+      expect(alert.textContent).not.toContain("{");
+      const details = screen.getByRole("button", { name: "Details" });
+      expect(details.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(details);
+      expect(details.getAttribute("aria-expanded")).toBe("true");
+      expect(alert.querySelector("pre")!.textContent).toBe(RAW);
+      fireEvent.click(screen.getByRole("button", { name: "Copy details" }));
+      await act(async () => {});
+      expect(writeText).toHaveBeenCalledWith(RAW);
+      expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+      vi.unstubAllGlobals();
+    });
+
+    it("offers no details for an error that is a plain sentence, and a way on when there is one", () => {
+      const retry = vi.fn();
+      render(<Toasts />);
+      act(() =>
+        showError("The folder is gone.", { doing: "Could not open the deck", action: { label: "Retry", run: retry } }),
+      );
+      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(retry).toHaveBeenCalledOnce();
+      expect(texts()).toEqual([]);
+    });
   });
 });

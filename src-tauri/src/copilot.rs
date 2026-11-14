@@ -584,12 +584,15 @@ fn permission(data: &Value, dir: &Path, mode: PermissionMode) -> Option<(String,
     };
     let details =
         details.unwrap_or_else(|| serde_json::to_string_pretty(request).unwrap_or_default());
+    let scope = session
+        .as_ref()
+        .and_then(permissions::copilot_session_scope);
     let (decisions, choices) = permissions::offer(
         json!({ "kind": "approve-once" }),
         session,
         json!({ "kind": "reject", "feedback": "The user declined this request." }),
     );
-    let approval = Approval::new(title, text("intention"), details, decisions);
+    let approval = Approval::new(title, text("intention"), details, decisions).covering(scope);
     Some((request_id, Permission::Ask(approval, choices)))
 }
 

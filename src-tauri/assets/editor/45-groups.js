@@ -196,6 +196,7 @@
       return text ? kind + ": " + (text.length > 32 ? text.slice(0, 31) + "…" : text) : kind;
     };
     if (isGroup(el)) return "Group of " + membersOf(el).length;
+    if (isBackground(el)) return "Background";
     var figure = figureOf(el);
     if (figure) return clip(FIGURE_NAMES[figure] || figure.charAt(0).toUpperCase() + figure.slice(1));
     var line = lineOf(el);
@@ -243,8 +244,11 @@
   function layers() {
     var rows = [];
     var add = function (list, depth) {
-      paintOrder(list).reverse().forEach(function (el) {
+      paintOrder(list).reverse().forEach(function (el, at, shown) {
         rows.push({
+          // Whether it can go past the layer above or below it (see restack).
+          canUp: at > 0,
+          canDown: at < shown.length - 1,
           path: pathOf(el),
           name: layerName(el),
           group: isGroup(el),
@@ -259,12 +263,21 @@
       });
     };
     var top = [];
+    // The slide's background layers (see isBackground) that show a box of their own are listed
+    // under what they hold.
+    var grounds = [];
     walkContent(slide, function (el) {
-      if (!arrangeable(el)) return false;
+      if (!arrangeable(el)) {
+        if (selectable(el) === el && paintsBox(getComputedStyle(el)) && isBackground(el)) grounds.unshift(el);
+        return false;
+      }
       top.push(el);
       return true;
     });
     add(top, 0);
+    grounds.forEach(function (el) {
+      add([el], 0);
+    });
     return rows;
   }
 

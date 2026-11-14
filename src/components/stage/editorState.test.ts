@@ -22,8 +22,20 @@ const layer = (selected: boolean) => ({
   held: false,
   selected,
   depth: 0,
+  canUp: false,
+  canDown: false,
 });
-const menu = { x: 10, y: 20, at: { x: 20, y: 40 }, element: null, elements: [], editable: false, unlockable: false };
+const menu = {
+  x: 10,
+  y: 20,
+  at: { x: 20, y: 40 },
+  element: null,
+  elements: [],
+  editable: false,
+  unlockable: false,
+  under: [],
+  parent: null,
+};
 
 describe("what the slide editor reports", () => {
   const notified = vi.fn();
@@ -111,6 +123,21 @@ describe("what the slide editor reports", () => {
     // Started again with nothing to clear, it tells nobody.
     editorRestarted();
     expect(notified).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a slide's own background from the deck's, and a gradient or image from a color", () => {
+    reportDeckLook({ background: "#ffffff" });
+    expect(useEditorState.getState()).toMatchObject({ backgroundOther: false, backgroundOwn: false });
+    reportDeckLook({ background: "#ffffff", backgroundOther: true });
+    expect(useEditorState.getState()).toMatchObject({ background: "#ffffff", backgroundOther: true });
+    reportDeckLook({ background: "#ff0000", backgroundOwn: true });
+    expect(useEditorState.getState()).toMatchObject({ backgroundOther: false, backgroundOwn: true });
+    // A report about the fonts leaves the background as it was.
+    notified.mockClear();
+    reportDeckLook({ fonts: [] });
+    expect(useEditorState.getState().backgroundOwn).toBe(true);
+    reportDeckLook({ background: "#ff0000", backgroundOwn: true });
+    expect(notified).not.toHaveBeenCalled();
   });
 
   it("forgets everything when the stage goes", () => {

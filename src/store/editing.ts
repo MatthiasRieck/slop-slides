@@ -9,8 +9,9 @@ import {
   type ToolFamily,
 } from "../lib/editTools";
 import { memoizeLast } from "../lib/memo";
-import { withRecentColor } from "../lib/palette";
-import { loadFlag, saveFlag } from "../lib/storage";
+import { parseRecentColors, withRecentColor } from "../lib/palette";
+import { withSlideBackground } from "../lib/slideBackground";
+import { loadFlag, loadJson, loadText, saveFlag, saveJson, trySaveText } from "../lib/storage";
 import { captureSlide } from "./capture";
 import { promptAgent } from "./composer";
 import { editsSaved, queueEdit } from "./editQueue";
@@ -27,7 +28,7 @@ import type { AppState, AppStore, Slice } from "./types";
  * are tabs of the sidebar, beside the slide. Nor is playing the deck: its timeline opens under
  * the slide in View and in Edit (see `timelineOpen`).
  */
-export type DeckMode = "view" | "edit" | "settings" | "git";
+export type DeckMode = "view" | "edit" | "git";
 
 /** The deck's mode, and editing slides on the stage: the edits saved, and asking the agent about them. */
 export interface EditingSlice {
@@ -37,11 +38,16 @@ export interface EditingSlice {
    */
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "settings" | "git";
+  slideMode: "view" | "git";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
   editTool: EditTool;
+  /**
+   * The tool stays in hand after it added something (a double-click on its button), for adding
+   * several of a kind; picking Select, or any tool with a single click, lets go of it.
+   */
+  editToolKept: boolean;
   /** What new text boxes, shapes and drawings look like; restyling one updates its family's. */
   editStyles: Record<ToolFamily, EditStyle>;
   /** Where the deck's history was when edit mode started, and its slides' hashes then. */
@@ -55,7 +61,7 @@ export interface EditingSlice {
   editSaved: Record<string, string>;
   /** Dragging and resizing snap to the guides; remembered between slides and launches. */
   editSnap: boolean;
-  /** The colors picked last in the edit toolbar's color wells, the latest first. */
+  /** The colors picked last in the edit toolbar's color wells, the latest first; remembered between launches. */
   recentColors: string[];
   /**
    * The look copied from an element (⌥⌘C), as the slide editor reported it, to paste onto others
@@ -79,7 +85,8 @@ export interface EditingSlice {
   setEditing: (editing: boolean) => void;
   /** Switches the deck to a mode, leaving the one it is in. */
   setMode: (mode: DeckMode) => void;
-  setEditTool: (tool: EditTool) => void;
+  /** Picks the edit toolbar's tool; with `keep`, it stays in hand after adding something. */
+  setEditTool: (tool: EditTool, keep?: boolean) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /**
    * Saves `markup` as the new version of `slide`, after any edits still being saved. `group` is
@@ -98,8 +105,8 @@ export interface EditingSlice {
    */
   discardSlideEdits: (slide?: string) => Promise<void>;
   /**
-   * Screenshots the slide, leaves edit mode, and puts a prompt in the composer asking the agent
-   * to rebuild the slide's layout around the user's hand edits, with the screenshot attached.
+   * Screenshots the slide and puts a prompt in the composer asking the agent to rebuild the
+   * slide's layout around the user's hand edits, with the screenshot attached. The mode stays.
    * `overflow` lists elements the slide editor found running past the slide or cut off.
    */
   tidyLayout: (overflow?: string[]) => Promise<void>;
@@ -115,13 +122,31 @@ export interface EditingSlice {
   askForInsert: (kind: AgentInsert) => Promise<void>;
   /** Like `tidyLayout`, but has the agent give only `element` a place in the layout. */
   tidyElement: (element: EditElement) => Promise<void>;
+  /**
+   * Gives every slide of the deck that is not locked `color` as its own background (null: the
+   * deck's own again), as one step to undo. Resolves to how many slides it changed.
+   */
+  applyBackgroundToAll: (color: string | null) => Promise<number>;
 }
 
-/** The popovers of the edit toolbar that can be asked for from outside it. */
-export type EditPanel = "link" | "background";
+/**
+ * The popovers of the edit toolbar that can be asked for from outside it, and the one picker it
+ * opens for the selection: the file to put in the selected image.
+ */
+export type EditPanel = "link" | "background" | "position" | "replace-image";
+
+/** Where the mode decks were last in, View or Edit, is remembered. */
+const MODE_KEY = "slopslide.deckMode";
+
+/** The mode a deck opens in: the one decks were last in, View or Edit; Edit until one was picked. */
+export function lastDeckMode(): "view" | "edit" {
+  return loadText(MODE_KEY) === "view" ? "view" : "edit";
+}
 
 /** Where `editSnap` is remembered. */
 const SNAP_KEY = "slopslides.editSnap";
+/** Where `recentColors` are remembered. */
+const RECENT_COLORS_KEY = "slopslides.recentColors";
 
 /** How each request to the agent from the Insert section starts; the user says the rest. */
 export const INSERT_PROMPTS: Record<AgentInsert, string> = {
@@ -193,12 +218,13 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   slideMode: "view",
   editReload: 0,
   editTool: "select",
+  editToolKept: false,
   editStyles: DEFAULT_EDIT_STYLES,
   editBase: null,
   editedSlides: [],
   editSaved: {},
   editSnap: loadFlag(SNAP_KEY, true),
-  recentColors: [],
+  recentColors: loadJson(RECENT_COLORS_KEY, [], parseRecentColors),
   copiedStyle: null,
   editPanelAsk: null,
 
@@ -211,7 +237,15 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
     }
   },
 
-  noteColor: (color) => set((s) => ({ recentColors: withRecentColor(s.recentColors, color) })),
+  noteColor: (color) => {
+    const recentColors = withRecentColor(get().recentColors, color);
+    set({ recentColors });
+    try {
+      saveJson(RECENT_COLORS_KEY, recentColors);
+    } catch {
+      // Only the remembered colors are lost.
+    }
+  },
 
   setCopiedStyle: (copiedStyle) => set({ copiedStyle }),
 
@@ -220,7 +254,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   setEditing: (editing) => {
     if (editing === get().editing) return;
     // Each edit session starts with the select tool; leaving keeps the edits.
-    set({ editing, editTool: "select", ...NO_EDIT_STATE });
+    set({ editing, editTool: "select", editToolKept: false, ...NO_EDIT_STATE });
     if (!editing) return;
     // Where discarding the session's edits goes back to, after any change still being saved.
     void queueEdit(async () => {
@@ -234,11 +268,13 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   },
 
   setMode: (mode) => {
+    // The next deck opens the way this one is worked on.
+    if (mode === "view" || mode === "edit") trySaveText(MODE_KEY, mode);
     get().setEditing(mode === "edit");
     set({ slideMode: mode === "edit" ? "view" : mode });
   },
 
-  setEditTool: (editTool) => set({ editTool }),
+  setEditTool: (editTool, keep = false) => set({ editTool, editToolKept: keep && editTool !== "select" }),
 
   setEditStyle: (family, changes) =>
     set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
@@ -297,7 +333,6 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
     await editsSaved();
     const screenshot = await captureSlide(deck.id);
     if (get().deck?.id !== deck.id) return;
-    get().setEditing(false);
     promptAgent(app, tidyPrompt(overflow), { screenshot });
   },
 
@@ -320,4 +355,28 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   tidyElement: async (element) => {
     await promptAboutElement(app, TIDY_ELEMENT_PROMPT, element, { leaveEditing: true });
   },
+
+  applyBackgroundToAll: (color) =>
+    queueEdit(async () => {
+      const { deck } = get();
+      if (!deck) return 0;
+      // One name for all the saves, so the deck's history keeps them as one step.
+      const group = `background:${Date.now()}`;
+      let changed = 0;
+      try {
+        for (const slide of deck.slides) {
+          if (slide.locked) continue;
+          const source = await api.slideSource(deck.id, slide.id);
+          const markup = withSlideBackground(source.markup, color);
+          if (markup === source.markup) continue;
+          const next = await api.updateSlide(deck.id, slide.id, markup, source.hash, group);
+          if (get().deck?.id !== deck.id) return changed;
+          showEdited(app, slide.id, next);
+          changed += 1;
+        }
+      } catch (error) {
+        showErrorIn(app, error);
+      }
+      return changed;
+    }),
 });

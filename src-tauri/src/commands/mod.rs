@@ -6,6 +6,7 @@ pub mod chat;
 pub mod clipboard;
 pub mod deck;
 pub mod export;
+pub mod file_ops;
 pub mod git;
 pub mod history;
 pub mod narration;
@@ -109,6 +110,7 @@ mod command_thread_tests {
             include_str!("clipboard.rs"),
             include_str!("deck.rs"),
             include_str!("export.rs"),
+            include_str!("file_ops.rs"),
             include_str!("git.rs"),
             include_str!("history.rs"),
             include_str!("narration.rs"),
@@ -135,10 +137,20 @@ mod command_thread_tests {
             "load_chat",
             "session_provider",
             "list_chat_threads",
+            "chat_title",
+            "discard_attachment",
             "list_dir",
             "open_file",
+            "search_files",
+            "rename_entry",
+            "create_folder",
+            "trash_entry",
+            "read_text_file",
+            "open_in_default_app",
             "recent_workspaces",
             "recent_decks",
+            "deck_gallery",
+            "deck_workspace",
             "list_templates",
             "create_template",
             "copy_slides",
@@ -160,6 +172,8 @@ mod command_thread_tests {
             "save_chat",
             "reset_chat",
             "select_chat_thread",
+            "rename_chat_thread",
+            "delete_chat_thread",
             "move_chat_to_deck",
             "rewind_chat",
             "open_workspace",
@@ -205,7 +219,12 @@ mod command_thread_tests {
             "replace_in_deck",
             "replace_match_in_deck",
             "lint_deck",
+            "create_example_deck",
+            "duplicate_deck",
+            "trash_deck",
             // commands/history.rs
+            "deck_versions",
+            "restore_version",
             "deck_history",
             "undo_deck",
             "redo_deck",

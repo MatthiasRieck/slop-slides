@@ -15,6 +15,8 @@ import {
   sectionStarts,
   startsSection,
   stepRows,
+  stepSection,
+  withoutSection,
   withoutSlides,
   withSlidesMarked,
 } from "./sections";
@@ -327,5 +329,46 @@ describe("sectionSizes", () => {
       ["section:0", 2],
       ["section:1", 0],
     ]);
+  });
+});
+
+describe("withoutSection", () => {
+  it("takes the section out, numbering the ones after it one lower, and leaves the slides", () => {
+    const before = deck([
+      ["One", 0],
+      ["Two", 1],
+      ["Three", 2],
+    ]);
+    const after = withoutSection(before, 1);
+    expect(after.sections).toEqual([
+      { index: 0, title: "One", before: 0 },
+      { index: 1, title: "Three", before: 2 },
+    ]);
+    expect(after.slides).toBe(before.slides);
+    expect(withoutSection(before, 7)).toBe(before);
+  });
+});
+
+describe("stepSection", () => {
+  const items = railItems(
+    deck(
+      [
+        ["One", 1],
+        ["Two", 2],
+        ["Three", 3],
+      ],
+      ["a", "b", "c", "d"],
+    ),
+  );
+
+  it("swaps a section with the one above or below, slides and all, the loose slides staying first", () => {
+    expect(stepSection(items, sectionKey(1), -1)).toEqual(["a", "section:1", "c", "section:0", "b", "section:2", "d"]);
+    expect(stepSection(items, sectionKey(1), 1)).toEqual(["a", "section:0", "b", "section:2", "d", "section:1", "c"]);
+  });
+
+  it("has nowhere to go past the first or the last section", () => {
+    expect(stepSection(items, sectionKey(0), -1)).toBeNull();
+    expect(stepSection(items, sectionKey(2), 1)).toBeNull();
+    expect(stepSection(items, "section:9", 1)).toBeNull();
   });
 });

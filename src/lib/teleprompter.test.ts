@@ -168,10 +168,8 @@ describe("following a real talk", () => {
   ];
 
   it("keeps up, jumps both ways and leaves what was skipped unsaid", () => {
-    const seen = passes.reduce<Track[]>((tracks, heard) => {
-      const last = tracks[tracks.length - 1] ?? startTrack(script);
-      return [...tracks, follow(script, last, heard)];
-    }, []);
+    const seen: Track[] = [];
+    for (const heard of passes) seen.push(follow(script, seen.at(-1) ?? startTrack(script), heard));
     expect(seen[1]!.position).toBe(endOf("quarterly results"));
     expect(seen[6]!.position).toBe(endOf("our cloud platform"));
     expect(seen[12]!.position).toBe(endOf("a difficult transition"));

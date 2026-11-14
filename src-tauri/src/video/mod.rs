@@ -17,7 +17,11 @@
 //! (written in Rust, so every platform encodes the same way), and written to the MP4 (see
 //! mp4.rs) as they come. A frame held on screen is stored once, lasting as long as it shows.
 //! The narration is one Opus audio track, royalty-free too, encoded once the frames are.
+//!
+//! Beyond its timing, an export says which slides the video is of, how tall it is, and whether
+//! captions of the narration are written beside it ([`Output`], captions.rs).
 
+pub mod captions;
 mod encoder;
 
 use std::fs::File;
@@ -31,6 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::capture::decode_png;
 use crate::error::{Error, Result};
+use crate::export_scope::Scope;
 use crate::export_window::{self, Helper, Page};
 use crate::mp4::AudioTrack;
 use crate::narration::{self, Narration};
@@ -176,6 +181,34 @@ impl Options {
     }
 }
 
+/// The video heights offered besides the slides' own, in pixels: 720p, 1080p and 4K.
+pub const HEIGHTS: [u32; 3] = [720, 1080, 2160];
+
+/// What the video is of and how it comes out, beyond its timing (see [`Options`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Output {
+    /// The slides it shows.
+    #[serde(flatten)]
+    pub scope: Scope,
+    /// How tall it is, in pixels, one of [`HEIGHTS`], as wide as the slides' shape makes it;
+    /// the slides' own size when left out.
+    pub height: Option<u32>,
+    /// Captions of the narration, written beside the video in this format.
+    pub captions: Option<captions::Format>,
+}
+
+impl Output {
+    pub fn check(&self) -> Result<()> {
+        match self.height {
+            Some(height) if !HEIGHTS.contains(&height) => {
+                Err(Error::msg(format!("unsupported video height: {height}")))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// A shown slide's part in the video's timing.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Timing {
@@ -203,6 +236,10 @@ struct Cue {
     clip: Option<Vec<f32>>,
     duration: Option<f64>,
     narration_start: Option<f64>,
+    /// What the audio says, as plain text, and when each of its words is said, where known:
+    /// what captions are made from.
+    script: String,
+    words: Option<Vec<crate::voice::Word>>,
 }
 
 /// What the export is doing.
@@ -249,30 +286,34 @@ impl Drop for Running {
     }
 }
 
-/// The video's size for slides `width` × `height`: theirs, scaled down to fit [`MAX_SIZE`],
-/// in even pixels, as 4:2:0 chroma needs.
-pub fn video_size(width: u32, height: u32) -> (u32, u32) {
+/// The video's size for slides `width` × `height`: theirs, or as tall as `tall` asks in the
+/// same shape, scaled down to fit [`MAX_SIZE`], in even pixels, as 4:2:0 chroma needs.
+pub fn video_size(width: u32, height: u32, tall: Option<u32>) -> (u32, u32) {
     let (w, h) = (f64::from(width.max(1)), f64::from(height.max(1)));
+    let asked = tall.map_or(1.0, |tall| f64::from(tall.max(2)) / h);
     let scale = (f64::from(MAX_SIZE.0) / w)
         .min(f64::from(MAX_SIZE.1) / h)
-        .min(1.0);
+        .min(asked);
     let even = |v: f64| (((v * scale) / 2.0).round() as u32 * 2).max(2);
     (even(w), even(h))
 }
 
-/// Records the deck `file` (in the open workspace) to `dest` as an MP4, calling `progress`
-/// after each frame. A failed or cancelled export leaves no file behind.
+/// Records the slides of `output` of the deck `file` (in the open workspace) to `dest` as an
+/// MP4, calling `progress` after each frame. A failed or cancelled export leaves no file
+/// behind, of the video or of its captions.
 pub async fn export(
     app: &AppHandle,
     file: &Path,
     dest: &Path,
     options: Options,
+    output: &Output,
     progress: impl Fn(Progress),
 ) -> Result<()> {
     options.check()?;
+    output.check()?;
     let _running = Running::start()?;
     let cues = match options.narration {
-        true => narrate(app, file, &progress).await?,
+        true => narrate(app, file, &output.scope, &progress).await?,
         false => Vec::new(),
     };
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
@@ -282,7 +323,7 @@ pub async fn export(
     } else {
         "static&print"
     };
-    let (window, signals) = export_window::open(
+    let (window, signals, _served) = export_window::open(
         app,
         file,
         canvas,
@@ -295,6 +336,7 @@ pub async fn export(
             purpose: "recording",
             out_of_sight: true,
         },
+        Some(&output.scope),
     )?;
     let mut helper = Helper {
         window: &window,
@@ -304,28 +346,62 @@ pub async fn export(
     let recorded = record(
         &mut helper,
         &dest,
-        video_size(canvas.0, canvas.1),
+        video_size(canvas.0, canvas.1, output.height),
         options,
         &cues,
         progress,
     )
     .await;
     let _ = window.destroy();
-    if recorded.is_err() {
+    let captions = output
+        .captions
+        .map(|format| captions::file_for(&dest, format));
+    let written = recorded.and_then(|starts| match (output.captions, &captions) {
+        (Some(format), Some(path)) => {
+            let text = captions::write(format, &captions::cues(&spoken(&cues, &starts)));
+            std::fs::write(path, text).map_err(Error::from)
+        }
+        _ => Ok(()),
+    });
+    if written.is_err() {
         let _ = std::fs::remove_file(&dest);
+        if let Some(path) = &captions {
+            let _ = std::fs::remove_file(path);
+        }
     }
-    recorded
+    written
 }
 
-/// Says the shown slides' narration that has no up-to-date audio yet, then gives each shown
-/// slide's narration audio and timing, in order.
-async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> Result<Vec<Cue>> {
+/// What each slide's narration says and when, for the captions: `starts` is when each slide's
+/// narration starts in the video (see [`Timeline::starts`]).
+fn spoken<'a>(cues: &'a [Cue], starts: &[Option<f64>]) -> Vec<captions::Spoken<'a>> {
+    cues.iter()
+        .zip(starts)
+        .filter_map(|(cue, start)| {
+            let clip = cue.clip.as_ref()?;
+            Some(captions::Spoken {
+                text: &cue.script,
+                start: (*start)?,
+                length: clip.len() as f64 / f64::from(narration::audio::RATE),
+                words: cue.words.as_deref(),
+            })
+        })
+        .collect()
+}
+
+/// Says the narration of the slides of `scope` that has no up-to-date audio yet, then gives
+/// each of those slides' narration audio and timing, in order.
+async fn narrate(
+    app: &AppHandle,
+    file: &Path,
+    scope: &Scope,
+    progress: &impl Fn(Progress),
+) -> Result<Vec<Cue>> {
     use tauri::Manager;
-    let shown: Vec<String> = deck::load(file)?
-        .slides
+    let shown: Vec<String> = scope
+        .of(&deck::load(file)?)
         .into_iter()
-        .filter(|s| !s.hidden)
-        .map(|s| s.id)
+        .map(|s| s.id.clone())
         .collect();
     let home = crate::files::app_home()?;
     let render = app
@@ -344,10 +420,9 @@ async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> 
     }
     let deck = deck::load(file)?;
     let mut ready = narration::ready_audio(file, &deck);
-    Ok(deck
-        .slides
-        .iter()
-        .filter(|s| !s.hidden)
+    Ok(scope
+        .of(&deck)
+        .into_iter()
         .map(|s| Cue {
             clip: ready.remove(&s.id).map(|(samples, rate)| match rate {
                 narration::audio::RATE => samples,
@@ -355,6 +430,8 @@ async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> 
             }),
             duration: s.duration,
             narration_start: s.narration_start,
+            script: narration::spoken(&s.narration),
+            words: narration::words(file, &s.id),
         })
         .collect())
 }
@@ -410,7 +487,8 @@ pub fn encode_opus(samples: &[f32]) -> Result<AudioTrack> {
     })
 }
 
-/// Plays the deck in the helper's window, frame by frame, into the MP4 at `dest`.
+/// Plays the deck in the helper's window, frame by frame, into the MP4 at `dest`. When each
+/// slide's narration starts in the video comes back.
 async fn record(
     helper: &mut Helper<'_>,
     dest: &Path,
@@ -418,7 +496,7 @@ async fn record(
     options: Options,
     cues: &[Cue],
     progress: impl Fn(Progress),
-) -> Result<()> {
+) -> Result<Vec<Option<f64>>> {
     let ready = helper.answer("ready").await?;
     export_window::check_view(&ready)?;
     let slides: u32 = ready
@@ -443,6 +521,7 @@ async fn record(
         })
         .collect();
     let timeline = options.timeline(&timings);
+    let starts = timeline.starts.clone();
     let lengths = timeline.frames;
     let frames = lengths.iter().sum();
     let clips: Vec<(f64, &[f32])> = cues
@@ -495,7 +574,7 @@ async fn record(
     // Closing the queue lets the encoder finish the file (or stop, after a failure).
     drop(jobs);
     let written = encoded.await.map_err(|_| encoder_gone())?;
-    played.and(written)
+    played.and(written).map(|()| starts)
 }
 
 /// What the encoder does next.
@@ -812,12 +891,61 @@ mod tests {
 
     #[test]
     fn videos_are_the_slide_size_in_even_pixels_up_to_4k() {
-        assert_eq!(video_size(1920, 1080), (1920, 1080));
-        assert_eq!(video_size(1080, 1350), (1080, 1350));
-        assert_eq!(video_size(1281, 721), (1282, 722));
-        assert_eq!(video_size(7680, 4320), (3840, 2160));
-        assert_eq!(video_size(1080, 5000), (466, 2160));
-        assert_eq!(video_size(0, 0), (2, 2));
+        assert_eq!(video_size(1920, 1080, None), (1920, 1080));
+        assert_eq!(video_size(1080, 1350, None), (1080, 1350));
+        assert_eq!(video_size(1281, 721, None), (1282, 722));
+        assert_eq!(video_size(7680, 4320, None), (3840, 2160));
+        assert_eq!(video_size(1080, 5000, None), (466, 2160));
+        assert_eq!(video_size(0, 0, None), (2, 2));
+    }
+
+    #[test]
+    fn a_video_is_as_tall_as_asked_in_the_slides_shape() {
+        assert_eq!(video_size(1920, 1080, Some(720)), (1280, 720));
+        assert_eq!(video_size(1920, 1080, Some(2160)), (3840, 2160));
+        assert_eq!(
+            video_size(1280, 720, Some(1080)),
+            (1920, 1080),
+            "made larger too"
+        );
+        assert_eq!(video_size(1080, 1350, Some(720)), (576, 720));
+        assert_eq!(video_size(1080, 1920, Some(2160)), (1216, 2160));
+        assert_eq!(
+            video_size(4000, 1000, Some(2160)),
+            (3840, 960),
+            "never past 4K"
+        );
+    }
+
+    #[test]
+    fn the_output_takes_the_heights_offered() {
+        assert!(Output::default().check().is_ok());
+        for height in HEIGHTS {
+            let output = Output {
+                height: Some(height),
+                ..Output::default()
+            };
+            assert!(output.check().is_ok());
+        }
+        let odd = Output {
+            height: Some(1000),
+            ..Output::default()
+        };
+        assert_eq!(
+            odd.check().unwrap_err().to_string(),
+            "unsupported video height: 1000"
+        );
+        let read: Output = serde_json::from_str(
+            r#"{"slides":["a"],"includeHidden":true,"height":1080,"captions":"vtt"}"#,
+        )
+        .unwrap();
+        assert_eq!(read.height, Some(1080));
+        assert_eq!(read.captions, Some(captions::Format::Vtt));
+        assert!(read.scope.include_hidden);
+        assert_eq!(
+            serde_json::from_str::<Output>("{}").unwrap(),
+            Output::default()
+        );
     }
 
     #[test]

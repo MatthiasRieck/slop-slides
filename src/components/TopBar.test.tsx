@@ -16,7 +16,7 @@ const crumbsEl = () => document.querySelector<HTMLElement>("[data-breadcrumbs]")
 const openFileMenu = () => fireEvent.click(fileButton());
 
 beforeEach(() => {
-  invoke.mockReset();
+  invoke.mockReset().mockResolvedValue(undefined);
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
@@ -35,7 +35,6 @@ beforeEach(() => {
     running: false,
     messages: [],
     toasts: [],
-    imageExport: null,
   });
 });
 
@@ -107,6 +106,17 @@ describe("sidebar toggle", () => {
     expect(useApp.getState().sidebarOpen).toBe(true);
     expect(screen.queryByRole("button", { name: /sidebar/ })).toBeNull();
   });
+
+  it("holds the sidebar's settings and shortcut buttons while the sidebar is hidden", () => {
+    useApp.setState({ sidebarOpen: false, appSettingsOpen: false, shortcutHelpOpen: false });
+    render(<TopBar />);
+    fireEvent.click(screen.getByRole("button", { name: "App settings…" }));
+    expect(useApp.getState().appSettingsOpen).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect(useApp.getState().shortcutHelpOpen).toBe(true);
+    act(() => useApp.setState({ sidebarOpen: true, appSettingsOpen: false, shortcutHelpOpen: false }));
+    expect(screen.queryByRole("button", { name: "App settings…" })).toBeNull();
+  });
 });
 
 describe("the sidebar toggle's mark", () => {
@@ -167,6 +177,60 @@ describe("the sidebar toggle's mark", () => {
   });
 });
 
+describe("earlier versions", () => {
+  const entry = (id: string, label: string, source: HistoryEntry["source"], ago: number): HistoryEntry => ({
+    id,
+    label,
+    source,
+    time: Date.now() - ago,
+  });
+
+  it("lists the deck's versions, newest first, with who made them and when, and goes back to one", async () => {
+    const restoreVersion = vi.fn(async () => true);
+    const undo = vi.fn(async () => {});
+    useApp.setState({ restoreVersion, undo, history: { undo: null, redo: null, current: "v3" } });
+    invoke.mockImplementation(async (command: string) =>
+      command === "deck_versions"
+        ? {
+            entries: [
+              entry("v4", "Undone edit", "edit", 60_000),
+              entry("v3", "Bigger title", "chat", 5 * 60_000),
+              entry("v2", "Move slides", "rail", 10 * 60_000),
+              entry("v1", "Opened", "open", 20 * 60_000),
+            ],
+            current: "v3",
+          }
+        : undefined,
+    );
+    render(<TopBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Earlier versions" }));
+    const list = await screen.findByRole("menu", { name: "Versions" });
+    const rows = Array.from(list.querySelectorAll("[role=menuitem]"));
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Undone editYou · 1m ago · Undone",
+      "Bigger titleAgent · 5m ago · Now",
+      "Move slidesYou · 10m ago",
+      "OpenedOpened · 20m ago",
+    ]);
+    expect(list.textContent).toContain("Today");
+    expect((rows[1] as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => fireEvent.click(rows[2]!));
+    expect(restoreVersion).toHaveBeenCalledWith("v2");
+    const toast = useApp.getState().toasts.at(-1)!;
+    expect(toast.text).toBe("Back to the version after “Move slides”");
+    toast.action!.run();
+    expect(undo).toHaveBeenCalled();
+  });
+
+  it("are not offered while the agent works", () => {
+    useApp.setState({ running: true });
+    render(<TopBar />);
+    const button = screen.getByRole("button", { name: "Earlier versions" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe("Go back to an earlier version, once the agent is done");
+  });
+});
+
 describe("workspace bar", () => {
   const labels = () =>
     screen.getAllByRole("menuitem").map((el) => el.firstElementChild?.nextElementSibling?.firstChild?.textContent);
@@ -178,12 +242,18 @@ describe("workspace bar", () => {
     openFileMenu();
     expect(fileButton().getAttribute("aria-expanded")).toBe("true");
     expect(labels()).toEqual([
-      "Rename…",
-      "Deck settings",
-      "Show in folder",
-      "Close deck",
-      "Show in Files",
+      "New deck…",
+      "Open deck…",
       "Open folder…",
+      "Import PowerPoint…",
+      "New window",
+      "Rename…",
+      "Deck settings…",
+      "Duplicate deck",
+      "Reveal in sidebar",
+      "Show in folder",
+      "Move deck to Trash…",
+      "Close deck",
       "Close folder",
     ]);
     const menu = screen.getByRole("menu");
@@ -197,14 +267,17 @@ describe("workspace bar", () => {
 
   it("keeps room for the file's menu button, so the title does not vanish in a narrow window", () => {
     render(<TopBar />);
-    expect(fileButton().parentElement!.className).toContain("min-w-24");
+    expect(fileButton().parentElement!.className).toContain("min-w-12");
+    // It is what gives room first, before the undo buttons and the mode tabs.
+    expect(fileButton().parentElement!.className).toContain("shrink");
+    expect(fileButton().parentElement!.parentElement!.className).toContain("overflow-hidden");
   });
 
   it("shows where the open file is, in the Files tab", () => {
     useApp.setState({ sidebarOpen: false, sidebarTab: "chat" });
     render(<TopBar />);
     openFileMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Show in Files/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Reveal in sidebar/ }));
     expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "files" });
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -225,14 +298,61 @@ describe("workspace bar", () => {
     expect(document.activeElement).toBe(fileButton());
   });
 
-  it("opens the deck's settings from the file's menu, remembering the mode to go back to", () => {
-    useApp.setState({ editing: true });
+  it("opens the deck's settings from the file's menu, as a dialog over the deck's mode", () => {
+    useApp.setState({ editing: true, deckSettingsOpen: false });
     render(<TopBar />);
     openFileMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Deck settings/ }));
-    expect(useApp.getState().slideMode).toBe("settings");
-    expect(useApp.getState().settingsReturn).toBe("edit");
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Deck settings…/ }));
+    expect(useApp.getState()).toMatchObject({ deckSettingsOpen: true, editing: true });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("starts a new deck in the folder from the menu, in a dialog", () => {
+    useApp.setState({ newDeckOpen: false, templates: [] });
+    render(<TopBar />);
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^New deck…/ }));
+    const dialog = screen.getByRole("dialog", { name: "New deck" });
+    expect(dialog.textContent).toContain("It goes in a new folder in decks.");
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "What is the deck about?" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(useApp.getState().newDeckOpen).toBe(false);
+  });
+
+  it("opens a deck, and a new window, from the menu", async () => {
+    openDialog.mockResolvedValue(null);
+    invoke.mockResolvedValue(undefined);
+    render(<TopBar />);
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^Open deck…/ })));
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ title: "Open a deck" }));
+    openFileMenu();
+    expect(screen.getByRole("menuitem", { name: /^New window/ }).textContent).toContain("Ctrl+N");
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^New window/ })));
+    expect(invoke).toHaveBeenCalledWith("new_window");
+  });
+
+  it("imports a PowerPoint file from the menu", async () => {
+    const importPptx = vi.fn(async () => null);
+    useApp.setState({ importPptx });
+    openDialog.mockResolvedValue("/Users/me/q3.pptx");
+    render(<TopBar />);
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^Import PowerPoint…/ })));
+    expect(importPptx).toHaveBeenCalledWith("/Users/me/q3.pptx");
+  });
+
+  it("duplicates the deck, and moves it to the trash, from the menu", async () => {
+    const duplicateDeck = vi.fn(async () => "/decks/talk-copy/deck.html");
+    const trashDeck = vi.fn(async () => true);
+    useApp.setState({ duplicateDeck, trashDeck });
+    render(<TopBar />);
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Duplicate deck/ }));
+    expect(duplicateDeck).toHaveBeenCalledWith("/decks/talk/deck.html", { open: true });
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Move deck to Trash…/ }));
+    expect(trashDeck).toHaveBeenCalledWith("/decks/talk/deck.html", "Talk");
   });
 
   describe("renaming the deck", () => {
@@ -256,8 +376,16 @@ describe("workspace bar", () => {
       expect(field.value).toBe("Talk");
       expect(document.activeElement).toBe(field);
       expect([field.selectionStart, field.selectionEnd]).toEqual([0, 4]);
-      // The path stays above it.
-      expect(crumbsEl().textContent).toBe("decks/talk/deck.html");
+      // The folder stays above it.
+      expect(crumbsEl().textContent).toBe("decks/talk");
+    });
+
+    it("starts on a double-click of the title too", () => {
+      render(<TopBar />);
+      expect(fileButton().title).toBe("Talk: double-click to rename, click for the deck's menu");
+      fireEvent.doubleClick(fileButton());
+      expect(titleField()!.value).toBe("Talk");
+      expect(screen.queryByRole("menu")).toBeNull();
     });
 
     it("takes the new title on Enter", async () => {
@@ -341,7 +469,11 @@ describe("workspace bar", () => {
       render(<TopBar />);
       openFileMenu();
       expect(screen.queryByRole("menuitem", { name: "Rename…" })).toBeNull();
-      expect(labels()).toEqual(["Show in folder", "Close file", "Show in Files", "Open folder…", "Close folder"]);
+      expect(labels().slice(5)).toEqual(["Reveal in sidebar", "Show in folder", "Close file", "Close folder"]);
+      // A double-click does not rename it either.
+      openFileMenu();
+      fireEvent.doubleClick(fileButton());
+      expect(titleField()).toBeNull();
     });
   });
 
@@ -378,9 +510,13 @@ describe("workspace bar", () => {
     render(<TopBar />);
     openFileMenu();
     expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
-      "Show in FilesThe folder's files, in the sidebar",
+      "New deck…In a new folder in decks",
+      "Open deck…Ctrl+O",
+      "Open folder…Ctrl+Shift+O",
+      "Import PowerPoint…As a new deck in decks",
+      "New windowCtrl+N",
+      "Browse filesThe folder's files, in the sidebar",
       "Show in folder",
-      "Open folder…Work on the decks of another folder (Ctrl+O)",
       "Close folderBack to the start screen",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
@@ -482,13 +618,16 @@ describe("layout", () => {
     // What the deck's actions are called is theirs to say (DeckActions); where they go is the bar's.
     expect(order()).toEqual([
       "Hide slides",
-      "talk/deck.html",
+      "Talk: double-click to rename, click for the deck's menu",
       "Undo",
+      "Earlier versions",
       "Redo",
       "Mode",
       expect.stringMatching(/^Export/),
       expect.stringMatching(/^Present/),
       expect.stringMatching(/present/i),
+      "App settings…",
+      "Keyboard shortcuts",
       "Show sidebar",
     ]);
   });
@@ -539,10 +678,10 @@ describe("breadcrumbs", () => {
   const crumbs = () =>
     Array.from(crumbsEl().querySelectorAll(":scope > span > span:last-child")).map((el) => el.textContent);
 
-  it("goes from the workspace folder to the open file", () => {
+  it("goes from the workspace folder to the deck's own folder, without the deck.html every deck ends in", () => {
     render(<TopBar />);
-    expect(crumbs()).toEqual(["decks", "talk", "deck.html"]);
-    expect(screen.getByText("deck.html").getAttribute("aria-current")).toBe("page");
+    expect(crumbs()).toEqual(["decks", "talk"]);
+    expect(screen.getByText("talk").getAttribute("aria-current")).toBe("page");
     expect(screen.getByText("decks").getAttribute("aria-current")).toBeNull();
   });
 

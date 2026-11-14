@@ -81,17 +81,35 @@ export function codeSpans(text: string): { text: string; code: boolean }[] {
     .filter((part) => part.text !== "");
 }
 
-/** Where a link in a chat message leads: a page for the browser, a file of the workspace, or nowhere the app goes. */
-export type LinkTarget = { kind: "url"; url: string } | { kind: "file"; path: string } | null;
+/**
+ * Where a link in a chat message leads: a page for the browser, a file of the workspace, a slide
+ * of the open deck (by the id its `#…` names; whether there is such a slide is for the chat to
+ * check), or nowhere the app goes.
+ */
+export type LinkTarget =
+  | { kind: "url"; url: string }
+  | { kind: "file"; path: string }
+  | { kind: "slide"; id: string }
+  | null;
 
 /**
  * Where the link `href` of a chat message leads. Web and mail addresses are for the system's
- * browser; a path is a file, relative to the `workspace` folder unless it is inside it already.
- * Anything else (a place on the page, a script, a file outside the workspace) leads nowhere.
+ * browser; a path is a file, relative to the `workspace` folder unless it is inside it already;
+ * `#id` is the slide with that id, as the agent is told to write its links to slides.
+ * Anything else (a script, a file outside the workspace) leads nowhere.
  */
 export function linkTarget(href: string | undefined, workspace: string | null): LinkTarget {
   const link = href?.trim();
-  if (!link || link.startsWith("#")) return null;
+  if (!link) return null;
+  if (link.startsWith("#")) {
+    let id = link.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      // Not encoded after all: the id is as written.
+    }
+    return id ? { kind: "slide", id } : null;
+  }
   if (/^(https?:|mailto:)/i.test(link)) return { kind: "url", url: link };
   if (!workspace) return null;
   const root = workspace.replaceAll("\\", "/").replace(/\/+$/, "");

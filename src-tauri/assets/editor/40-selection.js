@@ -13,8 +13,16 @@
   var readoutAt = null;
   // The guide lines drawn, as one string, so a move that leaves them be draws nothing.
   var drawnGuides = "";
-  // How close, in screen pixels, a dragged edge or center comes before it snaps.
+  // How close, in screen pixels (see onScreen), a dragged edge or center comes before it snaps.
   var SNAP_PX = 6;
+  // How tall the ticks at the ends of an equal-spacing mark are, in screen pixels.
+  var GAP_MARK = 9;
+  // An element that holds others and covers this share of the slide is its background layer (see isBackground).
+  var BACKGROUND_SHARE = 0.9;
+  // Whether each element asked about is one, until the slide changes (see noteChange).
+  var backgroundLayers = null;
+  // The copies the last duplicate made and where their originals were, for ⌘D to go on from (see repeatOffset).
+  var lastDuplicate = null;
   // Never part of the slide's visible content.
   var NOT_CONTENT = /^(script|style|template|link|meta|title)$/i;
   var ASIDES = ".notes, .narration, .slop-review, " + SLOTS;
@@ -23,12 +31,19 @@
   style.textContent +=
     "[data-slop-multi], [data-slop-guides] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-multi] > *, [data-slop-guides] > * { position: absolute; box-sizing: border-box; }" +
-    "[data-slop-multi] > * { outline: 2px solid var(--slop-accent); }" +
+    // Each of several selected elements has a thin line of its own inside the frame around them all.
+    "[data-slop-multi] > * { outline: " + px(1) + " solid var(--slop-accent); box-shadow: 0 0 0 " + px(2) + " " + HALO + "; }" +
     "[data-slop-guides] > * { background: var(--slop-guide); }" +
+    // An equal-spacing mark: a line across the gap with a tick at each end.
+    "[data-slop-guides] > [data-gap=x] { border: solid var(--slop-guide); border-width: 0 " + px(1) + ";" +
+    " background: linear-gradient(var(--slop-guide), var(--slop-guide)) center / 100% " + px(1) + " no-repeat; }" +
+    "[data-slop-guides] > [data-gap=y] { border: solid var(--slop-guide); border-width: " + px(1) + " 0;" +
+    " background: linear-gradient(var(--slop-guide), var(--slop-guide)) center / " + px(1) + " 100% no-repeat; }" +
     "[data-slop-marquee], [data-slop-readout] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box; }" +
-    "[data-slop-marquee] { border: 1px solid var(--slop-accent); background: color-mix(in srgb, var(--slop-accent) 12%, transparent); }" +
-    "[data-slop-readout] { padding: 2px 6px; border-radius: 4px; background: var(--slop-overlay); color: var(--slop-overlay-foreground);" +
-    " font: 12px/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }";
+    "[data-slop-marquee] { border: " + px(1) + " solid var(--slop-accent); box-shadow: 0 0 0 " + px(1) + " " + HALO + ";" +
+    " background: color-mix(in srgb, var(--slop-accent) 12%, transparent); }" +
+    "[data-slop-readout] { padding: " + px(2) + " " + px(6) + "; border-radius: " + px(4) + "; background: var(--slop-overlay);" +
+    " color: var(--slop-overlay-foreground); font: " + px(11) + "/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }";
 
   function overlay(attr) {
     var el = document.createElement("div");
@@ -82,7 +97,7 @@
     }
   }
 
-  /** Shift- or ⌘-click: takes `el` out of the selection, or adds it instead of what holds it or it holds. */
+  /** Shift-click: takes `el` out of the selection, or adds it instead of what holds it or it holds. */
   function toggleSelected(el) {
     var group = allSelected();
     selectMany(isSelected(el)
@@ -94,9 +109,9 @@
         }).concat(el));
   }
 
-  /** Whether this press changes the selection instead of replacing it. On a Mac, Ctrl-click is a right click. */
-  function addsToSelection(event) {
-    return event.shiftKey || event.metaKey || (event.ctrlKey && !/Mac/.test(navigator.platform));
+  /** Whether this press reaches under what is selected (see selectUnder): with ⌘ / Ctrl. On a Mac, Ctrl-click is a right click. */
+  function reachesUnder(event) {
+    return event.metaKey || (event.ctrlKey && !/Mac/.test(navigator.platform));
   }
 
   /**
@@ -151,9 +166,9 @@
     });
   }
 
-  /** Whether `el` is only a see-through wrapper around other elements: no text or box of its own. */
-  function isBackdrop(el) {
-    if (el.hasAttribute(ADDED) || el.hasAttribute(GROUP_ATTR) || paintsBox(getComputedStyle(el))) return false;
+  /** Whether `el` is a wrapper the deck made around other elements, with no text of its own. */
+  function holdsElements(el) {
+    if (el.hasAttribute(ADDED) || el.hasAttribute(GROUP_ATTR)) return false;
     var ownText = Array.prototype.some.call(el.childNodes, function (node) {
       return node.nodeType === 3 && node.data.trim();
     });
@@ -162,9 +177,36 @@
     });
   }
 
+  /** Whether `el` is only a see-through wrapper around other elements: no text or box of its own. */
+  function isBackdrop(el) {
+    return !paintsBox(getComputedStyle(el)) && holdsElements(el);
+  }
+
+  /**
+   * Whether `el` is the slide's background layer: a wrapper around the slide's content that
+   * covers (nearly) all of the slide, as a deck's layout with a background of its own does. It
+   * is the ground the content lies on, not one more thing on the slide: a press on its empty
+   * part is a press on the empty slide (it deselects, draws a marquee, opens the slide's menu),
+   * and the marquee, ⌘A and Tab pass it by for what it holds. It is selected from the Layers
+   * list, with ⌘ / Ctrl-click, or from the context menu, and then moves like anything else.
+   */
+  function isBackground(el) {
+    if (!backgroundLayers) backgroundLayers = new WeakMap();
+    if (backgroundLayers.has(el)) return backgroundLayers.get(el);
+    var covers = false;
+    if (holdsElements(el)) {
+      var box = boxOf(el);
+      var w = Math.min(box.right, slideWidth()) - Math.max(box.left, 0);
+      var h = Math.min(box.bottom, slideHeight()) - Math.max(box.top, 0);
+      covers = w > 0 && h > 0 && w * h >= BACKGROUND_SHARE * slideWidth() * slideHeight();
+    }
+    backgroundLayers.set(el, covers);
+    return covers;
+  }
+
   /** Whether `el` is a thing on the slide of its own, to select with others. */
   function arrangeable(el) {
-    return selectable(el) === el && paints(el) && !isBackdrop(el);
+    return selectable(el) === el && paints(el) && !isBackdrop(el) && !isBackground(el);
   }
 
   /** Goes through what shows inside `root`; a true from `visit` skips what is in that element. */
@@ -218,7 +260,7 @@
     return { left: left, top: top, right: left + w, bottom: top + h };
   }
 
-  /** A frame around each of several selected elements, turned with it. */
+  /** A frame around each of several selected elements, turned with it; gives back where each is (see shownFrame). */
   function placeFrames() {
     var group = !extras.length || editing ? [] : allSelected();
     // Every element is measured before any frame is written, so the layout is worked out once.
@@ -227,22 +269,25 @@
     shown.forEach(function (at, i) {
       nodes[i].style.cssText = "left:" + (at.x - at.w / 2) + "px;top:" + (at.y - at.h / 2) + "px;width:" + at.w + "px;height:" + at.h + "px;transform:rotate(" + at.angle + "deg)";
     });
+    return shown;
   }
 
-  /** Starts a marquee at the pointer if it is on the slide; `picked` is what a click there selects. */
+  /**
+   * Starts a marquee at the pointer, on the slide or on the pasteboard around it; `picked` is
+   * what a click there selects, and with `add` the marquee adds to the selection.
+   */
   function startMarquee(event, picked, add) {
-    var rect = slide.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return false;
-    if (!rect.width || !rect.height) return false;
     event.preventDefault();
     dropHover();
-    marquee = { x: event.clientX, y: event.clientY, picked: picked, add: add, base: add ? allSelected() : [], moved: false, items: null };
+    var before = allSelected();
+    marquee = { x: event.clientX, y: event.clientY, picked: picked, add: add, base: add ? before : [], before: before, moved: false, items: null };
+    // A press on an empty spot lets go of the selection at once.
+    if (!add && !picked) select(null);
     try {
       document.documentElement.setPointerCapture(event.pointerId);
     } catch (e) {
       // Synthetic events have no active pointer to capture.
     }
-    return true;
   }
 
   /**
@@ -259,14 +304,20 @@
     return items;
   }
 
-  /** The outermost elements of `items` (see marqueeItems) fully inside `area`, in slide pixels. */
-  function elementsIn(area, items) {
+  /**
+   * The outermost elements of `items` (see marqueeItems) that `area`, in slide pixels, touches,
+   * or with `enclosed` (Alt held), only those fully inside it.
+   */
+  function elementsIn(area, items, enclosed) {
     var found = [];
     items.forEach(function (item) {
       var box = item.box;
-      var inside = !!box && box.right > box.left && box.bottom > box.top && box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
-      if (inside) found.push(item.el);
-      else found = found.concat(elementsIn(area, item.inner));
+      var real = !!box && box.right > box.left && box.bottom > box.top;
+      var hit = real && (enclosed
+        ? box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom
+        : box.left < area.right && box.right > area.left && box.top < area.bottom && box.bottom > area.top);
+      if (hit) found.push(item.el);
+      else found = found.concat(elementsIn(area, item.inner, enclosed));
     });
     return found;
   }
@@ -274,7 +325,7 @@
   function marqueeTo(event) {
     var dx = event.clientX - marquee.x;
     var dy = event.clientY - marquee.y;
-    if (!marquee.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+    if (!marquee.moved && Math.abs(dx) < onScreen(DRAG_THRESHOLD) && Math.abs(dy) < onScreen(DRAG_THRESHOLD)) return;
     marquee.moved = true;
     lastDown = { el: null, at: 0 };
     var left = Math.min(marquee.x, event.clientX);
@@ -286,8 +337,18 @@
     var at = camera();
     var x = (left - at.left) / at.k;
     var y = (top - at.top) / at.k;
-    selectMany(marquee.base.concat(elementsIn({ left: x, top: y, right: x + w / at.k, bottom: y + h / at.k }, marquee.items)), true);
+    var area = { left: x, top: y, right: x + w / at.k, bottom: y + h / at.k };
+    selectMany(marquee.base.concat(elementsIn(area, marquee.items, event.altKey)), true);
   }
+
+  // A press ends a marquee whose release never arrived.
+  window.addEventListener(
+    "pointerdown",
+    function () {
+      if (marquee) finishMarquee();
+    },
+    true,
+  );
 
   function finishMarquee() {
     var done = marquee;
@@ -330,29 +391,53 @@
   }
 
   /**
-   * Puts a copy of each selected element on top of the slide, `offset` slide pixels away and
+   * Puts a copy of each selected element on top of the slide, (dx, dy) slide pixels away and
    * looking as it does, and selects the copies. The caller saves.
    */
-  function duplicateSelected(offset) {
+  function duplicateSelected(dx, dy) {
     finishEditing();
     saveNudges();
+    var from = [];
     var copies = inDocumentOrder(allSelected()).map(function (el) {
       var header = clipHeader(el);
       var copy = cleanCopy(el);
       slide.appendChild(copy);
-      placeFree(copy, header, { x: header.box.x + offset, y: header.box.y + offset });
+      placeFree(copy, header, { x: header.box.x + dx, y: header.box.y + dy });
+      from.push({ x: header.box.x, y: header.box.y });
       return copy;
     });
     restickCopies(copies, function () {
       return true;
     });
     selectMany(copies);
+    lastDuplicate = { copies: copies, from: from };
   }
 
-  /** ⌘D: duplicates the selection, offset so the copy shows. */
+  /**
+   * How far the copies of the last duplicate were moved from their originals, when they are still
+   * what is selected: the next duplicate goes on by as much, so a row or a grid is one ⌘D per
+   * copy. Null otherwise, and for copies that were not moved at all.
+   */
+  function repeatOffset() {
+    var last = lastDuplicate;
+    var group = inDocumentOrder(allSelected());
+    var same = !!last && group.length === last.copies.length && group.every(function (el, i) {
+      return el === last.copies[i];
+    });
+    if (!same) return null;
+    var box = clipHeader(group[0]).box;
+    var by = { x: box.x - last.from[0].x, y: box.y - last.from[0].y };
+    return by.x || by.y ? by : null;
+  }
+
+  /**
+   * ⌘D: duplicates the selection, offset so the copy shows; a copy made by ⌘D or Alt-drag and
+   * moved since is copied on by as much again (see repeatOffset).
+   */
   function duplicate() {
     if (!selected) return;
-    duplicateSelected(DROP_CASCADE);
+    var by = repeatOffset() || { x: DROP_CASCADE, y: DROP_CASCADE };
+    duplicateSelected(by.x, by.y);
     commit();
   }
 
@@ -496,10 +581,13 @@
   }
 
   /**
-   * The selection's geometry while it is dragged along: where it started (see startMove), moved
-   * as far as the drag moved it, without measuring anything. Null when no move is under way.
+   * The selection's geometry while it is dragged along: where it started (see setMoveGroup), moved
+   * as far as the drag moved it, or the box several elements are resized to together (while they
+   * are turned together, the box they started in), without measuring anything. Null when no such
+   * drag is under way.
    */
   function movedGeometry() {
+    if (drag && drag.multi && drag.members) return geometryOf(drag.shown || drag.box, drag.members.length, null);
     var from = drag && drag.mode === "move" && drag.by ? drag.frame : null;
     if (!from) return null;
     var box = { left: from.box.left + drag.by.x, top: from.box.top + drag.by.y, right: from.box.right + drag.by.x, bottom: from.box.bottom + drag.by.y };
@@ -584,9 +672,12 @@
     saveSoon(null);
   }
 
-  /** The lines to snap to on each axis: the slide's and other elements' edges and centers. */
+  /**
+   * The lines to snap to on each axis (`x`, `y`): the slide's and other elements' edges and
+   * centers, and those elements' boxes (`boxes`), which a move spaces evenly with (see snapGaps).
+   */
   function snapTargets(moving) {
-    var lines = { x: [], y: [] };
+    var lines = { x: [], y: [], boxes: [] };
     var add = function (left, top, right, bottom) {
       [left, (left + right) / 2, right].forEach(function (at) {
         lines.x.push({ at: at, from: top, to: bottom });
@@ -603,10 +694,82 @@
       if (own) return true;
       if (!arrangeable(el)) return false;
       var box = boxOf(el);
-      if (box.right > box.left && box.bottom > box.top) add(box.left, box.top, box.right, box.bottom);
+      if (box.right > box.left && box.bottom > box.top) {
+        add(box.left, box.top, box.right, box.bottom);
+        lines.boxes.push(box);
+      }
       return false;
     });
     return lines;
+  }
+
+  /**
+   * The nudge along an axis (`across` for left to right, else top to bottom) that spaces `box`
+   * evenly with two of `others` level with it: halfway between two neighbours, or as far past
+   * one as that one is from the next. Null when nothing like it is within `tolerance`; else
+   * { by, marks }, the marks being the equal gaps, as { across, from, to, at } (`at` where on
+   * the other axis they are drawn). All in slide pixels, from boxes measured when the move began.
+   */
+  function snapGaps(across, box, others, tolerance) {
+    var start = across ? "left" : "top";
+    var end = across ? "right" : "bottom";
+    var lo = across ? "top" : "left";
+    var hi = across ? "bottom" : "right";
+    var size = box[end] - box[start];
+    var row = others.filter(function (other) {
+      return other[lo] < box[hi] && other[hi] > box[lo];
+    }).sort(function (a, b) {
+      return a[start] - b[start];
+    });
+    var best = null;
+    var offer = function (at, a, b, gaps) {
+      var by = at - box[start];
+      if (Math.abs(by) > tolerance || (best && Math.abs(by) >= Math.abs(best.by))) return;
+      // The marks go where all three are level, or failing that, by the middle of the moving box.
+      var from = Math.max(box[lo], a[lo], b[lo]);
+      var to = Math.min(box[hi], a[hi], b[hi]);
+      var level = from < to ? (from + to) / 2 : (box[lo] + box[hi]) / 2;
+      best = {
+        by: by,
+        marks: gaps(at).map(function (gap) {
+          return { across: across, from: gap[0], to: gap[1], at: level };
+        }),
+      };
+    };
+    row.forEach(function (a, i) {
+      row.slice(i + 1).forEach(function (b) {
+        var gap = b[start] - a[end];
+        // Two neighbours: nothing of the row lies between them.
+        var apart = gap > 0 && !row.some(function (other) {
+          return other !== a && other !== b && other[start] < b[start] && other[end] > a[end];
+        });
+        if (!apart) return;
+        if (gap > size) {
+          offer(a[end] + (gap - size) / 2, a, b, function (at) {
+            return [[a[end], at], [at + size, b[start]]];
+          });
+        }
+        offer(b[end] + gap, a, b, function (at) {
+          return [[a[end], b[start]], [b[end], at]];
+        });
+        offer(a[start] - gap - size, a, b, function (at) {
+          return [[at + size, a[start]], [a[end], b[start]]];
+        });
+      });
+    });
+    return best;
+  }
+
+  /**
+   * What a moved box snaps to along one axis: the nearer of the line `edge` found (see snapAxis)
+   * and the even spacing `gap` found (see snapGaps), with the guide lines and marks of whichever
+   * hold where it ends up.
+   */
+  function nearerSnap(edge, gap) {
+    if (!gap) return { by: edge.by, hits: edge.hits, marks: [] };
+    var both = Math.abs(edge.by - gap.by) < 0.5;
+    if (!edge.hits.length || Math.abs(gap.by) < Math.abs(edge.by)) return { by: gap.by, hits: both ? edge.hits : [], marks: gap.marks };
+    return { by: edge.by, hits: edge.hits, marks: both ? gap.marks : [] };
   }
 
   /** The nudge that brings the nearest of `edges` onto a line within `tolerance`, and the lines it hits. */
@@ -629,27 +792,43 @@
     };
   }
 
-  /** Draws the guide lines a snap hit (`xs` upright, `ys` level), each reaching to `box`; nothing when they are drawn already. */
-  function drawGuides(xs, ys, box) {
+  /**
+   * Draws the guide lines a snap hit (`xs` upright, `ys` level), each reaching to `box`, and the
+   * equal-spacing `marks` (see snapGaps), if any; nothing when they are drawn already.
+   */
+  function drawGuides(xs, ys, box, marks) {
     var at = camera();
+    var thick = onScreen(1);
     var lines = [];
-    var line = function (left, top, w, h) {
-      lines.push("left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px");
+    var line = function (left, top, w, h, gap) {
+      lines.push({ css: "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px", gap: gap || "" });
     };
     xs.forEach(function (hit) {
       var from = Math.min(hit.from, box.top);
-      line(at.left + hit.at * at.k, at.top + from * at.k, 1, (Math.max(hit.to, box.bottom) - from) * at.k);
+      line(at.left + hit.at * at.k, at.top + from * at.k, thick, (Math.max(hit.to, box.bottom) - from) * at.k);
     });
     ys.forEach(function (hit) {
       var from = Math.min(hit.from, box.left);
-      line(at.left + from * at.k, at.top + hit.at * at.k, (Math.max(hit.to, box.right) - from) * at.k, 1);
+      line(at.left + from * at.k, at.top + hit.at * at.k, (Math.max(hit.to, box.right) - from) * at.k, thick);
     });
-    var key = lines.join("|");
+    var tick = onScreen(GAP_MARK);
+    (marks || []).forEach(function (mark) {
+      var from = (mark.across ? at.left : at.top) + mark.from * at.k;
+      var level = (mark.across ? at.top : at.left) + mark.at * at.k - tick / 2;
+      var length = (mark.to - mark.from) * at.k;
+      if (mark.across) line(from, level, length, tick, "x");
+      else line(level, from, tick, length, "y");
+    });
+    var key = lines.map(function (item) {
+      return item.gap + item.css;
+    }).join("|");
     if (key === drawnGuides) return;
     drawnGuides = key;
     var nodes = fitChildren(guides, lines.length, newDiv);
-    lines.forEach(function (css, i) {
-      nodes[i].style.cssText = css;
+    lines.forEach(function (item, i) {
+      nodes[i].style.cssText = item.css;
+      if (item.gap) nodes[i].setAttribute("data-gap", item.gap);
+      else if (nodes[i].hasAttribute("data-gap")) nodes[i].removeAttribute("data-gap");
     });
   }
 
@@ -680,12 +859,19 @@
       clearGuides();
       return { x: dx, y: dy };
     }
-    var tolerance = SNAP_PX / drag.zoom;
-    var sx = snapAxis([box.left + dx, (box.left + box.right) / 2 + dx, box.right + dx], drag.targets.x, tolerance);
-    var sy = snapAxis([box.top + dy, (box.top + box.bottom) / 2 + dy, box.bottom + dy], drag.targets.y, tolerance);
+    var tolerance = onScreen(SNAP_PX) / drag.zoom;
+    var moved = { left: box.left + dx, top: box.top + dy, right: box.right + dx, bottom: box.bottom + dy };
+    var sx = nearerSnap(
+      snapAxis([moved.left, (moved.left + moved.right) / 2, moved.right], drag.targets.x, tolerance),
+      snapGaps(true, moved, drag.targets.boxes, tolerance),
+    );
+    var sy = nearerSnap(
+      snapAxis([moved.top, (moved.top + moved.bottom) / 2, moved.bottom], drag.targets.y, tolerance),
+      snapGaps(false, moved, drag.targets.boxes, tolerance),
+    );
     var x = dx + sx.by;
     var y = dy + sy.by;
-    drawGuides(sx.hits, sy.hits, { left: box.left + x, top: box.top + y, right: box.right + x, bottom: box.bottom + y });
+    drawGuides(sx.hits, sy.hits, { left: box.left + x, top: box.top + y, right: box.right + x, bottom: box.bottom + y }, sx.marks.concat(sy.marks));
     return { x: x, y: y };
   }
 
@@ -704,7 +890,7 @@
     }
     var d = drag.dir;
     var z = drag.zoom;
-    var tolerance = SNAP_PX / z;
+    var tolerance = onScreen(SNAP_PX) / z;
     var edgeX = (d.x > 0 ? box.right : box.left) + dx / z;
     var edgeY = (d.y > 0 ? box.bottom : box.top) + dy / z;
     var none = { by: 0, hits: [] };
@@ -719,12 +905,38 @@
     return { x: dx + sx.by * z, y: dy + sy.by * z };
   }
 
-  /** The first step of a move: the group to move, a copy of it with Alt, and what to snap to. */
+  /** The first step of a move: what to put back if it is called off, and with Alt, a copy to drag in its place. */
   function startMove(event) {
-    if (event.altKey) {
-      duplicateSelected(0);
-      drag.el = selected;
+    keepForCancel(drag, allSelected(), false);
+    drag.copies = null;
+    if (event.altKey) copyForMove(true);
+    else setMoveGroup();
+  }
+
+  /**
+   * Alt went down or up during a move: with it, the selection goes back where it was and a copy
+   * of it is dragged on from there; without it, the copy goes and the selection itself is
+   * dragged again.
+   */
+  function copyForMove(on) {
+    if (on) {
+      restoreKept(drag);
+      drag.originals = allSelected();
+      duplicateSelected(0, 0);
+      drag.copies = allSelected();
+    } else {
+      drag.copies.forEach(function (copy) {
+        if (copy.parentNode) copy.parentNode.removeChild(copy);
+      });
+      drag.copies = null;
+      selectMany(drag.originals);
     }
+    setMoveGroup();
+  }
+
+  /** What a move drags, resolved once for all its pointer moves: the selection, where it is, and what it snaps to. */
+  function setMoveGroup() {
+    drag.el = selected;
     var group = allSelected();
     drag.group = group.map(function (el) {
       return { el: el, from: offsetOf(el) };
@@ -758,11 +970,16 @@
     }).map(function (follower) {
       return follower.el;
     });
+    keepForCancel(drag, drag.followers.map(function (follower) {
+      return follower.el;
+    }), true);
     drag.targets = snapTargets(group.concat(stuck));
   }
 
   function moveDrag(event, dx, dy) {
     if (!drag.group) startMove(event);
+    else if (!!event.altKey !== !!drag.copies) copyForMove(!!event.altKey);
+    drag.last = { x: event.clientX, y: event.clientY, dx: dx, dy: dy, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey };
     // Shift keeps a move straight across or straight up and down, whichever it mostly goes.
     var across = Math.abs(dx) >= Math.abs(dy);
     if (event.shiftKey) {
@@ -781,13 +998,30 @@
     showReadout(event);
   }
 
+  // Alt pressed or let go in the middle of a move takes effect at once, wherever the pointer rests.
+  ["keydown", "keyup"].forEach(function (type) {
+    window.addEventListener(
+      type,
+      function (event) {
+        var last = drag && drag.mode === "move" && drag.moved ? drag.last : null;
+        if (event.key !== "Alt" || !last) return;
+        moveDrag(
+          { clientX: last.x, clientY: last.y, altKey: type === "keydown", shiftKey: last.shiftKey, metaKey: last.metaKey, ctrlKey: last.ctrlKey },
+          last.dx,
+          last.dy,
+        );
+      },
+      true,
+    );
+  });
+
   /**
    * Shows the position and size (or turn) next to the pointer while dragging. It is filled in
    * with the geometry reported next frame (see fillReadout), so a pointer move measures nothing for it.
    */
   function showReadout(event) {
     if (drag.mode === "tilt" || drag.mode === "adjust") return;
-    readoutAt = { x: event.clientX + 14, y: event.clientY + 18 };
+    readoutAt = { x: event.clientX + onScreen(14), y: event.clientY + onScreen(18) };
     scheduleGeometry();
   }
 
@@ -795,10 +1029,67 @@
   function fillReadout(now) {
     if (!readoutAt || !drag || !now) return;
     readout.textContent =
-      drag.mode === "rotate" ? now.rotation + "°"
+      drag.mode === "rotate" ? (drag.multi ? drag.turned || 0 : now.rotation) + "°"
       : drag.mode === "point" ? "X " + drag.at.x + "  Y " + drag.at.y
       : "X " + now.x + "  Y " + now.y + "  W " + now.w + "  H " + now.h;
     readout.style.cssText = "left:" + readoutAt.x + "px;top:" + readoutAt.y + "px";
+  }
+
+  /**
+   * The box a shape or text box being dragged out with a tool takes, in slide pixels, from the
+   * press (`create.at`) to the slide point `at`: Shift makes it as wide as tall, Alt draws it out
+   * from its center, and the corner being dragged snaps to the guides as a resize does (not with
+   * Shift), which shows them, with its place and size by the pointer. What it snaps to is
+   * measured once, on the first move, before the new element is there.
+   */
+  function createBox(event, at) {
+    var from = create.at;
+    var corner = { x: at.x, y: at.y };
+    var hits = { x: [], y: [] };
+    if (snaps(event) && !event.shiftKey) {
+      if (!create.targets) create.targets = snapTargets([]);
+      var tolerance = onScreen(SNAP_PX) / zoom();
+      var sx = snapAxis([corner.x], create.targets.x, tolerance);
+      var sy = snapAxis([corner.y], create.targets.y, tolerance);
+      corner = { x: corner.x + sx.by, y: corner.y + sy.by };
+      hits = { x: sx.hits, y: sy.hits };
+    }
+    var reach = event.altKey ? 2 : 1;
+    var w = Math.round(Math.abs(corner.x - from.x) * reach);
+    var h = Math.round(Math.abs(corner.y - from.y) * reach);
+    if (event.shiftKey) w = h = Math.max(w, h);
+    var x = event.altKey ? Math.round(from.x - w / 2) : corner.x < from.x ? from.x - w : from.x;
+    var y = event.altKey ? Math.round(from.y - h / 2) : corner.y < from.y ? from.y - h : from.y;
+    if (hits.x.length || hits.y.length) drawGuides(hits.x, hits.y, { left: x, top: y, right: x + w, bottom: y + h });
+    else clearGuides();
+    // A text box's height follows its text; only its width is dragged out.
+    showCreateReadout(event, "X " + x + "  Y " + y + "  W " + w + (create.tool === "text" ? "" : "  H " + h));
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  /** Shows a line's length and angle (counterclockwise from pointing right) by the pointer while it is drawn from `from` to `to`. */
+  function lineReadout(event, from, to) {
+    var dx = to.x - from.x;
+    var dy = to.y - from.y;
+    var angle = Math.round((-Math.atan2(dy, dx) * 180) / Math.PI);
+    showCreateReadout(event, "L " + Math.round(Math.hypot(dx, dy)) + "  " + (angle < 0 ? angle + 360 : angle) + "°");
+  }
+
+  // What the readout says while an element is added, until its next frame writes it.
+  var createText = "";
+  var createFrame = 0;
+
+  /** Puts `text` in the readout by the pointer next frame, however many pointer moves come before it. */
+  function showCreateReadout(event, text) {
+    readoutAt = { x: event.clientX + onScreen(14), y: event.clientY + onScreen(18) };
+    createText = text;
+    if (createFrame) return;
+    createFrame = window.requestAnimationFrame(function () {
+      createFrame = 0;
+      if (!create || !readoutAt) return;
+      readout.textContent = createText;
+      readout.style.cssText = "left:" + readoutAt.x + "px;top:" + readoutAt.y + "px";
+    });
   }
 
   /** Handles the app's messages for this section; true when `data` was one. */

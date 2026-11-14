@@ -46,6 +46,7 @@ import {
   presentationOf,
   removeHandle,
   restack,
+  scaleBy,
   serializeSvg,
   setPresentation,
   translateBy,
@@ -56,7 +57,19 @@ import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
 import { Button, keepFocus, ToolButton } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
 import { SectionLabel } from "./SectionLabel";
-import { checkerboard, duplicate, NO_OVERLAY, type Overlay, overlayOf, showDrawing, subtreeSize } from "./svg/drawing";
+import {
+  type Box,
+  checkerboard,
+  duplicate,
+  NO_OVERLAY,
+  type Overlay,
+  overlayOf,
+  parentBox,
+  type ScaleDir,
+  scaling,
+  showDrawing,
+  subtreeSize,
+} from "./svg/drawing";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 64;
@@ -66,6 +79,8 @@ const FIT_MARGIN = 32;
 const DRAG_THRESHOLD = 3;
 /** Changes to the same field this close together are one undo step. */
 const COALESCE_MS = 800;
+/** How much one press of a zoom button or key zooms. */
+const ZOOM_STEP = 1.25;
 /** The checkerboard behind the drawing, as squares and the ground between them. */
 const CHECKERS: Record<Backdrop, { ground: string; check: string }> = {
   light: { ground: "var(--paper)", check: "color-mix(in srgb, var(--paper) 90%, var(--stage))" },
@@ -75,8 +90,10 @@ const CHECKERS: Record<Backdrop, { ground: string; check: string }> = {
 /**
  * The SVG editor, in a sidebar tab: one drawing from a slide (opened with the "Edit SVG" button
  * on the slide in edit mode), edited in memory. Click an element to select it and drag it to
- * move it; drag a shape's points (and its curves' control points) to reshape it, drag the small
- * dots between them to add points and double-click a point to take it out. Its look, any of its
+ * move it, or drag the square handles around it to resize it (Shift keeps its proportions, Alt
+ * resizes it from its middle); drag a shape's points (and its curves' control points) to reshape
+ * it, drag the small dots between them to add points and double-click a point to take it out.
+ * ⌘+ / ⌘- / ⌘0 zoom in, out and back to the whole drawing. Its look, any of its
  * attributes, its place among the layers and the drawing's markup can all be changed. "Apply to
  * slide" (⌘S) saves the drawing into the slide; Discard goes back to the slide's.
  */
@@ -185,6 +202,9 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
     else if (mod && key === "y") store().redo();
     else if (mod && key === "d") duplicateSelected();
     else if (mod && key === "s") void store().accept();
+    else if (mod && (key === "=" || key === "+")) setZoom(clampZoom((zoom ?? 1) * ZOOM_STEP));
+    else if (mod && (key === "-" || key === "_")) setZoom(clampZoom((zoom ?? 1) / ZOOM_STEP));
+    else if (mod && key === "0") setZoom(null);
     else if (!mod && (event.key === "Delete" || event.key === "Backspace")) removeSelected();
     else if (!mod && event.key === "Escape") selectParent();
     else if (!mod && event.key.startsWith("Arrow")) {
@@ -232,20 +252,24 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
           {backdrop === "dark" ? <Moon /> : <Sun />}
         </ToolButton>
         <div className="min-w-2 flex-1" />
-        {dirty && <span className="mr-1 hidden text-xs text-muted-foreground @xs:inline">Not accepted yet</span>}
+        {dirty && <span className="mr-1 hidden text-xs text-muted-foreground @lg:inline">Not accepted yet</span>}
+        {/* In a narrow sidebar, Discard shows its icon only, so "Apply to slide" always fits. */}
         <Button
           size="md"
           disabled={!dirty || edit.saving}
           onClick={store().discard}
-          title="Go back to the drawing on the slide"
+          aria-label="Discard"
+          title="Discard: go back to the drawing on the slide"
+          className="shrink-0 whitespace-nowrap"
         >
           <RotateCcw />
-          Discard
+          <span className="hidden @md:inline">Discard</span>
         </Button>
         <Button
           variant="primary"
           size="md"
           disabled={!dirty || edit.saving || otherDeck || !svg}
+          className="shrink-0 whitespace-nowrap"
           onClick={() => void store().accept()}
           title={
             otherDeck
@@ -257,7 +281,7 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
         >
           <Check />
           {edit.saving ? "Saving…" : "Apply to slide"}
-          {!edit.saving && <span className="font-normal opacity-70">{formatKeys("mod+s")}</span>}
+          {!edit.saving && <span className="hidden font-normal opacity-70 @md:inline">{formatKeys("mod+s")}</span>}
         </Button>
       </div>
       {otherDeck && (
@@ -344,16 +368,17 @@ function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: nu
   const by = (factor: number) => onZoom(clampZoom((zoom ?? 1) * factor));
   return (
     <>
-      <ToolButton variant="panel" label="Zoom out" onClick={() => by(1 / 1.25)}>
+      <ToolButton variant="panel" label="Zoom out" shortcut="mod+-" onClick={() => by(1 / ZOOM_STEP)}>
         <Minus />
       </ToolButton>
-      <span className="w-10 text-center text-xs tabular-nums text-muted-foreground">
+      {/* The level shows where there is room for it; the buttons say what they do anyway. */}
+      <span className="hidden w-10 shrink-0 text-center text-xs tabular-nums text-muted-foreground @sm:inline">
         {zoom === null ? "" : `${Math.round(zoom * 100)}%`}
       </span>
-      <ToolButton variant="panel" label="Zoom in" onClick={() => by(1.25)}>
+      <ToolButton variant="panel" label="Zoom in" shortcut="mod+plus" onClick={() => by(ZOOM_STEP)}>
         <Plus />
       </ToolButton>
-      <ToolButton variant="panel" label="Fit the drawing" onClick={() => onZoom(null)}>
+      <ToolButton variant="panel" label="Fit the drawing" shortcut="mod+0" onClick={() => onZoom(null)}>
         <Maximize />
       </ToolButton>
     </>
@@ -361,6 +386,19 @@ function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: nu
 }
 
 const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+
+/** The cursor of each resize handle, by its way across and down, as (x + 1) * 3 + y + 1. */
+const SCALE_CURSORS = [
+  "nwse-resize",
+  "ew-resize",
+  "nesw-resize",
+  "ns-resize",
+  "default",
+  "ns-resize",
+  "nesw-resize",
+  "ew-resize",
+  "nwse-resize",
+];
 
 interface Drag {
   pointer: number;
@@ -370,9 +408,11 @@ interface Drag {
   index: number;
   /** A point of the shape, or (null) the whole element. */
   handle: string | null;
-  /** Screen to the user units the change is in: the element's own for a point, its parent's for a move. */
+  /** Screen to the user units the change is in: the element's own for a point, its parent's for a move or resize. */
   toLocal: DOMMatrix;
   moved: boolean;
+  /** For a resize: the way the handle pulls and the element's box when it started, in its parent's units. */
+  scale?: { dir: ScaleDir; box: Box };
 }
 
 /**
@@ -480,11 +520,36 @@ function Canvas(props: {
     (event.currentTarget as Element).setPointerCapture?.(event.pointerId);
   };
 
+  /** Starts resizing the selected element with the handle that pulls `dir`, from its box as it shows. */
+  const startScale = (event: ReactPointerEvent, dir: ScaleDir, markup: string) => {
+    const el = selected !== null && shown.current ? elementsOf(shown.current)[selected] : undefined;
+    const frame = el ? parentBox(el as SVGGraphicsElement) : null;
+    if (selected === null || !frame || frame.box.w <= 0 || frame.box.h <= 0) return;
+    drag.current = {
+      pointer: event.pointerId,
+      start: { x: event.clientX, y: event.clientY },
+      markup,
+      index: selected,
+      handle: null,
+      toLocal: frame.toScreen.inverse(),
+      moved: false,
+      scale: { dir, box: frame.box },
+    };
+    (event.currentTarget as Element).setPointerCapture?.(event.pointerId);
+  };
+
   const onPointerDown = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     scrollRef.current?.focus({ preventScroll: true });
-    const handle = (event.target as Element).closest?.("[data-handle]")?.getAttribute("data-handle");
     const draft = useSvgEditor.getState().edit?.draft ?? edit.draft;
+    const pulls = (event.target as Element).closest?.("[data-scale]")?.getAttribute("data-scale");
+    if (pulls && selected !== null) {
+      event.preventDefault();
+      const [x, y] = pulls.split(" ").map(Number) as ScaleDir;
+      startScale(event, [x, y], draft);
+      return;
+    }
+    const handle = (event.target as Element).closest?.("[data-handle]")?.getAttribute("data-handle");
     if (handle && selected !== null) {
       event.preventDefault();
       if (handle.startsWith("add:")) {
@@ -516,6 +581,16 @@ function Canvas(props: {
     let x = event.clientX;
     let y = event.clientY;
     if (!d.moved && Math.hypot(x - d.start.x, y - d.start.y) < DRAG_THRESHOLD) return;
+    if (d.scale) {
+      const first = !d.moved;
+      d.moved = true;
+      const from = new DOMPoint(d.start.x, d.start.y).matrixTransform(d.toLocal);
+      const to = new DOMPoint(x, y).matrixTransform(d.toLocal);
+      const { sx, sy, ox, oy } = scaling(d.scale.dir, d.scale.box, to.x - from.x, to.y - from.y, event);
+      const next = editMarkup(d.markup, d.index, (el) => scaleBy(el, sx, sy, ox, oy));
+      useSvgEditor.getState().change(next, first);
+      return;
+    }
     if (event.shiftKey && !d.handle) {
       // Shift keeps a move straight across or down.
       if (Math.abs(x - d.start.x) > Math.abs(y - d.start.y)) y = d.start.y;
@@ -629,6 +704,26 @@ function Canvas(props: {
             )}
             {overlay.handles.map((hd) => (
               <HandleMark key={hd.id} handle={hd} active={hd.id === point} />
+            ))}
+            {overlay.scales.map(({ dir, at }) => (
+              <rect
+                key={dir.join(" ")}
+                data-scale={dir.join(" ")}
+                x={at[0] - 4}
+                y={at[1] - 4}
+                width={8}
+                height={8}
+                rx={1.5}
+                fill="var(--handle)"
+                stroke="var(--primary)"
+                strokeWidth={1.5}
+                className="pointer-events-auto"
+                style={{ cursor: SCALE_CURSORS[(dir[0] + 1) * 3 + dir[1] + 1] }}
+              >
+                <title>
+                  Drag to resize ({formatKeys("shift")} keeps the proportions, {formatKeys("alt")} from the middle)
+                </title>
+              </rect>
             ))}
           </svg>
         </div>

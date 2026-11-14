@@ -32,6 +32,8 @@ export interface OpenComment {
   shot: string | null;
   /** The moment it is about, in seconds since the slide showed; null for the slide whenever. */
   time: number | null;
+  /** It went to the agent already; saving it with another text makes it one to send again. */
+  sent: boolean;
   text: string;
 }
 
@@ -82,8 +84,9 @@ async function captureArea(
 const NO_COMMENTS: SlideComment[] = [];
 
 /**
- * Comments on the slide on the stage, while `shown`: the comment tools, one picking elements in
- * the preview (whose `messages` say what was picked) and one outlining an area over `slideRef`
+ * Comments on the slide on the stage, while `shown` (in View and in Edit): the comment tools,
+ * one picking elements in the preview (whose `messages` say what was picked, also for a point
+ * the app asked it to pick at, see `slop:comment-at`) and one outlining an area over `slideRef`
  * (the box the slide is shown in, inside the stage area `areaRef`), where the preview found the
  * elements the comments are on, and the open comment.
  */
@@ -141,6 +144,7 @@ export function useSlideComments(
             area: null,
             shot: null,
             time: heldMoment(data.slide),
+            sent: false,
             text: "",
           });
         },
@@ -163,7 +167,7 @@ export function useSlideComments(
     [selected, shown],
   );
 
-  // A comment taken off the slide while it is open (sent to the agent) has nothing left to change.
+  // A comment taken off the slide while it is open (resolved from the list, say) has nothing left to change.
   const openGone = !!open?.id && !comments.some((c) => c.id === open.id);
   useEffect(() => {
     if (!openGone) return;
@@ -183,7 +187,19 @@ export function useSlideComments(
     if (useApp.getState().selected !== slide) return;
     const { left, top } = areaBounds(area);
     const time = heldMoment(slide);
-    setOpen({ key: crypto.randomUUID(), slide, id: null, x: left, y: top, target: null, area, shot, time, text: "" });
+    setOpen({
+      key: crypto.randomUUID(),
+      slide,
+      id: null,
+      x: left,
+      y: top,
+      target: null,
+      area,
+      shot,
+      time,
+      sent: false,
+      text: "",
+    });
   };
 
   const openComment = (comment: SlideComment) => {
@@ -199,6 +215,7 @@ export function useSlideComments(
       area: comment.area ?? null,
       shot: null,
       time: comment.time ?? null,
+      sent: !!comment.sent,
       text: comment.text,
     });
   };

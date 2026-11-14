@@ -4,20 +4,30 @@ import { create } from "zustand";
 import {
   api,
   type Deck,
+  type DeckNarrationSettings,
   errorMessage,
+  type NarrationPace,
   type NarrationProvider,
   type NarrationRenderProgress,
+  type NarrationTiming,
   type NarrationTimingProgress,
   type NarrationVoice,
   type SlideAudio,
   type SpeechStatus,
+  type VoiceDownloadProgress,
 } from "./lib/api";
 import { forgetNarration } from "./lib/narrationCache";
 import { dirname } from "./lib/utils";
+import { loadVideoOptions, type VideoOptions } from "./lib/video";
 import { showError, useApp } from "./store";
 
-/** The backend's error for a render the user cancelled. */
+/** The backend's error for a render (or a timing of words) the user cancelled. */
 export const NARRATION_CANCELLED = "the narration was cancelled";
+/** The backend's error for a download of the speech model the user cancelled. */
+export const VOICE_DOWNLOAD_CANCELLED = "the download was cancelled";
+
+/** Nothing set: one object, so a deck that keeps no settings tells nobody twice. */
+const NO_SETTINGS: DeckNarrationSettings = {};
 
 /**
  * Spoken narration (see src-tauri/src/narration/): the providers and their keys, the open
@@ -32,8 +42,15 @@ interface NarrationState {
   audioDeck: string | null;
   /** While narration is said, how far it has got. */
   render: NarrationRenderProgress | null;
-  /** While narration audio is heard again to time its words, how far it has got; `downloading` while the speech-to-text model downloads first. */
-  timing: (NarrationTimingProgress & { downloading?: boolean }) | null;
+  /**
+   * While narration audio is heard again to time its words, how far it has got; `downloading`
+   * while the speech-to-text model downloads first, with how much of it came (`download`) once
+   * the first of it did.
+   */
+  timing: (NarrationTimingProgress & { downloading?: boolean; download?: VoiceDownloadProgress }) | null;
+  /** What `settingsDeck` keeps of how its narration is said and timed (see `DeckNarrationSettings`). */
+  settings: DeckNarrationSettings;
+  settingsDeck: string | null;
   loadSpeech: () => Promise<void>;
   /** Asks a hosted provider for every voice its account can use; the built-in ones stay on failure. */
   loadVoices: (provider: string) => Promise<void>;
@@ -46,16 +63,25 @@ interface NarrationState {
   cancelRender: () => Promise<void>;
   /**
    * Has the speech-to-text model hear the `slides`' (all for null) up-to-date audio again to
-   * time each word, downloading the model first when needed; false when it failed.
+   * time each word, downloading the model first when needed (whoever calls it has asked the user,
+   * see `WordTiming`); false when it failed or was cancelled.
    */
   timeWords: (deck: string, slides: string[] | null) => Promise<boolean>;
+  /** Stops timing words: the model's download while that runs, else the hearing before its next slide. */
+  cancelTiming: () => Promise<void>;
+  /** Reads what the deck keeps of how its narration is said and timed. */
+  loadSettings: (deck: string) => Promise<void>;
+  /** Sets the times the deck plays with; false when it failed. */
+  setTiming: (deck: string, timing: NarrationTiming) => Promise<boolean>;
+  /** Sets how fast and in what manner the deck's narration is said, which puts its audio out of date; false when it failed. */
+  setDelivery: (deck: string, pace: NarrationPace, style: string) => Promise<boolean>;
   /** Deletes the slide's recording, so the narration service can say its script again. */
   deleteRecording: (deck: string, slide: string) => Promise<void>;
 }
 
 function fail(error: unknown) {
   const message = errorMessage(error);
-  if (message !== NARRATION_CANCELLED) showError(message);
+  if (message !== NARRATION_CANCELLED && message !== VOICE_DOWNLOAD_CANCELLED) showError(message);
 }
 
 /** Whether two slides' audio is the same in all that is known of it. */
@@ -119,6 +145,8 @@ export const useNarration = create<NarrationState>((set, get) => {
     audioDeck: null,
     render: null,
     timing: null,
+    settings: NO_SETTINGS,
+    settingsDeck: null,
 
     loadSpeech: async () => {
       try {
@@ -201,6 +229,52 @@ export const useNarration = create<NarrationState>((set, get) => {
       }
     },
 
+    cancelTiming: async () => {
+      if (get().timing?.downloading) await api.cancelVoiceDownload();
+      else await api.cancelNarrationTiming();
+    },
+
+    loadSettings: async (deck) => {
+      try {
+        const settings = (await api.narrationSettings(deck)) ?? NO_SETTINGS;
+        if (useApp.getState().deck?.id === deck) set({ settings, settingsDeck: deck });
+      } catch {
+        // The deck is gone or its folder unreadable: the app's own times do.
+      }
+    },
+
+    setTiming: async (deck, timing) => {
+      // Shown at once: the timeline lays itself out with it while it is written.
+      const before = get();
+      set({ settings: { ...settingsOf(before, deck), timing }, settingsDeck: deck });
+      try {
+        const settings = (await api.setNarrationTiming(deck, timing)) ?? { ...settingsOf(before, deck), timing };
+        if (get().settingsDeck === deck) set({ settings });
+        return true;
+      } catch (error) {
+        if (get().settingsDeck === deck) set({ settings: settingsOf(before, deck) });
+        fail(error);
+        return false;
+      }
+    },
+
+    setDelivery: async (deck, pace, style) => {
+      try {
+        const settings = (await api.setNarrationDelivery(deck, pace, style)) ?? {
+          ...settingsOf(get(), deck),
+          pace,
+          style,
+        };
+        if (get().settingsDeck === deck) set({ settings });
+        // Audio said another way is out of date now.
+        await get().refreshAudio(deck);
+        return true;
+      } catch (error) {
+        fail(error);
+        return false;
+      }
+    },
+
     deleteRecording: async (deck, slide) => {
       try {
         const audio = await api.deleteRecordedNarration(deck, slide);
@@ -212,6 +286,30 @@ export const useNarration = create<NarrationState>((set, get) => {
     },
   };
 });
+
+/** What is known of the settings `deck` keeps; none while another deck's are. */
+function settingsOf(state: Pick<NarrationState, "settings" | "settingsDeck">, deck: string): DeckNarrationSettings {
+  return state.settingsDeck === deck ? state.settings : NO_SETTINGS;
+}
+
+/** The times last read, and the options made of them: the same object for as long as neither changes. */
+let timed: { timing: NarrationTiming | undefined; stored: VideoOptions; options: VideoOptions } | null = null;
+
+/**
+ * The options the deck `deckId` plays with wherever it plays by itself (the timeline, the show's
+ * Play, a video): the times the deck keeps for itself, over what this computer last exported
+ * with (see `loadVideoOptions`), which is what every deck played with before it could keep its
+ * own, and still is the start for one that has not set any.
+ */
+export function deckVideoOptions(deckId: string | undefined, state = useNarration.getState()): VideoOptions {
+  const stored = loadVideoOptions();
+  const timing = deckId === undefined ? undefined : settingsOf(state, deckId).timing;
+  if (!timing) return stored;
+  if (!timed || timed.timing !== timing || timed.stored !== stored) {
+    timed = { timing, stored, options: { ...stored, ...timing } };
+  }
+  return timed.options;
+}
 
 /** Who says the deck's narration: its provider, or the default (the first) when the deck names none (or one unknown). */
 export function deckProvider(deck: Deck, speech: SpeechStatus): NarrationProvider | undefined {
@@ -256,6 +354,11 @@ export async function initNarrationEvents() {
       }
       if (payload.deck === open()) refresh(payload.deck);
     }),
+    // The speech model coming in before the words are timed: how much of it is there.
+    listen<VoiceDownloadProgress>("voice-download", ({ payload }) => {
+      const { timing } = useNarration.getState();
+      if (timing?.downloading) useNarration.setState({ timing: { ...timing, download: payload } });
+    }),
     // Recorded in the presenter view, maybe in its own window: other audio, however long.
     listen<string>("narration-recorded", ({ payload }) => {
       forgetNarration(payload);
@@ -265,6 +368,7 @@ export async function initNarrationEvents() {
   // A changed deck (a script, the voice or language) changes which audio is up to date.
   let last: Deck | null = null;
   let key: string | null = null;
+  let settingsOfDeck: string | null = null;
   // Audio written outside the app, such as by the agent, changes it too.
   let change = useApp.getState().workspaceChange;
   useApp.subscribe((state) => {
@@ -272,6 +376,13 @@ export async function initNarrationEvents() {
     change = state.workspaceChange;
     if (state.deck !== last) {
       last = state.deck;
+      // Another deck keeps other settings; the one open keeps them while it is edited.
+      const id = state.deck?.id ?? null;
+      if (id !== settingsOfDeck) {
+        settingsOfDeck = id;
+        useNarration.setState({ settings: NO_SETTINGS, settingsDeck: id });
+        if (id) void useNarration.getState().loadSettings(id);
+      }
       const next = state.deck ? audioKey(state.deck) : null;
       if (next === key) return;
       key = next;
@@ -280,6 +391,7 @@ export async function initNarrationEvents() {
       if (touchesNarration(change.paths, state.openedFile.path)) {
         forgetNarration(state.deck.id);
         refresh(state.deck.id);
+        void useNarration.getState().loadSettings(state.deck.id);
       }
     }
   });

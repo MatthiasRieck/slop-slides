@@ -15,6 +15,16 @@ afterEach(() => {
   for (const mock of tauri.tauriMocks) mock.mockClear();
 });
 
+// The app's yes-or-no questions (`confirmAction` in ../store/confirm.ts) are asked in a dialog of
+// its own. A test answers one as it answered the native dialog before it: by what the `ask`
+// stand-in resolves to, called with the message and the dialog's title and labels. While `ask`
+// gives no answer (its default), the question stays open for the test to press a button of
+// components/ConfirmDialog.tsx. No question outlives its test.
+// A store module loaded afresh (`freshModule` in ../store/testing.ts) brings its own questions,
+// which it answers the same way through `answerQuestionsWithAsk`.
+tauri.answerQuestionsWithAsk((await import("../store/confirm")).useConfirmQuestion);
+afterEach(tauri.dropOpenQuestions);
+
 // Files that need no DOM run in the `node` environment (`// @vitest-environment node`); the rest
 // get jsdom and what it lacks.
 if (typeof document !== "undefined") await setUpDom();

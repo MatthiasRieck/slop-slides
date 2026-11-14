@@ -10,19 +10,32 @@ vi.mock("./Ribbon", async (original) => {
   const actual = await original<typeof import("./Ribbon")>();
   return { ...actual, useRibbonFit: vi.fn(actual.useRibbonFit) };
 });
+// The row under the slide renders its deck check, and the notes under the slide their planned time, each time they render.
+vi.mock("./LintStatus", async (original) => {
+  const actual = await original<typeof import("./LintStatus")>();
+  return { ...actual, LintStatus: vi.fn(actual.LintStatus) };
+});
+vi.mock("./SlideTime", async (original) => {
+  const actual = await original<typeof import("./SlideTime")>();
+  return { ...actual, SlideTime: vi.fn(actual.SlideTime) };
+});
 
 import { parseSelection } from "../lib/editTools";
 import { flushReviewSave, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { LintStatus } from "./LintStatus";
 import { useRibbonFit } from "./Ribbon";
+import { SlideTime } from "./SlideTime";
 import { Stage } from "./Stage";
 import { useEditorState } from "./stage/editorState";
 import { useSlideKeyboard } from "./stage/useSlideKeyboard";
 
-/** How often the stage has rendered so far, and its toolbar (Edit's or View's). */
+/** How often the stage has rendered so far, its toolbar (Edit's or View's), the row under the slide and the notes. */
 const renders = () => ({
   stage: vi.mocked(useSlideKeyboard).mock.calls.length,
   toolbar: vi.mocked(useRibbonFit).mock.calls.length,
+  footer: vi.mocked(LintStatus).mock.calls.length,
+  notes: vi.mocked(SlideTime).mock.calls.length,
 });
 
 /** The observers of the laid-out stage, each reporting the size a test hands it. */
@@ -72,6 +85,8 @@ beforeEach(() => {
     editing: false,
     slideMode: "view",
     running: false,
+    lint: [],
+    notesOpen: true,
   });
 });
 
@@ -171,6 +186,9 @@ describe("what renders on the stage", () => {
     const { frame } = editing();
     const ink = () => screen.getByTestId("annotation-view").style;
     const before = renders();
+    // The row under the slide and the notes are there, and are counted.
+    expect(before.footer).toBeGreaterThan(0);
+    expect(before.notes).toBeGreaterThan(0);
     // The pasteboard reports its view with every move of the wheel.
     for (let step = 1; step <= 20; step++) {
       fromFrame(frame, { type: "slop:view", slide: "intro", x: step * 2, y: -step, k: 1 + step / 8 });

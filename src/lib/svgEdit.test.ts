@@ -18,6 +18,7 @@ import {
   removeHandle,
   replaceSvgInSlide,
   restack,
+  scaleBy,
   serializePath,
   setPresentation,
   translateBy,
@@ -205,6 +206,33 @@ describe("translateBy", () => {
   it("leaves the drawing itself alone, which the slide places", () => {
     const svg = parseSvg("<svg></svg>")!;
     translateBy(svg, 5, 5);
+    expect(svg.hasAttribute("transform")).toBe(false);
+  });
+});
+
+describe("scaleBy", () => {
+  it("scales around a point of the parent's units, which stays put, before the element's transform", () => {
+    const el = shape('<rect x="10" y="10" width="20" height="20" transform="rotate(45)"/>');
+    scaleBy(el, 2, 3, 10, 10);
+    expect(el.getAttribute("transform")).toBe("matrix(2 0 0 3 -10 -20) rotate(45)");
+  });
+
+  it("folds into the translate or matrix the transform starts with, and moves on from there", () => {
+    const el = shape('<g transform="translate(5 5) rotate(10)"></g>');
+    scaleBy(el, 2, 2, 0, 0);
+    expect(el.getAttribute("transform")).toBe("matrix(2 0 0 2 10 10) rotate(10)");
+    translateBy(el, 1, -10);
+    expect(el.getAttribute("transform")).toBe("matrix(2 0 0 2 11 0) rotate(10)");
+    // Back to its size, it is a move again; back in place, nothing.
+    scaleBy(el, 0.5, 0.5, 0, 0);
+    expect(el.getAttribute("transform")).toBe("translate(5.5 0) rotate(10)");
+    translateBy(el, -5.5, 0);
+    expect(el.getAttribute("transform")).toBe("rotate(10)");
+  });
+
+  it("leaves the drawing itself alone, which the slide places", () => {
+    const svg = parseSvg("<svg></svg>")!;
+    scaleBy(svg, 2, 2, 0, 0);
     expect(svg.hasAttribute("transform")).toBe(false);
   });
 });

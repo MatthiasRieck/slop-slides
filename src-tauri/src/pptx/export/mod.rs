@@ -8,6 +8,7 @@
 //! SVG using those) comes as a picture. A picture needs its transparency: [`matte`] works it
 //! out from two captures of the element alone, over white and over black.
 
+mod report;
 mod scene;
 mod write;
 
@@ -15,10 +16,14 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use base64::Engine as _;
+use serde::Serialize;
 use tauri::AppHandle;
 
+use super::Change;
 use crate::capture::{self, Image};
 use crate::error::{Error, Result};
+use crate::export_job::Job;
+use crate::export_scope::Scope;
 use crate::export_window::{self, Helper, Page};
 use crate::{deck, html};
 pub(super) use scene::*;
@@ -32,11 +37,27 @@ const PPTX_JS: &str = include_str!("../../../assets/pptx.js");
 const SHOT_SCALE: f64 = 2.0;
 const TASK: &str = "the PowerPoint export";
 
-/// Exports the deck `file` (in the open workspace) to `dest` as a PowerPoint file.
-pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
+/// What [`export`] made.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct Exported {
+    /// What the file does not keep of the deck, for the user to check; empty when it has all.
+    pub changes: Vec<Change>,
+}
+
+/// Exports the slides of `scope` of the deck `file` (in the open workspace) to `dest` as a
+/// PowerPoint file, telling `job` how far it has got; what the file does not keep comes back.
+/// A cancelled export stops before anything is written.
+pub async fn export(
+    app: &AppHandle,
+    file: &Path,
+    dest: &Path,
+    scope: &Scope,
+    job: &Job,
+) -> Result<Exported> {
     let loaded = deck::load(file)?;
-    let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let (window, signals) = export_window::open(
+    let source = deck::read_html(file)?;
+    let canvas = html::slide_size(&source).pixels();
+    let (window, signals, _served) = export_window::open(
         app,
         file,
         canvas,
@@ -49,6 +70,7 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
             purpose: "export",
             out_of_sight: true,
         },
+        Some(scope),
     )?;
 
     let mut helper = Helper {
@@ -56,12 +78,13 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
         signals,
         task: TASK,
     };
-    let read = read_scene(&mut helper).await;
+    let read = read_scene(&mut helper, job).await;
     let _ = window.destroy();
     let (scene, shots) = read?;
 
+    let changes = report::changes(&scene, &loaded, &source);
     let notes = deck_notes(&loaded);
-    let sections = deck_sections(&loaded);
+    let sections = deck_sections(&loaded, scope);
     let meta = Meta {
         title: loaded.title.clone(),
         canvas,
@@ -70,16 +93,18 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     };
     let folder = deck::folder(file).to_path_buf();
     let dest = dest.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = package(&scene, &meta, &shots, |src| {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        package(&scene, &meta, &shots, |src| {
             let path = deck::resolve_in_deck(&folder, src).ok()?;
             std::fs::read(path).ok()
-        })?;
-        std::fs::write(dest, bytes)?;
-        Ok(())
+        })
     })
     .await
-    .map_err(|e| Error::msg(format!("writing the PowerPoint file failed: {e}")))?
+    .map_err(|e| Error::msg(format!("writing the PowerPoint file failed: {e}")))??;
+    // Nothing is written yet: the last moment a cancelled export leaves nothing behind.
+    job.check()?;
+    std::fs::write(dest, bytes)?;
+    Ok(Exported { changes })
 }
 
 /// Each slide's notes; narration stands in for them where there are none, as the words go on
@@ -99,8 +124,8 @@ fn deck_notes(loaded: &deck::Deck) -> HashMap<String, String> {
         .collect()
 }
 
-/// Sections with the first shown slide of each; one with none shown is left out.
-fn deck_sections(loaded: &deck::Deck) -> Vec<(String, String)> {
+/// Sections with the first exported slide of each; one with none exported is left out.
+fn deck_sections(loaded: &deck::Deck, scope: &Scope) -> Vec<(String, String)> {
     loaded
         .sections
         .iter()
@@ -114,14 +139,17 @@ fn deck_sections(loaded: &deck::Deck) -> Vec<(String, String)> {
                 .slides
                 .get(section.before..end)?
                 .iter()
-                .find(|s| !s.hidden)?;
+                .find(|s| scope.holds(&s.id, s.hidden))?;
             Some((section.title.clone(), first.id.clone()))
         })
         .collect()
 }
 
-/// Reads the scene from the page and captures its pictures.
-async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
+/// Reads the scene from the page and captures its pictures, a step of `job` for each slide.
+async fn read_scene(
+    helper: &mut Helper<'_>,
+    job: &Job,
+) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
     let ready = helper.answer("ready").await?;
     let count: usize = ready
         .get("slides")
@@ -134,6 +162,7 @@ async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Ve
     // A step for each slide: a hidden window's timers stop before a long deck is read through.
     let mut chunks: usize = 0;
     for index in 0..count {
+        job.step(index, count)?;
         let scanned = helper
             .run(&format!("window.__slopPptx.scan({index})"), "scanned")
             .await?;
@@ -155,8 +184,10 @@ async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Ve
     let scene: Scene = serde_json::from_slice(&bytes)
         .map_err(|e| Error::msg(format!("unreadable answer from the deck: {e}")))?;
 
+    job.step(count, count)?;
     let mut shots = HashMap::new();
     for (index, shot) in scene.shots.iter().enumerate() {
+        job.check()?;
         let png = if shot.opaque {
             capture_shot(helper, index, None).await?
         } else {

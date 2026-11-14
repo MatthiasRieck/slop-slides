@@ -126,6 +126,8 @@ impl LiveWorker {
         target: NarrationTarget,
     ) {
         let mut visit = None;
+        // The slides this recording has kept audio of: what comes after goes on from it.
+        let mut recorded = std::collections::HashSet::new();
         loop {
             let take = match takes.recv_timeout(LIVE_INTERVAL) {
                 Ok(take) => take,
@@ -144,11 +146,13 @@ impl LiveWorker {
                 continue;
             }
             let goes_on = visit == Some(take.visit);
-            let kept = keep_take(&target, &take, self.rate, goes_on, |audio| {
+            let replaces = target.replace && !recorded.contains(&take.slide);
+            let kept = keep_take(&target, &take, self.rate, goes_on, replaces, |audio| {
                 transcribe(&self.whisper, &self.model, audio)
             });
             match kept {
                 Ok(true) => {
+                    recorded.insert(take.slide.clone());
                     visit = Some(take.visit);
                     let _ = self.app.emit(NARRATION_KEPT_EVENT, &target.deck);
                 }
@@ -197,12 +201,15 @@ impl LiveWorker {
 }
 
 /// Adds `take` (at `rate`) to its slide, the way `target` says; `goes_on` when it continues the
-/// last one kept. Returns whether anything was kept: not silence, and nothing of a locked slide.
+/// last one kept. Audio that `replaces` takes the place of what the slide had, instead of going
+/// on from its end. Returns whether anything was kept: not silence, and nothing of a locked
+/// slide.
 fn keep_take(
     target: &NarrationTarget,
     take: &Take,
     rate: u32,
     goes_on: bool,
+    replaces: bool,
     transcribe: impl FnOnce(&[f32]) -> Result<String>,
 ) -> Result<bool> {
     let audio = sound::resample(&take.samples, rate, WHISPER_RATE);
@@ -216,6 +223,9 @@ fn keep_take(
                 return Ok(false);
             }
             deck::append_slide_narration(&target.file, &take.slide, &text, !goes_on)?;
+        }
+        RecordMode::Audio if replaces => {
+            narration::replace_recording(&target.file, &take.slide, &take.samples, rate)?
         }
         RecordMode::Audio => {
             narration::append_recording(&target.file, &take.slide, &take.samples, rate)?
@@ -307,6 +317,7 @@ mod tests {
             deck: file.to_string_lossy().into_owned(),
             file: file.to_path_buf(),
             mode,
+            replace: false,
         }
     }
 
@@ -329,7 +340,7 @@ mod tests {
         let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Text);
         let say = |text: &'static str, goes_on: bool| {
-            keep_take(&target, &speech("a"), WHISPER_RATE, goes_on, |_| {
+            keep_take(&target, &speech("a"), WHISPER_RATE, goes_on, false, |_| {
                 Ok(text.into())
             })
         };
@@ -348,11 +359,11 @@ mod tests {
         for mode in [RecordMode::Text, RecordMode::Audio] {
             let target = target(&file, mode);
             let never = |_: &[f32]| panic!("nothing to transcribe");
-            let locked = keep_take(&target, &speech("b"), WHISPER_RATE, false, never);
+            let locked = keep_take(&target, &speech("b"), WHISPER_RATE, false, false, never);
             assert!(!locked.unwrap());
             let mut quiet = speech("a");
             quiet.samples.fill(0.0001);
-            assert!(!keep_take(&target, &quiet, WHISPER_RATE, false, never).unwrap());
+            assert!(!keep_take(&target, &quiet, WHISPER_RATE, false, false, never).unwrap());
         }
         assert_eq!(narration_of(&file, "a"), "So,");
         assert!(!narration::audio_dir(&file).exists());
@@ -363,7 +374,7 @@ mod tests {
         let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Audio);
         let never = |_: &[f32]| panic!("audio needs no transcript");
-        assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, never).unwrap());
+        assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, false, never).unwrap());
         let audio = narration::statuses(&file, &deck::load(&file).unwrap());
         assert!(audio[0].recorded);
         assert_eq!(audio[0].seconds, Some(1.0));
@@ -371,10 +382,35 @@ mod tests {
     }
 
     #[test]
+    fn a_take_recorded_again_replaces_the_slides_recording_and_goes_on_from_there() {
+        let (_dir, file) = narrated_deck();
+        let target = target(&file, RecordMode::Audio);
+        let never = |_: &[f32]| panic!("audio needs no transcript");
+        let seconds = || narration::statuses(&file, &deck::load(&file).unwrap())[0].seconds;
+        // Two takes, one after the other: the slide's recording grows.
+        for _ in 0..2 {
+            assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, false, never).unwrap());
+        }
+        assert_eq!(seconds(), Some(2.0));
+        // Recorded again, the first of it takes the place of both; what follows adds to it.
+        assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, true, never).unwrap());
+        assert_eq!(seconds(), Some(1.0));
+        assert!(keep_take(&target, &speech("a"), WHISPER_RATE, true, false, never).unwrap());
+        assert_eq!(seconds(), Some(2.0));
+        // Silence replaces nothing: the take before it stays.
+        let quiet = Take {
+            samples: vec![0.0; WHISPER_RATE as usize],
+            ..speech("a")
+        };
+        assert!(!keep_take(&target, &quiet, WHISPER_RATE, false, true, never).unwrap());
+        assert_eq!(seconds(), Some(2.0));
+    }
+
+    #[test]
     fn transcribing_a_take_that_fails_says_so() {
         let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Text);
-        let result = keep_take(&target, &speech("a"), WHISPER_RATE, false, |_| {
+        let result = keep_take(&target, &speech("a"), WHISPER_RATE, false, false, |_| {
             Err(Error::msg("no model"))
         });
         assert_eq!(result.unwrap_err().to_string(), "no model");

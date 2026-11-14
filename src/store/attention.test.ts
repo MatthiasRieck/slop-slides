@@ -74,6 +74,5 @@ describe("chatVisible", () => {
     expect(chatVisible({ sidebarOpen: true, sidebarTab: "chat" })).toBe(true);
     expect(chatVisible({ sidebarOpen: true, sidebarTab: "files" })).toBe(false);
     expect(chatVisible({ sidebarOpen: false, sidebarTab: "chat" })).toBe(false);
-    expect(chatVisible({ sidebarOpen: true, sidebarTab: null })).toBe(false);
   });
 });

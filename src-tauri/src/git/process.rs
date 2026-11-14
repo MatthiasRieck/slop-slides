@@ -84,12 +84,14 @@ pub fn head_oid(dir: &Path) -> Option<String> {
 
 /// The last commit of the repository around `dir`.
 pub(super) fn head_commit(dir: &Path) -> Option<Commit> {
-    let out = git(dir, &["log", "-1", "--format=%h%x00%s"])?;
+    let out = git(dir, &["log", "-1", "--format=%h%x00%ct%x00%s"])?;
     let out = String::from_utf8_lossy(&out);
-    let (hash, subject) = out.trim_end().split_once('\0')?;
+    let mut parts = out.trim_end().splitn(3, '\0');
+    let (hash, time, subject) = (parts.next()?, parts.next()?, parts.next()?);
     Some(Commit {
         hash: hash.into(),
         subject: subject.into(),
+        time: time.parse().ok()?,
     })
 }
 

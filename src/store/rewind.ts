@@ -1,7 +1,7 @@
 import { api, type HistoryEntry } from "../lib/api";
 import { loadText, saveText } from "../lib/storage";
 import { showErrorIn } from "./errors";
-import { persistChat } from "./messages";
+import { persistChat, sendOptionsOf } from "./messages";
 import { quoteLabel, rewindNote } from "./prompts";
 import type { AppStore, Slice } from "./types";
 
@@ -96,7 +96,15 @@ async function applyRewind(app: AppStore, entry: HistoryEntry, choice: RewindCho
     revertNotes: s.revertNotes.filter((n) => kept.has(n.message)),
     chatRevision: s.chatRevision + 1,
   }));
-  app.getState().fillComposer(message.text);
+  // The message goes back as it was sent: with its slide, its files and what else went along.
+  const sent = sendOptionsOf(message);
+  app.getState().fillComposer(message.text, {
+    attachments: sent.attachments,
+    slides: sent.slides,
+    includeSlide: sent.includeSlide,
+    screenshot: sent.screenshot,
+    element: sent.element,
+  });
   persistChat(app);
   try {
     await api.rewindChat(chatKey, message.id, rewindNote(label));

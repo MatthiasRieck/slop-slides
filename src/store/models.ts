@@ -38,6 +38,8 @@ export interface ModelsSlice {
   favoriteModels: string[];
   /** Installed agent CLIs and their models; `undefined` while loading. */
   providers: ProviderInfo[] | undefined;
+  /** Goes up each time the model picker is asked to open (an error that says to choose another model). */
+  modelPickerAsk: number;
 
   /** Sets the selected provider's mode, also for the turn running in the workspace. */
   setPermissionMode: (mode: PermissionMode) => void;
@@ -50,6 +52,8 @@ export interface ModelsSlice {
    */
   refreshProviders: (options?: { quiet?: boolean }) => Promise<void>;
   toggleFavoriteModel: (key: string) => void;
+  /** Opens the model picker in the chat's composer. */
+  openModelPicker: () => void;
 }
 
 const SELECTION_KEY = "slopslide.selection";
@@ -169,6 +173,9 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
   permissionModes: loadPermissions(),
   favoriteModels: loadFavorites(),
   providers: undefined,
+  modelPickerAsk: 0,
+
+  openModelPicker: () => set((s) => ({ modelPickerAsk: s.modelPickerAsk + 1 })),
 
   setPermissionMode: (mode) => {
     if (!isPermissionMode(mode)) return;

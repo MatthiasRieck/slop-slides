@@ -2,7 +2,24 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceEntry } from "./api";
-import { absolutePath, ancestorsOf, foldersToReload, parentOf, toggleFolder, treeMove, visibleRows } from "./fileTree";
+import {
+  absolutePath,
+  ancestorsOf,
+  deckFileOf,
+  fileToOpen,
+  foldersToReload,
+  foldersToReveal,
+  isDeckFolder,
+  isWithin,
+  nameSelection,
+  parentOf,
+  renamedPath,
+  rowOfFile,
+  toggleFolder,
+  trashNameFor,
+  treeMove,
+  visibleRows,
+} from "./fileTree";
 
 const dir = (path: string): WorkspaceEntry => ({ name: path.split("/").pop()!, path, kind: "directory" });
 const file = (path: string, kind: WorkspaceEntry["kind"] = "file"): WorkspaceEntry => ({
@@ -122,5 +139,77 @@ describe("absolutePath", () => {
     expect(absolutePath("/ws/", "notes.md")).toBe("/ws/notes.md");
     expect(absolutePath("C:\\Users\\me\\decks", "talks/q3.html")).toBe("C:\\Users\\me\\decks\\talks\\q3.html");
     expect(absolutePath("/ws", "")).toBe("/ws");
+  });
+});
+
+describe("a deck's folder", () => {
+  const deckFolder: WorkspaceEntry = { ...dir("untitled-deck-7"), deckTitle: "Q3 board update" };
+  const folders = new Map([
+    ["", [dir("assets"), deckFolder, file("notes.md")]],
+    ["untitled-deck-7", [dir("untitled-deck-7/assets"), file("untitled-deck-7/deck.html", "deck")]],
+  ]);
+
+  it("is told from a plain folder by its deck's title, and opens its deck", () => {
+    expect(isDeckFolder(deckFolder)).toBe(true);
+    expect(isDeckFolder(dir("assets"))).toBe(false);
+    expect(isDeckFolder({ ...file("deck.html", "deck"), deckTitle: "x" })).toBe(false);
+    expect(deckFileOf(deckFolder)).toBe("untitled-deck-7/deck.html");
+    expect(fileToOpen(deckFolder)).toBe("untitled-deck-7/deck.html");
+    expect(fileToOpen(dir("assets"))).toBeNull();
+    expect(fileToOpen(file("notes.md"))).toBe("notes.md");
+  });
+
+  it("is one row: expanded, it shows what it holds besides the deck file", () => {
+    expect(visibleRows(folders, new Set()).map((r) => r.entry.path)).toEqual(["assets", "untitled-deck-7", "notes.md"]);
+    expect(visibleRows(folders, new Set(["untitled-deck-7"])).map((r) => r.entry.path)).toEqual([
+      "assets",
+      "untitled-deck-7",
+      "untitled-deck-7/assets",
+      "notes.md",
+    ]);
+  });
+
+  it("stands for its deck: the open deck's row is the folder's, which stays closed", () => {
+    const rows = visibleRows(folders, new Set());
+    expect(rowOfFile(rows, "untitled-deck-7/deck.html")).toBe("untitled-deck-7");
+    expect(rowOfFile(rows, "notes.md")).toBe("notes.md");
+    expect(rowOfFile(rows, "gone.md")).toBeNull();
+    expect(rowOfFile(rows, null)).toBeNull();
+    expect(foldersToReveal("untitled-deck-7/deck.html", folders)).toEqual([]);
+    // Another file of the deck's folder shows inside it.
+    expect(foldersToReveal("untitled-deck-7/assets/a.png", folders)).toEqual([
+      "untitled-deck-7",
+      "untitled-deck-7/assets",
+    ]);
+    // A plain folder opens; one not listed yet is not known to be either.
+    const nested = new Map([...folders, ["talks", [dir("talks/q3")]]]);
+    expect(foldersToReveal("talks/q3/deck.html", nested)).toEqual(["talks", "talks/q3"]);
+    expect(foldersToReveal("talks/q3/deck.html", folders)).toBeNull();
+    expect(foldersToReveal("assets/deck.html", folders)).toEqual(["assets"]);
+    expect(foldersToReveal("deck.html", folders)).toEqual([]);
+  });
+});
+
+describe("renaming", () => {
+  it("moves what is at or inside the renamed path, and nothing else", () => {
+    expect(isWithin("talks/q3/deck.html", "talks")).toBe(true);
+    expect(isWithin("talks", "talks")).toBe(true);
+    expect(isWithin("talks-old/a.md", "talks")).toBe(false);
+    expect(renamedPath("talks/q3/deck.html", "talks", "Talks 2026")).toBe("Talks 2026/q3/deck.html");
+    expect(renamedPath("talks", "talks", "x")).toBe("x");
+    expect(renamedPath("talks-old/a.md", "talks", "x")).toBe("talks-old/a.md");
+  });
+
+  it("selects a file's name without its extension, and all of a folder's", () => {
+    expect(nameSelection("notes.final.md", false)).toEqual([0, 11]);
+    expect(nameSelection("README", false)).toEqual([0, 6]);
+    expect(nameSelection(".env", false)).toEqual([0, 4]);
+    expect(nameSelection("v1.2", true)).toEqual([0, 4]);
+  });
+
+  it("names the trash as the system does", () => {
+    expect(trashNameFor("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("Recycle Bin");
+    expect(trashNameFor("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe("Trash");
+    expect(trashNameFor("Mozilla/5.0 (X11; Linux x86_64)")).toBe("Trash");
   });
 });

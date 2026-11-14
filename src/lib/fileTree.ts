@@ -19,20 +19,98 @@ export function ancestorsOf(path: string): string[] {
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
-/** The rows to show: the root's entries, and those of every expanded folder under its parent. */
+/** The file that makes a folder a deck's folder. */
+const DECK_FILE = "deck.html";
+
+/** Whether `entry` is a deck's folder, which the tree shows as the deck: one row, named by the deck's title. */
+export function isDeckFolder(entry: WorkspaceEntry): entry is WorkspaceEntry & { deckTitle: string } {
+  return entry.kind === "directory" && entry.deckTitle !== undefined;
+}
+
+/** The deck file of the deck folder `entry`, which a click on its row opens. */
+export function deckFileOf(entry: WorkspaceEntry): string {
+  return `${entry.path}/${DECK_FILE}`;
+}
+
+/** What a click on the row of `entry` opens: its deck for a deck's folder, itself for a file, nothing for a plain folder. */
+export function fileToOpen(entry: WorkspaceEntry): string | null {
+  if (isDeckFolder(entry)) return deckFileOf(entry);
+  return entry.kind === "directory" ? null : entry.path;
+}
+
+/**
+ * The rows to show: the root's entries, and those of every expanded folder under its parent. A
+ * deck's folder is the deck's row, so the deck file inside it is not listed again: expanded, the
+ * folder shows what else it holds (the deck's images, its narration).
+ */
 export function visibleRows(
   folders: ReadonlyMap<string, readonly WorkspaceEntry[]>,
   expanded: ReadonlySet<string>,
 ): TreeRow[] {
   const rows: TreeRow[] = [];
-  const visit = (folder: string, depth: number) => {
+  const visit = (folder: string, depth: number, deckFile: string | null) => {
     for (const entry of folders.get(folder) ?? []) {
+      if (entry.path === deckFile) continue;
       rows.push({ entry, depth });
-      if (entry.kind === "directory" && expanded.has(entry.path)) visit(entry.path, depth + 1);
+      if (entry.kind === "directory" && expanded.has(entry.path)) {
+        visit(entry.path, depth + 1, isDeckFolder(entry) ? deckFileOf(entry) : null);
+      }
     }
   };
-  visit("", 0);
+  visit("", 0, null);
   return rows;
+}
+
+/**
+ * The folders to open so that the row of the open file `path` shows, as far as `folders` (the
+ * listings loaded so far) tell; null while the folder holding it is not listed yet, so it is not
+ * known whether that folder is a deck's. A deck in a folder of its own shows as that folder's
+ * row, so the folder itself stays closed.
+ */
+export function foldersToReveal(
+  path: string,
+  folders: ReadonlyMap<string, readonly WorkspaceEntry[]>,
+): string[] | null {
+  const above = ancestorsOf(path);
+  const holder = above.at(-1);
+  if (holder === undefined) return [];
+  const entry = folders.get(parentOf(holder))?.find((e) => e.path === holder);
+  if (!entry) return folders.has(parentOf(holder)) ? above : null;
+  return isDeckFolder(entry) && deckFileOf(entry) === path ? above.slice(0, -1) : above;
+}
+
+/**
+ * The row that stands for the open file among `rows`: its own, or the row of the deck's folder
+ * it is the deck of. Null when neither shows.
+ */
+export function rowOfFile(rows: readonly TreeRow[], file: string | null): string | null {
+  if (file === null) return null;
+  const row = rows.find(({ entry }) => entry.path === file || (isDeckFolder(entry) && deckFileOf(entry) === file));
+  return row?.entry.path ?? null;
+}
+
+/** Whether `path` is `folder` or lies inside it. */
+export function isWithin(path: string, folder: string): boolean {
+  return path === folder || path.startsWith(`${folder}/`);
+}
+
+/** `path` after `from` was renamed to `to`: what was at or inside `from` is at or inside `to`. */
+export function renamedPath(path: string, from: string, to: string): string {
+  return isWithin(path, from) ? to + path.slice(from.length) : path;
+}
+
+/**
+ * The part of a name to select when renaming starts, as `[start, end]`: all of a folder's, and
+ * a file's up to its extension, which usually stays.
+ */
+export function nameSelection(name: string, folder: boolean): [number, number] {
+  const dot = name.lastIndexOf(".");
+  return [0, folder || dot <= 0 ? name.length : dot];
+}
+
+/** What the system calls where deleted files go: the Recycle Bin on Windows, the Trash elsewhere. */
+export function trashNameFor(userAgent: string): string {
+  return userAgent.includes("Windows") ? "Recycle Bin" : "Trash";
 }
 
 /**

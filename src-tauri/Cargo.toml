@@ -32,6 +32,8 @@ log = "0.4"
 base64 = "0.23.1"
 cssparser = "0.37"
 png = "0.18"
+# JPEG slide images from the Export menu (see src/slide_images.rs); the version xcap already uses.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 # Voice input in the chat composer (see src/voice.rs): microphone capture, the speech-to-text
 # model's download, and whisper.cpp to run it.
@@ -54,6 +56,8 @@ symphonia = { version = "0.5.5", default-features = false, features = ["aac", "a
 # PowerPoint files (see src/pptx/): zip archives of XML parts.
 zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41.0"
+# Moving a deck to the system's trash (see src/workspace.rs), where the user can get it back from.
+trash = "5"
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.

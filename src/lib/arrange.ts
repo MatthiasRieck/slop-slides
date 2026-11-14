@@ -3,7 +3,7 @@
  * slide editor (src-tauri/assets/editor/) moves the elements in the slide's preview.
  */
 
-import type { EditStyle } from "./editTools";
+import type { EditStyle, EditTool } from "./editTools";
 
 export type AlignTo = "left" | "center" | "right" | "top" | "middle" | "bottom";
 export type DistributeAxis = "h" | "v";
@@ -42,6 +42,9 @@ export interface EditLayer {
   selected: boolean;
   /** How many groups in it is. */
   depth: number;
+  /** The editor can move it past the layer above it, or the one below. */
+  canUp: boolean;
+  canDown: boolean;
 }
 
 /** The layer list from the slide editor; malformed rows are dropped. */
@@ -49,7 +52,7 @@ export function parseLayers(value: unknown): EditLayer[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((row) => {
     if (!row || typeof row !== "object") return [];
-    const { path, name, group, locked, held, selected, depth } = row as Record<string, unknown>;
+    const { path, name, group, locked, held, selected, depth, canUp, canDown } = row as Record<string, unknown>;
     const steps = Array.isArray(path) && path.every((n) => Number.isInteger(n) && (n as number) >= 0);
     if (!steps || typeof name !== "string") return [];
     return [
@@ -61,6 +64,8 @@ export function parseLayers(value: unknown): EditLayer[] {
         held: held === true,
         selected: selected === true,
         depth: typeof depth === "number" && Number.isInteger(depth) && depth >= 0 ? depth : 0,
+        canUp: canUp === true,
+        canDown: canDown === true,
       },
     ];
   });
@@ -75,6 +80,14 @@ export type ArrangeMessage =
   | { type: "slop:edit-flip"; axis: "x" | "y" }
   | { type: "slop:edit-duplicate" }
   | { type: "slop:edit-clear-formatting" }
+  /** Takes the selection's text a size up or down, each text from its own size. */
+  | { type: "slop:edit-font-step"; step: 1 | -1 }
+  /** Moves list items a level in or out, and other text in from its box's edge or back. */
+  | { type: "slop:edit-indent"; step: 1 | -1 }
+  /** Turns every selected element a quarter turn, clockwise (1) or counterclockwise (-1). */
+  | { type: "slop:edit-rotate"; step: 1 | -1 }
+  /** Keeps the tool in hand after it added something, until Select is picked. */
+  | { type: "slop:edit-tool-keep"; tool: EditTool; on: boolean }
   /** Dragging and resizing snap to the guides, or not. */
   | { type: "slop:edit-snap"; on: boolean }
   | { type: "slop:edit-align"; to: AlignTo; target: AlignTarget }
@@ -91,12 +104,6 @@ export type ArrangeMessage =
   | { type: "slop:edit-select"; path: number[] }
   /** Moves a layer past the next one up or down, whether or not they overlap. */
   | { type: "slop:edit-order"; to: "forward" | "backward"; path: number[]; any: true };
-
-/** The rotation a quarter turn clockwise (`step` 1) or counterclockwise (-1) from `rotation` gives, within ±180°. */
-export function quarterTurn(rotation: number, step: 1 | -1): number {
-  const turned = (((Math.round(rotation) + step * 90) % 360) + 360) % 360;
-  return turned > 180 ? turned - 360 : turned;
-}
 
 /**
  * The value an arrow key takes a typed number to: one up or down, ten with Shift, from the

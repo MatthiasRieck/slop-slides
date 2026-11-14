@@ -1,4 +1,4 @@
-import { CircleDot, Eraser, Highlighter, MousePointer2, PenLine, Redo2, Trash2, Undo2 } from "lucide-react";
+import { CircleDot, Eraser, Highlighter, PenLine, Redo2, Trash2, Undo2 } from "lucide-react";
 import {
   memo,
   type PointerEvent as ReactPointerEvent,
@@ -540,35 +540,31 @@ export const AnnotationLayer = memo(function AnnotationLayer({
 });
 
 /**
- * The presenter's ink tools, as the buttons of a toolbar: the tools, the colors of the pen and
- * the highlighter while one is picked, then undo, redo and clear. They leave keyboard focus where
- * it was, so Space still advances the slide instead of pressing the button again.
+ * The presenter's ink tools, as the buttons of a toolbar: the tools, each pressed again (or
+ * Escape) to put it away, the colors of the pen and the highlighter while one is picked, then
+ * undo, redo and clear while there is ink to take back or a tool that makes or takes ink is
+ * picked. They leave keyboard focus where it was, so Space still advances the slide instead of
+ * pressing the button again.
  */
 export function InkTools({ annotations }: { annotations: Annotations }) {
   const { tool, setTool, colors, setColor, strokes, undo, redo, canUndo, canRedo, clear } = annotations;
   const inking = tool === "pen" || tool === "highlighter";
+  const editing = inking || tool === "eraser" || strokes.length > 0 || canUndo || canRedo;
+  /** Picks `next`, or puts it away when it is picked. */
+  const toggle = (next: Tool) => setTool(tool === next ? "pointer" : next);
 
   return (
     <>
       <ToolButton
         variant="presenter"
         keepFocus
-        label="Pointer (Esc)"
-        active={tool === "pointer"}
-        onClick={() => setTool("pointer")}
-      >
-        <MousePointer2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
         label="Laser pointer (L)"
         active={tool === "laser"}
-        onClick={() => setTool("laser")}
+        onClick={() => toggle("laser")}
       >
         <CircleDot />
       </ToolButton>
-      <ToolButton variant="presenter" keepFocus label="Pen (P)" active={tool === "pen"} onClick={() => setTool("pen")}>
+      <ToolButton variant="presenter" keepFocus label="Pen (P)" active={tool === "pen"} onClick={() => toggle("pen")}>
         <PenLine />
       </ToolButton>
       <ToolButton
@@ -576,7 +572,7 @@ export function InkTools({ annotations }: { annotations: Annotations }) {
         keepFocus
         label="Highlighter (H)"
         active={tool === "highlighter"}
-        onClick={() => setTool("highlighter")}
+        onClick={() => toggle("highlighter")}
       >
         <Highlighter />
       </ToolButton>
@@ -585,7 +581,7 @@ export function InkTools({ annotations }: { annotations: Annotations }) {
         keepFocus
         label="Eraser (E)"
         active={tool === "eraser"}
-        onClick={() => setTool("eraser")}
+        onClick={() => toggle("eraser")}
       >
         <Eraser />
       </ToolButton>
@@ -609,39 +605,43 @@ export function InkTools({ annotations }: { annotations: Annotations }) {
           ))}
         </div>
       )}
-      <div className="mx-1 h-5 w-px bg-foreground/15" />
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Undo"
-        shortcut="mod+z"
-        disabled={!canUndo}
-        disabledReason="Nothing to undo on this slide"
-        onClick={undo}
-      >
-        <Undo2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Redo"
-        shortcut="mod+shift+z"
-        disabled={!canRedo}
-        disabledReason="Nothing to redo on this slide"
-        onClick={redo}
-      >
-        <Redo2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Clear slide (C)"
-        disabled={strokes.length === 0}
-        disabledReason="No ink on this slide"
-        onClick={clear}
-      >
-        <Trash2 />
-      </ToolButton>
+      {editing && (
+        <>
+          <div className="mx-1 h-5 w-px bg-foreground/15" />
+          <ToolButton
+            variant="presenter"
+            keepFocus
+            label="Undo"
+            shortcut="mod+z"
+            disabled={!canUndo}
+            disabledReason="Nothing to undo on this slide"
+            onClick={undo}
+          >
+            <Undo2 />
+          </ToolButton>
+          <ToolButton
+            variant="presenter"
+            keepFocus
+            label="Redo"
+            shortcut="mod+shift+z"
+            disabled={!canRedo}
+            disabledReason="Nothing to redo on this slide"
+            onClick={redo}
+          >
+            <Redo2 />
+          </ToolButton>
+          <ToolButton
+            variant="presenter"
+            keepFocus
+            label="Clear slide (C)"
+            disabled={strokes.length === 0}
+            disabledReason="No ink on this slide"
+            onClick={clear}
+          >
+            <Trash2 />
+          </ToolButton>
+        </>
+      )}
     </>
   );
 }

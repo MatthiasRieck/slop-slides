@@ -28,27 +28,20 @@ function input(value: string) {
 }
 
 describe("fitInput", () => {
-  it("takes the height the user chose, without measuring", () => {
-    const { el, seen } = input("Some text");
-    fitInput(el, "Some text", 180);
-    expect(el.style.height).toBe("180px");
-    expect(seen.measured).toBe(0);
-  });
-
   it("keeps an empty input at its smallest, without measuring", () => {
     const { el, seen } = input("");
-    fitInput(el, "", null);
+    fitInput(el, "");
     expect(el.style.height).toBe("64px");
     expect(seen.measured).toBe(0);
   });
 
   it("grows with the text, to a point", () => {
     const { el, seen } = input("123456789012");
-    fitInput(el, el.value, null);
+    fitInput(el, el.value);
     expect(el.style.height).toBe("120px");
     expect(seen.measured).toBe(1);
     const long = input("x".repeat(40));
-    fitInput(long.el, long.el.value, null);
+    fitInput(long.el, long.el.value);
     expect(long.el.style.height).toBe("240px");
   });
 });

@@ -1,4 +1,4 @@
-import { FileText, Globe, Pencil, Search, SquareTerminal, Wrench } from "lucide-react";
+import { Eye, FileText, Globe, Pencil, Search, SquareTerminal, Wrench } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 import { slideNumbers } from "../../lib/slideNumbers";
@@ -7,8 +7,11 @@ import {
   editedIds,
   editedSlide,
   groupParts,
+  partKey,
+  stepFacts,
   stepsLabel,
   type ToolPart,
+  textEdits,
   toolArguments,
   toolName,
 } from "./toolCalls";
@@ -41,7 +44,7 @@ describe("describeTool", () => {
     ["mcp__slopslide__lint_deck", { path: "talk/deck.html" }, Wrench, "Checked the deck's HTML", "talk/deck.html"],
     ["lint_deck", {}, Wrench, "Checked the deck's HTML", ""],
     ["mcp__slopslide__open_file", { path: "talk/notes.md" }, Wrench, "Opened", "talk/notes.md"],
-    ["mcp__slopslide__render_slide", { path: "talk/deck.html" }, Wrench, "Looked at the slides", "talk/deck.html"],
+    ["mcp__slopslide__render_slide", { path: "talk/deck.html" }, Eye, "Looked at the slides", "talk/deck.html"],
     ["mcp__slopslide__set_narration_audio", { slide: "intro" }, Wrench, "Set the narration audio of", "intro"],
     ["mcp__slopslide__narration_timeline", {}, Wrench, "Read the narration timeline", ""],
     ["mcp__slopslide__narration_beats", { slide: "intro" }, Wrench, "Set the narration beats of", "intro"],
@@ -49,7 +52,20 @@ describe("describeTool", () => {
     ["mcp__slopslide__export_deck", { format: "pdf" }, Wrench, "Exported the deck as", "pdf"],
     ["Write", { file_path: 42 }, FileText, "Wrote", ""],
   ])("describes %s calls", (name, input, icon, label, target) => {
-    expect(describeTool(tool(name, input), DECK)).toEqual({ icon, label, target });
+    expect(describeTool(tool(name, input), DECK)).toMatchObject({ icon, label, target });
+  });
+
+  it.each([
+    ["Edit", { file_path: "/decks/talk/deck.html" }, "Editing deck.html…", "edit"],
+    ["Write", {}, "Writing a file…", "edit"],
+    ["Read", { file_path: "/decks/talk/assets/notes.md" }, "Reading notes.md…", "read"],
+    ["Grep", { pattern: "x" }, "Searching the files…", "search"],
+    ["WebFetch", { url: "https://a.b" }, "Reading a web page…", "web"],
+    ["Bash", { command: "ls" }, "Running a command…", "command"],
+    ["mcp__slopslide__render_slide", {}, "Looking at the slides…", "look"],
+    ["mcp__x__fetch_page", {}, "Fetch page…", "other"],
+  ])("says what a running %s call is doing", (name, input, doing, kind) => {
+    expect(describeTool(tool(name, input), DECK)).toMatchObject({ doing, kind });
   });
 });
 
@@ -118,7 +134,7 @@ describe("toolName", () => {
 describe("groupParts", () => {
   const text = (value: string) => ({ kind: "text" as const, text: value });
   const kinds = (parts: Parameters<typeof groupParts>[0]) =>
-    groupParts(parts).map((group) => (group.kind === "steps" ? group.tools.map((t) => t.id) : group.part.kind));
+    groupParts(parts).map((group) => (group.kind === "steps" ? group.steps.map((t) => partKey(t)) : group.part.kind));
 
   it("puts tool calls in a row into one group of steps", () => {
     const parts = [
@@ -133,8 +149,10 @@ describe("groupParts", () => {
     expect(kinds(parts)).toEqual(["text", ["a", "b", "c"], "text", ["d", "e"]]);
   });
 
-  const keys = (parts: Parameters<typeof groupParts>[0], fold?: boolean) =>
-    groupParts(parts, fold).map((group) => (group.kind === "part" ? group.key : group.tools.map((t) => t.id)));
+  const keys = (parts: Parameters<typeof groupParts>[0], streaming?: boolean) =>
+    groupParts(parts, streaming).map((group) =>
+      group.kind === "part" ? group.key : group.steps.map((t) => partKey(t)),
+    );
 
   it("leaves a tool call on its own as it is, each part with a key of its own", () => {
     const groups = groupParts([text("First"), tool("a", {}), text("Then")]);
@@ -142,15 +160,31 @@ describe("groupParts", () => {
     expect(keys([text("First"), tool("a", {}), text("Then")])).toEqual(["text-0", "a", "text-1"]);
   });
 
-  it("shows each tool call by itself while the reply comes in", () => {
-    expect(keys([text("First"), tool("a", {}), tool("b", {})], false)).toEqual(["text-0", "a", "b"]);
+  it("folds the steps done while the reply comes in, the newest step shown by itself after them", () => {
+    expect(keys([text("First"), tool("a", {}), tool("b", {}), tool("c", {})], true)).toEqual([
+      "text-0",
+      ["a", "b"],
+      "c",
+    ]);
+    // Two steps fold only once a third comes; one alone is a row.
+    expect(keys([tool("a", {}), tool("b", {})], true)).toEqual(["a", "b"]);
+    expect(keys([tool("a", {})], true)).toEqual(["a"]);
+    // A run before text is done: it folds whole.
+    expect(keys([tool("a", {}), tool("b", {}), text("Then")], true)).toEqual([["a", "b"], "text-0"]);
+  });
+
+  it("keeps an answered request among the steps, and a waiting one by itself", () => {
+    const answered = { kind: "approval" as const, status: "resolved" as const, approval: { id: "ap1" } as never };
+    const waiting = { ...answered, status: "pending" as const, approval: { id: "ap2" } as never };
+    expect(kinds([tool("a", {}), answered, tool("b", {})])).toEqual([["a", "ap1", "b"]]);
+    expect(kinds([tool("a", {}), waiting, tool("b", {})])).toEqual(["tool", "approval", "tool"]);
   });
 
   it("keeps the key of a text when a blank text before it goes, as it does when the agent calls a tool", () => {
     const before = [text("First"), text(" "), tool("a", {}), text("Then")];
     const after = before.filter((part) => part.kind !== "text" || part.text.trim() !== "");
-    expect(keys(before, false)).toEqual(["text-0", "a", "text-1"]);
-    expect(keys(after, false)).toEqual(keys(before, false));
+    expect(keys(before, true)).toEqual(["text-0", "a", "text-1"]);
+    expect(keys(after, true)).toEqual(keys(before, true));
   });
 
   it("names approvals and reviews by their ids", () => {
@@ -163,10 +197,74 @@ describe("groupParts", () => {
     expect(kinds([tool("a", {}), text("  \n"), tool("b", {})])).toEqual([["a", "b"]]);
     expect(kinds([text(" ")])).toEqual([]);
   });
+});
 
-  it("names a group by its steps, and says how many failed", () => {
-    const failed: ToolPart = { ...tool("b", {}), status: "error" };
-    expect(stepsLabel([tool("a", {}), tool("c", {})])).toBe("2 steps");
-    expect(stepsLabel([tool("a", {}), failed, tool("c", {})])).toBe("3 steps · 1 failed");
+describe("stepsLabel", () => {
+  const slides = slideNumbers([{ id: "intro" }, { id: "market" }, { id: "team" }]);
+  const label = (steps: ToolPart[]) => stepsLabel(stepFacts(steps, DECK), slides);
+  const editSlide = (id: string) => tool("Edit", { file_path: DECK, new_string: `<section id="${id}">` });
+
+  it("sums the steps up by kind, in the order the kinds came", () => {
+    expect(
+      label([
+        tool("Read", { file_path: "/decks/talk/a.md" }),
+        editSlide("intro"),
+        editSlide("market"),
+        editSlide("intro"),
+        tool("Read", { file_path: "/decks/talk/b.md" }),
+        tool("Read", { file_path: "/decks/talk/a.md" }),
+      ]),
+    ).toBe("Read 2 files, edited 2 slides");
+  });
+
+  it("counts edits of the deck that name no slide as the deck, and of other files as files", () => {
+    expect(label([tool("Edit", { file_path: DECK, new_string: ".title { color: red }" })])).toBe("Edited the deck");
+    expect(label([editSlide("intro"), tool("Edit", { file_path: DECK, new_string: "x" })])).toBe("Edited 1 slide");
+    expect(
+      label([tool("Write", { file_path: "/decks/talk/notes.md" }), tool("Edit", { file_path: "/decks/talk/x.css" })]),
+    ).toBe("Edited 2 files");
+  });
+
+  it("names three kinds and counts the rest, and says how many failed", () => {
+    const failed: ToolPart = { ...tool("Bash", { command: "false" }), status: "error" };
+    expect(
+      label([
+        editSlide("team"),
+        tool("Bash", { command: "ls" }),
+        failed,
+        tool("Grep", { pattern: "x" }),
+        tool("WebSearch", { query: "x" }),
+        tool("TodoWrite", {}),
+      ]),
+    ).toBe("Edited 1 slide, ran 2 commands, searched the files, 2 more · 1 failed");
+    expect(label([tool("mcp__slopslide__render_slide", {})])).toBe("Looked at the slides");
+  });
+});
+
+describe("textEdits", () => {
+  it("gives an edit's replacements, a write's new text, and nothing for other tools", () => {
+    expect(textEdits(tool("Edit", { old_string: "a", new_string: "b" }))).toEqual([{ before: "a", after: "b" }]);
+    expect(
+      textEdits(
+        tool("MultiEdit", {
+          edits: [
+            { old_string: "a", new_string: "b" },
+            { old_string: "c", new_string: "" },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { before: "a", after: "b" },
+      { before: "c", after: "" },
+    ]);
+    expect(textEdits(tool("Write", { content: "new" }))).toEqual([{ before: "", after: "new" }]);
+    expect(textEdits(tool("MultiEdit", { edits: [{ old_string: "a" }] }))).toBeNull();
+    expect(textEdits(tool("Edit", { old_string: 3 }))).toBeNull();
+    expect(textEdits(tool("Read", { file_path: "x" }))).toBeNull();
+  });
+
+  it("finds the slide of each edit of a MultiEdit", () => {
+    const multi = tool("MultiEdit", { file_path: DECK, edits: [{ old_string: "x", new_string: `<p id="team">` }] });
+    expect(editedIds(multi, "deck.html", DECK)).toEqual(["team"]);
   });
 });

@@ -63,3 +63,32 @@ pub fn restore_slides(id: String, since: String, slides: Vec<String>) -> Result<
         deck::restore_slides(file, &version, &slides)
     })
 }
+
+/// Every version kept of deck `id`, the newest first, for going back to one. As for
+/// [`deck_history`], a change made outside the app is noticed first unless the agent is working.
+#[tauri::command(async)]
+pub fn deck_versions(agent: State<AgentManager>, id: String) -> Result<history::Versions> {
+    let file = deck::deck_file(&id)?;
+    history::versions(&files::app_home()?, &file, !agent.works_on(&file))
+}
+
+/// Puts deck `id` back as it was at `version` of its history, as one change that undo takes back.
+#[tauri::command(async)]
+pub fn restore_version(
+    agent: State<AgentManager>,
+    id: String,
+    version: String,
+) -> Result<HistoryStep> {
+    let file = deck::deck_file(&id)?;
+    if agent.works_on(&file) {
+        return Err(error::Error::msg(
+            "The agent is still working on the deck; stop it or wait for it to finish first.",
+        ));
+    }
+    let step = history::restore(&files::app_home()?, &file, &version)?;
+    crate::watcher::own_writes().note(&file);
+    Ok(HistoryStep {
+        deck: deck::load(&file)?,
+        step,
+    })
+}

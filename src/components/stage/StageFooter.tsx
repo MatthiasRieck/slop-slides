@@ -1,35 +1,27 @@
-import {
-  AlertTriangle,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  EyeOff,
-  LayoutTemplate,
-  Lock,
-  Search,
-  Wand2,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
-import { memo, useRef, useState } from "react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, EyeOff, Lock, Search, ZoomIn, ZoomOut } from "lucide-react";
+import { memo, type ReactNode, useContext, useRef, useState } from "react";
 
 import { useMenuKeys } from "../../hooks/useMenuKeys";
 import type { Slide } from "../../lib/api";
-import { cn } from "../../lib/utils";
-import { useApp } from "../../store";
+import { cn, plural } from "../../lib/utils";
+import { showSuccess, useApp } from "../../store";
 import { Button, ToolButton, withShortcut } from "../Button";
-import { EDIT_ONLY } from "../editOnly";
 import { LintStatus } from "../LintStatus";
 import { Popover } from "../Popover";
-import { LayoutPicker } from "../Templates";
 import { useSlideReport } from "./editorState";
-import { isMoved, useShownView, useStageView } from "./stageView";
+import { AgentMark, StageActionsContext, useTidyLayout } from "./SlideLayoutTools";
+import { isMoved, overflowPath, useShownView, useStageView } from "./stageView";
 import { ZOOM_LEVELS, ZOOM_STEP } from "./usePasteboard";
 
+/** Where a control's name shows beside its icon: once the row under the slide has the room. */
+const NAMED = "hidden @[38rem]:inline";
+
 /**
- * The row under the slide: on the left the search, in the middle the arrows between slides and
- * where this one is (a field to jump to another), and on the right the zoom, what is wrong with
- * the slide or special about it (hidden, locked), its layout tools and the lint status.
+ * The row under the slide, in three groups that keep their places: on the left Find and what is
+ * special about the slide shown (something runs past it, it is hidden, it is locked); in the
+ * middle, always in the middle whatever shows beside it, the arrows between slides and where
+ * this one is (a field to jump to another); on the right the check of the deck and the zoom.
+ * In a narrow stage the controls keep their icons and drop their names.
  *
  * What the slide editor found running past the slide, and how far the slide is zoomed, it reads
  * for itself, where they show.
@@ -43,111 +35,200 @@ export const StageFooter = memo(function StageFooter(props: {
   onZoomBy: (factor: number) => void;
   /** Zooms to `k` times the size the slide fits the stage at. */
   onZoomTo: (k: number) => void;
-  /** Takes the selection out of the preview, for the screenshot Tidy layout sends. */
-  onClearSelection: () => void;
 }) {
   const { index, count, slide } = props;
-  // What runs past the slide or is cut off, as the editor found.
-  const overflow = useSlideReport((report) => report.overflow);
-  const running = useApp((s) => s.running);
-  const editable = useApp((s) => s.editing);
-  const locked = !!slide?.locked;
   return (
-    <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
-      <div className="flex items-center">
-        <ToolButton
-          variant="plain"
-          label="Find in the slides"
-          shortcut="mod+f"
-          onClick={() => useApp.getState().openFind()}
-        >
-          <Search />
-        </ToolButton>
-      </div>
-      <div className="flex items-center gap-2">
-        <ToolButton
-          variant="plain"
-          label="Previous slide"
-          shortcut="left"
-          onClick={() => useApp.getState().selectRelative(-1)}
-          disabled={index <= 0}
-        >
-          <ChevronLeft className="size-4" />
-        </ToolButton>
-        <SlideCounter index={index} count={count} />
-        <ToolButton
-          variant="plain"
-          label="Next slide"
-          shortcut="right"
-          onClick={() => useApp.getState().selectRelative(1)}
-          disabled={index >= count - 1}
-        >
-          <ChevronRight className="size-4" />
-        </ToolButton>
-      </div>
-      <div className="flex items-center justify-end">
-        {slide && <ZoomControls onFit={props.onResetView} onZoomBy={props.onZoomBy} onZoomTo={props.onZoomTo} />}
-        {overflow.length > 0 && (
-          <span
-            title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
-            className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-warning "
-          >
-            <AlertTriangle className="size-3.5" />
-            Overflow
-          </span>
-        )}
-        {slide?.hidden && (
+    <div className="@container shrink-0 border-t text-xs text-muted-foreground">
+      <div className="grid h-10 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-3">
+        <div className="flex min-w-0 items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
-            disabled={!editable}
-            title={
-              editable
-                ? "Hidden: skipped when presenting. Click to show it again."
-                : `Hidden: skipped when presenting. ${EDIT_ONLY}.`
-            }
-            onClick={() => void useApp.getState().setSlidesHidden([slide.id], false)}
-            className="mr-1"
+            aria-label="Find"
+            title="Find text on the slides and in their notes"
+            shortcut="mod+f"
+            onClick={() => useApp.getState().openFind()}
           >
-            <EyeOff />
-            Hidden
+            <Search />
+            <span className={NAMED}>Find</span>
           </Button>
-        )}
-        {slide && locked && (
-          <Button
-            variant="ghost"
-            size="sm"
-            title="Locked: neither you nor the agent can change this slide. Click to unlock it."
-            onClick={() => void useApp.getState().setSlidesLocked([slide.id], false)}
-            className="mr-1"
+          {slide && <SlideStatus slide={slide} number={index + 1} />}
+        </div>
+        <nav aria-label="Slides" className="flex items-center gap-1">
+          <ToolButton
+            variant="plain"
+            label="Previous slide"
+            shortcut="left"
+            onClick={() => useApp.getState().selectRelative(-1)}
+            disabled={index <= 0}
           >
-            <Lock />
-            Locked
-          </Button>
-        )}
-        {slide && <ChangeLayoutButton disabled={running || locked} />}
-        {slide && (
-          <Button
-            variant="ghost"
-            size="sm"
-            title="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
-            disabled={running || locked}
-            onClick={() => {
-              props.onClearSelection();
-              // Give the preview a frame to drop its selection outline before the screenshot.
-              requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout(overflow)));
-            }}
-            className={cn((slide.moved || overflow.length > 0) && "font-medium text-foreground")}
+            <ChevronLeft className="size-4" />
+          </ToolButton>
+          <SlideCounter index={index} count={count} />
+          <ToolButton
+            variant="plain"
+            label="Next slide"
+            shortcut="right"
+            onClick={() => useApp.getState().selectRelative(1)}
+            disabled={index >= count - 1}
           >
-            <Wand2 className="size-3.5" />
-            Tidy layout
-          </Button>
-        )}
-        <LintStatus />
+            <ChevronRight className="size-4" />
+          </ToolButton>
+        </nav>
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          <LintStatus nameClass={NAMED} />
+          {slide && <ZoomControls onFit={props.onResetView} onZoomBy={props.onZoomBy} onZoomTo={props.onZoomTo} />}
+        </div>
       </div>
     </div>
   );
 });
+
+/**
+ * What is special about the slide shown, each a control for it: what runs past it (a list to
+ * pick from), and that it is hidden or locked. The last two are toggles that are on: pressing
+ * one turns the state off, and says so with a way to take that back.
+ */
+function SlideStatus({ slide, number }: { slide: Slide; number: number }) {
+  const { setSlidesHidden, setSlidesLocked } = useApp.getState();
+  const show = () => {
+    void setSlidesHidden([slide.id], false);
+    showSuccess(`Slide ${number} is shown again`, { label: "Undo", run: () => void setSlidesHidden([slide.id], true) });
+  };
+  const unlock = () => {
+    void setSlidesLocked([slide.id], false);
+    showSuccess(`Slide ${number} unlocked`, { label: "Undo", run: () => void setSlidesLocked([slide.id], true) });
+  };
+  return (
+    <>
+      <OverflowChip slide={slide.id} />
+      {slide.hidden && (
+        <StatusToggle
+          label="Hidden"
+          title="Hidden: skipped when presenting. Click to show the slide again."
+          icon={<EyeOff />}
+          onClick={show}
+        />
+      )}
+      {slide.locked && (
+        <StatusToggle
+          label="Locked"
+          title="Locked: neither you nor the agent can change this slide. Click to unlock it."
+          icon={<Lock />}
+          onClick={unlock}
+        />
+      )}
+    </>
+  );
+}
+
+/** A state of the slide that is on, as the toggle it is: pressed, and a press turns it off. */
+function StatusToggle(props: { label: string; title: string; icon: ReactNode; onClick: () => void }) {
+  return (
+    <ToolButton
+      active
+      label={props.label}
+      title={props.title}
+      onClick={props.onClick}
+      className="flex shrink-0 items-center gap-1 px-1.5 text-xs [&_svg]:!size-3.5"
+    >
+      {props.icon}
+      <span className={NAMED}>{props.label}</span>
+    </ToolButton>
+  );
+}
+
+/**
+ * The warning that something on the slide runs past its edge or is cut off, as the editor found.
+ * It opens the list of what does: a row selects that element on the slide, and the button under
+ * the list asks the agent to tidy the slide.
+ */
+function OverflowChip({ slide }: { slide: string }) {
+  const overflow = useSlideReport((report) => report.overflow);
+  const running = useApp((s) => s.running);
+  const { post } = useContext(StageActionsContext);
+  const tidy = useTidyLayout();
+  const menu = useMenuKeys();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  if (overflow.length === 0) return null;
+  const select = (index: number) => {
+    const path = overflowPath(slide, index);
+    if (path) post({ type: "slop:edit-select", path });
+    setOpen(false);
+  };
+  return (
+    <>
+      <Button
+        ref={anchor}
+        variant="ghost"
+        size="sm"
+        aria-label={`Overflow: ${plural(overflow.length, "element")}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title="Something runs past the slide or is cut off. Click to see what."
+        onClick={() => setOpen((v) => !v)}
+        className={cn("text-warning", open && "bg-accent")}
+      >
+        <AlertTriangle />
+        <span className={NAMED}>Overflow</span>
+      </Button>
+      {open && (
+        <Popover
+          anchor={anchor}
+          placement="above"
+          width={380}
+          label="What runs past the slide"
+          onClose={() => setOpen(false)}
+        >
+          <p className="shrink-0 border-b px-3 py-2 text-xs font-medium">
+            {plural(overflow.length, "element runs", "elements run")} past the slide or{" "}
+            {overflow.length === 1 ? "is" : "are"} cut off
+          </p>
+          <div
+            role="menu"
+            aria-label="What runs past the slide"
+            {...menu}
+            className="min-h-0 flex-1 overflow-y-auto p-1 text-xs outline-none"
+          >
+            {overflow.map((item, i) => (
+              <button
+                // biome-ignore lint/suspicious/noArrayIndexKey: the list is the editor's, rebuilt whole with every report
+                key={i}
+                type="button"
+                role="menuitem"
+                title="Select this element on the slide"
+                onClick={() => select(i)}
+                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                <span className="min-w-0 flex-1 break-words">{item}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex shrink-0 items-center justify-end border-t p-2">
+            <Button
+              data-autofocus
+              disabled={running}
+              title={
+                running
+                  ? "The agent is at work: ask once it is done"
+                  : "Puts a request with a screenshot in the chat, to fit these into a clean layout · asks the agent"
+              }
+              onClick={() => {
+                setOpen(false);
+                tidy();
+              }}
+            >
+              Tidy layout…
+              <AgentMark />
+            </Button>
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
 
 /**
  * Where the slide shown is in the deck, "3 / 20". Pressed, the 3 becomes a field: a number and
@@ -171,14 +252,14 @@ function SlideCounter({ index, count }: { index: number; count: number }) {
         title="Go to a slide: type its number"
         disabled={count < 2}
         onClick={() => setTyping(true)}
-        className="rounded-md px-1.5 py-0.5 tabular-nums enabled:hover:bg-accent enabled:hover:text-foreground"
+        className="whitespace-nowrap rounded-md px-1.5 py-0.5 tabular-nums enabled:hover:bg-accent enabled:hover:text-foreground"
       >
         {index + 1} / {count}
       </button>
     );
   }
   return (
-    <span className="flex items-center gap-1 tabular-nums">
+    <span className="flex items-center gap-1 whitespace-nowrap tabular-nums">
       <input
         autoFocus
         aria-label="Go to slide number"
@@ -230,7 +311,7 @@ function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => 
   };
   return (
     // biome-ignore lint/a11y/useSemanticElements: a group of buttons, not a form's fieldset
-    <div role="group" aria-label="Zoom" className="mr-1 flex items-center">
+    <div role="group" aria-label="Zoom" className="flex shrink-0 items-center">
       <ToolButton variant="plain" label="Zoom out" shortcut="mod+-" onClick={() => props.onZoomBy(1 / ZOOM_STEP)}>
         <ZoomOut className="size-3.5" />
       </ToolButton>
@@ -293,33 +374,5 @@ function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => 
         </Popover>
       )}
     </div>
-  );
-}
-
-/** Opens the template layouts, to have the agent rebuild the current slide on one. */
-function ChangeLayoutButton(props: { disabled: boolean }) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  return (
-    <>
-      <Button
-        ref={buttonRef}
-        variant="ghost"
-        size="sm"
-        title="Rebuild this slide on a template layout"
-        aria-expanded={open}
-        disabled={props.disabled}
-        onClick={() => setOpen((v) => !v)}
-        className="mr-1"
-      >
-        <LayoutTemplate className="size-3.5" />
-        Layout
-      </Button>
-      {open && (
-        <Popover anchor={buttonRef} placement="above" width={560} label="Change layout" onClose={() => setOpen(false)}>
-          <LayoutPicker mode="change" onDone={() => setOpen(false)} />
-        </Popover>
-      )}
-    </>
   );
 }

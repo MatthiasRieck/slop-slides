@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openLayer } from "../lib/layers";
-import { type DesignChange, deckMode, useApp } from "../store";
+import { type DesignChange, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckSettings } from "./DeckSettings";
 
@@ -18,14 +18,16 @@ beforeEach(() => {
     deck: { ...deckFor(DECK_HTML), template: "swiss" },
     running: false,
     editing: false,
-    slideMode: "settings",
-    settingsReturn: "view",
+    slideMode: "view",
+    deckSettingsOpen: true,
     templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }],
     applyStyle,
     resizeSlides,
     renameDeck,
   });
 });
+
+const isOpen = () => useApp.getState().deckSettingsOpen;
 
 const title = () => screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement;
 
@@ -45,39 +47,38 @@ describe("DeckSettings", () => {
     expect(applyStyle).toHaveBeenCalledWith("swiss");
   });
 
-  it("is called the deck's settings, apart from the app's", () => {
+  it("is a dialog called the deck's settings, apart from the app's", () => {
     render(<DeckSettings />);
-    expect(screen.getByRole("region", { name: "Deck settings" })).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Deck settings");
+    expect(screen.getByRole("dialog", { name: "Deck settings" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Deck settings" })).toBeTruthy();
   });
 
-  describe("the way back", () => {
-    it("is the Done button, to the mode the settings opened from", () => {
-      useApp.setState({ slideMode: "view", editing: true });
-      act(() => useApp.getState().openDeckSettings());
-      expect(deckMode(useApp.getState())).toBe("settings");
+  it("puts the deck's own style first, marked as the current one", () => {
+    useApp.setState({
+      templates: [
+        { id: "plain", title: "Plain", builtin: true, path: null, slides: ["title"] },
+        { id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] },
+      ],
+    });
+    render(<DeckSettings />);
+    const styles = screen.getAllByRole("button", { name: / style$/ });
+    expect(styles[0]!.getAttribute("aria-label")).toBe("Swiss Design style");
+    expect(styles[0]!.textContent).toContain("Current");
+  });
+
+  describe("closing", () => {
+    it("is the Close button, the slide's mode staying as it was", () => {
+      useApp.setState({ editing: true });
       render(<DeckSettings />);
-      const done = screen.getByRole("button", { name: "Done" });
-      expect(done.title).toBe("Back to Edit (Esc)");
-      fireEvent.click(done);
-      expect(deckMode(useApp.getState())).toBe("edit");
+      fireEvent.click(screen.getAllByRole("button", { name: "Close" }).at(-1)!);
+      expect(isOpen()).toBe(false);
+      expect(useApp.getState().editing).toBe(true);
     });
 
     it("is Escape too", () => {
       render(<DeckSettings />);
       fireEvent.keyDown(document.body, { key: "Escape" });
-      expect(deckMode(useApp.getState())).toBe("view");
-    });
-
-    it("leaves Escape to a field that has its own use for it", () => {
-      render(<DeckSettings />);
-      const field = screen.getByRole("spinbutton", { name: "Width" });
-      field.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
-      fireEvent.keyDown(field, { key: "Escape" });
-      expect(deckMode(useApp.getState())).toBe("settings");
-      // A field with no use for it lets it through.
-      fireEvent.keyDown(field, { key: "Escape" });
-      expect(deckMode(useApp.getState())).toBe("view");
+      expect(isOpen()).toBe(false);
     });
 
     it("closes what is open over the settings first", () => {
@@ -89,18 +90,34 @@ describe("DeckSettings", () => {
       });
       fireEvent.keyDown(document.body, { key: "Escape" });
       expect(closed).toBe(true);
-      expect(deckMode(useApp.getState())).toBe("settings");
+      expect(isOpen()).toBe(true);
       fireEvent.keyDown(document.body, { key: "Escape" });
-      expect(deckMode(useApp.getState())).toBe("view");
+      expect(isOpen()).toBe(false);
     });
 
-    it("takes no Escape once it is gone", () => {
-      const { unmount } = render(<DeckSettings />);
-      // Gone, the settings take no Escape any more.
-      unmount();
-      useApp.setState({ slideMode: "git" });
+    it("asks about a slide size that is not applied yet, and loses nothing without a word", async () => {
+      render(<DeckSettings />);
+      fireEvent.click(screen.getByRole("button", { name: "Square" }));
       fireEvent.keyDown(document.body, { key: "Escape" });
-      expect(deckMode(useApp.getState())).toBe("git");
+      expect(isOpen()).toBe(true);
+      expect(screen.getByRole("alert").textContent).toContain("Apply the new slide size?");
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Close" }).at(-1)!);
+      resizeSlides.mockResolvedValueOnce("applied");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Apply and close" })));
+      expect(resizeSlides).toHaveBeenCalledWith({ width: 1080, height: 1080, unit: "px" });
+      expect(isOpen()).toBe(false);
+    });
+
+    it("discards the size typed when the user says so", () => {
+      render(<DeckSettings />);
+      fireEvent.click(screen.getByRole("button", { name: "Square" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Close" }).at(-1)!);
+      fireEvent.click(screen.getByRole("button", { name: "Discard size" }));
+      expect(isOpen()).toBe(false);
+      expect(resizeSlides).not.toHaveBeenCalled();
     });
   });
 
@@ -146,7 +163,7 @@ describe("DeckSettings", () => {
       fireEvent.change(title(), { target: { value: "Other" } });
       fireEvent.keyDown(title(), { key: "Escape" });
       expect(title().value).toBe("Talk");
-      expect(deckMode(useApp.getState())).toBe("settings");
+      expect(isOpen()).toBe(true);
       expect(renameDeck).not.toHaveBeenCalled();
     });
 

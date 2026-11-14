@@ -1,14 +1,24 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { parseGeometry, parseGeometryValue, parseLayers, quarterTurn, stepNumber } from "./arrange";
+import { parseGeometry, parseGeometryValue, parseLayers, stepNumber } from "./arrange";
 
 describe("parseLayers", () => {
   it("keeps the rows it can use, dropping malformed ones", () => {
     expect(
       parseLayers([
-        { path: [3], name: "Group of 2", group: true, locked: false, held: false, selected: true, depth: 0 },
-        { path: [3, 0], name: "Text: Hi", locked: true, depth: 1 },
+        {
+          path: [3],
+          name: "Group of 2",
+          group: true,
+          locked: false,
+          held: false,
+          selected: true,
+          depth: 0,
+          canUp: false,
+          canDown: true,
+        },
+        { path: [3, 0], name: "Text: Hi", locked: true, depth: 1, canUp: "yes" },
         { path: [-1], name: "Bad" },
         { path: "3", name: "Bad" },
         { path: [1], name: 5 },
@@ -16,9 +26,39 @@ describe("parseLayers", () => {
         { path: [2], name: "Deep", depth: 1.5 },
       ]),
     ).toEqual([
-      { path: [3], name: "Group of 2", group: true, locked: false, held: false, selected: true, depth: 0 },
-      { path: [3, 0], name: "Text: Hi", group: false, locked: true, held: false, selected: false, depth: 1 },
-      { path: [2], name: "Deep", group: false, locked: false, held: false, selected: false, depth: 0 },
+      {
+        path: [3],
+        name: "Group of 2",
+        group: true,
+        locked: false,
+        held: false,
+        selected: true,
+        depth: 0,
+        canUp: false,
+        canDown: true,
+      },
+      {
+        path: [3, 0],
+        name: "Text: Hi",
+        group: false,
+        locked: true,
+        held: false,
+        selected: false,
+        depth: 1,
+        canUp: false,
+        canDown: false,
+      },
+      {
+        path: [2],
+        name: "Deep",
+        group: false,
+        locked: false,
+        held: false,
+        selected: false,
+        depth: 0,
+        canUp: false,
+        canDown: false,
+      },
     ]);
     expect(parseLayers("nope")).toEqual([]);
   });
@@ -68,16 +108,5 @@ describe("stepNumber", () => {
     expect(stepNumber(10, 1, true)).toBe(20);
     expect(stepNumber(0, -1, true)).toBe(-10);
     expect(stepNumber(10.4, 1, false)).toBe(11);
-  });
-});
-
-describe("quarterTurn", () => {
-  it("turns a quarter either way, staying within ±180°", () => {
-    expect(quarterTurn(0, 1)).toBe(90);
-    expect(quarterTurn(0, -1)).toBe(-90);
-    expect(quarterTurn(90, 1)).toBe(180);
-    expect(quarterTurn(180, 1)).toBe(-90);
-    expect(quarterTurn(-90, -1)).toBe(180);
-    expect(quarterTurn(15.4, 1)).toBe(105);
   });
 });

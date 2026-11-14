@@ -14,6 +14,7 @@ import {
   audioKey,
   canSpeakWith,
   deckProvider,
+  deckVideoOptions,
   initNarrationEvents,
   NARRATION_CANCELLED,
   touchesNarration,
@@ -34,7 +35,10 @@ beforeEach(() => {
     audioDeck: null,
     render: null,
     timing: null,
+    settings: {},
+    settingsDeck: null,
   });
+  localStorage.removeItem("slopslide.video");
   useApp.setState({ deck: null, toasts: [] });
 });
 
@@ -221,14 +225,13 @@ describe("reading the deck's audio again", () => {
   it("starts listening to the backend's events together", () => {
     listen.mockClear();
     const pending = new Promise<() => void>(() => {});
-    listen.mockImplementationOnce(() => pending);
-    listen.mockImplementationOnce(() => pending);
-    listen.mockImplementationOnce(() => pending);
+    for (let i = 0; i < 4; i++) listen.mockImplementationOnce(() => pending);
     void initNarrationEvents();
     // None waits for the one before to be registered.
     expect(listen.mock.calls.map(([event]) => event)).toEqual([
       "narration-render",
       "narration-timing",
+      "voice-download",
       "narration-recorded",
     ]);
   });
@@ -282,6 +285,80 @@ describe("narration providers", () => {
     invoke.mockRejectedValue("offline");
     await useNarration.getState().loadVoices("openai");
     expect(useNarration.getState().accountVoices.openai).toBeUndefined();
+    expect(lastError(useApp.getState())).toBeNull();
+  });
+});
+
+describe("what a deck keeps of how its narration is said and timed", () => {
+  it("reads it for the deck opened, and forgets another deck's", async () => {
+    await initNarrationEvents();
+    invoke.mockImplementation(async (command: string) =>
+      command === "narration_settings" ? { timing: { secondsPerSlide: 3, pauseBefore: 0, pauseAfter: 0 } } : [],
+    );
+    await act(async () => useApp.setState({ deck }));
+    expect(invoke).toHaveBeenCalledWith("narration_settings", { id: deck.id });
+    expect(useNarration.getState().settingsDeck).toBe(deck.id);
+    expect(deckVideoOptions(deck.id).secondsPerSlide).toBe(3);
+    // Another deck plays with the app's times until its own are read.
+    expect(deckVideoOptions("other").secondsPerSlide).toBe(5);
+  });
+
+  it("lays a deck out with its own times over what this computer last exported with", () => {
+    localStorage.setItem("slopslide.video", JSON.stringify({ secondsPerSlide: 7, fps: 60, pauseBefore: 2 }));
+    expect(deckVideoOptions(deck.id)).toMatchObject({ secondsPerSlide: 7, fps: 60, pauseBefore: 2 });
+    useNarration.setState({
+      settings: { timing: { secondsPerSlide: 3, pauseBefore: 0, pauseAfter: 0.5 } },
+      settingsDeck: deck.id,
+    });
+    const options = deckVideoOptions(deck.id);
+    expect(options).toMatchObject({ secondsPerSlide: 3, fps: 60, pauseBefore: 0, pauseAfter: 0.5 });
+    // The same object while nothing changed, so the timeline is not laid out again for it.
+    expect(deckVideoOptions(deck.id)).toBe(options);
+  });
+
+  it("shows new times at once, and takes them back when they could not be saved", async () => {
+    useApp.setState({ deck });
+    let fail!: (reason: string) => void;
+    invoke.mockImplementation((command: string) =>
+      command === "set_narration_timing" ? new Promise((_, reject) => (fail = reject)) : Promise.resolve([]),
+    );
+    const timing = { secondsPerSlide: 9, pauseBefore: 1, pauseAfter: 1 };
+    const saving = useNarration.getState().setTiming(deck.id, timing);
+    expect(deckVideoOptions(deck.id).secondsPerSlide).toBe(9);
+    fail("The deck's folder cannot be written.");
+    expect(await saving).toBe(false);
+    expect(deckVideoOptions(deck.id).secondsPerSlide).toBe(5);
+    expect(lastError(useApp.getState())).toBe("The deck's folder cannot be written.");
+  });
+
+  it("sets the pace and style, reading the audio again as it is out of date now", async () => {
+    useApp.setState({ deck });
+    invoke.mockImplementation(async (command: string) =>
+      command === "set_narration_delivery" ? { pace: "faster" } : [{ slide: "intro", state: "stale", seconds: 2 }],
+    );
+    expect(await useNarration.getState().setDelivery(deck.id, "faster", "")).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("set_narration_delivery", { id: deck.id, pace: "faster", style: "" });
+    expect(useNarration.getState().audio.intro?.state).toBe("stale");
+  });
+
+  it("stops the model's download while it runs, and the hearing after it", async () => {
+    await initNarrationEvents();
+    useNarration.setState({ timing: { deck: deck.id, slide: null, done: 0, total: 0, downloading: true } });
+    act(() => listeners.get("voice-download")?.({ payload: { received: 10, total: 100 } }));
+    expect(useNarration.getState().timing?.download).toEqual({ received: 10, total: 100 });
+    await useNarration.getState().cancelTiming();
+    expect(invoke).toHaveBeenLastCalledWith("cancel_voice_download");
+    useNarration.setState({ timing: { deck: deck.id, slide: "intro", done: 0, total: 2 } });
+    await useNarration.getState().cancelTiming();
+    expect(invoke).toHaveBeenLastCalledWith("cancel_narration_timing");
+    // A download called off says nothing more.
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "voice_status") return { modelReady: false };
+      if (command === "download_voice_model") throw "the download was cancelled";
+      return [];
+    });
+    useNarration.setState({ timing: null });
+    expect(await useNarration.getState().timeWords(deck.id, null)).toBe(false);
     expect(lastError(useApp.getState())).toBeNull();
   });
 });

@@ -17,6 +17,13 @@ pub async fn download_voice_model(app: AppHandle, voice: State<'_, voice::Voice>
     voice.download(&app, &files::app_home()?).await
 }
 
+/// Stops the speech-to-text model's download, if one runs; `download_voice_model` fails with
+/// "the download was cancelled".
+#[tauri::command]
+pub fn cancel_voice_download(voice: State<voice::Voice>) {
+    voice.cancel_download();
+}
+
 /// Listens for the teleprompter in the calling window, reporting recent words as `voice-heard`
 /// events until `cancel_recording`.
 #[tauri::command]

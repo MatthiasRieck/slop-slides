@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { editShortcut, type ShortcutKey } from "./editKeys";
+import { useApp } from "../../store";
+import { editShortcut, runEditKey, type ShortcutKey } from "./editKeys";
 
 const key = (key: string, more: Partial<ShortcutKey> = {}): ShortcutKey => ({
   key,
@@ -32,9 +33,18 @@ describe("editShortcut", () => {
     expect(editShortcut(shift(";", "Period"))).toEqual({ post: { type: "slop:edit-font-step", step: 1 } });
   });
 
-  it("flips with Shift+H / V, locks with Alt+L, copies and pastes a look with Alt+C / V, links with K", () => {
-    expect(editShortcut(shift("H"))).toEqual({ post: { type: "slop:edit-flip", axis: "x" } });
-    expect(editShortcut(shift("V"))).toEqual({ post: { type: "slop:edit-flip", axis: "y" } });
+  it("turns a quarter with Alt+R and strikes text through with Shift+X", () => {
+    expect(editShortcut(alt("®", "KeyR"))).toEqual({ post: { type: "slop:edit-rotate", step: 1 } });
+    expect(editShortcut(shift("X"))).toEqual({ post: { type: "slop:edit-toggle-style", key: "strike" } });
+  });
+
+  it("flips with Alt+Shift+H / V, locks with Alt+L, copies and pastes a look with Alt+C / V, links with K", () => {
+    const altShift = (k: string, code: string) => key(k, { altKey: true, shiftKey: true, code });
+    expect(editShortcut(altShift("Ó", "KeyH"))).toEqual({ post: { type: "slop:edit-flip", axis: "x" } });
+    expect(editShortcut(altShift("◊", "KeyV"))).toEqual({ post: { type: "slop:edit-flip", axis: "y" } });
+    // Shift+V alone is pasting as plain text, which the app's paste does; Shift+H is nothing.
+    expect(editShortcut(shift("V"))).toBeNull();
+    expect(editShortcut(shift("H"))).toBeNull();
     // With Alt, macOS types another character: the key goes by where it is.
     expect(editShortcut(alt("¬", "KeyL"))).toEqual({ lock: true });
     expect(editShortcut(alt("ç", "KeyC"))).toEqual({ post: { type: "slop:edit-copy-style" } });
@@ -50,5 +60,19 @@ describe("editShortcut", () => {
     for (const k of ["|", "G", "Z", "K"]) expect(editShortcut(shift(k))).toBeNull();
     expect(editShortcut(alt("x", "KeyX"))).toBeNull();
     expect(editShortcut(key("L", { altKey: true, shiftKey: true, code: "KeyL" }))).toBeNull();
+  });
+});
+
+describe("runEditKey", () => {
+  it("picks a tool with its letter and puts it away with Escape, which never leaves edit mode", () => {
+    useApp.setState({ editing: true, editTool: "select" });
+    expect(runEditKey("r")).toBe(true);
+    expect(useApp.getState().editTool).toBe("rect");
+    expect(runEditKey("Escape")).toBe(true);
+    expect(useApp.getState()).toMatchObject({ editTool: "select", editing: true });
+    // Nothing left to put away: the key is not taken, and edit mode stays.
+    expect(runEditKey("Escape")).toBe(false);
+    expect(useApp.getState().editing).toBe(true);
+    expect(runEditKey("Enter")).toBe(false);
   });
 });

@@ -44,7 +44,9 @@ mod spans;
 #[cfg(test)]
 pub(crate) mod fixtures;
 
-pub use asides::{append_narration, narration, narration_spans, notes, set_narration, set_notes};
+pub use asides::{
+    append_narration, narration, narration_spans, notes, notes_spans, set_narration, set_notes,
+};
 pub use assets::{asset_refs, inline_assets};
 pub use attrs::*;
 pub use batch::edit_slides;

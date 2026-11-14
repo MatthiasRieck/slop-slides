@@ -130,8 +130,13 @@
   }
 
   function reportBackground() {
-    var color = toHex(getComputedStyle(slide).backgroundColor);
-    window.parent.postMessage({ type: "slop:edit-background", slide: slide.id, color: color }, "*");
+    var computed = getComputedStyle(slide);
+    var color = toHex(computed.backgroundColor);
+    // A gradient or an image over the color: what the color well cannot show, and a pick replaces.
+    var other = (computed.backgroundImage || "none") !== "none";
+    // Whether the color is the slide's own, set here, and not the deck's.
+    var own = !!slide.style.getPropertyValue("background-color");
+    window.parent.postMessage({ type: "slop:edit-background", slide: slide.id, color: color, other: other, own: own }, "*");
   }
 
   /** The slide's own background, over any image or gradient the deck gives it; null drops it. */
@@ -180,7 +185,8 @@
   /** Gives `el` the look the format painter took, and puts it away. */
   function paintOnto(el) {
     var taken = painting;
-    useTool("select", true);
+    // A kept painter goes on to the next element with the look it took.
+    if (keptTool !== tool) useTool("select", true);
     if (!el || !taken) return;
     select(el);
     applyStyle(paintChanges(el, taken));
@@ -340,13 +346,23 @@
     var add = function (stack) {
       var name = firstFamily(stack);
       if (!name || seen[name.toLowerCase()] || /^(inherit|initial|unset|revert|serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|-apple-system)$/i.test(name)) return;
-      seen[name.toLowerCase()] = true;
-      fonts.push({ name: name, stack: String(stack).trim() });
+      seen[name.toLowerCase()] = { name: name, stack: String(stack).trim(), weights: [] };
+      fonts.push(seen[name.toLowerCase()]);
     };
     found.stacks.forEach(add);
     if (document.fonts && document.fonts.forEach) {
       document.fonts.forEach(function (face) {
         add('"' + firstFamily(face.family) + '"');
+        // The weights its files come in ("400", "bold", or a variable font's "100 900"), for the weight list.
+        var font = seen[firstFamily(face.family).toLowerCase()];
+        var range = String(face.weight || "").replace(/normal/g, "400").replace(/bold/g, "700").match(/\d+/g);
+        if (!font || !range) return;
+        for (var w = 100; w <= 900; w += 100) {
+          if (w >= Number(range[0]) && w <= Number(range[range.length - 1]) && font.weights.indexOf(w) < 0) font.weights.push(w);
+        }
+        font.weights.sort(function (a, b) {
+          return a - b;
+        });
       });
     }
     Array.prototype.forEach.call(slide.querySelectorAll("[style*='font-family']"), function (el) {

@@ -51,41 +51,6 @@ describe("slide selection", () => {
   });
 });
 
-describe("slide image export", () => {
-  it("remembers the folder and which slides to save", async () => {
-    const useApp = await freshStore();
-    useApp.setState({ deck: DECK });
-    useApp.getState().startImageExport("/out/Talk");
-    expect(useApp.getState().imageExport).toEqual({ dir: "/out/Talk", slides: ["intro", "#2", "outro"] });
-    useApp.getState().endImageExport();
-    expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("does not start without slides", async () => {
-    const useApp = await freshStore();
-    useApp.getState().startImageExport("/out/Talk");
-    useApp.setState({ deck: { ...DECK, slides: [] } });
-    useApp.getState().startImageExport("/out/Talk");
-    expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("is abandoned when the deck closes or another opens", async () => {
-    const useApp = await freshStore();
-    useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
-    await useApp.getState().closeDeck();
-    expect(useApp.getState().imageExport).toBeNull();
-    backend({
-      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
-      open_deck: () => DECK,
-      load_chat: () => [],
-      agent_running: () => false,
-    });
-    useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
-    await useApp.getState().openDeck("/decks/talk/deck.html");
-    expect(useApp.getState().imageExport).toBeNull();
-  });
-});
-
 describe("slide rail changes", () => {
   const edited = (previous: string, source: string, deck: Deck = deckFor(DECK_HTML)) => ({
     deck,
@@ -145,13 +110,10 @@ describe("slide rail changes", () => {
     expect(lastError(useApp.getState())).toBe("The slides changed while reordering; try again.");
   });
 
-  it("does not move past the end, or while a search shows only some slides", async () => {
+  it("does not move past the end", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
     await useApp.getState().moveSlides(-1);
-    useApp.getState().setSearch({ query: "x" });
-    useApp.getState().setSearchMatches([]);
-    await useApp.getState().moveSlides(1);
     expect(calls("reorder_slides")).toEqual([]);
   });
 
@@ -339,57 +301,30 @@ describe("going through the slides", () => {
     return useApp;
   }
 
-  it("steps through the slides a search found, the ones the rail lists, and stops at their ends", async () => {
-    const useApp = await searching("b", ["b", 1], ["b", 1], ["d", 3], ["e", 4]);
-    useApp.getState().selectRelative(1);
-    expect(useApp.getState().selected).toBe("d");
-    useApp.getState().selectRelative(1);
-    useApp.getState().selectRelative(1);
-    expect(useApp.getState().selected).toBe("e");
-    useApp.getState().selectRelative(-1);
-    useApp.getState().selectRelative(-1);
-    useApp.getState().selectRelative(-1);
-    expect(useApp.getState().selected).toBe("b");
-  });
-
-  it("goes from a slide without a match to the nearest one with, that way, or stays", async () => {
-    const useApp = await searching("c", ["b", 1], ["e", 4]);
-    useApp.getState().selectRelative(1);
-    expect(useApp.getState().selected).toBe("e");
-    useApp.getState().select("c");
-    useApp.getState().selectRelative(-1);
-    expect(useApp.getState().selected).toBe("b");
-    useApp.getState().select("a");
-    useApp.getState().selectRelative(-1);
-    expect(useApp.getState().selected).toBe("a");
-  });
-
-  it("steps through every slide when the search found nothing, as the rail then lists none", async () => {
-    const useApp = await searching("b");
+  it("steps through every slide while a search is on, as the rail lists them all, and stops at the ends", async () => {
+    const useApp = await searching("b", ["b", 1], ["d", 3], ["e", 4]);
     useApp.getState().selectRelative(1);
     expect(useApp.getState().selected).toBe("c");
+    useApp.getState().selectRelative(1);
+    useApp.getState().selectRelative(1);
+    useApp.getState().selectRelative(1);
+    expect(useApp.getState().selected).toBe("e");
+    for (let i = 0; i < 5; i++) useApp.getState().selectRelative(-1);
+    expect(useApp.getState().selected).toBe("a");
   });
 
-  it("goes to the first and the last slide, of those a search found while one is on", async () => {
+  it("goes to the deck's first and last slide, whatever a search found", async () => {
     const useApp = await searching("c", ["b", 1], ["d", 3]);
-    useApp.getState().selectEdge("last");
-    expect(useApp.getState().selected).toBe("d");
-    useApp.getState().selectEdge("first");
-    expect(useApp.getState().selected).toBe("b");
-    useApp.getState().clearSearch();
     useApp.getState().selectEdge("last");
     expect(useApp.getState().selected).toBe("e");
     useApp.getState().selectEdge("first");
     expect(useApp.getState().selected).toBe("a");
   });
 
-  it("picks every slide the rail lists, keeping the one shown where it is among them", async () => {
+  it("picks every slide, also while a search is on, keeping the one shown where it is among them", async () => {
     const useApp = await searching("d", ["b", 1], ["d", 3]);
     useApp.getState().selectAllSlides();
-    expect(useApp.getState()).toMatchObject({ selected: "d", railSelected: ["b", "d"] });
-    useApp.getState().clearSearch();
-    useApp.getState().selectAllSlides();
-    expect(useApp.getState().railSelected).toEqual(["a", "b", "c", "d", "e"]);
+    expect(useApp.getState()).toMatchObject({ selected: "d", railSelected: ["a", "b", "c", "d", "e"] });
     // Picking slides the one shown is not among shows the first of them.
     useApp.getState().pickSlides(["a", "b"]);
     expect(useApp.getState()).toMatchObject({ selected: "a", railSelected: ["a", "b"] });
@@ -661,5 +596,126 @@ describe("changes to the slides that show before the deck file has them", () => 
     await backend.resolve(answer(moved));
     await done;
     expect(calls("deck_history")).toHaveLength(1);
+  });
+});
+
+describe("extending the picked range with the keys", () => {
+  const five: Deck = { ...DECK, slides: ["a", "b", "c", "d", "e"].map((id) => ({ ...DECK.slides[0]!, id })) };
+
+  it("picks from where the range started to where ⇧ and the arrows go, either way", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: five, selected: "c" });
+    useApp.getState().extendRailBy(1);
+    useApp.getState().extendRailBy(1);
+    expect(useApp.getState()).toMatchObject({ selected: "e", railSelected: ["c", "d", "e"] });
+    // Back past the start: the range turns round it.
+    useApp.getState().extendRailBy(-3);
+    expect(useApp.getState()).toMatchObject({ selected: "b", railSelected: ["b", "c"] });
+    useApp.getState().extendRailBy(1);
+    expect(useApp.getState()).toMatchObject({ selected: "c", railSelected: [] });
+  });
+
+  it("goes on from a ⇧-click's range, whose far end it moves", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: five, selected: "b" });
+    useApp.getState().extendRailSelection("d", "range");
+    expect(useApp.getState()).toMatchObject({ selected: "b", railSelected: ["b", "c", "d"] });
+    useApp.getState().extendRailBy(1);
+    expect(useApp.getState()).toMatchObject({ selected: "e", railSelected: ["b", "c", "d", "e"] });
+  });
+
+  it("starts again from the slide a plain selection goes to", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: five, selected: "a" });
+    useApp.getState().extendRailTo("c");
+    useApp.getState().select("e");
+    useApp.getState().extendRailBy(-1);
+    expect(useApp.getState().railSelected).toEqual(["d", "e"]);
+  });
+});
+
+describe("the grid of all slides and the layouts", () => {
+  it("shows the grid only with a deck, and leaves it for a slide", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: null });
+    useApp.getState().setOverview(true);
+    expect(useApp.getState().overview).toBe(false);
+    useApp.setState({ deck: DECK, selected: "intro" });
+    useApp.getState().setOverview(true);
+    expect(useApp.getState().overview).toBe(true);
+    useApp.getState().openSlide("outro");
+    expect(useApp.getState()).toMatchObject({ overview: false, selected: "outro" });
+  });
+
+  it("opens the layouts, but not during a show", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, presenting: true });
+    useApp.getState().setAddingSlide(true);
+    expect(useApp.getState().addingSlide).toBe(false);
+    useApp.setState({ presenting: false });
+    useApp.getState().setAddingSlide(true);
+    expect(useApp.getState().addingSlide).toBe(true);
+  });
+
+  it("starts each deck on the stage, with nothing picked", () => {
+    expect(railStateOf("/decks/talk/deck.html")).toMatchObject({
+      overview: false,
+      addingSlide: false,
+      railSelected: [],
+      railAnchor: null,
+    });
+  });
+});
+
+describe("sections and their slides", () => {
+  const sectioned: Deck = {
+    ...DECK,
+    sections: [
+      { index: 0, title: "Opening", before: 0 },
+      { index: 1, title: "Closing", before: 2 },
+    ],
+  };
+
+  it("deletes a section with its slides at once, with a way back, and moves the stage off them", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: sectioned, selected: "intro" });
+    const answer = { ...DECK, slides: DECK.slides.slice(2), sections: [{ index: 0, title: "Closing", before: 0 }] };
+    backend({ delete_section_slides: () => ({ deck: answer, created: [] }) });
+    await useApp.getState().deleteSectionSlides(0);
+    expect(calls("delete_section_slides")).toEqual([{ id: DECK.id, index: 0, slides: ["intro", "#2"] }]);
+    expect(useApp.getState().selected).toBe("outro");
+    expect(useApp.getState().deck?.sections).toEqual([{ index: 0, title: "Closing", before: 0 }]);
+    expect(toastTexts(useApp.getState(), "success").at(-1)).toBe("Deleted the section “Opening” and its 2 slides");
+  });
+
+  it("does not delete a section holding a locked slide, and says why", async () => {
+    const useApp = await freshStore();
+    const locked = { ...sectioned, slides: sectioned.slides.map((s) => ({ ...s, locked: s.id === "#2" })) };
+    useApp.setState({ deck: locked, selected: "intro" });
+    await useApp.getState().deleteSectionSlides(0);
+    expect(calls("delete_section_slides")).toEqual([]);
+    expect(toastTexts(useApp.getState(), "info").at(-1)).toMatch(/holds a locked slide/);
+  });
+
+  it("moves a section past its neighbour", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: sectioned, selected: "intro" });
+    backend({ reorder_slides: (args) => ({ deck: sectioned, created: [], args }) });
+    await useApp.getState().moveSection(1, -1);
+    expect(calls("reorder_slides")).toEqual([
+      { id: DECK.id, slides: ["section:1", "outro", "section:0", "intro", "#2"] },
+    ]);
+    await useApp.getState().moveSection(1, 1);
+    expect(calls("reorder_slides")).toHaveLength(1);
+  });
+
+  it("says when there is nothing to paste, only when asked to", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro", toasts: [] });
+    backend({ paste_slides: () => null });
+    expect(await useApp.getState().pasteSlides()).toBe(false);
+    expect(toastTexts(useApp.getState(), "info")).toEqual([]);
+    await useApp.getState().pasteSlides(true);
+    expect(toastTexts(useApp.getState(), "info").at(-1)).toMatch(/^There are no slides to paste\. Copy some first/);
   });
 });

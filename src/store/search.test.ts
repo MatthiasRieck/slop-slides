@@ -86,16 +86,17 @@ describe("find and replace", () => {
     expect(useApp.getState().search).toMatchObject({ open: false, query: "" });
   });
 
-  it("opens the Notes tab for a match in a slide's notes, and leaves the sidebar alone for the others", async () => {
+  it("opens the notes under the slide for a match in them, and leaves them as they are for the others", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", sidebarTab: "chat" });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", sidebarTab: "chat", notesOpen: false });
     useApp.getState().setSearch({ query: "x" });
     useApp.getState().setSearchMatches([match("intro", 0), match("outro", 2, { notes: true })]);
     useApp.getState().stepSearch(1);
-    expect(useApp.getState()).toMatchObject({ selected: "outro", sidebarTab: "notes" });
-    useApp.setState({ sidebarTab: "chat" });
+    expect(useApp.getState()).toMatchObject({ selected: "outro", notesOpen: true, sidebarTab: "chat" });
+    useApp.setState({ notesOpen: false });
+    // Past the last match is the first again.
     useApp.getState().stepSearch(1);
-    expect(useApp.getState()).toMatchObject({ selected: "intro", sidebarTab: "chat" });
+    expect(useApp.getState()).toMatchObject({ selected: "intro", notesOpen: false });
   });
 
   it("replaces the match in focus by its place on its slide, then goes to the one after it", async () => {

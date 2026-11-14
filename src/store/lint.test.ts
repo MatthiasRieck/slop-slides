@@ -20,9 +20,18 @@ describe("lint", () => {
     const useApp = await freshStore();
     backend({ lint_deck: () => [issue()] });
     useApp.setState({ deck: deckFor(DECK_HTML) });
-    await useApp.getState().refreshLint();
+    expect(await useApp.getState().refreshLint()).toBe(true);
     expect(calls("lint_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
     expect(useApp.getState().lint).toEqual([issue()]);
+  });
+
+  it("opens the deck's code in the sidebar on a line, until the code shows it", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), sidebarTab: "chat" });
+    useApp.getState().revealCodeLine(42);
+    expect(useApp.getState()).toMatchObject({ codeReveal: 42, sidebarTab: "code", sidebarOpen: true });
+    useApp.getState().codeLineShown();
+    expect(useApp.getState().codeReveal).toBeNull();
   });
 
   it("does nothing without a deck", async () => {
@@ -40,9 +49,10 @@ describe("lint", () => {
     const first = useApp.getState().refreshLint();
     const second = useApp.getState().refreshLint();
     answers[1]!([]);
-    await second;
+    expect(await second).toBe(true);
     answers[0]!([issue()]);
-    await first;
+    // The overtaken check is not the one shown.
+    expect(await first).toBe(false);
     expect(useApp.getState().lint).toEqual([]);
   });
 

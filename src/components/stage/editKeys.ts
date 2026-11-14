@@ -50,19 +50,17 @@ export function toolMessage(tool: EditTool, styles: Record<string, EditStyle>) {
 }
 
 /**
- * Edit mode's plain keys: a tool's shortcut picks it, Escape puts the tool away or else leaves
- * edit mode. `fromApp` when pressed in the app rather than forwarded by the slide, where
- * Escape belongs to whatever has focus. True when the key was one of them.
+ * Edit mode's plain keys: a tool's shortcut picks it, Escape puts the tool away. Escape never
+ * leaves edit mode: with nothing left to put away it does nothing, as in every slide editor.
+ * True when the key was one of them.
  */
-export function runEditKey(key: string, fromApp = false) {
+export function runEditKey(key: string) {
   const app = useApp.getState();
   const tool = EDIT_TOOL_KEYS[key.toLowerCase()];
   if (tool && key.length === 1) {
     app.setEditTool(tool);
   } else if (key === "Escape" && app.editTool !== "select") {
     app.setEditTool("select");
-  } else if (key === "Escape" && !fromApp) {
-    app.setEditing(false);
   } else {
     return false;
   }
@@ -95,16 +93,22 @@ const ALIGN_KEYS: Record<string, TextAlign> = { l: "left", e: "center", r: "righ
 /**
  * The shortcut on the selection that a key pressed with ⌘ / Ctrl is, as the slide editor has
  * them (`runShortcut` in src-tauri/assets/editor/): restacking (] and [, with Shift to the front
- * and back), text alignment (Shift+L / E / R / J) and size (Shift+. / Shift+,), flips (Shift+H /
- * Shift+V), the lock (Alt+L), copying and pasting a look (Alt+C / Alt+V) and the link popover (K).
+ * and back), text alignment (Shift+L / E / R / J) and size (Shift+. / Shift+,), flips (Alt+Shift+H /
+ * Alt+Shift+V: Shift+V alone pastes as plain text), the lock (Alt+L), copying and pasting a look
+ * (Alt+C / Alt+V) and the link popover (K).
  * Null for any other key. With Alt held a key types something else, so there it goes by its place.
  */
 export function editShortcut(event: ShortcutKey): EditShortcut | null {
   const code = event.altKey ? /^Key([A-Z])$/.exec(event.code ?? "") : null;
   const letter = code ? code[1]!.toLowerCase() : event.key.toLowerCase();
   if (event.altKey) {
-    if (event.shiftKey) return null;
+    if (event.shiftKey) {
+      return letter === "h" || letter === "v"
+        ? { post: { type: "slop:edit-flip", axis: letter === "h" ? "x" : "y" } }
+        : null;
+    }
     if (letter === "l") return { lock: true };
+    if (letter === "r") return { post: { type: "slop:edit-rotate", step: 1 } };
     if (letter === "c") return { post: { type: "slop:edit-copy-style" } };
     return letter === "v" ? { pasteStyle: true } : null;
   }
@@ -118,7 +122,7 @@ export function editShortcut(event: ShortcutKey): EditShortcut | null {
   if (align) return { post: { type: "slop:edit-style", style: { align } } };
   const size = keyOfPair(event, ",<", ".>", "Comma", "Period");
   if (size) return { post: { type: "slop:edit-font-step", step: size } };
-  if (letter === "h" || letter === "v") return { post: { type: "slop:edit-flip", axis: letter === "h" ? "x" : "y" } };
+  if (letter === "x") return { post: { type: "slop:edit-toggle-style", key: "strike" } };
   return null;
 }
 

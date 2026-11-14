@@ -13,9 +13,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
   }),
 }));
 
-import type { RecentDeck, RecentWorkspace } from "../lib/api";
+import type { GalleryDeck, RecentWorkspace } from "../lib/api";
 import { useApp } from "../store";
-import { lastError, toastTexts } from "../store/errors";
+import { lastError } from "../store/errors";
+import { useExports } from "../store/exports";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke, open as openDialog } from "../test/tauri";
 import { Home } from "./Home";
@@ -23,14 +24,34 @@ import { Home } from "./Home";
 const NOW = Date.now();
 const LIBRARY = "/Users/me/Documents/SlopSlide";
 let recent: RecentWorkspace[];
-let recentDecks: RecentDeck[];
-let importSkipped: string[];
+let gallery: GalleryDeck[];
+const MODEL = {
+  id: "m",
+  label: "M",
+  isDefault: true,
+  efforts: [],
+  defaultEffort: null,
+  contextWindows: [],
+  defaultContextWindow: null,
+};
+let providers: { id: string; installed: boolean; path: string | null; models: unknown[]; error: null }[];
+const SIZE = { width: 1920, height: 1080, unit: "px" as const, pixelWidth: 1920, pixelHeight: 1080 };
+/** A deck on the start screen. */
+const galleryDeck = (path: string, title: string, workspace: string, ago: number, opened = true): GalleryDeck => ({
+  path,
+  title,
+  workspace,
+  modifiedMs: NOW - ago,
+  openedMs: opened ? NOW - ago : null,
+  size: SIZE,
+});
+let importChanges: { what: string; slides: number[] }[];
 /** Held, the backend answers `create_deck` and `import_pptx` only once it is let go. */
 let hold: Promise<void> | null;
 
 beforeEach(() => {
   localStorage.clear();
-  importSkipped = [];
+  importChanges = [];
   hold = null;
   dragDrop = null;
   unlistenDragDrop.mockClear();
@@ -38,18 +59,26 @@ beforeEach(() => {
     { path: "/Users/me/talks", name: "talks", openedMs: NOW - 5 * 60_000 },
     { path: "/Users/me/work/q3", name: "q3", openedMs: NOW - 3 * 3_600_000 },
   ];
-  recentDecks = [];
+  gallery = [];
+  providers = [{ id: "claude", installed: true, path: "/bin/claude", models: [MODEL], error: null }];
   invoke.mockReset().mockImplementation(async (command: string, args?: { path?: string; id?: string }) => {
     switch (command) {
       case "recent_workspaces":
         return recent;
-      case "recent_decks":
-        return recentDecks;
+      case "deck_gallery":
+        return gallery;
+      case "deck_workspace":
+        // A deck in a folder of its own opens in the folder around it.
+        return args?.path?.endsWith("/deck.html")
+          ? args.path.split("/").slice(0, -2).join("/")
+          : args?.path?.split("/").slice(0, -1).join("/");
+      case "list_providers":
+        return providers;
       case "forget_workspace":
         recent = recent.filter((w) => w.path !== args?.path);
         return;
       case "forget_deck":
-        recentDecks = recentDecks.filter((d) => d.path !== args?.path);
+        gallery = gallery.map((d) => (d.path === args?.path ? { ...d, openedMs: null } : d));
         return;
       case "library_folder":
         return LIBRARY;
@@ -64,7 +93,8 @@ beforeEach(() => {
         await hold;
         return {
           deck: { ...deckFor(DECK_HTML), id: `${LIBRARY}/q3/deck.html`, path: `${LIBRARY}/q3/deck.html` },
-          skipped: importSkipped,
+          changes: importChanges,
+          fonts: [],
         };
       case "load_chat":
         return null;
@@ -81,7 +111,13 @@ beforeEach(() => {
   useApp.setState({ workspace: null, openedFile: null, deck: null, toasts: [] });
 });
 
-const rows = () => screen.queryAllByRole("listitem");
+/** The rows of the recent folders. */
+const rows = () => {
+  const list = screen.queryByRole("list", { name: "Recent folders" });
+  return list ? within(list).getAllByRole("listitem") : [];
+};
+const aboutField = () => screen.getByRole("textbox", { name: "What is the deck about?" }) as HTMLTextAreaElement;
+const titleField = () => screen.getByRole("textbox", { name: "Title (optional)" }) as HTMLInputElement;
 const createButton = () => screen.getByRole("button", { name: /Create deck|Creating/ }) as HTMLButtonElement;
 /** A promise the test resolves, to hold the backend's answer back. */
 function held() {
@@ -112,7 +148,11 @@ describe("Home", () => {
   it("reports a recent list that cannot be read", async () => {
     invoke.mockRejectedValue("cannot locate home folder");
     render(<Home />);
-    await waitFor(() => expect(lastError(useApp.getState())).toBe("cannot locate home folder"));
+    await waitFor(() =>
+      expect(lastError(useApp.getState())).toBe("Could not load the recent decks: cannot locate home folder"),
+    );
+    // With a way to try again.
+    expect(useApp.getState().toasts.at(-1)?.action?.label).toBe("Retry");
   });
 
   it("opens a recent folder when it is clicked", async () => {
@@ -145,7 +185,7 @@ describe("Home", () => {
     const base = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (command: string, args?: { path?: string; id?: string }) =>
       command === "open_file"
-        ? { path: args?.path, absolute: `/Users/me/talks/q3/${args?.path}`, kind: "deck" }
+        ? { path: args?.path, absolute: `/Users/me/talks/${args?.path}`, kind: "deck" }
         : base(command, args),
     );
     render(<Home />);
@@ -153,7 +193,8 @@ describe("Home", () => {
     expect(openDialog).toHaveBeenCalledWith(
       expect.objectContaining({ filters: [{ name: "HTML deck", extensions: ["html", "htm"] }] }),
     );
-    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks/q3" });
+    // The folder around the deck's own: new decks go beside it, not among its assets.
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks" });
     await waitFor(() => expect(useApp.getState().deck?.id).toBe("/Users/me/talks/q3/deck.html"));
     expect(useApp.getState().chatKey).toBe("/Users/me/talks/q3/deck.html");
   });
@@ -185,8 +226,7 @@ describe("Home", () => {
 
   it("creates a deck with the typed title in the library", async () => {
     render(<Home />);
-    const input = screen.getByPlaceholderText(/Deck title/);
-    fireEvent.change(input, { target: { value: "  Quarterly update  " } });
+    fireEvent.change(titleField(), { target: { value: "  Quarterly update  " } });
     await act(async () => fireEvent.click(createButton()));
     expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Quarterly update", template: null });
@@ -198,10 +238,30 @@ describe("Home", () => {
     });
   });
 
-  it("creates an untitled deck when no title is given", async () => {
+  it("creates nothing from an empty form, but an empty deck when asked for one", async () => {
     render(<Home />);
-    await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
+    expect(createButton().disabled).toBe(true);
+    await act(async () => fireEvent.submit(createButton().closest("form")!));
+    expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start with an empty deck" })));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
+  });
+
+  it("creates a deck from what it is about, named after it, and asks the agent for it", async () => {
+    render(<Home />);
+    expect(document.activeElement).toBe(aboutField());
+    fireEvent.change(aboutField(), { target: { value: "A pitch for the tool library. Bold and warm" } });
+    await act(async () => fireEvent.keyDown(aboutField(), { key: "Enter" }));
+    expect(invoke).toHaveBeenCalledWith("create_deck", { title: "A pitch for the tool library", template: null });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("send_message", expect.anything()));
+  });
+
+  it("offers ideas for what a deck could be about while the field is empty", () => {
+    render(<Home />);
+    const idea = screen.getByRole("button", { name: /Quarterly engineering update/ });
+    fireEvent.click(idea);
+    expect(aboutField().value).toMatch(/^Quarterly engineering update/);
+    expect(screen.queryByRole("button", { name: /Quarterly engineering update/ })).toBeNull();
   });
 
   it("does not create a deck when the library cannot be opened", async () => {
@@ -211,19 +271,31 @@ describe("Home", () => {
       return [];
     });
     render(<Home />);
-    await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Start with an empty deck" })));
     expect(lastError(useApp.getState())).toBe("not a folder");
     expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
   });
 
-  it("offers the templates as styles for a new deck", async () => {
+  it("offers the templates as styles for a new deck, as pictures, or leaves the style to the agent", async () => {
     useApp.setState({ templates: undefined });
     render(<Home />);
-    const style = screen.getByLabelText("Style") as HTMLSelectElement;
-    await waitFor(() => expect(style.options).toHaveLength(3));
-    expect([...style.options].map((o) => o.textContent)).toEqual(["Any style", "Mine (yours)", "Swiss Design"]);
-    fireEvent.change(style, { target: { value: "swiss" } });
-    fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
+    const choice = () => screen.getByRole("button", { name: /^Style: / });
+    expect(choice().getAttribute("aria-label")).toBe("Style: Let the agent choose");
+    fireEvent.click(choice());
+    const picker = await screen.findByRole("dialog", { name: "Style" });
+    await waitFor(() => expect(within(picker).getAllByRole("button")).toHaveLength(3));
+    expect(
+      within(picker)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Let the agent choose", "Mine style", "Swiss Design style"]);
+    expect(within(picker).getByRole("button", { name: "Let the agent choose" }).getAttribute("aria-current")).toBe(
+      "true",
+    );
+    fireEvent.click(within(picker).getByRole("button", { name: "Swiss Design style" }));
+    expect(screen.queryByRole("dialog", { name: "Style" })).toBeNull();
+    expect(choice().getAttribute("aria-label")).toBe("Style: Swiss Design");
+    fireEvent.change(titleField(), { target: { value: "Board" } });
     await act(async () => fireEvent.click(createButton()));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: "swiss" });
   });
@@ -247,40 +319,35 @@ describe("Home", () => {
     expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
   });
 
-  it("says what an import had to change", async () => {
-    importSkipped = ["charts (their data came along as tables)"];
+  it("keeps what an import had to change for its report", async () => {
+    importChanges = [{ what: "charts (their data came along as tables)", slides: [2] }];
     openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
     render(<Home />);
     fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
-    await waitFor(() =>
-      expect(toastTexts(useApp.getState(), "info")).toEqual([
-        "Imported, with these changes: charts (their data came along as tables).",
-      ]),
-    );
+    await waitFor(() => expect(useExports.getState().reportOpen).toBe(true));
+    expect(useExports.getState().report?.changes).toEqual(importChanges);
     // It is something to know, not a failure.
     expect(lastError(useApp.getState())).toBeNull();
   });
 
   describe("the new deck form", () => {
-    it("is headed New deck, over a labelled Title field that has the focus", () => {
+    it("is headed New deck, and asks first what the deck is about, with the focus there", () => {
       render(<Home />);
       expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("New deck");
-      const title = screen.getByRole("textbox", { name: "Title" });
-      expect(title).toBe(screen.getByPlaceholderText(/Deck title/));
-      expect(document.activeElement).toBe(title);
+      expect(document.activeElement).toBe(aboutField());
+      expect(titleField()).toBeTruthy();
     });
 
     it("says it is creating, and takes no second submit meanwhile", async () => {
       const release = held();
       render(<Home />);
+      fireEvent.change(titleField(), { target: { value: "Talk" } });
       const form = createButton().closest("form")!;
       await act(async () => fireEvent.submit(form));
       await waitFor(() => expect(createButton().textContent).toBe("Creating…"));
       expect(createButton().disabled).toBe(true);
       expect(createButton().getAttribute("aria-busy")).toBe("true");
-      expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).closest("fieldset")!.disabled).toBe(
-        true,
-      );
+      expect(titleField().closest("fieldset")!.disabled).toBe(true);
       await act(async () => fireEvent.submit(form));
       await act(async () => release());
       await waitFor(() => expect(useApp.getState().deck).not.toBeNull());
@@ -294,6 +361,7 @@ describe("Home", () => {
         return base(command, args);
       });
       render(<Home />);
+      fireEvent.change(titleField(), { target: { value: "Talk" } });
       await act(async () => fireEvent.submit(createButton().closest("form")!));
       expect(lastError(useApp.getState())).toBe("a deck of that name exists");
       expect(createButton().disabled).toBe(false);
@@ -311,7 +379,7 @@ describe("Home", () => {
         within(row)
           .getAllByRole("button")
           .map((button) => button.textContent),
-      ).toEqual(["Open folder…", "Open deck…", "SlopSlide library", "Import PowerPoint…"]);
+      ).toEqual(["Open deck…", "Open folder…", "Import PowerPoint…", "SlopSlide library"]);
       expect(importButton().className).toBe(screen.getByRole("button", { name: /Open deck/ }).className);
     });
 
@@ -319,6 +387,7 @@ describe("Home", () => {
       const release = held();
       openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
       render(<Home />);
+      fireEvent.change(titleField(), { target: { value: "Talk" } });
       fireEvent.click(importButton());
       await waitFor(() => expect(importButton().textContent).toBe("Importing q3.pptx…"));
       expect(importButton().disabled).toBe(true);
@@ -331,37 +400,35 @@ describe("Home", () => {
     });
   });
 
-  describe("recent decks", () => {
+  describe("your decks", () => {
     beforeEach(() => {
-      recentDecks = [
-        {
-          path: `${LIBRARY}/pitch/deck.html`,
-          title: "Series A pitch",
-          workspace: LIBRARY,
-          openedMs: NOW - 2 * 60_000,
-        },
-        { path: "/Users/me/talks/q3.html", title: "", workspace: "/Users/me/talks", openedMs: NOW - 2 * 86_400_000 },
+      gallery = [
+        galleryDeck(`${LIBRARY}/pitch/deck.html`, "Series A pitch", LIBRARY, 2 * 60_000),
+        galleryDeck("/Users/me/talks/q3.html", "", "/Users/me/talks", 2 * 86_400_000),
+        galleryDeck(`${LIBRARY}/notes/deck.html`, "Team notes", LIBRARY, 3 * 86_400_000, false),
       ];
     });
-    const deckRows = () => within(screen.getByRole("list", { name: "Recent decks" })).getAllByRole("listitem");
+    const cards = () => within(screen.getByRole("list", { name: "Your decks" })).getAllByRole("listitem");
 
-    it("come before the recent folders, each with its title, folder and age", async () => {
+    it("come before the recent folders as pictures, each with its title, folder and age", async () => {
       render(<Home />);
-      await waitFor(() => expect(rows()).toHaveLength(4));
+      await waitFor(() => expect(cards()).toHaveLength(3));
       expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
         "Open",
-        "Recent decks",
+        "Your decks",
         "Recent folders",
       ]);
-      expect(deckRows()[0]!.textContent).toContain("Series A pitch");
-      expect(deckRows()[0]!.textContent).toContain(`${LIBRARY}/pitch`);
-      expect(deckRows()[0]!.textContent).toContain("2m ago");
+      expect(cards()[0]!.textContent).toContain("Series A pitch");
+      expect(cards()[0]!.textContent).toContain("SlopSlide / pitch");
+      expect(cards()[0]!.textContent).toContain("2m ago");
       // A deck without a title still has a name to press.
-      expect(deckRows()[1]!.textContent).toContain("Untitled");
-      expect(deckRows()[1]!.textContent).toContain("2d ago");
+      expect(cards()[1]!.textContent).toContain("Untitled");
+      expect(cards()[1]!.textContent).toContain("2d ago");
+      // Each shows its first slide.
+      expect(cards()[0]!.querySelector("[data-slide-frame], iframe, div")).toBeTruthy();
     });
 
-    it("open the folder the deck was in, then the deck", async () => {
+    it("open the folder the deck opens in, then the deck", async () => {
       const base = invoke.getMockImplementation()!;
       invoke.mockImplementation(async (command: string, args?: { path?: string; id?: string }) =>
         command === "open_file"
@@ -369,27 +436,118 @@ describe("Home", () => {
           : base(command, args),
       );
       render(<Home />);
-      await waitFor(() => expect(rows()).toHaveLength(4));
-      await act(async () => fireEvent.click(screen.getByText("Series A pitch")));
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Open Series A pitch" })));
       expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
       expect(invoke).toHaveBeenCalledWith("open_file", { path: "pitch/deck.html" });
       await waitFor(() => expect(useApp.getState().deck?.id).toBe(`${LIBRARY}/pitch/deck.html`));
     });
 
-    it("can be taken off the list", async () => {
+    it("can be taken off the recent ones from a card's menu, the deck staying", async () => {
       render(<Home />);
-      await waitFor(() => expect(rows()).toHaveLength(4));
-      await act(async () => fireEvent.click(screen.getByLabelText("Remove Series A pitch from recent decks")));
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      fireEvent.click(screen.getByRole("button", { name: "More for Series A pitch" }));
+      // Only a deck opened before can be taken off them.
+      expect(screen.getByRole("menu").textContent).toContain("Remove from recent decks");
+      await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /Remove from recent decks/ })));
       expect(invoke).toHaveBeenCalledWith("forget_deck", { path: `${LIBRARY}/pitch/deck.html` });
-      await waitFor(() => expect(deckRows()).toHaveLength(1));
       expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
+      fireEvent.contextMenu(cards()[2]!);
+      expect(screen.getByRole("menu").textContent).not.toContain("Remove from recent decks");
     });
 
-    it("are left out when no deck was opened before", async () => {
-      recentDecks = [];
+    it("duplicates a deck from its menu", async () => {
+      const base = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (command: string, args?: { id?: string }) =>
+        command === "duplicate_deck" ? `${LIBRARY}/pitch-copy/deck.html` : base(command, args),
+      );
+      render(<Home />);
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      fireEvent.contextMenu(cards()[0]!);
+      await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /Duplicate/ })));
+      expect(invoke).toHaveBeenCalledWith("duplicate_deck", { id: `${LIBRARY}/pitch/deck.html` });
+      // The list is read again, with the copy.
+      expect(invoke.mock.calls.filter(([command]) => command === "deck_gallery")).toHaveLength(2);
+    });
+
+    it("moves a deck to the trash from its menu, once the user says so", async () => {
+      const { useConfirmQuestion } = await import("../store/confirm");
+      render(<Home />);
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      fireEvent.click(screen.getByRole("button", { name: "More for Team notes" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /Move to/ }));
+      await waitFor(() => expect(useConfirmQuestion.getState().question?.title).toMatch(/^Move “Team notes” to the/));
+      await act(async () => useConfirmQuestion.getState().question!.answer(true));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("trash_deck", { id: `${LIBRARY}/notes/deck.html` }));
+    });
+
+    it("are found by their title or folder once there are many", async () => {
+      gallery = Array.from({ length: 10 }, (_, n) =>
+        galleryDeck(`${LIBRARY}/deck-${n}/deck.html`, n === 4 ? "Board update" : `Deck ${n}`, LIBRARY, n * 60_000),
+      );
+      render(<Home />);
+      await waitFor(() => expect(cards()).toHaveLength(10));
+      fireEvent.change(screen.getByRole("searchbox", { name: "Find a deck" }), { target: { value: "board" } });
+      expect(cards()).toHaveLength(1);
+      expect(cards()[0]!.textContent).toContain("Board update");
+      fireEvent.change(screen.getByRole("searchbox", { name: "Find a deck" }), { target: { value: "nothing" } });
+      expect(screen.getByText(/No deck’s title or folder has “nothing” in it/)).toBeTruthy();
+    });
+
+    it("has no field to find one while there are few", async () => {
+      render(<Home />);
+      await waitFor(() => expect(cards()).toHaveLength(3));
+      expect(screen.queryByRole("searchbox")).toBeNull();
+    });
+
+    it("are left out when there are none", async () => {
+      gallery = [];
       render(<Home />);
       await waitFor(() => expect(rows()).toHaveLength(2));
-      expect(screen.queryByText("Recent decks")).toBeNull();
+      expect(screen.queryByText("Your decks")).toBeNull();
+    });
+  });
+
+  describe("the first start", () => {
+    it("says when an agent is ready", async () => {
+      render(<Home />);
+      expect((await screen.findByTestId("agent-check")).textContent).toContain("Claude Code is ready");
+    });
+
+    it("says how to get an agent when none is installed", async () => {
+      providers = [{ id: "claude", installed: false, path: null, models: [], error: null }];
+      useApp.setState({ providers: undefined });
+      render(<Home />);
+      const check = await screen.findByRole("alert");
+      expect(check.textContent).toContain("No agent is installed yet");
+      expect(check.textContent).toContain("claude.com/claude-code");
+    });
+
+    it("offers an example deck, made in the library", async () => {
+      recent = [];
+      const base = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (command: string, args?: { id?: string }) =>
+        command === "create_example_deck"
+          ? {
+              ...deckFor(DECK_HTML),
+              id: `${LIBRARY}/example-deck/deck.html`,
+              path: `${LIBRARY}/example-deck/deck.html`,
+            }
+          : base(command, args),
+      );
+      render(<Home />);
+      const example = await screen.findByRole("button", { name: "Open an example deck" });
+      await act(async () => fireEvent.click(example));
+      expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
+      await waitFor(() => expect(useApp.getState().deck?.id).toBe(`${LIBRARY}/example-deck/deck.html`));
+    });
+
+    it("has the app's settings and the shortcuts at its top", async () => {
+      useApp.setState({ appSettingsOpen: false });
+      render(<Home />);
+      fireEvent.click(screen.getByRole("button", { name: "App settings…" }));
+      expect(useApp.getState().appSettingsOpen).toBe(true);
+      expect(screen.getByRole("button", { name: "Keyboard shortcuts" })).toBeTruthy();
     });
   });
 
@@ -427,8 +585,10 @@ describe("Home", () => {
     await waitFor(() => expect(rows()).toHaveLength(3));
     expect(rows()[0]!.textContent).toContain("new");
     // Both lists are asked for together, once each.
-    const asked = invoke.mock.calls.map(([command]) => command).filter((c) => String(c).startsWith("recent_"));
-    expect(asked.sort()).toEqual(["recent_decks", "recent_workspaces"]);
+    const asked = invoke.mock.calls
+      .map(([command]) => command)
+      .filter((c) => ["deck_gallery", "recent_workspaces"].includes(String(c)));
+    expect(asked.sort()).toEqual(["deck_gallery", "recent_workspaces"]);
   });
 
   describe("dropping on the start screen", () => {
@@ -460,13 +620,13 @@ describe("Home", () => {
       const base = invoke.getMockImplementation()!;
       invoke.mockImplementation(async (command: string, args?: { path?: string; id?: string }) =>
         command === "open_file"
-          ? { path: args?.path, absolute: `/Users/me/talks/q3/${args?.path}`, kind: "deck" }
+          ? { path: args?.path, absolute: `/Users/me/talks/${args?.path}`, kind: "deck" }
           : base(command, args),
       );
       render(<Home />);
       await waitFor(() => expect(dragDrop).not.toBeNull());
       await drop(["/Users/me/talks/q3/deck.html"]);
-      expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks/q3" });
+      expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks" });
       await waitFor(() => expect(useApp.getState().deck?.id).toBe("/Users/me/talks/q3/deck.html"));
     });
 
@@ -503,10 +663,13 @@ describe("Home", () => {
     });
   });
 
-  it("opens a folder on Ctrl+O", async () => {
-    openDialog.mockResolvedValue("/Users/me/new");
+  it("opens a deck on Ctrl+O, and a folder on Ctrl+Shift+O", async () => {
+    openDialog.mockResolvedValue(null);
     render(<Home />);
     await act(async () => fireEvent.keyDown(document.body, { key: "o", ctrlKey: true }));
+    expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Open a deck" }));
+    openDialog.mockResolvedValue("/Users/me/new");
+    await act(async () => fireEvent.keyDown(document.body, { key: "O", ctrlKey: true, shiftKey: true }));
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
     expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/new" });
   });

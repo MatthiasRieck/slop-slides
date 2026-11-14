@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::audio;
+use super::settings::{Delivery, Pace};
 use crate::error::{Error, Result};
 use crate::sound;
 use crate::voice::Word;
@@ -84,6 +85,12 @@ impl Provider {
             Provider::ElevenLabs => ELEVENLABS_VOICES,
             Provider::OpenAi => OPENAI_VOICES,
         }
+    }
+
+    /// Whether it takes a note on the manner narration is said in (see
+    /// [`Delivery::style`]): OpenAI's model follows instructions, ElevenLabs' has none.
+    pub fn takes_style(self) -> bool {
+        matches!(self, Provider::OpenAi)
     }
 
     pub fn default_voice(self) -> &'static str {
@@ -323,14 +330,44 @@ pub struct Request {
     pub body: Value,
 }
 
+/// What OpenAI's model is told about how to say narration in the language named `language`:
+/// the pace in words, as its model has no speed to set, and the deck's style note after it.
+fn openai_instructions(language: &str, delivery: &Delivery) -> String {
+    let pace = match delivery.pace {
+        Pace::Slower => "Speak slowly and deliberately, with a clear pause between sentences.",
+        Pace::Normal => "Keep a natural, steady pace.",
+        Pace::Faster => "Speak at a brisk, energetic pace, every word still clear.",
+    };
+    let mut instructions =
+        format!("Speak in {language}, as a clear, engaging presenter narrating a slide. {pace}");
+    if !delivery.style.is_empty() {
+        instructions.push_str(&format!(
+            " Manner: {}.",
+            delivery.style.trim_end_matches('.')
+        ));
+    }
+    instructions
+}
+
+/// How fast ElevenLabs speaks at `pace`, as its `voice_settings.speed` (1 is the voice's own;
+/// it takes 0.7 to 1.2).
+fn elevenlabs_speed(pace: Pace) -> f64 {
+    match pace {
+        Pace::Slower => 0.85,
+        Pace::Normal => 1.0,
+        Pace::Faster => 1.15,
+    }
+}
+
 /// How to ask `provider` to say `text` in `voice`, in the language named `language` (English,
-/// German…), with `key`.
+/// German…), with `key`, the way `delivery` says.
 pub fn request(
     provider: Provider,
     key: &str,
     text: &str,
     voice: &str,
     language: &str,
+    delivery: &Delivery,
 ) -> Result<Request> {
     let too_long = |max: usize| {
         Error::msg(format!(
@@ -350,13 +387,18 @@ pub fn request(
             if text.chars().count() > ELEVENLABS_MAX_CHARS {
                 return Err(too_long(ELEVENLABS_MAX_CHARS));
             }
+            let mut body = json!({ "text": text, "model_id": ELEVENLABS_MODEL });
+            // The voice's own settings stand unless the deck asks for another pace.
+            if delivery.pace != Pace::Normal {
+                body["voice_settings"] = json!({ "speed": elevenlabs_speed(delivery.pace) });
+            }
             Ok(Request {
                 url: format!(
                     "https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps?output_format=pcm_{}",
                     audio::RATE
                 ),
                 headers: vec![("xi-api-key", key.to_string())],
-                body: json!({ "text": text, "model_id": ELEVENLABS_MODEL }),
+                body,
             })
         }
         Provider::OpenAi => {
@@ -372,9 +414,7 @@ pub fn request(
                     "input": text,
                     // Raw 16-bit mono PCM at 24 kHz.
                     "response_format": "pcm",
-                    "instructions": format!(
-                        "Speak in {language}, as a clear, engaging presenter narrating a slide. Keep a natural, steady pace."
-                    ),
+                    "instructions": openai_instructions(language, delivery),
                 }),
             })
         }
@@ -509,8 +549,9 @@ pub async fn say(
     text: &str,
     voice: &str,
     language: &str,
+    delivery: &Delivery,
 ) -> Result<Said> {
-    let request = request(provider, key, text, voice, language)?;
+    let request = request(provider, key, text, voice, language, delivery)?;
     let mut call = client()?
         .post(&request.url)
         .header("Content-Type", "application/json")
@@ -689,6 +730,7 @@ mod tests {
             "Hello.",
             "JBFqnCBsd6RMkjVDRZzb",
             "German",
+            &Delivery::default(),
         )
         .unwrap();
         assert_eq!(
@@ -698,11 +740,63 @@ mod tests {
         assert_eq!(r.headers, vec![("xi-api-key", "k".to_string())]);
         assert_eq!(r.body["text"], "Hello.");
         assert_eq!(r.body["model_id"], "eleven_multilingual_v2");
+        assert!(
+            r.body["voice_settings"].is_null(),
+            "the voice's own settings"
+        );
+    }
+
+    #[test]
+    fn the_pace_and_style_go_to_each_service_the_way_it_takes_them() {
+        let plain = Delivery::default();
+        let slow = Delivery::checked(Pace::Slower, "warm and calm.").unwrap();
+        let openai = |delivery: &Delivery| {
+            let r = request(Provider::OpenAi, "sk", "Hi.", "coral", "English", delivery).unwrap();
+            r.body["instructions"].as_str().unwrap().to_string()
+        };
+        // The plain delivery asks as it always did, so nothing made before sounds different.
+        assert_eq!(
+            openai(&plain),
+            "Speak in English, as a clear, engaging presenter narrating a slide. Keep a natural, steady pace."
+        );
+        assert!(openai(&slow).contains("slowly"), "{}", openai(&slow));
+        assert!(
+            openai(&slow).ends_with("Manner: warm and calm."),
+            "{}",
+            openai(&slow)
+        );
+        let fast = Delivery::checked(Pace::Faster, "").unwrap();
+        assert!(openai(&fast).contains("brisk"));
+        // ElevenLabs has a speed to set, and no note to take.
+        let eleven = |delivery: &Delivery| {
+            request(
+                Provider::ElevenLabs,
+                "k",
+                "Hi.",
+                "JBFqnCBsd6RMkjVDRZzb",
+                "English",
+                delivery,
+            )
+            .unwrap()
+            .body
+        };
+        assert_eq!(eleven(&slow)["voice_settings"]["speed"], 0.85);
+        assert_eq!(eleven(&fast)["voice_settings"]["speed"], 1.15);
+        assert!(!eleven(&slow).to_string().contains("warm"));
+        assert!(Provider::OpenAi.takes_style() && !Provider::ElevenLabs.takes_style());
     }
 
     #[test]
     fn openai_is_asked_for_pcm_in_the_narrations_language() {
-        let r = request(Provider::OpenAi, "sk", "Hallo.", "coral", "German").unwrap();
+        let r = request(
+            Provider::OpenAi,
+            "sk",
+            "Hallo.",
+            "coral",
+            "German",
+            &Delivery::default(),
+        )
+        .unwrap();
         assert_eq!(r.url, "https://api.openai.com/v1/audio/speech");
         assert_eq!(r.headers, vec![("Authorization", "Bearer sk".to_string())]);
         assert_eq!(r.body["model"], "gpt-4o-mini-tts");
@@ -715,17 +809,27 @@ mod tests {
     #[test]
     fn too_long_a_narration_is_refused_before_sending() {
         let long = "a".repeat(OPENAI_MAX_CHARS + 1);
-        let err = request(Provider::OpenAi, "sk", &long, "coral", "English").unwrap_err();
+        let plain = Delivery::default();
+        let err = request(Provider::OpenAi, "sk", &long, "coral", "English", &plain).unwrap_err();
         assert!(err.to_string().contains("4096"), "{err}");
         assert!(request(
             Provider::ElevenLabs,
             "k",
             &long,
             "JBFqnCBsd6RMkjVDRZzb",
-            "English"
+            "English",
+            &plain
         )
         .is_ok());
-        assert!(request(Provider::ElevenLabs, "k", "Hi", "../voices", "English").is_err());
+        assert!(request(
+            Provider::ElevenLabs,
+            "k",
+            "Hi",
+            "../voices",
+            "English",
+            &plain
+        )
+        .is_err());
     }
 
     #[test]

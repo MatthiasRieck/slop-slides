@@ -1,10 +1,11 @@
-import { AppWindow, ArrowLeftRight, Loader2, MonitorPlay, StickyNote } from "lucide-react";
+import { AppWindow, ArrowLeftRight, Loader2, MonitorPlay } from "lucide-react";
 import { useState } from "react";
 
 import type { Screen } from "../lib/api";
 import { arrange, choose, loadChoice, type ScreenChoice, swap } from "../lib/screens";
 import { cn } from "../lib/utils";
 import { Dialog } from "./Dialog";
+import { PRESENTER_VIEW, PresenterViewIcon } from "./presenter/presenterView";
 
 /** How tall the drawing of the screens gets; it narrows to keep their shape. */
 const MAX_HEIGHT_REM = 16;
@@ -13,7 +14,7 @@ const MAX_HEIGHT_REM = 16;
 const LABEL = "relative max-w-full truncate rounded bg-background/85 px-1.5 py-px text-[10px] font-medium";
 
 /** What a screen is used for, in words: its border's color alone would not say. */
-const ROLE_NAMES = { audience: "Slides", presenter: "Presenter view", none: "Not used" } as const;
+const ROLE_NAMES = { audience: "Slides", presenter: PRESENTER_VIEW, none: "Not used" } as const;
 
 /**
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
@@ -41,15 +42,10 @@ export function ScreenPicker(props: {
     <Dialog
       label="Choose screens"
       onClose={props.onCancel}
-      className="flex w-[34rem] max-w-[90vw] flex-col gap-4 rounded-xl border border-border bg-background p-5 text-foreground shadow-2xl outline-none"
-      heading={
-        <>
-          <h2 className="text-base font-semibold">Present on</h2>
-          <p className="text-xs text-muted-foreground">
-            Screens match the arrangement in your system display settings. Pick where your slides and notes appear.
-          </p>
-        </>
-      }
+      size="md"
+      className="gap-4"
+      title="Present on"
+      description="Screens match the arrangement in your system display settings. Pick where your slides and the presenter view appear."
     >
       <div
         className="relative mx-auto w-full"
@@ -113,7 +109,7 @@ export function ScreenPicker(props: {
                   disabled={role === "audience"}
                   onClick={() => setChoice(choose(choice, "presenter", screen.index))}
                 >
-                  <StickyNote />
+                  <PresenterViewIcon />
                 </RoleButton>
               </div>
               <span className={cn(LABEL, "tabular-nums")}>

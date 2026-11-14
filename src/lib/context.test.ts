@@ -1,7 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { type ContextUsage, contextPercent, formatTokens, latestContext, mergeContext, windowTokens } from "./context";
+import {
+  type ContextUsage,
+  contextNotice,
+  contextPercent,
+  formatCost,
+  formatTokens,
+  latestContext,
+  mergeContext,
+  totalCost,
+  windowTokens,
+} from "./context";
 
 const usage = (patch: Partial<ContextUsage> = {}): ContextUsage => ({
   provider: "claude",
@@ -71,5 +81,39 @@ describe("context usage", () => {
     expect(mergeContext(usage(), "claude", { contextTokens: 7, contextWindow: 8 })).toEqual(
       usage({ tokens: 7, window: 8 }),
     );
+  });
+});
+
+describe("contextNotice", () => {
+  it("says nothing while the chat has room, and how full it is from 60% on", () => {
+    expect(contextNotice(null)).toBeNull();
+    expect(contextNotice(59.4)).toBeNull();
+    expect(contextNotice(60)).toEqual({
+      text: "This chat is 60% full.",
+      advice: "Compact summarizes it to make room.",
+      urgent: false,
+    });
+  });
+
+  it("says what to do once it is nearly full", () => {
+    const notice = contextNotice(93.6)!;
+    expect(notice.text).toBe("This chat is almost full (94%).");
+    expect(notice.advice).toMatch(/start a new chat/);
+    expect(notice.urgent).toBe(true);
+  });
+});
+
+describe("cost", () => {
+  it("adds up what the replies reported, and is unknown when none did", () => {
+    expect(
+      totalCost([{ role: "user" }, { role: "assistant", costUsd: 0.1 }, { role: "assistant", costUsd: 0.25 }]),
+    ).toBeCloseTo(0.35);
+    expect(totalCost([{ role: "assistant", costUsd: null }, { role: "user" }])).toBeNull();
+    expect(totalCost([{ role: "assistant", costUsd: 0 }])).toBe(0);
+  });
+
+  it("writes small costs to a tenth of a cent", () => {
+    expect(formatCost(0.0123)).toBe("$0.012");
+    expect(formatCost(1.234)).toBe("$1.23");
   });
 });

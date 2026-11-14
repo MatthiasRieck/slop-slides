@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AUTOFIT_LABELS,
+  CASE_LABELS,
   combineElements,
   DEFAULT_EDIT_STYLES,
   defaultsFrom,
@@ -15,19 +16,21 @@ import {
   familyOfKind,
   firstFamily,
   fontChoices,
+  fontWeights,
+  isMixed,
+  LIST_STYLES,
   linkedSlide,
   normalizeHref,
   parseDeckColors,
   parseElement,
-  parseFontSize,
   parseFonts,
   parseHexColor,
   parseMenuTarget,
+  parseNumber,
   parseSelection,
   SYSTEM_FONTS,
-  stepFontSize,
-  strokeWidths,
   toolbarState,
+  WEIGHT_NAMES,
 } from "./editTools";
 
 const SELECTION: EditSelection = {
@@ -41,12 +44,18 @@ const SELECTION: EditSelection = {
   fontSize: 48,
   fontFamily: "Inter",
   bold: false,
+  weight: 500,
   italic: false,
   underline: true,
   strike: false,
   script: "sup",
+  textCase: "upper",
+  highlight: "#facc15",
   letterSpacing: 2,
   lineHeight: 1.2,
+  spaceBefore: 8,
+  spaceAfter: 16,
+  listStyle: "lower-alpha",
   align: "left",
   valign: "top",
   list: "ol",
@@ -73,19 +82,10 @@ const SELECTION: EditSelection = {
   flipY: false,
   group: false,
   locked: true,
+  mixed: ["fontSize", "align"],
 };
 
 describe("edit tools", () => {
-  it("steps font sizes through a scale", () => {
-    expect(stepFontSize(48, 1)).toBe(56);
-    expect(stepFontSize(48, -1)).toBe(40);
-    // Sizes off the scale snap onto it.
-    expect(stepFontSize(50, 1)).toBe(56);
-    expect(stepFontSize(50, -1)).toBe(48);
-    expect(stepFontSize(240, 1)).toBe(240);
-    expect(stepFontSize(12, -1)).toBe(12);
-  });
-
   it("groups tools and added elements into families that share defaults", () => {
     expect(["select", "text", "rect", "rounded", "ellipse", "draw"].map((t) => familyOf(t as never))).toEqual([
       null,
@@ -154,12 +154,18 @@ describe("edit tools", () => {
       fontSize: null,
       fontFamily: null,
       bold: false,
+      weight: 400,
       italic: false,
       underline: false,
       strike: false,
       script: null,
+      textCase: null,
+      highlight: null,
       letterSpacing: 0,
       lineHeight: null,
+      spaceBefore: 0,
+      spaceAfter: 0,
+      listStyle: null,
       align: "left",
       valign: null,
       list: null,
@@ -186,6 +192,7 @@ describe("edit tools", () => {
       flipY: false,
       group: false,
       locked: false,
+      mixed: [],
     });
     expect(parseSelection({ kind: "shape", flippable: true })?.flippable).toBe(true);
     expect(
@@ -219,12 +226,6 @@ describe("edit tools", () => {
       underline: true,
       fontFamily: "Georgia",
     });
-  });
-
-  it("reads a typed font size", () => {
-    expect(parseFontSize(" 72 ")).toBe(72);
-    expect(parseFontSize("40.6")).toBe(41);
-    expect(["", "0", "-4", "1000", "big"].map(parseFontSize)).toEqual([null, null, null, null, null]);
   });
 
   it("offers the deck's fonts first, then system fonts it does not have", () => {
@@ -379,16 +380,48 @@ describe("what the toolbar and the context menu are told", () => {
       elements: [A, B],
       editable: true,
       unlockable: true,
+      under: [],
+      parent: null,
     });
     // A report without the list (an older editor) is about its one element.
-    expect(parseMenuTarget({ element: A })).toEqual({ element: A, elements: [A], editable: false, unlockable: false });
+    expect(parseMenuTarget({ element: A })).toMatchObject({
+      element: A,
+      elements: [A],
+      editable: false,
+      unlockable: false,
+    });
     expect(parseMenuTarget({ element: null, locked: "yes" })).toEqual({
       element: null,
       elements: [],
       editable: false,
       unlockable: false,
+      under: [],
+      parent: null,
     });
     expect(parseMenuTarget(null).element).toBeNull();
+  });
+
+  it("takes what lies under the pointer and what holds the selection, leaving out what is no place", () => {
+    const target = parseMenuTarget({
+      element: A,
+      under: [
+        { path: [0, 2], name: "Text: Two", selected: true },
+        { path: [], name: "Nothing" },
+        { path: [0, -1], name: "Bad" },
+        { path: [1], name: 4 },
+        { path: [0], name: "Box" },
+      ],
+      parent: { path: [0], name: "Box" },
+    });
+    expect(target.under).toEqual([
+      { path: [0, 2], name: "Text: Two", selected: true },
+      { path: [0], name: "Box", selected: false },
+    ]);
+    expect(target.parent).toEqual({ path: [0], name: "Box", selected: false });
+    expect(parseMenuTarget({ element: A, under: "all", parent: { path: "0" } })).toMatchObject({
+      under: [],
+      parent: null,
+    });
   });
 
   it("makes several elements the one thing a question is about", () => {
@@ -403,14 +436,76 @@ describe("what the toolbar and the context menu are told", () => {
     expect(combineElements([A, A])?.added).toBe(true);
   });
 
-  it("offers no zero width for a line, which would be gone", () => {
-    expect(strokeWidths(0, false)).toEqual([0, 1, 2, 4, 6, 8, 12, 16]);
-    expect(strokeWidths(3, false)).toContain(3);
-    expect(strokeWidths(6, true)).toEqual([1, 2, 4, 6, 8, 12, 16]);
-    expect(strokeWidths(0, true)).not.toContain(0);
+  it("reads the text's weight, case, highlight, paragraph spacing and bullets, and what several elements do not share", () => {
+    expect(
+      parseSelection({
+        kind: "text",
+        weight: 300,
+        textCase: "capitalize",
+        highlight: "#FFFF00",
+        spaceBefore: 12,
+        spaceAfter: 4,
+        listStyle: "square",
+        mixed: ["fontFamily", 3, "opacity"],
+      }),
+    ).toMatchObject({
+      weight: 300,
+      textCase: "capitalize",
+      highlight: "#ffff00",
+      spaceBefore: 12,
+      spaceAfter: 4,
+      listStyle: "square",
+      mixed: ["fontFamily", "opacity"],
+    });
+    // What an older or malformed report leaves out has its plain value.
+    expect(parseSelection({ kind: "text", bold: true, textCase: "SHOUT", highlight: "yellow" })).toMatchObject({
+      weight: 700,
+      textCase: null,
+      highlight: null,
+      spaceBefore: 0,
+      spaceAfter: 0,
+      listStyle: null,
+      mixed: [],
+    });
+    const mixed = parseSelection({ kind: "text", mixed: ["fontSize"] });
+    expect(isMixed(mixed, "fontSize")).toBe(true);
+    expect(isMixed(mixed, "align")).toBe(false);
+    expect(isMixed(null, "fontSize")).toBe(false);
+  });
+
+  it("offers the weights the deck has files for, or the usual ones, always with the current one", () => {
+    const fonts = parseFonts([
+      { name: "Inter", stack: "Inter, sans-serif", weights: [300, 400, 600, 700, 1200] },
+      { name: "Lora", stack: "Lora, serif", weights: [400] },
+    ]);
+    expect(fonts[0]!.weights).toEqual([300, 400, 600, 700]);
+    expect(fontWeights(fonts, '"Inter", sans-serif', 400)).toEqual([300, 400, 600, 700]);
+    expect(fontWeights(fonts, "Inter", 500)).toEqual([300, 400, 500, 600, 700]);
+    // One weight is no choice: the usual ones show.
+    expect(fontWeights(fonts, "Lora", 400)).toEqual([300, 400, 500, 600, 700]);
+    expect(fontWeights([], null, 900)).toEqual([300, 400, 500, 600, 700, 900]);
+    expect(WEIGHT_NAMES[600]).toBe("Semibold");
+  });
+
+  it("reads a typed number within its range, to the places it takes", () => {
+    expect(parseNumber(" 1.25 ", 0.5, 5, 2)).toBe(1.25);
+    expect(parseNumber("1,5", 0.5, 5, 1)).toBe(1.5);
+    expect(parseNumber("3.7", 0, 10)).toBe(4);
+    expect(["", "x", "11", "-1"].map((t) => parseNumber(t, 0, 10))).toEqual([null, null, null, null]);
+  });
+
+  it("keeps the highlight, paragraph spacing and bullets out of the defaults for new elements", () => {
+    expect(
+      defaultsFrom({ highlight: "#ffff00", spaceBefore: 8, spaceAfter: 8, listStyle: "square", weight: 300 }),
+    ).toEqual({
+      weight: 300,
+    });
   });
 
   it("names the choices in plain words", () => {
+    expect(CASE_LABELS.map((c) => c.label)).toEqual(["As typed", "UPPERCASE", "lowercase", "Capitalize Each Word"]);
+    expect(LIST_STYLES.ul.map((c) => c.value)).toContain("disc");
+    expect(LIST_STYLES.ol.map((c) => c.value)).toContain("decimal");
     expect(AUTOFIT_LABELS.map((c) => c.label)).toEqual(["Don't autofit", "Shrink text to fit", "Grow box to fit"]);
     expect(FIT_LABELS.map((c) => c.label)).toEqual(["Fit inside", "Fill and crop", "Stretch"]);
     expect(FIT_POSITION_NAMES).toHaveLength(FIT_POSITIONS.length);

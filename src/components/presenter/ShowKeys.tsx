@@ -16,8 +16,9 @@ export function ShowKeys({ onClose }: { onClose: () => void }) {
     <Dialog
       label="Keys while presenting"
       onClose={onClose}
-      className="dark flex max-h-[calc(100vh-4rem)] w-[28rem] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-foreground/10 bg-background p-4 text-xs text-foreground shadow-lg outline-none"
-      heading={<h2 className="text-sm font-medium">Keys while presenting</h2>}
+      size="md"
+      className="dark w-[28rem] text-xs"
+      title="Keys while presenting"
       closeKeys={CLOSE_KEYS}
       closeOnBackdrop
       closeButton

@@ -1,0 +1,341 @@
+{
+  "menus": [
+    {
+      "title": "App",
+      "items": [
+        { "native": "about" },
+        "-",
+        { "id": "app.settings", "title": "Settings…", "keys": "mod+,", "help": "General", "describe": "App settings" },
+        "-",
+        { "native": "services" },
+        "-",
+        { "native": "hide" },
+        { "native": "hideOthers" },
+        { "native": "showAll" },
+        "-",
+        { "native": "quit" }
+      ]
+    },
+    {
+      "title": "File",
+      "items": [
+        { "id": "deck.new", "title": "New deck…" },
+        { "id": "window.new", "title": "New window", "keys": "mod+n", "help": "General" },
+        "-",
+        { "id": "file.openDeck", "title": "Open deck…", "keys": "mod+o", "help": "General", "describe": "Open a deck" },
+        {
+          "id": "file.openFolder",
+          "title": "Open folder…",
+          "keys": "mod+shift+o",
+          "help": "General",
+          "describe": "Open a folder"
+        },
+        { "id": "file.importPptx", "title": "Import PowerPoint…" },
+        "-",
+        {
+          "id": "file.close",
+          "title": "Close deck",
+          "keys": "mod+w",
+          "help": "General",
+          "describe": "Close the deck (with none open: the window)"
+        },
+        { "id": "file.closeWindow", "title": "Close window", "keys": "mod+shift+w", "help": "General" },
+        { "id": "file.closeFolder", "title": "Close folder" },
+        "-",
+        {
+          "id": "file.save",
+          "title": "Save",
+          "keys": "mod+s",
+          "help": "General",
+          "describe": "Check that everything is saved (the deck saves by itself)"
+        },
+        { "id": "deck.duplicate", "title": "Duplicate deck" },
+        {
+          "id": "deck.reveal",
+          "title": "Show in folder",
+          "titles": { "macos": "Show in Finder", "windows": "Show in File Explorer" }
+        },
+        {
+          "id": "deck.trash",
+          "title": "Move deck to Trash…",
+          "titles": { "windows": "Move deck to Recycle Bin…" }
+        },
+        "-",
+        { "id": "deck.settings", "title": "Deck settings…" },
+        "-",
+        { "id": "export.pdf", "title": "Export PDF…" },
+        { "id": "export.pptx", "title": "Export PowerPoint…" },
+        { "id": "export.html", "title": "Export web page…" },
+        { "id": "export.images", "title": "Export images…" },
+        { "id": "export.video", "title": "Export video…" }
+      ]
+    },
+    {
+      "title": "Edit",
+      "items": [
+        {
+          "id": "edit.undo",
+          "title": "Undo",
+          "keys": "mod+z",
+          "help": "General",
+          "describe": "Undo a change to the deck"
+        },
+        {
+          "id": "edit.redo",
+          "title": "Redo",
+          "keys": "mod+shift+z",
+          "help": "General",
+          "describe": "Redo a change to the deck"
+        },
+        "-",
+        { "native": "cut" },
+        { "native": "copy" },
+        { "native": "paste" },
+        { "native": "selectAll" },
+        "-",
+        {
+          "id": "edit.duplicate",
+          "title": "Duplicate",
+          "keys": "mod+d",
+          "help": "Edit",
+          "describe": "Duplicate (again after moving the copy: as far again)"
+        },
+        {
+          "id": "edit.delete",
+          "title": "Delete",
+          "keys": "backspace",
+          "help": "Edit",
+          "describe": "Delete (not what is locked)"
+        },
+        "-",
+        {
+          "id": "edit.find",
+          "title": "Find…",
+          "keys": "mod+f",
+          "help": "View",
+          "describe": "Search the slides (in View and in Edit)"
+        }
+      ]
+    },
+    {
+      "title": "View",
+      "items": [
+        { "id": "view.view", "title": "View", "keys": "mod+1", "help": "General", "describe": "View mode" },
+        { "id": "view.edit", "title": "Edit", "keys": "mod+2", "help": "General", "describe": "Edit mode" },
+        {
+          "id": "view.changes",
+          "title": "Changes",
+          "keys": "mod+3",
+          "help": "General",
+          "describe": "Changes (for a deck kept with Git)"
+        },
+        "-",
+        {
+          "id": "view.overview",
+          "title": "Slide grid",
+          "keys": "g",
+          "check": true,
+          "help": "Slides",
+          "describe": "All slides as a grid, and back to the slide"
+        },
+        {
+          "id": "view.rail",
+          "title": "Slide list",
+          "keys": "mod+shift+\\",
+          "check": true,
+          "help": "General",
+          "describe": "Show or hide the slide list"
+        },
+        {
+          "id": "view.sidebar",
+          "title": "Sidebar",
+          "keys": "mod+\\",
+          "check": true,
+          "help": "General",
+          "describe": "Show or hide the sidebar"
+        },
+        { "id": "view.notes", "title": "Speaker notes", "check": true },
+        { "id": "view.timeline", "title": "Timeline", "check": true },
+        "-",
+        { "id": "view.zoomIn", "title": "Zoom in", "keys": "mod+plus", "help": "View" },
+        { "id": "view.zoomOut", "title": "Zoom out", "keys": "mod+-", "help": "View" },
+        {
+          "id": "view.zoomFit",
+          "title": "Fit slide",
+          "keys": "mod+0",
+          "help": "View",
+          "describe": "Fit: back to the whole slide"
+        },
+        "-",
+        {
+          "id": "view.chat",
+          "title": "Go to chat",
+          "keys": "mod+l",
+          "help": "Chat",
+          "describe": "Go to the chat and its message box"
+        },
+        "-",
+        { "native": "fullscreen" }
+      ]
+    },
+    {
+      "title": "Insert",
+      "items": [
+        { "id": "insert.text", "title": "Text box", "keys": "t", "help": "Tools" },
+        { "id": "insert.rect", "title": "Rectangle", "keys": "r", "help": "Tools" },
+        { "id": "insert.ellipse", "title": "Ellipse", "keys": "o", "help": "Tools" },
+        { "id": "insert.draw", "title": "Draw", "keys": "d", "help": "Tools" },
+        { "id": "insert.line", "title": "Line", "keys": "l", "help": "Tools" },
+        { "id": "insert.arrow", "title": "Arrow", "keys": "a", "help": "Tools" },
+        "-",
+        { "id": "insert.image", "title": "Image…" },
+        { "id": "insert.table", "title": "Table…", "hint": "Asks the agent" },
+        { "id": "insert.chart", "title": "Chart…", "hint": "Asks the agent" },
+        { "id": "insert.icon", "title": "Icon…", "hint": "Asks the agent" }
+      ]
+    },
+    {
+      "title": "Format",
+      "items": [
+        { "id": "format.bold", "title": "Bold", "keys": "mod+b", "help": "Text" },
+        { "id": "format.italic", "title": "Italic", "keys": "mod+i", "help": "Text" },
+        { "id": "format.underline", "title": "Underline", "keys": "mod+u", "help": "Text" },
+        { "id": "format.strike", "title": "Strikethrough", "keys": "mod+shift+x", "help": "Text" },
+        "-",
+        { "id": "format.alignLeft", "title": "Align text left", "keys": "mod+shift+l", "help": "Text" },
+        { "id": "format.alignCenter", "title": "Center text", "keys": "mod+shift+e", "help": "Text" },
+        { "id": "format.alignRight", "title": "Align text right", "keys": "mod+shift+r", "help": "Text" },
+        { "id": "format.justify", "title": "Justify text", "keys": "mod+shift+j", "help": "Text" },
+        "-",
+        { "id": "format.bigger", "title": "Larger text", "keys": "mod+shift+.", "help": "Text" },
+        { "id": "format.smaller", "title": "Smaller text", "keys": "mod+shift+,", "help": "Text" },
+        "-",
+        {
+          "id": "format.link",
+          "title": "Link…",
+          "keys": "mod+k",
+          "help": "Text",
+          "describe": "Add or change the link"
+        },
+        "-",
+        { "id": "format.copyStyle", "title": "Copy style", "keys": "mod+alt+c", "help": "Edit" },
+        { "id": "format.pasteStyle", "title": "Paste style", "keys": "mod+alt+v", "help": "Edit" }
+      ]
+    },
+    {
+      "title": "Arrange",
+      "items": [
+        { "id": "arrange.front", "title": "Bring to front", "keys": "mod+shift+]", "help": "Edit" },
+        { "id": "arrange.forward", "title": "Bring forward", "keys": "mod+]", "help": "Edit" },
+        { "id": "arrange.backward", "title": "Send backward", "keys": "mod+[", "help": "Edit" },
+        { "id": "arrange.back", "title": "Send to back", "keys": "mod+shift+[", "help": "Edit" },
+        "-",
+        { "id": "arrange.group", "title": "Group", "keys": "mod+g", "help": "Edit" },
+        { "id": "arrange.ungroup", "title": "Ungroup", "keys": "mod+shift+g", "help": "Edit" },
+        "-",
+        { "id": "arrange.alignLeft", "title": "Align left" },
+        { "id": "arrange.alignCenter", "title": "Align center" },
+        { "id": "arrange.alignRight", "title": "Align right" },
+        { "id": "arrange.alignTop", "title": "Align top" },
+        { "id": "arrange.alignMiddle", "title": "Align middle" },
+        { "id": "arrange.alignBottom", "title": "Align bottom" },
+        { "id": "arrange.distributeH", "title": "Distribute horizontally" },
+        { "id": "arrange.distributeV", "title": "Distribute vertically" },
+        "-",
+        { "id": "arrange.flipH", "title": "Flip horizontally", "keys": "mod+alt+shift+h", "help": "Edit" },
+        { "id": "arrange.flipV", "title": "Flip vertically", "keys": "mod+alt+shift+v", "help": "Edit" },
+        {
+          "id": "arrange.rotateRight",
+          "title": "Rotate right 90°",
+          "keys": "mod+alt+r",
+          "help": "Edit",
+          "describe": "Rotate 90° clockwise"
+        },
+        { "id": "arrange.rotateLeft", "title": "Rotate left 90°" },
+        "-",
+        {
+          "id": "arrange.lock",
+          "title": "Lock",
+          "keys": "mod+alt+l",
+          "check": true,
+          "help": "Edit",
+          "describe": "Lock / unlock the selection"
+        }
+      ]
+    },
+    {
+      "title": "Slide",
+      "items": [
+        {
+          "id": "slide.new",
+          "title": "New slide…",
+          "keys": "mod+shift+n",
+          "help": "Slides",
+          "describe": "New slide after this one: the layouts, Blank first"
+        },
+        { "id": "slide.duplicate", "title": "Duplicate slide" },
+        { "id": "slide.delete", "title": "Delete slide" },
+        "-",
+        {
+          "id": "slide.moveUp",
+          "title": "Move slide up",
+          "keys": "mod+up",
+          "help": "Slides",
+          "describe": "Move the picked slides up"
+        },
+        {
+          "id": "slide.moveDown",
+          "title": "Move slide down",
+          "keys": "mod+down",
+          "help": "Slides",
+          "describe": "Move the picked slides down"
+        },
+        "-",
+        { "id": "slide.startSection", "title": "Start a section here" },
+        "-",
+        { "id": "slide.hide", "title": "Skip in the show", "check": true },
+        { "id": "slide.lock", "title": "Lock slide", "check": true }
+      ]
+    },
+    {
+      "title": "Present",
+      "items": [
+        { "id": "present.current", "title": "Present from current slide", "keys": "mod+enter", "help": "Presenting" },
+        {
+          "id": "present.start",
+          "title": "Present from the beginning",
+          "keys": "mod+shift+enter",
+          "help": "Presenting"
+        },
+        {
+          "id": "present.windows",
+          "title": "Present in windows",
+          "hint": "Slides in this window, to share in a call; the presenter view in another"
+        }
+      ]
+    },
+    {
+      "title": "Window",
+      "items": [{ "native": "minimize" }, { "native": "maximize" }, "-", { "native": "bringAllToFront" }]
+    },
+    {
+      "title": "Help",
+      "items": [
+        {
+          "id": "help.shortcuts",
+          "title": "Keyboard shortcuts…",
+          "keys": "mod+/",
+          "help": "General",
+          "describe": "Show these shortcuts"
+        },
+        {
+          "id": "help.palette",
+          "title": "Command palette…",
+          "keys": "mod+shift+p",
+          "help": "General",
+          "describe": "The command palette: find and run any command"
+        }
+      ]
+    }
+  ]
+}

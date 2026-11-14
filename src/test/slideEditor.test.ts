@@ -133,14 +133,23 @@ describe("slide editor", () => {
     expect(e.$(".card p").hasAttribute("contenteditable")).toBe(false);
   });
 
-  it("walks up to the parent with Escape", () => {
+  it("lets go of the selection with Escape, and selects the parent with Shift+Enter", () => {
     const e = editor();
     e.down(e.$(".card p"));
     e.key("Escape");
-    expect(e.selected()).toEqual([e.$(".card")]);
-    e.key("Escape");
     expect(e.selected()).toEqual([]);
     expect(e.keys()).toEqual([]);
+    e.fromParent({ type: "slop:edit-select", path: [1, 0] });
+    expect(e.key("Enter", { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(e.selected()).toEqual([e.$(".card")]);
+    expect(e.$(".card p").hasAttribute("contenteditable")).toBe(false);
+    // The slide itself is no parent to select.
+    e.key("Enter", { shiftKey: true });
+    expect(e.selected()).toEqual([e.$(".card")]);
+    // With nothing selected, Escape goes to the app, which stays in edit mode (see editKeys.ts).
+    e.key("Escape");
+    e.key("Escape");
+    expect(e.keys()).toEqual([{ type: "slop:key", key: "Escape", mod: false, shift: false }]);
   });
 
   it("removes the selection with Delete, leaving an invisible slot so the layout stays put", () => {
@@ -372,7 +381,7 @@ describe("slide editor", () => {
       const first = e.$(".card p");
       e.down(first);
       e.up(first);
-      e.key("Escape");
+      e.key("Enter", { shiftKey: true });
       expect(e.selected()).toEqual([card]);
       rightClick(e, first);
       expect(e.selected()).toEqual([card]);
@@ -891,7 +900,7 @@ describe("slide editor", () => {
     // Clicks inside the text being edited place the caret.
     e.down(e.$("em"));
     expect(h1.getAttribute("contenteditable")).toBe("true");
-    e.down(e.$(".card"));
+    e.click(e.$(".card"));
     expect(h1.hasAttribute("contenteditable")).toBe(false);
     expect(e.selected()).toEqual([e.$(".card")]);
     // Unchanged text is not saved.
@@ -1570,12 +1579,15 @@ describe("slide editor", () => {
     });
 
     it("keeps the handles just outside the frame, so small text stays double-clickable", () => {
-      const { e, h1, handle } = withHeading();
-      const margin = (kind: string) => handle(kind).style.margin;
-      expect(margin("-1 -1")).toBe("-18px 0px 0px -18px");
-      expect(margin("1 1")).toBe("2px 0px 0px 2px");
-      expect(margin("0 -1")).toBe("-18px 0px 0px -12px");
-      expect(margin("1 0")).toBe("-12px 0px 0px 2px");
+      const { e, h1 } = withHeading();
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      // In screen pixels, whatever the preview is scaled by (see --slop-ui).
+      const screen = (n: number) => `calc(${n}px * var(--slop-ui, 1))`;
+      const margin = (dir: string) => new RegExp(`\\[data-dir="${dir}"\\] \\{[^}]*margin: ([^;]*);`).exec(css)?.[1];
+      expect(margin("-1 -1")).toBe(`${screen(-12)} 0 0 ${screen(-12)}`);
+      expect(margin("1 1")).toBe(`${screen(2)} 0 0 ${screen(2)}`);
+      expect(margin("0 -1")).toBe(`${screen(-12)} 0 0 ${screen(-8)}`);
+      expect(margin("1 0")).toBe(`${screen(-8)} 0 0 ${screen(2)}`);
       // A double-click inside the selection edits its text.
       e.down(h1);
       expect(h1.getAttribute("contenteditable")).toBe("true");
@@ -1622,8 +1634,11 @@ describe("slide editor", () => {
       return event;
     };
     /** A mouse wheel turned by whole notches (up is negative), as WebKit and Chromium report it. */
-    const notch = (e: ReturnType<typeof editor>, notches: number, at: { clientX?: number; clientY?: number } = {}) =>
-      wheel(e, { deltaY: notches * 40, ...at }, { wheelDeltaY: -notches * 120 });
+    const notch = (
+      e: ReturnType<typeof editor>,
+      notches: number,
+      at: { clientX?: number; clientY?: number; ctrlKey?: boolean; shiftKey?: boolean } = {},
+    ) => wheel(e, { deltaY: notches * 40, ...at }, { wheelDeltaY: -notches * 120 });
     const resize = (e: ReturnType<typeof editor>, width: number, height: number) => {
       Object.defineProperty(e.window, "innerWidth", { value: width, configurable: true });
       Object.defineProperty(e.window, "innerHeight", { value: height, configurable: true });
@@ -1650,9 +1665,10 @@ describe("slide editor", () => {
       expect(e.doc.documentElement.style.getPropertyValue("--slop-canvas")).toBe("rgb(1, 2, 3)");
       expect(e.doc.documentElement.style.getPropertyValue("--slop-accent")).toBe("rgb(4, 5, 6)");
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
-      expect(css).toMatch(
-        /\[data-slop-frame\] \{ outline: 2px solid var\(--slop-accent[^}]*outline-offset: 4px[^}]*var\(--slop-canvas/,
+      expect(css).toContain(
+        "[data-slop-frame] { outline: calc(1.5px * var(--slop-ui, 1)) solid var(--slop-accent); outline-offset: calc(3px * var(--slop-ui, 1));",
       );
+      expect(css).toMatch(/\[data-slop-frame\] \{[^}]*var\(--slop-canvas/);
       // One frame, which the pasteboard moves with the slide.
       expect(e.doc.querySelectorAll("[data-slop-frame]")).toHaveLength(1);
       e.fromParent({ type: "slop:camera", x: 30, y: 40, k: 0.5 });
@@ -1678,34 +1694,58 @@ describe("slide editor", () => {
       expect(h1.hasAttribute("data-moved")).toBe(false);
     });
 
-    it("zooms with the mouse wheel around the pointer, keeping the slide's markup out of it", () => {
+    it("zooms with ⌘/Ctrl and the mouse wheel around the pointer, keeping the slide's markup out of it", () => {
       const e = editor();
-      const event = notch(e, -1, { clientX: 0, clientY: 0 });
+      const event = notch(e, -1, { clientX: 0, clientY: 0, ctrlKey: true });
       expect(event.defaultPrevented).toBe(true);
       expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
       // Zooming at the slide's corner leaves that corner where it was.
       expect(placement(e.$(".deck"))).toContain("translate(0px,0px)");
-      notch(e, 1, { clientX: 0, clientY: 0 });
+      notch(e, 1, { clientX: 0, clientY: 0, ctrlKey: true });
       expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
       expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
       expect(e.commits()).toEqual([]);
     });
 
-    it("zooms with a line-based mouse wheel (Firefox)", () => {
+    it("scrolls with the mouse wheel only as far as the zoomed-in slide reaches, and not at all while it fits", () => {
       const e = editor();
-      wheel(e, { deltaY: -3, deltaMode: 1 });
-      expect(views(e).at(-1)!.k).toBeGreaterThan(1);
+      const event = notch(e, 3);
+      expect(event.defaultPrevented).toBe(true);
+      // The whole slide is in view: nothing to scroll to, and no zoom.
+      expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
+      expect(views(e)).toEqual([]);
+      // Zoomed in to twice the size, the slide reaches 1080px past the view below.
+      e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
+      notch(e, 3);
+      expect(views(e).at(-1)).toMatchObject({ x: 0, y: -120, k: 2 });
+      // Down to its bottom edge and a margin, and no further; with Shift, sideways.
+      for (let i = 0; i < 40; i++) notch(e, 3);
+      expect(views(e).at(-1)).toMatchObject({ x: 0, y: -1080 - 48 });
+      notch(e, 3, { shiftKey: true });
+      expect(views(e).at(-1)).toMatchObject({ x: -120, y: -1128 });
+      for (let i = 0; i < 40; i++) notch(e, -3, { shiftKey: true });
+      expect(views(e).at(-1)!.x).toBe(48);
+      expect(e.commits()).toEqual([]);
     });
 
-    it("zooms with a mouse wheel in WebKit, which reports notches as fractions of a line", () => {
+    it("scrolls a line-based mouse wheel (Firefox) by lines, and zooms with it and ⌘/Ctrl", () => {
       const e = editor();
+      e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
+      wheel(e, { deltaY: 3, deltaMode: 1 });
+      expect(views(e).at(-1)).toMatchObject({ y: -48, k: 2 });
+      wheel(e, { deltaY: -3, deltaMode: 1, ctrlKey: true });
+      expect(views(e).at(-1)!.k).toBeGreaterThan(2);
+    });
+
+    it("scrolls a whole line for a mouse notch in WebKit, which reports one as a fraction of a line", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
       // A slow notch is a tenth of a 40px line; a fast spin, several tenths.
-      wheel(e, { deltaY: -4.000244140625, clientX: 0, clientY: 0 }, { wheelDeltaY: 12 });
-      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(4.000244140625 * 0.005), 5);
-      wheel(e, { deltaY: 12.000732421875, clientX: 0, clientY: 0 }, { wheelDeltaY: -36 });
-      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(-8.00048828125 * 0.005), 5);
-      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
-      expect(placement(e.$(".deck"))).toContain("translate(0px,0px)");
+      wheel(e, { deltaY: 4.000244140625 }, { wheelDeltaY: -12 });
+      expect(views(e).at(-1)!.y).toBeCloseTo(-40.00244140625, 5);
+      wheel(e, { deltaY: 12.000732421875 }, { wheelDeltaY: -36 });
+      expect(views(e).at(-1)!.y).toBeCloseTo(-160.0097656, 5);
+      expect(views(e).at(-1)!.k).toBe(2);
     });
 
     it("pans when swiping on a trackpad, without limit", () => {
@@ -1727,9 +1767,9 @@ describe("slide editor", () => {
       wheel(e, { deltaY: 5 }, { wheelDeltaY: -15 });
       wheel(e, { deltaY: 40 }, { wheelDeltaY: -120, sameGesture: true });
       expect(placement(e.$(".deck"))).toBe("translate(0px,-45px) scale(1)");
-      // A new gesture is judged afresh.
+      // A new gesture is judged afresh: a mouse notch, which has nothing to scroll to at this size.
       notch(e, -1);
-      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
+      expect(placement(e.$(".deck"))).toBe("translate(0px,-45px) scale(1)");
     });
 
     it("zooms when pinching on a trackpad (Ctrl+wheel), or with ⌘/Ctrl+scroll", () => {
@@ -1742,7 +1782,7 @@ describe("slide editor", () => {
 
     it("keeps the point under the pointer fixed while zooming", () => {
       const e = editor();
-      notch(e, -1, { clientX: 1000, clientY: 500 });
+      notch(e, -1, { clientX: 1000, clientY: 500, ctrlKey: true });
       const { x, y, k } = views(e).at(-1)!;
       // The slide point that was under the pointer at 1000,500 still is.
       expect(x + 1000 * k).toBeCloseTo(1000, 5);
@@ -1751,9 +1791,9 @@ describe("slide editor", () => {
 
     it("limits how far it zooms", () => {
       const e = editor();
-      for (let i = 0; i < 40; i++) notch(e, -2);
+      for (let i = 0; i < 40; i++) notch(e, -2, { ctrlKey: true });
       expect(views(e).at(-1)!.k).toBe(8);
-      for (let i = 0; i < 80; i++) notch(e, 2);
+      for (let i = 0; i < 80; i++) notch(e, 2, { ctrlKey: true });
       expect(views(e).at(-1)!.k).toBe(0.1);
     });
 
@@ -1765,18 +1805,18 @@ describe("slide editor", () => {
       expect(h1.style.translate).toBe("200px -100px");
     });
 
-    it("pans by dragging empty space, and deselects", () => {
+    it("deselects on a press on the empty space around the slide, where a drag draws a marquee, not a pan", () => {
       const e = editor();
       e.down(e.$("h1"));
       e.up(e.$("h1"));
       expect(e.selected()).toHaveLength(1);
       e.down(e.doc.body, 10, 10);
-      e.move(e.doc.body, 60, 40);
       expect(e.selected()).toEqual([]);
-      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
+      e.move(e.doc.body, 60, 40);
+      expect(e.$("[data-slop-marquee]").style.display).toBe("");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
       e.up(e.doc.body, 60, 40);
-      e.move(e.doc.body, 200, 200);
-      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
+      expect(e.$("[data-slop-marquee]").style.display).toBe("none");
       expect(e.commits()).toEqual([]);
     });
 
@@ -1920,7 +1960,7 @@ describe("slide editor", () => {
       laidOut(e, { h1: rect(100, 100, 600, 200), ".card": rect(100, 300, 600, 500) });
       e.key("Tab");
       await frame();
-      expect(overflows(e).at(-1)).toEqual({ type: "slop:edit-overflow", slide: "intro", items: [] });
+      expect(overflows(e).at(-1)).toEqual({ type: "slop:edit-overflow", slide: "intro", items: [], paths: [] });
       expect(e.doc.querySelector("[data-slop-overflow]")!.children).toHaveLength(0);
     });
 
@@ -1973,6 +2013,8 @@ describe("slide editor", () => {
       const [report] = overflows(e).slice(-1);
       expect(report!.slide).toBe("intro");
       expect(report!.items).toEqual(['<h1> "Hello there" runs past the bottom edge by 120px']);
+      // Where it is, for the app's list to select it.
+      expect((report as unknown as { paths: number[][] }).paths).toEqual([[0]]);
       const layer = e.doc.querySelector("[data-slop-overflow]")!;
       expect(layer.querySelectorAll("[data-wire]")).toHaveLength(1);
     });
@@ -2123,15 +2165,16 @@ describe("slide editor", () => {
       expect(added(e)[1]!.style).toMatchObject({ width: "200px", height: "200px", borderRadius: "24px" });
     });
 
-    it("adds a text box that starts out typing, and drops it if left empty", () => {
+    it("adds a text box that starts out typing, empty with a hint, and drops it if left empty", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "text", style: { ...TEXT_STYLE, bold: true } });
       dragOut(e, [200, 120], [200, 120]);
       const [box] = added(e);
       expect(box!.getAttribute("data-added")).toBe("text");
       // Its text sits in one block, so formatted runs stay in their lines (the box is a flex column).
-      expect(box!.innerHTML).toBe(`<div data-text-body="">Text</div>`);
-      expect(e.window.getSelection()!.toString()).toBe("Text");
+      // It holds no text: the hint is the editor's, until something is typed.
+      expect(box!.querySelector("[data-text-body]")!.textContent).toBe("");
+      expect(box!.hasAttribute("data-slop-empty")).toBe(true);
       expect(box!.getAttribute("contenteditable")).toBe("true");
       expect(box!.style).toMatchObject({
         left: "200px",
@@ -2273,12 +2316,19 @@ describe("slide editor", () => {
           // jsdom has no fonts of its own.
           fontFamily: expect.any(String),
           bold: true,
+          weight: 700,
           italic: false,
           underline: false,
           strike: false,
           script: null,
+          textCase: null,
+          highlight: null,
           letterSpacing: 0,
           lineHeight: null,
+          // A shape's padding is its own, not space around a paragraph.
+          spaceBefore: 0,
+          spaceAfter: 0,
+          listStyle: null,
           align: "center",
           valign: "middle",
           list: null,
@@ -2360,7 +2410,7 @@ describe("slide editor", () => {
     it("fills and borders boxes, turning a border on and off", () => {
       const e = editor();
       const card = e.$(".card");
-      e.down(card);
+      e.click(card);
       e.fromParent({ type: "slop:edit-style", style: { fill: "#00ff00" } });
       expect(reports(e).at(-1)!.selection).toMatchObject({ fill: "#00ff00" });
       // A border color alone gets a width, a width alone a color.
@@ -2467,6 +2517,8 @@ describe("slide editor", () => {
         const e = editor();
         e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
         dragOut(e, [100, 100], [400, 100]);
+        // A text box starts empty, and one left so goes away.
+        added(e)[0]!.querySelector("[data-text-body]")!.textContent = "Note";
         e.key("Escape");
         const box = added(e)[0]!;
         e.down(box);
@@ -3589,7 +3641,7 @@ describe("slide editor", () => {
       expect(e.posted()).toContainEqual({
         type: "slop:edit-fonts",
         slide: "intro",
-        fonts: [{ name: "Playfair Display", stack: `"Playfair Display", Georgia, serif` }],
+        fonts: [{ name: "Playfair Display", stack: `"Playfair Display", Georgia, serif`, weights: [] }],
       });
     });
   });
@@ -3876,22 +3928,58 @@ describe("slide editor: shapes, styling and media", () => {
       expect(under.hasAttribute("data-slop-hover")).toBe(false);
       expect(e.commits().at(-1)!.markup).not.toContain("data-slop-hover");
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
-      expect(css).toContain("[data-slop-hover=line] { outline: none !important;");
+      expect(css).toContain("[data-slop-hover=line] { filter: drop-shadow(");
+      // No box is drawn around a hovered line.
+      at(e, "pointermove", 150, 150);
+      await e.frame();
+      expect(e.$("[data-slop-outline=hover]").style.display).toBe("");
     });
 
     it("gives the bend handles room to be grabbed", () => {
       const { e } = drawn("line", [100, 100], [300, 200]);
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
-      expect(css).toContain("[data-point=add] { width: 14px; height: 14px;");
-      expect(css).toContain("[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px;");
+      expect(css).toContain(
+        "[data-slop-points] > *::before { content: ''; position: absolute; inset: calc(-6px * var(--slop-ui, 1));",
+      );
     });
 
     it("marks each bend handle with a small plus", () => {
       const { e } = drawn("line", [100, 100], [300, 200]);
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
       expect(css).toContain("[data-slop-points] > [data-point=add]::after { content: '';");
-      expect(css).toContain("center / 6px 2px no-repeat");
-      expect(css).toContain("center / 2px 6px no-repeat");
+      const screen = (n: number) => `calc(${n}px * var(--slop-ui, 1))`;
+      expect(css).toContain(`center / ${screen(5)} ${screen(1.5)} no-repeat`);
+      expect(css).toContain(`center / ${screen(1.5)} ${screen(5)} no-repeat`);
+    });
+
+    it("puts a line back as it was when Escape calls a point's drag off, a new bend point too", () => {
+      const { e, svg } = drawn("line", [100, 100], [300, 200]);
+      const shape = () => [svg.getAttribute("style"), svg.getAttribute("viewBox"), svg.innerHTML];
+      const before = shape();
+      const commits = e.commits().length;
+      for (const kind of ["point", "add"]) {
+        const [x, y] = spot(handles(e, kind)[kind === "point" ? 1 : 0]!);
+        handles(e, kind)[kind === "point" ? 1 : 0]!.dispatchEvent(
+          new e.window.PointerEvent("pointerdown", {
+            clientX: x,
+            clientY: y,
+            button: 0,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        at(e, "pointermove", 500, 50, { metaKey: true });
+        expect(shape()).not.toEqual(before);
+        expect(e.key("Escape").defaultPrevented).toBe(true);
+        expect(shape()).toEqual(before);
+        at(e, "pointerup", 500, 50);
+      }
+      expect(handles(e, "point").map(spot)).toEqual([
+        [100, 100],
+        [300, 200],
+      ]);
+      expect(e.commits()).toHaveLength(commits);
+      expect(e.selected()).toEqual([svg]);
     });
 
     it("shows its ends and where to bend it instead of a box", () => {
@@ -4813,7 +4901,7 @@ describe("slide editor: shapes, styling and media", () => {
         strokeWidth: 4,
         flippable: true,
       });
-      expect(e.commits()[0]!.markup).toContain('data-shape="' + tool + '"');
+      expect(e.commits()[0]!.markup).toContain(`data-shape="${tool}"`);
     });
 
     it("keeps the size it is given, however wide: its padding comes from its height, not its width", () => {
@@ -5116,7 +5204,7 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("does not flip a text box", () => {
       const e = editor();
-      e.down(e.$(".card"));
+      e.click(e.$(".card"));
       expect(lastSelection(e)).toMatchObject({ flippable: false });
       style(e, { flipX: true });
       expect(e.$(".card").style.transform).toBe("");
@@ -5127,7 +5215,7 @@ describe("slide editor: shapes, styling and media", () => {
     it("sets, reports and clears them on any element", () => {
       const e = editor();
       const card = e.$(".card");
-      e.down(card);
+      e.click(card);
       style(e, { opacity: 0.5, shadow: 24, radius: 16 });
       expect(card.style.opacity).toBe("0.5");
       expect(card.style.getPropertyValue("box-shadow")).toContain("0px 8px 24px");
@@ -5141,7 +5229,7 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("keeps an element clickable: opacity stops short of zero", () => {
       const e = editor();
-      e.down(e.$(".card"));
+      e.click(e.$(".card"));
       style(e, { opacity: 0 });
       expect(e.$(".card").style.opacity).toBe("0.05");
     });
@@ -5298,14 +5386,30 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("reports it on load, sets it on the slide, and drops it again", () => {
       const e = editor();
-      expect(told(e).at(-1)).toEqual({ type: "slop:edit-background", slide: "intro", color: null });
+      expect(told(e).at(-1)).toEqual({
+        type: "slop:edit-background",
+        slide: "intro",
+        color: null,
+        other: false,
+        own: false,
+      });
       e.fromParent({ type: "slop:edit-background", color: "#ff0000" });
       expect(e.$("#intro").style.getPropertyValue("background-image")).toBe("none");
-      expect(told(e).at(-1)!.color).toBe("#ff0000");
+      expect(told(e).at(-1)).toMatchObject({ color: "#ff0000", own: true, other: false });
       expect(e.commits().at(-1)!.markup).toMatch(/^<section class="slide" id="intro" style="background-color: [^"]*"/);
       e.fromParent({ type: "slop:edit-background", color: null });
       expect(e.$("#intro").hasAttribute("style")).toBe(false);
       expect(told(e).at(-1)!.color).toBeNull();
+    });
+
+    it("tells a gradient or image from a plain color", () => {
+      const e = editor({
+        markup: DECK.replace('id="intro"', 'id="intro" style="background-image: linear-gradient(red, blue)"'),
+      });
+      expect(told(e).at(-1)).toMatchObject({ other: true, own: false });
+      // A color picked replaces it, and says so.
+      e.fromParent({ type: "slop:edit-background", color: "#ffffff" });
+      expect(told(e).at(-1)).toMatchObject({ color: "#ffffff", other: false, own: true });
     });
 
     it("refuses anything but a color", () => {
@@ -5392,6 +5496,265 @@ describe("slide editor: shapes, styling and media", () => {
       e.fromParent({ type: "slop:edit-tool", tool: "paint" });
       e.key("Escape");
       expect(e.doc.documentElement.hasAttribute("data-slop-tool")).toBe(false);
+    });
+  });
+});
+
+describe("slide editor: direct manipulation", () => {
+  const css = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+  /** The heading selected, laid out at (400, 250), 200 × 100. */
+  const heading = () => {
+    const e = editor();
+    const h1 = e.$("h1");
+    Object.defineProperty(h1, "offsetWidth", { value: 200, configurable: true });
+    Object.defineProperty(h1, "offsetHeight", { value: 100, configurable: true });
+    h1.getBoundingClientRect = () => new e.window.DOMRect(400, 250, 200, 100);
+    e.click(h1);
+    const ui = e.$("[data-slop-ui]");
+    const handle = (kind: string) =>
+      ui.querySelector<HTMLElement>(/^[a-z]+$/.test(kind) ? `[data-handle="${kind}"]` : `[data-dir="${kind}"]`)!;
+    return { e, h1, ui, handle };
+  };
+
+  describe("sizes on screen", () => {
+    it("keeps the drag threshold and the edge handles' room at their size on screen, however small the preview shows", () => {
+      const { e, h1, ui } = heading();
+      // At a quarter of its size, 3 screen pixels are 12 of the preview's.
+      e.fromParent({ type: "slop:fit", scale: 0.25 });
+      expect(e.doc.documentElement.style.getPropertyValue("--slop-ui")).toBe("4");
+      e.drag(h1, 10, 0);
+      expect(h1.style.translate).toBe("");
+      expect(e.commits()).toEqual([]);
+      // Not a second press on it, which would be a double-click.
+      e.click(e.$(".shape"));
+      e.drag(h1, 13, 0);
+      expect(h1.style.translate).toBe("13px 0px");
+      // 200 × 100 here is 50 × 25 on screen: no room for edge handles between the corners.
+      expect([ui.hasAttribute("data-narrow"), ui.hasAttribute("data-flat")]).toEqual([false, true]);
+      e.fromParent({ type: "slop:fit", scale: 1 });
+      expect([ui.hasAttribute("data-narrow"), ui.hasAttribute("data-flat")]).toEqual([false, false]);
+    });
+
+    it("sizes the handles, frames, guides and readout in screen pixels", () => {
+      const e = editor();
+      const sheet = css(e);
+      const screen = (n: number) => `calc(${n}px * var(--slop-ui, 1))`;
+      expect(sheet).toContain(`width: ${screen(10)}; height: ${screen(10)};`);
+      expect(sheet).toContain(`outline: ${screen(1.5)} solid var(--slop-accent)`);
+      expect(sheet).toContain(`font: ${screen(11)}/1.4 system-ui`);
+      expect(sheet).toContain(
+        `[data-slop-guides] > [data-gap=x] { border: solid var(--slop-guide); border-width: 0 ${screen(1)};`,
+      );
+    });
+
+    it("rings frames with a light halo, so they show on a dark slide or one in the accent's color", () => {
+      const sheet = css(editor());
+      const halo = "color-mix(in srgb, var(--slop-handle) 85%, transparent)";
+      expect(sheet).toContain(
+        "[data-slop-ui], [data-slop-outline] { position: fixed; pointer-events: none; box-sizing: border-box;" +
+          ` outline: calc(1.5px * var(--slop-ui, 1)) solid var(--slop-accent); box-shadow: 0 0 0 calc(2.5px * var(--slop-ui, 1)) ${halo},` +
+          ` inset 0 0 0 calc(1px * var(--slop-ui, 1)) ${halo}; }`,
+      );
+    });
+  });
+
+  describe("outlines", () => {
+    it("outlines what the pointer is over with a box of its own, not on the element, and not what is selected", async () => {
+      const { e, h1 } = heading();
+      const p = e.$(".card p");
+      p.getBoundingClientRect = () => new e.window.DOMRect(100, 600, 300, 50);
+      Object.defineProperty(p, "offsetWidth", { value: 300, configurable: true });
+      Object.defineProperty(p, "offsetHeight", { value: 50, configurable: true });
+      const hover = e.$("[data-slop-outline=hover]");
+      e.move(p, 150, 620);
+      await e.frame();
+      expect(p.getAttribute("data-slop-hover")).toBe("");
+      expect([hover.style.display, hover.style.left, hover.style.top, hover.style.width, hover.style.height]).toEqual([
+        "block",
+        "100px",
+        "600px",
+        "300px",
+        "50px",
+      ]);
+      e.move(h1, 450, 300);
+      await e.frame();
+      expect(hover.style.display).toBe("");
+    });
+
+    it("outlines the text being typed in, without handles", () => {
+      const { e, h1, ui } = heading();
+      const box = e.$("[data-slop-outline=edit]");
+      expect(box.style.display).toBe("");
+      e.key("Enter");
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+      expect([box.style.display, box.style.left, box.style.width]).toEqual(["block", "400px", "200px"]);
+      expect(ui.style.display).toBe("none");
+      e.key("Escape");
+      expect(box.style.display).toBe("");
+    });
+  });
+
+  describe("handles", () => {
+    it("keeps the 3D tilt handle below the frame, away from the one that turns", () => {
+      const sheet = css(editor());
+      expect(sheet).toContain("[data-slop-ui] > [data-handle=tilt] {");
+      expect(sheet).toMatch(/\[data-handle=tilt\] \{[^}]*top: calc\(100% \+ 26px \* var\(--slop-ui, 1\)\)/);
+      expect(sheet).toMatch(/\[data-handle=rotate\] \{[^}]*top: calc\(-36px \* var\(--slop-ui, 1\)\)/);
+    });
+
+    it("turns the resize cursors with the element", () => {
+      const { e, h1, handle } = heading();
+      const cursors = () => ["1 1", "1 0", "0 1", "-1 1"].map((dir) => handle(dir).style.cursor);
+      expect(cursors()).toEqual(["nwse-resize", "ew-resize", "ns-resize", "nesw-resize"]);
+      h1.style.rotate = "90deg";
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      expect(cursors()).toEqual(["nesw-resize", "ns-resize", "ew-resize", "nwse-resize"]);
+      h1.style.rotate = "40deg";
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      // The bottom right corner pulls straight down now, near enough.
+      expect(cursors()).toEqual(["ns-resize", "nwse-resize", "nesw-resize", "ew-resize"]);
+    });
+
+    it("marks a selected locked element with a lock that unlocks it, and no move cursor", () => {
+      const { e, h1, ui } = heading();
+      e.fromParent({ type: "slop:edit-lock", locked: true });
+      expect(ui.hasAttribute("data-locked")).toBe(true);
+      expect(css(e)).toContain(
+        "[data-lock][data-slop-selected], [data-lock] [data-slop-selected] { cursor: default !important; }",
+      );
+      const mark = ui.querySelector<HTMLElement>("[data-lock-mark]")!;
+      expect(mark.getAttribute("aria-label")).toBe("Unlock");
+      e.down(mark);
+      expect(e.selected()).toEqual([h1]);
+      mark.dispatchEvent(new e.window.MouseEvent("click", { bubbles: true }));
+      expect(h1.hasAttribute("data-lock")).toBe(false);
+      expect(ui.hasAttribute("data-locked")).toBe(false);
+      expect(e.commits().at(-1)!.markup).not.toContain("data-lock");
+    });
+  });
+
+  describe("Escape calls a gesture off", () => {
+    it("puts a moved element back and saves nothing, the guides gone", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.move(h1, 160, 130);
+      expect(h1.style.translate).toBe("60px 30px");
+      expect(e.key("Escape").defaultPrevented).toBe(true);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+      expect(e.$("[data-slop-guides]").children).toHaveLength(0);
+      expect(e.$("[data-slop-readout]").style.display).toBe("none");
+      // The selection stays, the pointer moving on moves nothing, and the release saves nothing.
+      expect(e.selected()).toEqual([h1]);
+      e.move(h1, 200, 200);
+      e.up(h1, 200, 200);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(e.commits()).toEqual([]);
+      expect(e.keys()).toEqual([]);
+    });
+
+    it("puts a resized or turned element back, with the slot a resize left in the layout gone", () => {
+      const { e, h1, handle } = heading();
+      const pointer = (type: string, target: Element, x: number, y: number) =>
+        target.dispatchEvent(
+          new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true }),
+        );
+      const pulls: [string, [number, number], [number, number]][] = [
+        ["1 1", [600, 350], [700, 450]],
+        ["rotate", [500, 200], [700, 300]],
+      ];
+      for (const [kind, from, to] of pulls) {
+        pointer("pointerdown", handle(kind), ...from);
+        pointer("pointermove", handle(kind), ...to);
+        expect(h1.hasAttribute("style")).toBe(true);
+        // A resize takes the heading out of the layout, leaving its slot behind.
+        expect(!!e.doc.querySelector("[data-resize-placeholder]")).toBe(kind === "1 1");
+        e.key("Escape");
+        expect(h1.hasAttribute("style")).toBe(false);
+        expect(e.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+        pointer("pointerup", handle(kind), ...to);
+      }
+      expect(e.commits()).toEqual([]);
+      expect(e.selected()).toEqual([h1]);
+    });
+  });
+
+  describe("the slide's background layer", () => {
+    const LAYOUT = DECK.replace(
+      '<h1 class="title">',
+      '<div class="layout" style="background: rgb(0, 0, 40)"><h1 class="title">',
+    ).replace('<div class="overlay">', '</div><div class="overlay">');
+    const laidOut = () => {
+      const e = editor({ markup: LAYOUT });
+      const layout = e.$(".layout");
+      layout.getBoundingClientRect = () => new e.window.DOMRect(0, 0, 1920, 1080);
+      return { e, layout, slide: e.$("#intro") };
+    };
+
+    it("is the empty slide to a click, which selects nothing, and to a drag, which draws a marquee", () => {
+      const { e, layout } = laidOut();
+      e.click(e.$("h1"));
+      e.down(layout, 1500, 900);
+      expect(e.selected()).toEqual([]);
+      e.move(layout, 1600, 1000);
+      expect(e.$("[data-slop-marquee]").style.display).toBe("");
+      e.up(layout, 1600, 1000);
+      expect(layout.style.translate).toBe("");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("is selected with ⌘-click, and then moves like anything else", () => {
+      const { e, layout } = laidOut();
+      Object.assign(e.doc, { elementsFromPoint: () => [layout, e.$("#intro")] });
+      e.click(layout, { metaKey: true });
+      expect(e.selected()).toEqual([layout]);
+      e.drag(layout, 40, 0);
+      expect(layout.style.translate).toBe("40px 0px");
+    });
+
+    it("opens the slide's menu, which offers to select it", () => {
+      const { e, layout } = laidOut();
+      Object.assign(e.doc, { elementsFromPoint: () => [layout, e.$("#intro")] });
+      layout.dispatchEvent(
+        new e.window.MouseEvent("contextmenu", { clientX: 1500, clientY: 900, bubbles: true, cancelable: true }),
+      );
+      const menu = e.messages<{ element: unknown; under: unknown; parent: unknown }>("slop:edit-menu").at(-1)!;
+      expect(menu.element).toBeNull();
+      expect(menu.under).toEqual([{ path: [0], name: "Background", selected: false }]);
+      expect(menu.parent).toBeNull();
+    });
+
+    it("is left out of ⌘A, and listed in the layers as the background", async () => {
+      const { e, layout } = laidOut();
+      e.key("a", { metaKey: true });
+      expect(e.selected()).not.toContain(layout);
+      expect(e.selected()).toContain(e.$("h1"));
+      await e.frame();
+      const layers = e.messages<{ layers: { name: string; path: number[] }[] }>("slop:edit-layers").at(-1)!.layers;
+      expect(layers.find((row) => row.name === "Background")?.path).toEqual([0]);
+    });
+  });
+
+  describe("the context menu's choices to select", () => {
+    it("lists what lies under the pointer, the top-most first, and what holds the selection", () => {
+      const e = editor();
+      const second = e.$(".card p:nth-child(2)");
+      const shape = e.$(".shape");
+      Object.assign(e.doc, { elementsFromPoint: () => [second, e.$(".card"), shape, e.$("#intro")] });
+      second.dispatchEvent(
+        new e.window.MouseEvent("contextmenu", { clientX: 120, clientY: 80, bubbles: true, cancelable: true }),
+      );
+      const menu = e.messages<{ under: unknown; parent: unknown }>("slop:edit-menu").at(-1)!;
+      // The card shows nothing of its own at the pointer: it is not listed, but it holds the selection.
+      expect(menu.under).toEqual([
+        { path: [1, 1], name: expect.stringContaining("Two"), selected: true },
+        { path: [4], name: expect.any(String), selected: false },
+      ]);
+      expect(menu.parent).toEqual({ path: [1], name: expect.any(String) });
+      // The app selects what was chosen.
+      e.fromParent({ type: "slop:edit-select", path: [4] });
+      expect(e.selected()).toEqual([shape]);
     });
   });
 });

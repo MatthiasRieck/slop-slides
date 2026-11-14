@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::assets::{bring_assets, mime_for};
+use crate::assets::bring_assets;
 use crate::comments::{self, Comments};
 use crate::deck_cache::{self, Cached};
 use crate::error::{Error, Result};
@@ -716,6 +716,24 @@ pub fn delete_slides(file: &Path, slides: &[String]) -> Result<RailEdit> {
     })
 }
 
+/// Deletes section `index` together with `slides`, the slides it holds, all in one write; nothing
+/// goes if one of them is locked.
+pub fn delete_section_slides(file: &Path, index: usize, slides: &[String]) -> Result<RailEdit> {
+    let (written, ()) = rewrite(file, |deck| {
+        if let Some(locked) = slides.iter().find(|s| deck.parsed().is_locked(s)) {
+            return Err(locked_message(locked));
+        }
+        let unmarked = html::delete_section(deck.source(), index)?;
+        let ids = slides.iter().map(String::as_str);
+        let out = html::edit_slides(&unmarked, ids, |_, slide| slide.delete())?;
+        Ok((prune_review(&out).unwrap_or(out), ()))
+    })?;
+    Ok(RailEdit {
+        deck: written.parsed().deck(file),
+        created: Vec::new(),
+    })
+}
+
 /// Writes `source` over the deck, as a change that can be undone. Locked `slides` refuse it, and
 /// review marks and comments of slides that went with it are dropped.
 pub fn restore(file: &Path, slide: Option<&str>, source: String) -> Result<RailEdit> {
@@ -908,8 +926,11 @@ fn same_text(a: &str, b: &str) -> bool {
     a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
 }
 
-/// Writes a standalone copy of the deck with attached assets embedded as data URIs.
+/// Writes a standalone copy of the deck with attached assets embedded as data URIs. The app
+/// exports through export_scope.rs, which leaves out what the author keeps to themselves.
+#[cfg(test)]
 pub fn export(file: &Path, dest: &Path) -> Result<()> {
+    use crate::assets::mime_for;
     let source = html::ensure_runtime(&read_html(file)?);
     let standalone = html::inline_assets(&source, |rel| {
         let path = resolve_in_deck(folder(file), rel).ok()?;
@@ -939,7 +960,7 @@ pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
         &read_guard(file, session),
     );
     let deck = parsed.deck(file);
-    let slides = narration::timeline::layout(file, &deck, &narration::timeline::DEFAULTS);
+    let slides = narration::timeline::layout(file, &deck, &narration::timeline::defaults_for(file));
     let overlaps = narration::timeline::overlaps(&slides);
     if !overlaps.is_empty() {
         issues.extend(lint::narration_overlaps(source, &parsed.slides, &overlaps));
@@ -1738,6 +1759,7 @@ mod tests {
                     target: None,
                     area: None,
                     time: None,
+                    sent: false,
                 };
                 (id.to_string(), vec![comment])
             })
@@ -2077,6 +2099,24 @@ mod tests {
         let json = serde_json::to_value(&loaded).unwrap();
         assert_eq!(json["sections"][0]["title"], "Part two");
         assert_eq!(json["sections"][0]["before"], 1);
+    }
+
+    #[test]
+    fn deletes_a_section_with_its_slides_in_one_write_unless_one_is_locked() {
+        let deck = TempDeck::new(THREE);
+        add_section(&deck.file(), Some("b".into()), "Middle").unwrap();
+        add_section(&deck.file(), Some("c".into()), "Finale").unwrap();
+        set_slide_locked(&deck.file(), None, "b", true).unwrap();
+        let before = deck.html();
+        let err = delete_section_slides(&deck.file(), 0, &ids(&["b"])).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert!(delete_section_slides(&deck.file(), 4, &ids(&["c"])).is_err());
+        assert_eq!(deck.html(), before);
+        set_slide_locked(&deck.file(), None, "b", false).unwrap();
+        let deleted = delete_section_slides(&deck.file(), 0, &ids(&["b"])).unwrap();
+        assert_eq!(slide_ids(&deleted.deck), ["a", "c"]);
+        assert_eq!(sections(&deleted.deck), [(0, "Finale", 1)]);
+        assert!(deleted.created.is_empty());
     }
 
     #[test]

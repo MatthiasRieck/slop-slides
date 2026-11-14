@@ -14,8 +14,8 @@ import {
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FolderPlus, LayoutGrid, Plus } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Deck } from "../lib/api";
 import {
   dropRows,
@@ -26,22 +26,30 @@ import {
   railItems,
   sectionBlocks,
   sectionKey,
-  sectionSizes,
-  sectionStarts,
   startsSection,
 } from "../lib/sections";
-import { plural } from "../lib/utils";
+import { cn, plural } from "../lib/utils";
 import { railSelection, useApp } from "../store";
 import { ToolButton } from "./Button";
-import { EDIT_ONLY } from "./editOnly";
-import { Popover } from "./Popover";
-import { ContextMenu, type MenuEntry } from "./rail/ContextMenu";
+import { BulkActions } from "./rail/BulkActions";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
-import { SEARCH_REORDER, sectionMenu, slideMenu } from "./rail/menus";
+import { NewSlide } from "./rail/NewSlide";
+import { useOverflowWatch } from "./rail/overflowMarks";
+import { railTitle, useRailRows, useSameKeys, useSearchCounts } from "./rail/rows";
 import { SectionHeader } from "./rail/SectionHeader";
-import { Thumbnail } from "./rail/Thumbnail";
+import { ONE_ROW_OF_ACTIONS, SLIDE_LIST_ATTR, Thumbnail } from "./rail/Thumbnail";
+import { OVERVIEW_KEY, useOverviewKey } from "./rail/useOverviewKey";
+import { useRailMenus } from "./rail/useRailMenus";
 import { SectionLabel } from "./SectionLabel";
-import { LayoutPicker } from "./Templates";
+
+/** What a double-click on a slide of the list says it does, in View; in Edit the slide is being edited already. */
+const EDIT_HINT = "double-click to edit";
+
+/** A double-click on a slide of the list: on to editing it. */
+function editSlide(slide: string) {
+  useApp.getState().select(slide);
+  useApp.getState().setMode("edit");
+}
 
 /**
  * How a drag starts. The same objects for every render: dnd-kit takes new options for new
@@ -63,46 +71,9 @@ const MEASURE_DRAGGING = { droppable: { strategy: MeasuringStrategy.WhileDraggin
 const NONE_FOLDED: ReadonlySet<string> = new Set();
 
 /**
- * `keys` as the same list for as long as it names the same rows in the same order. dnd-kit tells
- * every row when its list of rows is another one, which a slide saved anew would otherwise be.
- */
-function useSameKeys(keys: string[]): string[] {
-  const [kept, setKept] = useState(keys);
-  const same = kept.length === keys.length && kept.every((key, i) => key === keys[i]);
-  if (!same) setKept(keys);
-  return same ? kept : keys;
-}
-
-/**
- * The rail's rows and what is looked up in them, worked out once for each change to the slides
- * or the sections. The deck keeps both as they are while they do not change (see `shareDeck`),
- * so a slide's comments or the review marks leave all of this alone.
- */
-function useRailRows(deck: Deck | null) {
-  const slides = deck?.slides;
-  const sections = deck?.sections;
-  return useMemo(() => {
-    const items = slides && sections ? railItems({ slides, sections }) : [];
-    const blocks = sectionBlocks(items);
-    return {
-      items,
-      blocks,
-      itemKeys: items.map((item) => item.key),
-      blockKeys: blocks.map((block) => block.key),
-      starts: sectionStarts(blocks),
-      sizes: sectionSizes(blocks),
-      looseSlides: items.findIndex((item) => item.kind === "section"),
-    };
-  }, [slides, sections]);
-}
-
-/** A right-click's menu, where it was asked for. */
-type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
-
-/**
- * The deck's slides and sections, to go through and pick from. Changing them is Edit mode's:
- * adding, duplicating, deleting, hiding, locking and reordering slides, and the sections. In View
- * the rail only shows them, folds sections and picks slides; its "+" goes to Edit to add one.
+ * The deck's slides and sections, to go through, pick from and organise: adding, duplicating,
+ * deleting, hiding, locking and reordering slides, and the sections. It works the same in View
+ * and in Edit: the modes are about the slide on the stage, not about the list.
  *
  * A right-click on a slide or a section's header opens its menu (see ./rail/menus.ts): on a slide
  * that is not picked it picks that slide first, and with several picked it is about all of them.
@@ -110,29 +81,25 @@ type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
  * arrows move it, Space puts it down. One of several picked slides takes the others along.
  *
  * The rail itself does not follow which slide is selected: the rows that are picked or let go
- * follow it themselves, as do the bits of its header that depend on it (`StartSectionButton`,
+ * follow it themselves, as do the bits of its header that depend on it (`RailHeader`,
  * `OpenSelectedFold`), so going through the slides renders two rows, not the whole list.
  */
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
-  const editable = useApp((s) => s.editing);
-  const [editingSection, setEditingSection] = useState<number | null>(null);
-  const [addingSlide, setAddingSlide] = useState(false);
-  const addButton = useRef<HTMLButtonElement>(null);
+  // In Edit the slide on the stage is being edited already; in View a double-click goes there.
+  const editing = useApp((s) => s.editing);
+  const header = useRef<HTMLDivElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, POINTER_DRAG), useSensor(KeyboardSensor, KEYBOARD_DRAG));
-  const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const { menu, openSlideMenu, openSectionMenu, editingSection, setEditingSection, startSection } = useRailMenus();
+  useOverviewKey();
+  useOverflowWatch();
   // The slides going along with the one being dragged, itself included; empty when it goes alone.
   const [dragged, setDragged] = useState<string[]>([]);
   const matches = useApp((s) => s.search.matches);
   const collapsed = useApp((s) => s.collapsedSections);
-  // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
-  // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
-  const found = useMemo(() => {
-    if (!matches) return null;
-    const counts = new Map<string, number>();
-    for (const match of matches) counts.set(match.slide, (counts.get(match.slide) ?? 0) + 1);
-    return counts;
-  }, [matches]);
+  // While a search runs the rail still lists every slide: those it found carry their count, the
+  // others are dimmed, and the order can be changed as ever.
+  const found = useSearchCounts(matches);
   // The section being dragged, where its row was when picked up, and how tall a slide's row is.
   // Until it is dropped the slides are folded away, the rail closing up around that row.
   const [moving, setMoving] = useState<SectionMove | null>(null);
@@ -171,68 +138,8 @@ export function SlideRail() {
   const folded = useMemo(() => (found ? NONE_FOLDED : foldedSlides(blocks, collapsed)), [found, blocks, collapsed]);
   const app = useApp.getState;
 
-  /** Starts a section at `slide`, and goes on to naming it. */
-  const startSection = useCallback(
-    async (slide: string) => setEditingSection(await useApp.getState().startSection(slide)),
-    [],
-  );
-
-  // The menus read what they are about when they open, so every row gets the same two functions.
-  const openSlideMenu = useCallback(
-    (event: React.MouseEvent, slide: string) => {
-      const app = useApp.getState;
-      const { deck } = app();
-      if (!deck) return;
-      event.preventDefault();
-      // A slide that is not picked is what the menu is about; one of the picked ones stands for all.
-      if (!railSelection(app()).includes(slide)) app().select(slide);
-      const state = app();
-      const entries = slideMenu(
-        deck,
-        slide,
-        railSelection(state),
-        { editable: state.editing, searching: !!state.search.matches },
-        {
-          addSlide: (after) => void app().addSlide(after),
-          duplicate: (slides) => void app().duplicateSlides(slides),
-          copy: () => void app().copySlides(),
-          cut: () => void app().cutSlides(),
-          paste: () => void app().pasteSlides(),
-          remove: (slides) => void app().deleteSlides(slides),
-          setHidden: (slides, hidden) => void app().setSlidesHidden(slides, hidden),
-          setLocked: (slides, locked) => void app().setSlidesLocked(slides, locked),
-          move: (delta) => void app().moveSlides(delta),
-          startSection: (at) => void startSection(at),
-        },
-      );
-      setMenu({ label: "Slide", x: event.clientX, y: event.clientY, entries });
-    },
-    [startSection],
-  );
-
-  const openSectionMenu = useCallback((event: React.MouseEvent, key: string) => {
-    const app = useApp.getState;
-    const { deck, editing, collapsedSections } = app();
-    if (!deck) return;
-    const items = railItems(deck);
-    const row = items.find((item) => item.key === key);
-    if (row?.kind !== "section") return;
-    event.preventDefault();
-    const { section } = row;
-    const entries = sectionMenu(key, sectionBlocks(items), collapsedSections, editing, {
-      rename: () => setEditingSection(section.index),
-      setCollapsed: (first, folded) => app().toggleSection(first, folded),
-      setAllCollapsed: (firsts, folded) => app().setSectionsCollapsed(firsts, folded),
-      select: (slides) => app().pickSlides(slides),
-      remove: () => void app().removeSection(section.index),
-    });
-    setMenu({ label: "Section", x: event.clientX, y: event.clientY, entries });
-  }, []);
-
   const keys = useSameKeys(moving ? blockKeys : itemKeys);
   if (!deck) return null;
-  // The layouts add a slide, which is Edit mode's: leaving it puts them away.
-  if (addingSlide && !editable) setAddingSlide(false);
 
   const hiddenCount = deck.slides.filter((s) => s.hidden).length;
 
@@ -286,49 +193,22 @@ export function SlideRail() {
     await useApp.getState().reorderRail(dropRows(keys, moved, key, String(over.id)));
   };
 
-  /** The "+": the layouts to add a slide on. Adding one is Edit mode's, so in View it goes there first. */
-  const openLayouts = () => {
-    if (!editable) app().setMode("edit");
-    setAddingSlide((open) => !open);
-  };
-
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
-      <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <SectionLabel>{railTitle(deck.slides.length, found?.size, hiddenCount)}</SectionLabel>
-        <div className="flex items-center gap-0.5">
-          <StartSectionButton deck={deck} editable={editable} onStart={startSection} />
-          <ToolButton
-            ref={addButton}
-            variant="panel"
-            label="New slide"
-            title={editable ? "New slide" : "New slide: switches to Edit and opens the layouts"}
-            onClick={openLayouts}
-            aria-expanded={addingSlide}
-            aria-haspopup="dialog"
-          >
-            <Plus className="size-4" />
-          </ToolButton>
-        </div>
-      </div>
-      {addingSlide && (
-        <Popover
-          anchor={addButton}
-          placement="below"
-          width={560}
-          label="New slide"
-          onClose={() => setAddingSlide(false)}
-        >
-          <LayoutPicker mode="add" onBlank={() => void app().addSlide()} onDone={() => setAddingSlide(false)} />
-        </Popover>
-      )}
-      {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+      <RailHeader
+        ref={header}
+        deck={deck}
+        title={railTitle(deck.slides.length, hiddenCount)}
+        short={String(deck.slides.length)}
+        onStartSection={startSection}
+      />
+      <NewSlide anchor={header} />
+      {menu}
       <OpenSelectedFold />
-      <BulkActions deck={deck} editable={editable} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
-            No slides yet. Describe your presentation in the chat, or switch to Edit and add a blank slide.
+            No slides yet. Describe your presentation in the chat, or add a slide with the + above.
           </p>
         ) : (
           <DndContext
@@ -341,12 +221,9 @@ export function SlideRail() {
             onDragEnd={onDragEnd}
             onDragCancel={onDragCancel}
           >
-            {found?.size === 0 && (
-              <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
-            )}
             <Remeasure handle={remeasure} />
-            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found || !editable}>
-              <ol ref={list} className="flex flex-col gap-3">
+            <SortableContext items={keys} strategy={verticalListSortingStrategy}>
+              <ol ref={list} {...{ [SLIDE_LIST_ATTR]: "" }} className={cn("flex flex-col gap-3", ONE_ROW_OF_ACTIONS)}>
                 {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
                 {items.map((item) =>
                   item.kind === "slide" ? (
@@ -355,21 +232,22 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      editable={editable}
-                      filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
+                      filteredOut={folded.has(item.slide.id)}
+                      dimmed={!!found && !found.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
                       draggedAlong={dragged.length > 1 && dragged.includes(item.slide.id)}
                       matches={found?.get(item.slide.id)}
+                      hint={editing ? undefined : EDIT_HINT}
                       onMenu={openSlideMenu}
+                      onOpen={editSlide}
                     />
                   ) : (
                     <SectionHeader
                       key={item.key}
                       itemKey={item.key}
                       section={item.section}
-                      editable={editable}
-                      filteredOut={!!found}
+                      filteredOut={false}
                       still={!!moving || settling}
                       slides={moving ? sizes.get(item.key) : undefined}
                       first={starts.get(item.key)}
@@ -428,9 +306,72 @@ function OpenSelectedFold() {
   return null;
 }
 
-/** Starts a section at the selected slide, which is what it follows, so that the rail need not. */
-function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (slide: string) => void }) {
-  const { deck, editable } = props;
+/**
+ * The row over the list: how many slides there are, and the buttons for the grid of all slides, a
+ * new section and a new slide. While several slides are picked, what can be done to them takes
+ * its place (see ./rail/BulkActions.tsx), the row keeping its height. It never wraps: in a narrow
+ * list the title is cut short, then gives way to the bare count. It follows the picks and the
+ * selected slide itself, so that the rail need not.
+ */
+function RailHeader(props: {
+  ref: React.RefObject<HTMLDivElement | null>;
+  deck: Deck;
+  title: string;
+  /** The count alone, for a list too narrow for the title. */
+  short: string;
+  onStartSection: (slide: string) => void;
+}) {
+  const { deck } = props;
+  const several = useApp((s) => s.railSelected.length > 1);
+  const overview = useApp((s) => s.overview);
+  const adding = useApp((s) => s.addingSlide);
+  const app = useApp.getState;
+  return (
+    <div ref={props.ref} className="@container flex h-10 shrink-0 items-center gap-1 px-3">
+      {several ? (
+        <BulkActions deck={deck} />
+      ) : (
+        <>
+          <SectionLabel title={props.title} className="min-w-0 flex-1 truncate whitespace-nowrap">
+            <span className="hidden @[11rem]:inline">{props.title}</span>
+            <span className="@[11rem]:hidden">{props.short}</span>
+          </SectionLabel>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <ToolButton
+              variant="panel"
+              label="All slides"
+              title={overview ? "Back to the slide" : "Show all slides as a grid"}
+              shortcut={OVERVIEW_KEY}
+              active={overview}
+              aria-pressed={overview}
+              disabled={deck.slides.length === 0}
+              disabledReason="There are no slides to show yet"
+              onClick={() => app().setOverview(!overview)}
+            >
+              <LayoutGrid className="size-4" />
+            </ToolButton>
+            <StartSectionButton deck={deck} onStart={props.onStartSection} />
+            <ToolButton
+              variant="panel"
+              label="New slide"
+              title="New slide…"
+              shortcut="mod+shift+n"
+              onClick={() => app().setAddingSlide(!adding)}
+              aria-expanded={adding}
+              aria-haspopup="dialog"
+            >
+              <Plus className="size-4" />
+            </ToolButton>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Starts a section at the selected slide, which is what it follows. */
+function StartSectionButton(props: { deck: Deck; onStart: (slide: string) => void }) {
+  const { deck } = props;
   const selected = useApp((s) => s.selected);
   const index = deck.slides.findIndex((s) => s.id === selected);
   return (
@@ -438,92 +379,12 @@ function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (sl
       variant="panel"
       label="Start a section at this slide"
       onClick={() => selected && props.onStart(selected)}
-      disabled={!editable || index < 0 || startsSection(deck, index)}
-      disabledReason={
-        !editable ? EDIT_ONLY : index < 0 ? "Select a slide to start a section" : "This slide already starts a section"
-      }
+      disabled={index < 0 || startsSection(deck, index)}
+      disabledReason={index < 0 ? "Select a slide to start a section" : "This slide already starts a section"}
     >
-      <SquareSplitVertical className="size-4" />
+      <FolderPlus className="size-4" />
     </ToolButton>
   );
-}
-
-/**
- * What can be done to the slides picked with ⇧/⌘-click. Locked ones are not deleted or hidden,
- * and out of Edit mode (`editable`) none of them is changed.
- */
-function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
-  const count = useApp((s) => s.railSelected.length);
-  const searching = useApp((s) => !!s.search.matches);
-  if (count < 2) return null;
-  const app = useApp.getState();
-  const picked = railSelection(app);
-  const free = deck.slides.filter((s) => picked.includes(s.id) && !s.locked);
-  const ids = free.map((s) => s.id);
-  const show = free.length > 0 && free.every((s) => s.hidden);
-  const locked = picked.length - free.length;
-  const skips = locked > 0 ? ` (not the ${locked} locked)` : "";
-  return (
-    <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
-      <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
-      <ToolButton
-        variant="panel"
-        label="Move up"
-        shortcut="mod+up"
-        disabledReason={editable ? SEARCH_REORDER : EDIT_ONLY}
-        disabled={!editable || searching}
-        onClick={() => void app.moveSlides(-1)}
-      >
-        <ArrowUp className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        label="Move down"
-        shortcut="mod+down"
-        disabledReason={editable ? SEARCH_REORDER : EDIT_ONLY}
-        disabled={!editable || searching}
-        onClick={() => void app.moveSlides(1)}
-      >
-        <ArrowDown className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        aria-label={`${show ? "Show" : "Hide"} slides`}
-        title={editable ? `${show ? "Show" : "Hide"} slides${skips}` : EDIT_ONLY}
-        disabled={!editable || free.length === 0}
-        onClick={() => void app.setSlidesHidden(ids, !show)}
-      >
-        {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        aria-label="Duplicate slides"
-        title={editable ? "Duplicate slides" : EDIT_ONLY}
-        disabled={!editable}
-        onClick={() => void app.duplicateSlides(picked)}
-      >
-        <Copy className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        aria-label="Delete slides"
-        title={editable ? `Delete slides${skips}` : EDIT_ONLY}
-        disabled={!editable || free.length === 0}
-        onClick={() => void app.deleteSlides(ids)}
-      >
-        <Trash2 className="size-3.5" />
-      </ToolButton>
-      <ToolButton variant="panel" label="Clear selection" shortcut="escape" onClick={app.clearRailSelection}>
-        <X className="size-3.5" />
-      </ToolButton>
-    </div>
-  );
-}
-
-/** What the rail is headed with: how many slides, how many of them a search found, how many are hidden. */
-export function railTitle(slides: number, found: number | undefined, hidden: number): string {
-  if (found !== undefined) return `Slides · ${found} of ${slides}`;
-  return hidden > 0 ? `Slides · ${slides} (${hidden} hidden)` : `Slides · ${slides}`;
 }
 
 /** Hands out a way to have dnd-kit measure every row again, which it only does when a drag starts. */

@@ -1,10 +1,11 @@
 import { act, fireEvent, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChanges } from "../changesStore";
+import { usePalette } from "../commands/palette";
 import { deckMode, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { invoke, open as openDialog } from "../test/tauri";
+import { appWindow, getCurrentWindow, invoke, open as openDialog } from "../test/tauri";
 import { runShellCommand, useShellKeys } from "./useShellKeys";
 
 const DECK = deckFor(DECK_HTML);
@@ -71,15 +72,51 @@ describe("useShellKeys", () => {
     expect(useApp.getState().railOpen).toBe(true);
   });
 
-  it("opens the app's settings on Ctrl+,", () => {
-    useApp.setState({ sidebarOpen: false });
+  it("opens the app's settings on Ctrl+, in their dialog, leaving the sidebar as it is", () => {
+    useApp.setState({ sidebarOpen: false, appSettingsOpen: false });
     expect(press(",")).toBe(true);
-    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "settings" });
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: false, appSettingsOpen: true });
+    useApp.getState().closeAppSettings();
   });
 
-  it("asks for a folder to open on Ctrl+O", async () => {
+  it("asks for a deck to open on Ctrl+O, and a folder on Ctrl+Shift+O", async () => {
     await act(async () => void press("o"));
-    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+    expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Open a deck" }));
+    await act(async () => void press("O", { shiftKey: true }));
+    expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ directory: true }));
+  });
+
+  it("says that everything is saved on Ctrl+S, with a deck open", async () => {
+    const confirmSaved = vi.fn(async () => true);
+    useApp.setState({ confirmSaved });
+    await act(async () => void press("s"));
+    expect(confirmSaved).toHaveBeenCalledOnce();
+    useApp.setState({ deck: null });
+    expect(press("s")).toBe(false);
+  });
+
+  it("closes the deck on Ctrl+W, and with nothing open the window, as document apps do", async () => {
+    const closeDeck = vi.fn(async () => true);
+    const close = vi.fn(async () => {});
+    getCurrentWindow.mockReturnValue({ close });
+    useApp.setState({ closeDeck, openedFile: { path: "talk/deck.html", absolute: "/decks/talk/deck.html" } as never });
+    await act(async () => void press("w"));
+    expect(closeDeck).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    useApp.setState({ openedFile: null, deck: null });
+    await act(async () => void press("w"));
+    expect(close).toHaveBeenCalledOnce();
+    // Ctrl+Shift+W closes the window whatever is open.
+    await act(async () => void press("W", { shiftKey: true }));
+    expect(close).toHaveBeenCalledTimes(2);
+    getCurrentWindow.mockReturnValue(appWindow);
+  });
+
+  it("opens the command palette on Ctrl+Shift+P", () => {
+    usePalette.setState({ open: false });
+    expect(press("P", { shiftKey: true, code: "KeyP" })).toBe(true);
+    expect(usePalette.getState().open).toBe(true);
+    usePalette.setState({ open: false });
   });
 
   it("has no modes or slide list without a deck, but still the sidebar", () => {
@@ -122,7 +159,7 @@ describe("useShellKeys", () => {
   it("takes no key without the modifier, or with Alt as well", () => {
     expect(fireEvent.keyDown(document.body, { key: "1" })).toBe(true);
     expect(press("1", { altKey: true })).toBe(false);
-    expect(press("o", { shiftKey: true })).toBe(false);
+    expect(press("s", { shiftKey: true })).toBe(false);
     expect(deckMode(useApp.getState())).toBe("view");
   });
 
@@ -164,8 +201,13 @@ describe("runShellCommand", () => {
   it("opens nothing in the sidebar on the start screen, but still asks for a folder", () => {
     useApp.setState({ workspace: null, deck: null });
     expect(runShellCommand("sidebar")).toBe(false);
-    expect(runShellCommand("appSettings")).toBe(false);
+    // The app's settings are a dialog, there on the start screen too.
+    expect(runShellCommand("appSettings")).toBe(true);
+    expect(useApp.getState().appSettingsOpen).toBe(true);
+    useApp.getState().closeAppSettings();
+    expect(runShellCommand("save")).toBe(false);
+    expect(runShellCommand("openDeck")).toBe(true);
     expect(runShellCommand("openFolder")).toBe(true);
-    expect(openDialog).toHaveBeenCalledOnce();
+    expect(openDialog).toHaveBeenCalledTimes(2);
   });
 });

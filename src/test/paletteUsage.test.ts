@@ -50,10 +50,15 @@ describe("palette", () => {
 
   it("uses no color the palette does not define", () => {
     const theme = css.match(/@theme inline \{[\s\S]*?\n\}/)?.[0] ?? "";
-    const defined = new Set([...theme.matchAll(/--(?:color|shadow)-([a-z-]+):/g)].map((m) => m[1]!));
+    const defined = new Set([...theme.matchAll(/--color-([a-z-]+):/g)].map((m) => m[1]!));
+    // A shadow is named by the color it is in or by one of the theme's shadows (`shadow-popover`).
+    const shadows = new Set([...theme.matchAll(/--shadow-([a-z-]+):/g)].map((m) => m[1]!));
     expect(defined.has("ring")).toBe(true);
     const unknown = (source: string) =>
-      [...source.matchAll(NAMED_COLOR)].filter(([, , name]) => !defined.has(name!) && !NOT_A_TOKEN.has(name!));
+      [...source.matchAll(NAMED_COLOR)].filter(
+        ([, kind, name]) =>
+          !defined.has(name!) && !NOT_A_TOKEN.has(name!) && !(kind === "shadow" && shadows.has(name!)),
+      );
     // The check sees a made-up token, with variants and an opacity, and passes the real ones.
     expect(
       unknown("hover:bg-popover/50 focus:ring-ringg border-b text-xs bg-card ring-offset-background"),
@@ -83,7 +88,7 @@ describe("palette", () => {
         // The laser's color is built from the swatches, with an alpha.
         .filter((line) => !line.includes("LASER_RGB"))
         // Not the app's to choose: Claude's brand color, and a mask, where only the alpha counts.
-        .filter((line) => !line.includes("fill-[#d97757]") && !line.includes("#000 ${round(at + half)}px"))
+        .filter((line) => !line.includes("fill-[#d97757]") && !/#000 \$\{round\(at\)\}px/.test(line))
         .flatMap((line) => line.match(RAW_COLOR)?.map((color) => `${path}: ${color}`) ?? []),
     );
     expect(found).toEqual([]);
@@ -91,7 +96,8 @@ describe("palette", () => {
 
   it("gives the slide's frame only palette colors", () => {
     // Styles for what the editor adds to a deck, and transparent, which the pasteboard compares with.
-    const content = /var (?:BORDER_COLOR|FALLBACK_STYLE|SHADOW_COLOR) = .*|"#000"|rgba\(0, 0, 0, 0\)/g;
+    const content =
+      /var (?:BORDER_COLOR|DEFAULT_INK|INK_ON_DARK|FALLBACK_STYLE|SHADOW_COLOR) = .*|"#000"|rgba\(0, 0, 0, 0\)/g;
     const defaults = /":root \{ --slop-[\s\S]*?\}" \+/;
     const own = `${EDITOR}\n${PASTEBOARD}`.replace(defaults, "").replace(content, "");
     expect(own.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b(?!-)|\brgba?\(/gi) ?? []).toEqual([]);
@@ -131,6 +137,19 @@ describe("palette", () => {
     expect(blockOf(css, ":root")).toMatch(/--thumbnail-edge: --alpha\(var\(--color-black\)/);
     expect(blockOf(css, ".dark")).toMatch(/--thumbnail-edge: --alpha\(var\(--color-white\)/);
     for (const block of [":root", ".dark"]) expect(tokensIn(blockOf(css, block))).toContain("--thumbnail-shade");
+  });
+
+  it("lays what opens over the window on named layers, never a number", () => {
+    const theme = css.match(/@theme inline \{[\s\S]*?\n\}/)?.[0] ?? "";
+    for (const layer of ["raised", "sticky", "dropdown", "cover", "overlay", "toast", "tooltip"]) {
+      expect(theme).toMatch(new RegExp(`--z-index-${layer}: \\d+;`));
+    }
+    // What covers the workbench or more: z-40 and up, and any number of its own (`z-[70]`).
+    const literal = /(?<![\w-])(?:[a-z-]+:)*-?z-(?:[4-9]\d|\d{3,}|\[[^\]]+\])(?![\w-])/g;
+    const found = sources("src").flatMap((path) =>
+      [...readFileSync(path, "utf8").matchAll(literal)].map((m) => `${path}: ${m[0]}`),
+    );
+    expect(found).toEqual([]);
   });
 
   it("offers every class the components use", () => {

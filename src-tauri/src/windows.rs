@@ -1,5 +1,6 @@
 //! App windows. Each window has a workspace of its own (see [`OpenWorkspace`]), so several
 //! folders, or several decks of one folder, can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another.
+//! The menu bar is [`crate::menu`]'s: the app's on macOS, each window's own elsewhere.
 //! On macOS so does opening the app again (a double-click in Finder) and the New Window item of
 //! its Dock menu, while a click on its Dock icon only brings it back: see `reopened`. Folders
 //! opened with the app from Finder (dropped on its icon, Open With) open in a window too: see
@@ -26,9 +27,6 @@ use crate::workspace::OpenWorkspace;
 /// Labels of the windows [`open_new`] opens start with this; the capabilities grant them
 /// what the first window (`main`) gets.
 pub const LABEL_PREFIX: &str = "window-";
-
-/// Id of the File › New Window menu item.
-pub const NEW_WINDOW_MENU: &str = "new-window";
 
 #[cfg(target_os = "macos")]
 /// Tells the windows a folder is waiting to be opened in one of them; each asks for its own
@@ -225,12 +223,14 @@ fn build(app: &AppHandle, label: &str) -> Result<()> {
         .build()
         .map_err(|e| Error::msg(format!("cannot open a window: {e}")))?;
     paint(&window);
+    #[cfg(not(target_os = "macos"))]
+    crate::menu::attach(&window);
     Ok(())
 }
 
 /// The app's dark background (`--background` under `.dark` in src/index.css), for a window to
 /// show before its page has drawn anything.
-const DARK_BACKGROUND: Color = Color(10, 10, 10, 255);
+const DARK_BACKGROUND: Color = Color(23, 23, 23, 255);
 
 /// What an empty window shows on a system with `theme`: None is the light background the
 /// window's configuration already gives it.
@@ -274,29 +274,6 @@ pub fn closed(window: &Window) {
     open.set(label, None);
     window.state::<WorkspaceWatcher>().stop(label);
     window.state::<PendingFolders>().take(label);
-}
-
-/// The app menu with File › New Window added (macOS shows a menu bar for the app; the other
-/// systems get Ctrl+N from the frontend instead).
-#[cfg(target_os = "macos")]
-pub fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{Menu, MenuItem, MenuItemKind};
-    let menu = Menu::default(app)?;
-    let new_window = MenuItem::with_id(
-        app,
-        NEW_WINDOW_MENU,
-        "New Window",
-        true,
-        Some("CmdOrCtrl+N"),
-    )?;
-    for item in menu.items()? {
-        if let MenuItemKind::Submenu(submenu) = item {
-            if submenu.text()? == "File" {
-                submenu.prepend(&new_window)?;
-            }
-        }
-    }
-    Ok(menu)
 }
 
 /// The Dock: who sent a reopen, and the menu of the app's icon. Tauri has neither, so this adds
@@ -396,8 +373,8 @@ mod tests {
         assert_eq!(background_for(Theme::Dark), Some(DARK_BACKGROUND));
         // The colour the page itself draws in the dark, in index.html and src/index.css.
         let page = include_str!("../../index.html");
-        assert!(page.contains("html.dark { background: oklch(0.145 0 0)"));
-        assert_eq!(DARK_BACKGROUND, Color(10, 10, 10, 255));
+        assert!(page.contains("html.dark { background: oklch(0.205 0 0)"));
+        assert_eq!(DARK_BACKGROUND, Color(23, 23, 23, 255));
     }
     use crate::test_support::TempDir;
 

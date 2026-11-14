@@ -104,11 +104,23 @@ describe("CodeView: showing deck.html", () => {
     expect(container.querySelector(".cm-slide-last")!.textContent).toBe(`</section>`);
   });
 
-  it("shows the slide number, id and line range in the header", async () => {
+  it("names the slide by its number and title in the header, with its id as the tooltip, and its lines", async () => {
     await renderView();
-    await waitFor(() => expect(header()).toContain("Slide 1"));
-    expect(header()).toContain("#intro");
+    await waitFor(() => expect(header()).toContain("Slide 1 · Intro"));
+    expect(header()).not.toContain("#intro");
+    expect(screen.getByText("Slide 1 · Intro").title).toBe('id="intro"');
     expect(header()).toContain("lines 4–6");
+  });
+
+  it("goes to a line asked for from elsewhere, once, with the caret at its start", async () => {
+    const { view } = await renderView();
+    await act(async () => useApp.setState({ codeReveal: 5 }));
+    await waitFor(() => expect(useApp.getState().codeReveal).toBeNull());
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(5);
+    // A line past the end is the last one.
+    await act(async () => useApp.setState({ codeReveal: 9999 }));
+    await waitFor(() => expect(useApp.getState().codeReveal).toBeNull());
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(view.state.doc.lines);
   });
 
   it("numbers every slide in the gutter and marks the selected one", async () => {
@@ -368,8 +380,7 @@ describe("CodeView: editing and saving", () => {
     const { view } = await renderView();
     await type(view, "<p>Bye</p>\n</section>\n", `<section class="slide" id="new">\n  <p>New</p>\n</section>\n`);
     await act(async () => useApp.setState({ selected: "new", revealRev: useApp.getState().revealRev + 1 }));
-    await waitFor(() => expect(header()).toContain("Slide 4"));
-    expect(header()).toContain("#new");
+    await waitFor(() => expect(header()).toContain("Slide 4 · New"));
   });
 
   it("saves with the Save button, sending the edit and the text it started from", async () => {

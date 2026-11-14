@@ -2,6 +2,7 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Clapperboard,
   Delete,
   Eraser,
   Eye,
@@ -12,10 +13,8 @@ import {
   MessageSquareText,
   MessagesSquare,
   PenLine,
-  Play,
+  Presentation,
   RotateCw,
-  Search,
-  SkipForward,
   SquareDashed,
   Trash2,
 } from "lucide-react";
@@ -27,12 +26,12 @@ import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
 import { deckComments, hasReview, useApp } from "../store";
-import { ToolButton, toolButtonClass } from "./Button";
+import { ToolButton } from "./Button";
 import { CommentsOverview } from "./Comments";
-import { SlideSearch } from "./FindReplace";
 import { Popover } from "./Popover";
 import type { Annotations } from "./PresenterTools";
 import { RibbonRow, RibbonSection, RibbonToggle, useRibbonFit } from "./Ribbon";
+import { ChangeLayoutTool, TidyLayoutTool } from "./stage/SlideLayoutTools";
 import { TimelineTools } from "./TimelineTools";
 
 const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
@@ -44,11 +43,13 @@ const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
 /**
  * View mode's tools, in a ribbon like the edit tools': pen, highlighter and eraser for marking up
  * the slide, comments on its elements or on an area outlined with a rectangle, an ellipse or a
- * lasso, the list of the deck's comments, whether the slide plays its animations or shows its
- * final state (and playing them again), the deck's timeline, and the search. Marks
+ * lasso, the list of the deck's comments, how slides show here (animated, or in their final
+ * state) and replaying the slide's animations, the requests to the agent about the slide's
+ * layout, and the deck's timeline. Marks
  * and comments are saved in the deck file as a review, which can be shown and hidden, and go to
  * the agent with the next chat message: the marks as a screenshot, the comments as the composer
- * says, and each new area comment's screenshot of its area as an image in the composer.
+ * says, and each new area comment's screenshot of its area as an image in the composer. Find is
+ * not here: it is the bar over the stage, the same in every mode (see ./FindReplace.tsx).
  *
  * Every tool is always there, off when it has nothing to work on, so the sections keep their
  * widths and the ribbon knows what fits.
@@ -197,67 +198,71 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
           </ToolButton>
         </RibbonRow>
       </RibbonSection>
-      <RibbonSection title="Animations" icon={<Play />} collapsed={collapsedFrom <= 2} closeOn={finalState}>
+      <RibbonSection title="Animations" icon={<Clapperboard />} collapsed={collapsedFrom <= 2} closeOn={finalState}>
         <RibbonRow>
-          {/* One choice of two: a slide either plays its animations as it shows, or shows how it ends. */}
-          {/* biome-ignore lint/a11y/useSemanticElements: two pressed buttons read better here than a fieldset. */}
-          <div
-            role="group"
-            aria-label="When a slide is shown"
-            className="flex flex-1 items-center rounded-md border p-px"
-          >
-            <Segment
-              label="Play the slide's animations when it is shown"
-              active={!finalState}
-              onClick={() => useApp.getState().setFinalState(false)}
-            >
-              <Play />
-              Play
-            </Segment>
-            <Segment
-              label="Show the slide's final state, with no animations, as the slide list does"
-              active={finalState}
-              onClick={() => useApp.getState().setFinalState(true)}
-            >
-              <SkipForward />
-              Final
-            </Segment>
-          </div>
+          {/* One choice of two, a setting and not a command: how a slide shows when the user comes to it. */}
+          <ShowsAs finalState={finalState} />
         </RibbonRow>
         <RibbonRow>
           <RibbonToggle
-            label="Play this slide's animations again, from their start"
+            label="Replay this slide's animations from their start"
             onClick={() => useApp.getState().replaySlide()}
           >
             <RotateCw />
-            Replay
+            Replay animations
           </RibbonToggle>
         </RibbonRow>
       </RibbonSection>
-      <TimelineTools collapsed={collapsedFrom <= 3} />
-      <RibbonSection title="Find" icon={<Search />} collapsed={collapsedFrom <= 4}>
-        <SlideSearch />
+      <RibbonSection title="Slide" icon={<Presentation />} collapsed={collapsedFrom <= 3}>
+        <RibbonRow>
+          <ChangeLayoutTool />
+        </RibbonRow>
+        <RibbonRow>
+          <TidyLayoutTool />
+        </RibbonRow>
       </RibbonSection>
+      <TimelineTools collapsed={collapsedFrom <= 4} />
     </div>
   );
 });
 
-/** One half of a two-way choice in the ribbon; `active` is the half chosen. */
-function Segment(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
+const SHOWS_AS = [
+  { final: false, name: "Animated", hint: "Slides play their animations when you come to them" },
+  { final: true, name: "Final state", hint: "Slides show as they end, with nothing moving, as the slide list does" },
+];
+
+/**
+ * How a slide shows on the stage when the user comes to it: animated, or in its final state. A
+ * choice of two that stays as it is set, so a segmented control; playing something is what
+ * "Replay animations", the timeline's Play and the top bar's Present do.
+ */
+function ShowsAs({ finalState }: { finalState: boolean }) {
   return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      onClick={props.onClick}
-      className={cn(
-        toolButtonClass("toolbar", "xs", props.active),
-        "flex flex-1 items-center justify-center gap-1 px-1.5 text-xs [&_svg]:!size-3.5",
-      )}
+    <div
+      role="radiogroup"
+      aria-label="How slides show here"
+      className="grid flex-1 grid-cols-2 gap-0.5 rounded-md border bg-muted p-0.5 text-xs"
     >
-      {props.children}
-    </button>
+      {SHOWS_AS.map(({ final, name, hint }) => (
+        <label
+          key={name}
+          title={hint}
+          className={cn(
+            "flex h-[18px] cursor-pointer items-center justify-center whitespace-nowrap rounded px-2 text-muted-foreground hover:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-primary/40",
+            finalState === final && "bg-background font-medium text-foreground shadow-sm ring-1 ring-border",
+          )}
+        >
+          <input
+            type="radio"
+            name="slides-show-as"
+            className="sr-only"
+            checked={finalState === final}
+            onChange={() => useApp.getState().setFinalState(final)}
+          />
+          {name}
+        </label>
+      ))}
+    </div>
   );
 }
 
@@ -268,19 +273,18 @@ function CommentsButton() {
   const anchor = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button
+      <ToolButton
         ref={anchor}
-        type="button"
-        aria-label={`Comments (${count})`}
-        title="All comments of the deck, by slide"
+        label={`Comments (${count})`}
+        title="All comments of the deck, by slide: choose which to send, resolve or delete them"
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((v) => !v)}
-        className={cn(toolButtonClass("toolbar", "sm", open), "flex items-center gap-1 px-1.5 text-xs tabular-nums")}
+        className={cn("flex items-center gap-1 px-1.5 text-xs tabular-nums", open && "bg-accent text-foreground")}
       >
         <MessagesSquare />
         {count}
-      </button>
+      </ToolButton>
       {open && <CommentsOverview anchor={anchor} onClose={() => setOpen(false)} />}
     </>
   );

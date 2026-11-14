@@ -9,24 +9,44 @@ import {
 } from "react";
 
 import type { SlideTiming } from "../../lib/api";
-import type { Timeline } from "../../lib/timeline";
+import { snapTime, type Timeline } from "../../lib/timeline";
 import { useApp } from "../../store";
 
 /** How far the pointer goes before pressing something is moving it, in pixels. */
 const DRAG_START = 3;
 /** How far the arrow keys move an edge or a narration, in seconds; with Shift, a second. */
 const STEP = 0.1;
+/** How near a target a drag comes before it snaps to it, in pixels. */
+export const SNAP_PIXELS = 6;
 
 /** What to save for what is pressed to move by some seconds. */
 export type Move = (by: number) => SlideTiming[];
 
-/** A drag in progress: what it moves, where the pointer started, and how far a pixel goes. */
+/**
+ * What a drag snaps to: `from`, the time of what is dragged as it starts (an edge, a narration's
+ * start), and the times it snaps to, worked out once as it is pressed.
+ */
+export interface SnapTargets {
+  from: number;
+  targets: number[];
+}
+
+/** A drag in progress: what it moves, where the pointer started, how far a pixel goes and what it snaps to. */
 interface Drag {
   move: Move;
+  /** What is dragged, for whoever shows it while it moves. */
+  name: string;
   target: Element;
   x: number;
   secondsPerPixel: number;
+  snap: SnapTargets | null;
   moved: boolean;
+}
+
+/** A drag as it shows while it moves: what is dragged, and the time it snapped to (null when none). */
+export interface Dragging {
+  name: string;
+  guide: number | null;
 }
 
 /**
@@ -36,6 +56,11 @@ interface Drag {
  * longer of the two is. `held` is how long the track was when a drag took off: until it ends, a
  * second stays as wide. `track` is the element the timeline is laid out along. Unless `editable`
  * (Edit mode), nothing moves.
+ *
+ * A drag snaps to the targets it is pressed with, within a few pixels (Alt held lets it go
+ * anywhere); `dragging` says what moves and where it snapped, for a guide line. A press that
+ * did not move is no drag: `wasDragged` says whether the press just released moved something,
+ * so a click after a drag does nothing more.
  *
  * `layout` and `timeline` are expected to stay the same while what they are made from does: the
  * preview is laid out once for each move of a drag, not again for every render in between.
@@ -49,7 +74,9 @@ export function useTimingEdits(
   // What a drag would save, until it is saved.
   const [preview, setPreview] = useState<SlideTiming[] | null>(null);
   const [held, setHeld] = useState<number | null>(null);
+  const [dragging, setDragging] = useState<Dragging | null>(null);
   const drag = useRef<Drag | null>(null);
+  const dragged = useRef(false);
 
   const shown = useMemo(() => (preview ? layout(preview) : timeline), [preview, layout, timeline]);
   const end = Math.max(timeline.end, shown.end);
@@ -73,28 +100,57 @@ export function useTimingEdits(
     event.stopPropagation();
     finish(move((event.shiftKey ? 1 : STEP) * (event.key === "ArrowLeft" ? -1 : 1)));
   };
-  const press = (event: PointerEvent, move: Move) => {
+  const press = (event: PointerEvent, move: Move, name = "", snap: SnapTargets | null = null) => {
+    dragged.current = false;
     if (!editable || event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    const secondsPerPixel = end / (track.current?.getBoundingClientRect().width || 1);
-    drag.current = { move, target: event.currentTarget, x: event.clientX, secondsPerPixel, moved: false };
+    const width = track.current?.getBoundingClientRect().width ?? 0;
+    const secondsPerPixel = end / (width || 1);
+    // A track not laid out yet has no pixels to snap within.
+    const snaps = width > 0 ? snap : null;
+    drag.current = {
+      move,
+      name,
+      target: event.currentTarget,
+      x: event.clientX,
+      secondsPerPixel,
+      snap: snaps,
+      moved: false,
+    };
   };
   const pointed = (event: PointerEvent) => {
-    const dragged = drag.current;
-    if (!dragged) return;
-    const pixels = event.clientX - dragged.x;
-    if (!dragged.moved && Math.abs(pixels) < DRAG_START) return;
-    dragged.moved = true;
+    const current = drag.current;
+    if (!current) return;
+    const pixels = event.clientX - current.x;
+    if (!current.moved && Math.abs(pixels) < DRAG_START) return;
+    current.moved = true;
+    let by = pixels * current.secondsPerPixel;
+    let guide: number | null = null;
+    if (current.snap && !event.altKey) {
+      const { from, targets } = current.snap;
+      const snapped = snapTime(from + by, targets, SNAP_PIXELS * current.secondsPerPixel);
+      by = snapped.at - from;
+      guide = snapped.target;
+    }
     setHeld((length) => length ?? end);
-    setPreview(dragged.move(pixels * dragged.secondsPerPixel));
+    setDragging((was) => (was?.name === current.name && was.guide === guide ? was : { name: current.name, guide }));
+    setPreview(current.move(by));
   };
   const release = () => {
-    const dragged = drag.current;
+    const current = drag.current;
     drag.current = null;
+    dragged.current = !!current?.moved;
     setHeld(null);
-    if (dragged?.moved && preview) finish(preview);
+    setDragging(null);
+    if (current?.moved && preview) finish(preview);
+  };
+  /** Whether the press released last moved what it pressed; asking forgets it. */
+  const wasDragged = () => {
+    const was = dragged.current;
+    dragged.current = false;
+    return was;
   };
 
-  return { shown, end, held, press, pointed, release, nudge };
+  return { shown, end, held, dragging, press, pointed, release, nudge, finish, wasDragged };
 }

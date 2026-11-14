@@ -2,6 +2,7 @@
 //! [`crate::voice::Voice::time_words`]) and kept in the manifest with the audio it was heard in.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
@@ -25,6 +26,15 @@ pub struct TimingProgress {
 
 /// Emitted as [`time_words`] goes.
 pub const TIMING_EVENT: &str = "narration-timing";
+
+/// Set to stop [`time_words`] before its next slide: one deck's words are timed at a time.
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Stops timing words, if it runs: the slide being heard is finished and kept, the rest is
+/// left for another time, and [`time_words`] ends with [`super::CANCELLED`].
+pub fn cancel_timing() {
+    CANCEL.store(true, Ordering::SeqCst);
+}
 
 /// When each word of a slide's audio is said: seconds from the start of its audio, which
 /// plays `data-narration-start` seconds after the slide shows.
@@ -55,7 +65,11 @@ pub async fn time_words(
         .filter(|a| slides.map_or(true, |s| s.contains(&a.slide)))
         .collect();
     let dir = audio_dir(file);
+    CANCEL.store(false, Ordering::SeqCst);
     for (done, audio) in todo.iter().enumerate() {
+        if CANCEL.swap(false, Ordering::SeqCst) {
+            return Err(Error::msg(super::CANCELLED));
+        }
         progress(TimingProgress {
             deck: deck.id.clone(),
             slide: Some(audio.slide.clone()),

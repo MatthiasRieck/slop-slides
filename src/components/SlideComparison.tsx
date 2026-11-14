@@ -26,21 +26,21 @@ const LABEL_DISTANCE = 56;
 type Drag = { kind: "move" } | { kind: "rotate"; side: 1 | -1 };
 
 /**
- * Two versions of a slide on top of each other, split by a divider. Drag anywhere to move it and
- * its round handle to rotate it; `feather` fades one version into the other around it. Both
- * previews stay under the surface that takes the pointer, so a drag never ends up in an iframe.
+ * Two versions of a slide on top of each other, split by a divider, each half named as the view
+ * switch names it. Drag anywhere to move the divider and its round handle to rotate it; a double
+ * click on that handle puts it back upright in the middle. Both previews stay under the surface
+ * that takes the pointer, so a drag never ends up in an iframe.
  */
 export function SlideComparison(props: {
   /** The size the slide is shown at, in CSS pixels. */
   box: { width: number; height: number };
-  /** CSS pixels per slide pixel. */
-  scale: number;
   before: ReactNode;
   after: ReactNode;
 }) {
-  const { box, scale } = props;
+  const { box } = props;
   const divider = useChanges((s) => s.divider);
   const setDivider = useChanges((s) => s.setDivider);
+  const resetDivider = useChanges((s) => s.resetDivider);
   const drag = useRef<Drag | null>(null);
   const surface = useRef<HTMLDivElement>(null);
 
@@ -91,7 +91,7 @@ export function SlideComparison(props: {
   const [lineStart, lineEnd] = dividerEnds(divider, box);
   const side = knobSide(divider, box);
   const knob = knobAt(divider, box, side);
-  const mask = revealMask(divider, box, scale);
+  const mask = revealMask(divider, box);
 
   return (
     <div className="relative bg-stage" style={box} data-testid="slide-comparison">
@@ -130,8 +130,8 @@ export function SlideComparison(props: {
           drag.current = null;
         }}
       >
-        <Name at={sideLabelAt(divider, box, -1, LABEL_DISTANCE)}>Old</Name>
-        <Name at={sideLabelAt(divider, box, 1, LABEL_DISTANCE)}>New</Name>
+        <Name at={sideLabelAt(divider, box, -1, LABEL_DISTANCE)}>Before</Name>
+        <Name at={sideLabelAt(divider, box, 1, LABEL_DISTANCE)}>After</Name>
         <button
           type="button"
           role="slider"
@@ -153,8 +153,9 @@ export function SlideComparison(props: {
           aria-valuenow={divider.angle}
           aria-valuemin={-180}
           aria-valuemax={180}
-          title="Drag to rotate the divider; hold Shift for steps of 15°"
+          title="Drag to rotate the divider (Shift for steps of 15°); double-click to put it back"
           onKeyDown={onRotateKey}
+          onDoubleClick={resetDivider}
           onPointerDown={(event) => start(event, { kind: "rotate", side })}
           style={{ left: knob.x, top: knob.y }}
           className="absolute size-5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-handle bg-primary shadow-md"

@@ -60,8 +60,8 @@ export function useDismiss(open: boolean, refs: Refs, close: () => void, options
 const MARGIN = 8;
 
 const LOOKS = {
-  dialog: { className: "flex flex-col overflow-hidden shadow-lg", gap: 6 },
-  menu: { className: "overflow-y-auto shadow-xl shadow-scrim/40", gap: 8 },
+  dialog: { className: "flex flex-col overflow-hidden shadow-popover", gap: 6 },
+  menu: { className: "overflow-y-auto shadow-popover", gap: 8 },
 };
 
 /**
@@ -178,7 +178,7 @@ export function Popover(props: {
       style={{ width, ...position }}
       // Placed, it comes in from the anchor's side (see `enter-below` in src/index.css).
       className={cn(
-        "fixed z-50 rounded-xl border bg-card text-foreground",
+        "fixed z-overlay rounded-xl border bg-card text-foreground",
         look.className,
         side && `enter-${side}`,
         props.className,
@@ -192,7 +192,7 @@ export function Popover(props: {
 
 /** The class of a `DropdownPanel`, for a panel that is not a div (a form, say). */
 export const dropdownPanel =
-  "enter-below absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md";
+  "enter-below absolute top-full left-1/2 z-dropdown mt-1 -translate-x-1/2 rounded-lg border bg-card p-2 shadow-popover";
 
 /**
  * A toolbar button's panel, dropping down centered under it. Put it next to the button in a

@@ -1,10 +1,21 @@
 import { api, type Deck, type RailEdit, type Slide } from "../lib/api";
-import { applyOrder, railItems, stepRows, withoutSlides, withSlidesMarked } from "../lib/sections";
+import { formatKeys } from "../lib/keys";
+import {
+  applyOrder,
+  railItems,
+  sectionBlocks,
+  sectionKey,
+  stepRows,
+  stepSection,
+  withoutSection,
+  withoutSlides,
+  withSlidesMarked,
+} from "../lib/sections";
 import { shareDeck } from "../lib/share";
 import { loadJson, saveJson } from "../lib/storage";
 import { plural } from "../lib/utils";
 import { queueEdit } from "./editQueue";
-import { showErrorIn, showSuccessIn } from "./errors";
+import { showErrorIn, showInfoIn, showSuccessIn } from "./errors";
 import { refreshHistory, undoNewest } from "./history";
 import type { AppState, AppStore, Slice } from "./types";
 import type { ToastAction } from "./ui";
@@ -19,14 +30,21 @@ export interface SlidesSlice {
   /** The slides picked in the rail when there are several; empty when it is just `selected`. */
   railSelected: string[];
   /**
+   * Where a range of picked slides starts: ⇧-click and ⇧ with the arrows pick from it to the slide
+   * they go to. Null while it is the selected slide (see `rangeAnchor`).
+   */
+  railAnchor: string | null;
+  /** Every slide shows as a grid in the place of the stage (see ../components/SlideOverview.tsx). */
+  overview: boolean;
+  /** The layouts to add a slide on are open (the slide list's "+", ⇧⌘N, "New slide…" in a menu). */
+  addingSlide: boolean;
+  /**
    * The rail's folded sections, each named by its first slide's id, which moves with the section.
    * Remembered per deck between launches (see `railStateOf`).
    */
   collapsedSections: string[];
   /** Bumped to play the animations of the slide on the stage again (see `replaySlide`). */
   replayRev: number;
-  /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
-  imageExport: { dir: string; slides: string[] } | null;
 
   /**
    * Shows `deck` as the open deck's new state. What did not change in it stays the very objects
@@ -34,12 +52,9 @@ export interface SlidesSlice {
    */
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
-  /**
-   * Goes `delta` slides on from the selected one. While a search lists only the slides it found,
-   * those are the ones it steps through, as they are the ones the rail shows.
-   */
+  /** Goes `delta` slides on from the selected one, through every slide, also while a search is on. */
   selectRelative: (delta: number) => void;
-  /** Goes to the first or the last slide (of those a search found, while one is on). */
+  /** Goes to the first or the last slide. */
   selectEdge: (edge: "first" | "last") => void;
   /** Picks every slide the rail lists, keeping the selected one on the stage. */
   selectAllSlides: () => void;
@@ -50,8 +65,21 @@ export interface SlidesSlice {
    * `range` (⇧) picks everything from the selected slide to it, which stays on the stage.
    */
   extendRailSelection: (slide: string, how: "toggle" | "range") => void;
+  /**
+   * ⇧ with a key that goes to `slide`: picks everything from where the range started to it, and
+   * shows it on the stage.
+   */
+  extendRailTo: (slide: string) => void;
+  /** ⇧ with an arrow: the picked range ends `delta` listed slides further on. */
+  extendRailBy: (delta: number) => void;
   /** Back to just the selected slide. */
   clearRailSelection: () => void;
+  /** Shows every slide as a grid in the place of the stage, or the stage again. */
+  setOverview: (overview: boolean) => void;
+  /** Leaves the grid of all slides for `slide` on the stage. */
+  openSlide: (slide: string) => void;
+  /** Opens or closes the layouts to add a slide on. They do not open during a show. */
+  setAddingSlide: (open: boolean) => void;
   /** Folds the rail's section that starts with slide `first` to its header, or opens it again. */
   toggleSection: (first: string, collapsed?: boolean) => void;
   /** Folds every section whose first slide is in `firsts`, or opens all of them (and any other). */
@@ -69,6 +97,13 @@ export interface SlidesSlice {
   renameSection: (index: number, title: string) => Promise<void>;
   /** Takes section `index` out of the rail, leaving its slides where they are; it can be taken back. */
   removeSection: (index: number) => Promise<void>;
+  /**
+   * Deletes section `index` together with its slides, as one change that can be taken back. With
+   * a locked slide in it nothing goes, and it says why.
+   */
+  deleteSectionSlides: (index: number) => Promise<void>;
+  /** Moves section `index`, with its slides, before the section above it (-1) or after the one below (1). */
+  moveSection: (index: number, delta: -1 | 1) => Promise<void>;
   /** Runs a change to the deck file as one the slide list can undo; null when it failed. */
   editRail: (change: (id: string) => Promise<RailEdit>) => Promise<RailEdit | null>;
   /** Hides or shows `slides`, as one change, which shows right away. */
@@ -91,17 +126,22 @@ export interface SlidesSlice {
   /**
    * Inserts the slides on the system clipboard (copied here or in another window) after the
    * selected one, in their order, and picks them. Their images come along; styles from the other
-   * deck's CSS do not. Resolves to whether there were slides to paste.
+   * deck's CSS do not. Resolves to whether there were slides to paste; with `explain`, an empty
+   * clipboard is said, as a menu's choice that did nothing would look broken.
    */
-  pasteSlides: () => Promise<boolean>;
+  pasteSlides: (explain?: boolean) => Promise<boolean>;
   /** Plays the animations of the slide on the stage from their start, turning them on if the stage showed final states. */
   replaySlide: () => void;
-  startImageExport: (dir: string) => void;
-  endImageExport: () => void;
 }
 
 /** The rail's picks when no deck is open. */
-export const NO_RAIL_STATE = { railSelected: [], collapsedSections: [] };
+export const NO_RAIL_STATE = {
+  railSelected: [],
+  railAnchor: null,
+  collapsedSections: [],
+  overview: false,
+  addingSlide: false,
+};
 
 /** Where the folded sections of every deck are remembered, by the deck file's path. */
 const COLLAPSED_KEY = "slopslide.collapsedSections";
@@ -130,23 +170,23 @@ function saveCollapsed(id: string, firsts: string[]) {
   }
 }
 
-/** The rail's picks as deck `id` opens: nothing picked, its sections folded as they were left. */
+/** The rail as deck `id` opens: nothing picked, the stage showing, its sections folded as they were left. */
 export function railStateOf(id: string) {
-  return { railSelected: [], collapsedSections: loadCollapsed()[id] ?? [] };
+  return { ...NO_RAIL_STATE, collapsedSections: loadCollapsed()[id] ?? [] };
 }
 
-/** The slides the rail lists, in deck order: all of them, or while a search is on only those it found. */
+/**
+ * The slides the rail lists, in deck order: all of them, also while a search is on. A search
+ * marks and counts what it finds (see ./search.ts); it does not take slides off the list.
+ */
 export function listedSlides(state: Pick<AppState, "deck" | "search">): string[] {
-  const ids = (state.deck?.slides ?? []).map((s) => s.id);
-  const { matches } = state.search;
-  if (!matches) return ids;
-  const found = new Set(matches.map((m) => m.slide));
-  return ids.filter((id) => found.has(id));
+  return (state.deck?.slides ?? []).map((s) => s.id);
 }
 
 /** How the deck's history labels the rail's changes that a toast offers to take back (see src-tauri/src/commands/deck.rs). */
 const DELETE_SLIDES_LABEL = "Delete slides";
 const DELETE_SECTION_LABEL = "Delete section";
+const DELETE_SECTION_SLIDES_LABEL = "Delete section and slides";
 
 /** The Undo of a toast about the change labelled `label`; `what` names it if it can no longer be undone. */
 const undoAction = (app: AppStore, label: string, what: string): ToastAction => ({
@@ -158,6 +198,28 @@ const undoAction = (app: AppStore, label: string, what: string): ToastAction => 
 export function railSelection(state: Pick<AppState, "deck" | "selected" | "railSelected">): string[] {
   const picked = state.railSelected.length > 0 ? state.railSelected : state.selected ? [state.selected] : [];
   return (state.deck?.slides ?? []).map((s) => s.id).filter((id) => picked.includes(id));
+}
+
+/**
+ * Where a range of picked slides starts: the slide ⇧ was first held on, as long as it is still
+ * listed, else the selected one.
+ */
+export function rangeAnchor(state: Pick<AppState, "deck" | "search" | "selected" | "railAnchor">): string | null {
+  const { railAnchor, selected } = state;
+  return railAnchor !== null && listedSlides(state).includes(railAnchor) ? railAnchor : selected;
+}
+
+/**
+ * Where the picked range ends, which is what ⇧ with an arrow moves: the end of the picked slides
+ * that is not where the range started. A ⇧-click leaves the slide on the stage where it was, so
+ * this need not be the selected slide.
+ */
+export function rangeFocus(state: Pick<AppState, "deck" | "search" | "selected" | "railSelected" | "railAnchor">) {
+  const picked = railSelection(state);
+  const anchor = rangeAnchor(state);
+  if (picked.length > 1 && anchor === picked[0]) return picked.at(-1)!;
+  if (picked.length > 1 && anchor === picked.at(-1)) return picked[0]!;
+  return state.selected;
 }
 
 /** The slide shown on the stage, if any. */
@@ -250,6 +312,29 @@ function editAhead<T>(
 }
 
 /**
+ * Takes the selection off the slides `doomed`, which are about to be deleted: the stage goes on to
+ * the next slide that stays, else the one before, and none is picked. What it returns puts the
+ * stage back on its slide, for when the slides were not deleted after all, unless the user went
+ * on since.
+ */
+function leaveSlides(app: AppStore, doomed: ReadonlySet<string>): () => void {
+  const { deck, selected, select } = app.getState();
+  if (!deck) return () => {};
+  const leaving = selected !== null && doomed.has(selected);
+  const here = deck.slides.findIndex((s) => s.id === selected);
+  const left = (s: Slide) => !doomed.has(s.id);
+  const neighbor = deck.slides.slice(here + 1).find(left) ?? deck.slides.slice(0, here).findLast(left);
+  if (leaving) select(neighbor?.id ?? null);
+  app.setState((s) => ({ railSelected: unpicked(s), railAnchor: null }));
+  return () => {
+    const now = app.getState();
+    if (leaving && now.selected === (neighbor?.id ?? null) && now.deck?.slides.some((s) => s.id === selected)) {
+      now.select(selected);
+    }
+  };
+}
+
+/**
  * Queues a rail change after the edits before it and shows its deck. The change is one more in
  * the deck's history even when it leaves the slides as the app has them, so the history is asked.
  */
@@ -274,39 +359,28 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   deck: null,
   selected: null,
   revealRev: 0,
-  railSelected: [],
-  collapsedSections: [],
+  ...NO_RAIL_STATE,
   replayRev: 0,
-  imageExport: null,
 
   setDeck: (deck) => {
     // Only a deck that changed can have a history that did.
     if (showDeck(app, deck)) void refreshHistory(app);
   },
 
-  select: (slide) => set((s) => ({ selected: slide, railSelected: unpicked(s), revealRev: s.revealRev + 1 })),
+  select: (slide) =>
+    set((s) => ({ selected: slide, railSelected: unpicked(s), railAnchor: null, revealRev: s.revealRev + 1 })),
 
   selectRelative: (delta) => {
     const { deck, selected } = get();
     if (!deck || deck.slides.length === 0) return;
-    const all = deck.slides.map((s) => s.id);
-    const listed = listedSlides(get());
-    // A search that found nothing lists no slide to step through; the keys then go through them all.
-    const ids = listed.length > 0 ? listed : all;
+    const ids = listedSlides(get());
     const at = ids.indexOf(selected ?? "");
-    let next = ids[Math.min(ids.length - 1, Math.max(0, at + delta))];
-    // The slide shown is not one of those listed: on to the nearest listed one that way, if any.
-    if (at < 0) {
-      const here = all.indexOf(selected ?? "");
-      next = delta > 0 ? ids.find((id) => all.indexOf(id) > here) : ids.findLast((id) => all.indexOf(id) < here);
-      if (next === undefined) return;
-    }
-    set((s) => ({ selected: next ?? null, railSelected: unpicked(s), revealRev: s.revealRev + 1 }));
+    const next = ids[Math.min(ids.length - 1, Math.max(0, at + delta))];
+    set((s) => ({ selected: next ?? null, railSelected: unpicked(s), railAnchor: null, revealRev: s.revealRev + 1 }));
   },
 
   selectEdge: (edge) => {
-    const listed = listedSlides(get());
-    const ids = listed.length > 0 ? listed : (get().deck?.slides ?? []).map((s) => s.id);
+    const ids = listedSlides(get());
     const slide = edge === "first" ? ids[0] : ids.at(-1);
     if (slide !== undefined) get().select(slide);
   },
@@ -320,34 +394,80 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
       return {
         selected,
         railSelected: slides.length > 1 ? slides : [],
+        railAnchor: null,
         revealRev: selected === s.selected ? s.revealRev : s.revealRev + 1,
       };
     });
   },
 
   extendRailSelection: (slide, how) => {
-    const { deck, selected, search } = get();
+    const { deck } = get();
     if (!deck) return;
     const picked = railSelection(get());
     if (how === "range") {
       const ids = deck.slides.map((s) => s.id);
-      const [from, to] = [ids.indexOf(selected ?? slide), ids.indexOf(slide)].sort((a, b) => a - b) as [number, number];
-      // A search only shows some slides; those are the ones to pick.
-      const shown = search.matches && new Set(search.matches.map((m) => m.slide));
-      const range = ids.slice(from, to + 1).filter((id) => !shown || shown.has(id));
-      set({ railSelected: range.length > 1 ? range : [] });
+      const anchor = rangeAnchor(get()) ?? slide;
+      const [from, to] = [ids.indexOf(anchor), ids.indexOf(slide)].sort((a, b) => a - b) as [number, number];
+      const range = ids.slice(from, to + 1);
+      set({ railSelected: range.length > 1 ? range : [], railAnchor: anchor });
     } else if (!picked.includes(slide)) {
-      set((s) => ({ railSelected: [...picked, slide], selected: slide, revealRev: s.revealRev + 1 }));
+      // The slide added is where a range picked next starts.
+      set((s) => ({
+        railSelected: [...picked, slide],
+        selected: slide,
+        railAnchor: null,
+        revealRev: s.revealRev + 1,
+      }));
     } else if (picked.length > 1) {
       const rest = picked.filter((id) => id !== slide);
       set((s) => ({
         railSelected: rest.length > 1 ? rest : [],
         selected: rest.includes(s.selected ?? "") ? s.selected : (rest.at(-1) ?? null),
+        railAnchor: null,
       }));
     }
   },
 
-  clearRailSelection: () => set({ railSelected: [] }),
+  extendRailTo: (slide) => {
+    const ids = listedSlides(get());
+    const anchor = rangeAnchor(get());
+    if (!ids.includes(slide)) return;
+    // With nothing to start from (no slide on the stage), the range is the slide.
+    const start = anchor !== null && ids.includes(anchor) ? anchor : slide;
+    const [from, to] = [ids.indexOf(start), ids.indexOf(slide)].sort((a, b) => a - b) as [number, number];
+    const range = ids.slice(from, to + 1);
+    set((s) => ({
+      selected: slide,
+      railSelected: range.length > 1 ? range : unpicked(s),
+      railAnchor: start,
+      revealRev: s.revealRev + 1,
+    }));
+  },
+
+  extendRailBy: (delta) => {
+    const ids = listedSlides(get());
+    if (ids.length === 0) return;
+    const at = ids.indexOf(rangeFocus(get()) ?? "");
+    // The slide shown is not one of those listed: the range starts at the listed end that way.
+    const to = at < 0 ? (delta > 0 ? 0 : ids.length - 1) : Math.min(ids.length - 1, Math.max(0, at + delta));
+    get().extendRailTo(ids[to]!);
+  },
+
+  clearRailSelection: () => set({ railSelected: [], railAnchor: null }),
+
+  setOverview: (overview) => {
+    if (get().deck && get().overview !== overview) set({ overview });
+  },
+
+  openSlide: (slide) => {
+    get().select(slide);
+    get().setOverview(false);
+  },
+
+  setAddingSlide: (open) => {
+    const addingSlide = open && !!get().deck && !get().presenting;
+    if (get().addingSlide !== addingSlide) set({ addingSlide });
+  },
 
   toggleSection: (first, collapsed) => {
     const { deck, collapsedSections } = get();
@@ -382,29 +502,17 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   deleteSlides: async (slides, verb = "Deleted") => {
-    const { deck, selected } = get();
+    const { deck } = get();
     const doomed = new Set(deck?.slides.filter((s) => slides.includes(s.id) && !s.locked).map((s) => s.id));
     if (!deck || doomed.size === 0) return;
-    // The slide on the stage goes: on to the next one that stays, else the one before it.
-    const leaving = selected !== null && doomed.has(selected);
-    const here = deck.slides.findIndex((s) => s.id === selected);
-    const left = (s: Slide) => !doomed.has(s.id);
-    const neighbor = deck.slides.slice(here + 1).find(left) ?? deck.slides.slice(0, here).findLast(left);
-    if (leaving) get().select(neighbor?.id ?? null);
-    set((s) => ({ railSelected: unpicked(s) }));
+    const comeBack = leaveSlides(app, doomed);
     const edit = await editAhead(
       app,
       (shown) => withoutSlides(shown, doomed),
       (id) => api.deleteSlides(id, [...doomed]),
       (answer) => answer.deck,
     );
-    if (!edit) {
-      // The slides are back: so is the one that was on the stage, unless the user went on since.
-      if (leaving && get().selected === (neighbor?.id ?? null) && get().deck?.slides.some((s) => s.id === selected)) {
-        get().select(selected);
-      }
-      return;
-    }
+    if (!edit) return comeBack();
     // The deck file drops the slides' review marks with them; forget them here too.
     for (const slide of doomed) get().clearSketch(slide);
     const text = `${verb} ${plural(doomed.size, "slide")}`;
@@ -452,6 +560,42 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     }
   },
 
+  deleteSectionSlides: async (index) => {
+    const { deck } = get();
+    const section = deck?.sections.find((s) => s.index === index);
+    if (!deck || !section) return;
+    const rows = sectionBlocks(railItems(deck)).find((block) => block.key === sectionKey(index))?.rows ?? [];
+    const slides = deck.slides.filter((s) => rows.includes(s.id));
+    if (slides.length === 0) return get().removeSection(index);
+    if (slides.some((s) => s.locked)) {
+      showInfoIn(app, "This section holds a locked slide. Unlock it to delete the section with its slides.");
+      return;
+    }
+    const doomed = new Set(slides.map((s) => s.id));
+    const comeBack = leaveSlides(app, doomed);
+    const edit = await editAhead(
+      app,
+      (shown) => withoutSection(withoutSlides(shown, doomed), index),
+      (id) => api.deleteSectionSlides(id, index, [...doomed]),
+      (answer) => answer.deck,
+    );
+    if (!edit) return comeBack();
+    for (const slide of doomed) get().clearSketch(slide);
+    const name = section.title ? `the section “${section.title}”` : "the section";
+    showSuccessIn(
+      app,
+      `Deleted ${name} and its ${plural(doomed.size, "slide")}`,
+      undoAction(app, DELETE_SECTION_SLIDES_LABEL, "delete"),
+    );
+  },
+
+  moveSection: async (index, delta) => {
+    const { deck } = get();
+    if (!deck) return;
+    const order = stepSection(railItems(deck), sectionKey(index), delta);
+    if (order) await get().reorderRail(order);
+  },
+
   setSlidesHidden: async (slides, hidden) => {
     if (slides.length === 0) return;
     await editAhead(
@@ -496,8 +640,8 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   moveSlides: async (delta) => {
-    const { deck, search } = get();
-    if (!deck || search.matches) return;
+    const { deck } = get();
+    if (!deck) return;
     const keys = railItems(deck).map((item) => item.key);
     const order = stepRows(keys, railSelection(get()), delta);
     if (order.some((key, i) => key !== keys[i])) await get().reorderRail(order);
@@ -532,12 +676,17 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     await get().deleteSlides(free, "Cut");
   },
 
-  pasteSlides: async () => {
+  pasteSlides: async (explain = false) => {
     const { deck, selected } = get();
     if (!deck) return false;
     try {
       const pasted = await api.pasteSlides(deck.id, selected);
-      if (!pasted) return false;
+      if (!pasted) {
+        if (explain) {
+          showInfoIn(app, `There are no slides to paste. Copy some first (${formatKeys("mod+c")} in the slide list).`);
+        }
+        return false;
+      }
       if (get().deck?.id === deck.id) {
         get().setDeck(pasted.deck);
         get().select(pasted.created.at(-1) ?? null);
@@ -554,11 +703,4 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     if (get().finalState) get().setFinalState(false);
     set((s) => ({ replayRev: s.replayRev + 1 }));
   },
-
-  startImageExport: (dir) => {
-    const { deck } = get();
-    if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
-  },
-
-  endImageExport: () => set({ imageExport: null }),
 });

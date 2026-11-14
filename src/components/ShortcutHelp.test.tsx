@@ -6,7 +6,8 @@ import { TOOL_KEYS } from "../lib/ink";
 import { formatKeys } from "../lib/keys";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { openShortcutHelp, useApp } from "../store";
-import { keysLabel, SECTIONS, ShortcutHelp, TOOL_ROWS } from "./ShortcutHelp";
+import { DECK_HTML, deckFor } from "../test/fixtures";
+import { filterSections, keysLabel, orderSections, SECTIONS, ShortcutHelp, TOOL_ROWS } from "./ShortcutHelp";
 
 const dialog = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
 const section = (title: string) => SECTIONS.find((s) => s.title === title)!;
@@ -29,7 +30,11 @@ describe("the shortcuts listed", () => {
     expect(general).toEqual(
       expect.arrayContaining([
         formatKeys(SHELL_SHORTCUTS.openFolder),
-        [SHELL_SHORTCUTS.view, SHELL_SHORTCUTS.edit, SHELL_SHORTCUTS.git].map((keys) => formatKeys(keys)).join(" / "),
+        formatKeys(SHELL_SHORTCUTS.view),
+        formatKeys(SHELL_SHORTCUTS.edit),
+        formatKeys(SHELL_SHORTCUTS.git),
+        formatKeys(SHELL_SHORTCUTS.close),
+        formatKeys(SHELL_SHORTCUTS.palette),
         formatKeys(SHELL_SHORTCUTS.sidebar),
         formatKeys(SHELL_SHORTCUTS.rail),
         formatKeys(SHELL_SHORTCUTS.appSettings),
@@ -48,9 +53,35 @@ describe("the shortcuts listed", () => {
       "Lines",
       "Chat",
       "Presenting",
-      "HTML and SVG editors",
-      "Changes (Git)",
+      "Code and drawing editors",
+      "Changes",
     ]);
+  });
+
+  it("puts the sections of the deck's mode first, the rest in their order", () => {
+    const titles = (mode: string | null) => orderSections(SECTIONS, mode).map((s) => s.title);
+    expect(titles(null)).toEqual(SECTIONS.map((s) => s.title));
+    expect(titles("edit").slice(0, 4)).toEqual(["Edit", "Text", "Lines", "General"]);
+    expect(titles("view").slice(0, 2)).toEqual(["View", "General"]);
+    expect(titles("git")[0]).toBe("Changes");
+    expect(titles("edit")).toHaveLength(SECTIONS.length);
+  });
+
+  it("finds rows by what they do, by their keys as shown or spelled, and by section", () => {
+    const found = (query: string) =>
+      filterSections(SECTIONS, query).flatMap((s) => s.rows.map(([keys]) => `${s.title}: ${keysLabel(keys)}`));
+    expect(found("duplicate")).toEqual(expect.arrayContaining(["Edit: Ctrl+D", "Slides: Ctrl+X / Ctrl+D in the list"]));
+    expect(found("DUPLICATE").length).toBe(found("duplicate").length);
+    // Every word counts, wherever it is.
+    expect(found("ctrl+g")).toContain("Edit: Ctrl+G");
+    expect(found("cmd g group")).toContain("Edit: Ctrl+G");
+    expect(found("any command")).toEqual(["General: Ctrl+Shift+P"]);
+    expect(found("option resizing")).toEqual(["Edit: Alt resizing"]);
+    expect(found("presenting laser")).toEqual(["Presenting: L / P / H / E"]);
+    expect(found("no such thing")).toEqual([]);
+    expect(filterSections(SECTIONS, "  ")).toEqual(SECTIONS);
+    // A section with no row found is left out.
+    expect(filterSections(SECTIONS, "laser").map((s) => s.title)).toEqual(["Presenting"]);
   });
 
   it("lists every edit tool's key, and nothing else as one", () => {
@@ -86,16 +117,10 @@ describe("ShortcutHelp", () => {
     fireEvent.keyDown(document.body, { key: "?" });
     expect(dialog()).toBeTruthy();
     for (const title of SECTIONS.map((s) => s.title)) expect(screen.getByRole("heading", { name: title })).toBeTruthy();
-    for (const keys of [
-      "Ctrl+A",
-      "Ctrl+D",
-      "Tab / Shift+Tab",
-      "Ctrl+C / Ctrl+X / Ctrl+V",
-      "Ctrl+B / Ctrl+I / Ctrl+U",
-    ]) {
+    for (const keys of ["Ctrl+A", "Ctrl+D", "Tab / Shift+Tab", "Ctrl+C / Ctrl+X / Ctrl+V", "Ctrl+B", "Ctrl+Shift+P"]) {
       expect(screen.getByText(keys)).toBeTruthy();
     }
-    for (const keys of ["Shift+Arrows", "Shift moving", "Alt resizing", "Ctrl+G / Ctrl+Shift+G", "Snapping"]) {
+    for (const keys of ["Shift+Arrows", "Shift moving", "Alt resizing", "Ctrl+G", "Ctrl+Shift+G", "Snapping"]) {
       expect(screen.getByText(keys)).toBeTruthy();
     }
     expect(screen.getByText("Steer: send into the agent's turn now")).toBeTruthy();
@@ -224,6 +249,31 @@ describe("ShortcutHelp", () => {
     fireEvent.keyDown(dialog()!, { key: "ArrowRight" });
     window.removeEventListener("keydown", listen);
     expect(reached).toBe(false);
+  });
+
+  it("opens with the focus in its search, which narrows the list as the user types", () => {
+    render(<ShortcutHelp />);
+    act(() => openShortcutHelp());
+    const search = screen.getByRole("searchbox", { name: "Search the shortcuts" });
+    expect(document.activeElement).toBe(search);
+    fireEvent.change(search, { target: { value: "laser" } });
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual(["Presenting"]);
+    // Typed in the search, ? is a character, not the key that closes the help.
+    fireEvent.keyDown(search, { key: "?" });
+    expect(dialog()).toBeTruthy();
+    fireEvent.change(search, { target: { value: "zzz" } });
+    expect(screen.getByRole("status").textContent).toBe("No shortcut matches “zzz”.");
+    // The list keeps its scrollbar drawn, saying there is more.
+    expect(screen.getByTestId("shortcut-list").className).toContain("overflow-y-scroll");
+  });
+
+  it("opens on the sections of the mode the deck is in", () => {
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    useApp.getState().setMode("edit");
+    render(<ShortcutHelp />);
+    act(() => openShortcutHelp());
+    expect(screen.getAllByRole("heading", { level: 3 })[0]!.textContent).toBe("Edit");
+    act(() => useApp.setState({ deck: null }));
   });
 
   it("is not left open when the workbench it belongs to goes away", () => {

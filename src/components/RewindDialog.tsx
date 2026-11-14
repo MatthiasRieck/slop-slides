@@ -26,14 +26,10 @@ export function RewindDialog() {
     <Dialog
       label="Undo chat changes"
       onClose={() => answer(null)}
-      className="flex w-[28rem] max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-      heading={
-        <>
-          <h2 className="text-base font-semibold">You undid the agent's changes. What about the chat?</h2>
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-            The deck is back to how it was before your message “{entry.label}”.
-          </p>
-        </>
+      size="md"
+      title="You undid the agent's changes. What about the chat?"
+      description={
+        <span className="line-clamp-2">The deck is back to how it was before your message “{entry.label}”.</span>
       }
     >
       <div className="flex flex-col gap-2">

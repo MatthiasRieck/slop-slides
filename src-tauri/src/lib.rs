@@ -14,9 +14,12 @@ mod deck_lock;
 mod env;
 mod error;
 mod export;
+mod export_job;
+mod export_scope;
 mod export_smoke;
 mod export_window;
 mod extensions;
+mod file_ops;
 mod files;
 mod find;
 mod git;
@@ -26,6 +29,7 @@ mod html;
 mod inbox;
 mod lint;
 mod mcp;
+mod menu;
 mod mp4;
 mod narration;
 mod pdf;
@@ -41,6 +45,7 @@ mod safety;
 mod screens;
 mod sessions;
 mod size;
+mod slide_images;
 mod sound;
 mod stamp;
 mod templates;
@@ -81,10 +86,20 @@ pub fn run() {
     env::adopt_login_shell_env();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(windows::menu).setup(|app| {
+    let builder = builder.menu(menu::build).setup(|app| {
         windows::dock::add_menu(app.handle());
         for window in app.webview_windows().values() {
             windows::paint(window);
+        }
+        Ok(())
+    });
+    // Elsewhere a menu bar is the window's: the first window gets its own (later ones as they open).
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.setup(|app| {
+        for window in app.webview_windows().values() {
+            if windows::is_app_window(window.label()) {
+                menu::attach(window);
+            }
         }
         Ok(())
     });
@@ -97,16 +112,11 @@ pub fn run() {
         .manage(windows::PendingFolders::default())
         .manage(voice::Voice::default())
         .manage(narration::Narration::default())
-        .on_menu_event(|app, event| {
-            if event.id() == windows::NEW_WINDOW_MENU {
-                if let Err(e) = windows::open_new(app) {
-                    eprintln!("{e}");
-                }
-            }
-        })
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 windows::closed(window);
+                screens::window_closed(window.label());
                 window.state::<voice::Voice>().window_closed(window.label());
             }
         })
@@ -120,11 +130,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::workspace::new_window,
+            menu::set_menu_state,
             commands::workspace::list_screens,
             commands::workspace::screen_previews,
             commands::workspace::present_on,
             commands::workspace::close_presenter_view,
             commands::workspace::present_in_windows,
+            commands::workspace::restore_show_window,
+            commands::workspace::keep_awake,
             commands::workspace::take_pending_folder,
             commands::workspace::open_workspace,
             commands::workspace::close_workspace,
@@ -133,9 +146,20 @@ pub fn run() {
             commands::workspace::recent_decks,
             commands::workspace::forget_deck,
             commands::workspace::library_folder,
+            commands::workspace::deck_gallery,
+            commands::workspace::deck_workspace,
             commands::workspace::list_dir,
             commands::workspace::open_file,
+            commands::file_ops::search_files,
+            commands::file_ops::rename_entry,
+            commands::file_ops::create_folder,
+            commands::file_ops::trash_entry,
+            commands::file_ops::read_text_file,
+            commands::file_ops::open_in_default_app,
             commands::deck::create_deck,
+            commands::deck::create_example_deck,
+            commands::deck::duplicate_deck,
+            commands::deck::trash_deck,
             commands::deck::open_deck,
             commands::deck::close_deck,
             commands::deck::load_deck,
@@ -156,6 +180,7 @@ pub fn run() {
             commands::deck::add_section,
             commands::deck::rename_section,
             commands::deck::delete_section,
+            commands::deck::delete_section_slides,
             commands::deck::delete_slides,
             commands::deck::update_slide,
             commands::deck::slide_source,
@@ -164,6 +189,8 @@ pub fn run() {
             commands::history::undo_deck,
             commands::history::redo_deck,
             commands::history::restore_slides,
+            commands::history::deck_versions,
+            commands::history::restore_version,
             commands::chat::rewind_chat,
             commands::deck::import_assets,
             commands::deck::save_asset,
@@ -188,13 +215,13 @@ pub fn run() {
             commands::deck::lint_deck,
             commands::chat::capture_sketch,
             commands::chat::capture_area,
-            commands::export::create_image_export_dir,
-            commands::export::export_slide_image,
+            commands::export::export_slide_images,
             commands::export::export_pdf,
             commands::export::export_pptx,
             commands::deck::import_pptx,
             commands::export::export_video,
             commands::export::cancel_video_export,
+            commands::export::cancel_export,
             commands::chat::load_chat,
             commands::chat::session_provider,
             commands::chat::save_chat,
@@ -202,6 +229,10 @@ pub fn run() {
             commands::chat::move_chat_to_deck,
             commands::chat::list_chat_threads,
             commands::chat::select_chat_thread,
+            commands::chat::chat_title,
+            commands::chat::rename_chat_thread,
+            commands::chat::delete_chat_thread,
+            commands::chat::discard_attachment,
             commands::chat::send_message,
             commands::chat::interrupt_agent,
             commands::chat::steer_agent,
@@ -217,6 +248,7 @@ pub fn run() {
             commands::templates::create_template,
             commands::voice::voice_status,
             commands::voice::download_voice_model,
+            commands::voice::cancel_voice_download,
             commands::voice::follow_speech,
             commands::voice::start_recording,
             commands::voice::stop_recording,
@@ -238,6 +270,11 @@ pub fn run() {
             commands::narration::set_speech_key,
             commands::narration::speech_voices,
             commands::narration::set_narration_language,
+            commands::narration::cancel_narration_timing,
+            commands::narration::narration_settings,
+            commands::narration::set_narration_timing,
+            commands::narration::set_narration_delivery,
+            commands::narration::preview_narration_voice,
         ])
         .build(context)
         .expect("error while running SlopSlide")

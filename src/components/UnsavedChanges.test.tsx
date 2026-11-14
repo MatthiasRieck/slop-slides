@@ -6,9 +6,9 @@ import { UnsavedChanges } from "./UnsavedChanges";
 
 beforeEach(() => useUnsavedQuestion.getState().question?.answer("cancel"));
 
-/** Asks about `deck.html` with the dialog mounted. */
-function ask() {
-  render(<UnsavedChanges />);
+/** Asks about `deck.html` with the dialog mounted, as on macOS or as elsewhere. */
+function ask(mac = true) {
+  render(<UnsavedChanges mac={mac} />);
   let asked!: Promise<UnsavedAnswer>;
   act(() => {
     asked = askUnsaved("deck.html");
@@ -23,11 +23,40 @@ describe("UnsavedChanges", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("asks whether to save the changes to the file, Save first", () => {
+  const buttons = () => screen.getAllByRole("button").map((button) => button.textContent);
+
+  it("asks whether to save the changes to the file, Save the default", () => {
     void ask();
-    expect(dialog()!.textContent).toContain("Save the changes to deck.html?");
-    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Cancel", "Don’t save", "Save"]);
+    expect(screen.getByRole("heading", { name: "Save the changes to deck.html?" })).toBeTruthy();
+    expect(dialog()!.textContent).toContain("Without saving, they are lost.");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
+  });
+
+  it("orders its buttons as macOS does: Don’t save apart at the left, then Cancel and Save", () => {
+    void ask(true);
+    expect(buttons()).toEqual(["Don’t save", "Cancel", "Save"]);
+    const apart = screen.getByRole("button", { name: "Don’t save" }).parentElement!;
+    expect(apart.classList.contains("mr-auto")).toBe(true);
+    expect(apart.contains(screen.getByRole("button", { name: "Cancel" }))).toBe(false);
+  });
+
+  it("orders its buttons as Windows does elsewhere: Save, Don’t save, Cancel", () => {
+    void ask(false);
+    expect(buttons()).toEqual(["Save", "Don’t save", "Cancel"]);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
+  });
+
+  it("does not paint not saving red: it is a choice, and Save is the one that stands out", () => {
+    void ask();
+    expect(screen.getByRole("button", { name: "Don’t save" }).className).not.toContain("destructive");
+    expect(screen.getByRole("button", { name: "Save" }).classList.contains("bg-primary")).toBe(true);
+  });
+
+  it("looks like every other dialog of the app", () => {
+    void ask();
+    for (const name of ["w-96", "rounded-xl", "bg-card", "shadow-dialog"]) {
+      expect(dialog()!.classList.contains(name)).toBe(true);
+    }
   });
 
   it.each([

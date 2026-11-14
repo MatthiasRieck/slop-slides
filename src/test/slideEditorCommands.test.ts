@@ -153,23 +153,28 @@ describe("shortcuts on the selection", () => {
     expect(e.commits()).toEqual([]);
   });
 
-  it("flips with ⌘⇧H and ⌘⇧V, every selected element that can flip, and back again", () => {
+  it("flips with ⌥⇧⌘H and ⌥⇧⌘V, every selected element that can flip, and back again", () => {
     const e = editor();
     e.pick("#pic", "#a", "#line");
     const path = () => e.$("#line path").getAttribute("d");
     const drawn = path();
-    e.key("H", { metaKey: true, shiftKey: true });
+    // ⇧⌘V and ⇧⌘H flip nothing: ⇧⌘V is pasting as plain text, which the app does.
+    e.key("V", { metaKey: true, shiftKey: true, code: "KeyV" });
+    e.key("H", { metaKey: true, shiftKey: true, code: "KeyH" });
+    expect(e.$("#pic").style.transform).toBe("");
+    // With Alt held, macOS types another character: the key goes by where it is.
+    e.key("Ó", { metaKey: true, shiftKey: true, altKey: true, code: "KeyH" });
     expect(e.$("#pic").style.transform).toContain("scaleX(-1)");
     // A plain box does not flip; a line is mirrored through its points.
     expect(e.$("#a").style.transform).toBe("");
     expect(path()).not.toBe(drawn);
     expect(e.commits()).toHaveLength(1);
-    e.key("H", { metaKey: true, shiftKey: true });
+    e.key("Ó", { metaKey: true, shiftKey: true, altKey: true, code: "KeyH" });
     expect(e.$("#pic").style.transform).toBe("");
     expect(path()).toBe(drawn);
     e.fromParent({ type: "slop:edit-flip", axis: "y" });
     expect(e.$("#pic").style.transform).toContain("scaleY(-1)");
-    e.key("V", { metaKey: true, shiftKey: true });
+    e.key("◊", { metaKey: true, shiftKey: true, altKey: true, code: "KeyV" });
     expect(e.$("#pic").style.transform).toBe("");
     expect(e.selected()).toHaveLength(3);
   });
@@ -404,5 +409,167 @@ describe("colors the wells cannot show as one", () => {
     // The same color on both is that color.
     e.fromParent({ type: "slop:edit-style", style: { fill: "#00ff00" } });
     expect(selection(e)).toMatchObject({ fill: "#00ff00", fillOther: false });
+  });
+});
+
+describe("the ribbon's commands", () => {
+  const selection = (e: ReturnType<typeof editor>) =>
+    e.messages<{ selection: Record<string, unknown> }>("slop:edit-selection").at(-1)!.selection;
+
+  it("steps each selected text from its own size, keeping a larger one larger", () => {
+    const e = editor(
+      DECK.replace(
+        "left: 400px; top: 300px; width: 200px; height: 100px; font-size: 48px;",
+        "left: 400px; top: 300px; width: 200px; height: 100px; font-size: 24px;",
+      ),
+    );
+    e.pick("#a", "#b");
+    e.fromParent({ type: "slop:edit-font-step", step: 1 });
+    expect([e.$("#a").style.fontSize, e.$("#b").style.fontSize]).toEqual(["56px", "28px"]);
+    expect(e.commits()).toHaveLength(1);
+    e.fromParent({ type: "slop:edit-font-step", step: -1 });
+    expect([e.$("#a").style.fontSize, e.$("#b").style.fontSize]).toEqual(["48px", "24px"]);
+  });
+
+  it("steps a word with a size of its own from that size, inside the element", () => {
+    const e = editor();
+    e.pick("#a");
+    e.$("#a").innerHTML = 'Plain <span style="font-size: 96px">big</span>';
+    e.fromParent({ type: "slop:edit-font-step", step: 1 });
+    expect(e.$("#a").style.fontSize).toBe("56px");
+    expect(e.$("#a span").style.fontSize).toBe("112px");
+  });
+
+  it("reports what several selected elements do not share as mixed", () => {
+    const e = editor(
+      DECK.replace(
+        "left: 400px; top: 300px; width: 200px; height: 100px; font-size: 48px;",
+        "left: 400px; top: 300px; width: 200px; height: 100px; font-size: 24px; opacity: 0.5; text-align: center;",
+      ),
+    );
+    e.pick("#a");
+    expect(selection(e).mixed).toBeUndefined();
+    e.click(e.$("#b"), { shiftKey: true });
+    const mixed = selection(e).mixed as string[];
+    expect(mixed).toEqual(expect.arrayContaining(["fontSize", "opacity", "align"]));
+    expect(mixed).not.toContain("fontFamily");
+    // Made the same, they are no longer mixed.
+    e.fromParent({ type: "slop:edit-style", style: { fontSize: 30 } });
+    expect(selection(e).mixed).not.toContain("fontSize");
+  });
+
+  it("turns every selected element a quarter turn, with ⌘⌥R and from the ribbon", () => {
+    const e = editor();
+    e.pick("#a", "#b");
+    e.fromParent({ type: "slop:edit-rotate", step: 1 });
+    expect([e.$("#a").style.rotate, e.$("#b").style.rotate]).toEqual(["90deg", "90deg"]);
+    expect(e.commits()).toHaveLength(1);
+    e.fromParent({ type: "slop:edit-rotate", step: -1 });
+    e.fromParent({ type: "slop:edit-rotate", step: -1 });
+    expect(e.$("#a").style.rotate).toBe("-90deg");
+    e.pick("#a");
+    expect(e.key("®", { metaKey: true, altKey: true, code: "KeyR" }).defaultPrevented).toBe(true);
+    expect(e.$("#a").style.rotate).toBe("");
+  });
+
+  it("strikes text through with ⌘⇧X and from the app, and back", () => {
+    const e = editor();
+    e.pick("#a");
+    e.key("X", { metaKey: true, shiftKey: true });
+    expect(selection(e).strike).toBe(true);
+    e.fromParent({ type: "slop:edit-toggle-style", key: "strike" });
+    expect(selection(e).strike).toBe(false);
+    e.fromParent({ type: "slop:edit-toggle-style", key: "color" });
+    expect(e.commits()).toHaveLength(2);
+  });
+
+  it("keeps a tool in hand for one element after another, until Select is picked", () => {
+    const e = editor();
+    const addAt = (x: number) => {
+      e.down(e.$("#intro"), x, 600);
+      e.up(e.$("#intro"), x, 600);
+    };
+    const shapes = () => e.doc.querySelectorAll('[data-added="shape"]').length;
+    const before = shapes();
+    e.fromParent({ type: "slop:edit-tool", tool: "rect" });
+    e.fromParent({ type: "slop:edit-tool-keep", tool: "rect", on: true });
+    addAt(900);
+    addAt(1300);
+    expect(shapes()).toBe(before + 2);
+    expect(e.messages("slop:edit-tool")).toEqual([]);
+    // Let go of, the next one puts it away.
+    e.fromParent({ type: "slop:edit-tool-keep", tool: "rect", on: false });
+    addAt(1600);
+    expect(e.messages("slop:edit-tool").at(-1)).toMatchObject({ tool: "select" });
+  });
+
+  it("keeps the painter for several, and its look is the copied look too", () => {
+    const e = editor();
+    e.pick("#a");
+    e.fromParent({ type: "slop:edit-style", style: { fill: "#ff0000" } });
+    e.fromParent({ type: "slop:edit-tool-keep", tool: "paint", on: true });
+    e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+    expect(e.messages("slop:edit-style-copied")).toHaveLength(1);
+    e.click(e.$("#b"));
+    e.click(e.$("#pic"));
+    expect(e.$("#b").style.backgroundColor).toBe("rgb(255, 0, 0)");
+    expect(e.$("#pic").style.backgroundColor).toBe("rgb(255, 0, 0)");
+    expect(e.messages("slop:edit-tool")).toEqual([]);
+  });
+
+  it("indents text in from its box's edge, and a list item a level in while typing", () => {
+    const e = editor();
+    e.pick("#a");
+    e.fromParent({ type: "slop:edit-indent", step: 1 });
+    expect(e.$("#a").style.paddingLeft).toBe("40px");
+    e.fromParent({ type: "slop:edit-indent", step: -1 });
+    e.fromParent({ type: "slop:edit-indent", step: -1 });
+    expect(e.$("#a").style.paddingLeft).toBe("0px");
+  });
+
+  it("gives text a weight, a case, a highlight and space around its paragraphs, and reports them", () => {
+    const e = editor();
+    e.pick("#a");
+    e.fromParent({
+      type: "slop:edit-style",
+      style: { weight: 300, textCase: "upper", highlight: "#ffff00", spaceBefore: 12, spaceAfter: 8 },
+    });
+    expect(e.$("#a").style).toMatchObject({ fontWeight: "300", textTransform: "uppercase" });
+    expect(selection(e)).toMatchObject({
+      weight: 300,
+      bold: false,
+      textCase: "upper",
+      highlight: "#ffff00",
+      spaceBefore: 12,
+      spaceAfter: 8,
+    });
+    // The highlight comes off again, and the case goes back to how it was typed.
+    e.fromParent({ type: "slop:edit-style", style: { highlight: null, textCase: null } });
+    expect(selection(e)).toMatchObject({ highlight: null, textCase: null });
+    expect(e.$("#a").innerHTML).not.toMatch(/background-color/);
+  });
+
+  it("changes a list's bullets", () => {
+    const e = editor(DECK.replace(">A<", "><ul><li>One</li><li>Two</li></ul><"));
+    e.pick("#a");
+    expect(selection(e).listStyle).toBe("disc");
+    e.fromParent({ type: "slop:edit-style", style: { listStyle: "square" } });
+    expect(e.$("#a ul").style.listStyleType).toBe("square");
+    expect(selection(e).listStyle).toBe("square");
+    // What is not a list style is refused.
+    e.fromParent({ type: "slop:edit-style", style: { listStyle: "url(x); color: red" } });
+    expect(e.$("#a ul").style.listStyleType).toBe("square");
+  });
+
+  it("says of each layer whether it can go up or down, the way it is moved", async () => {
+    const e = editor();
+    await e.frame();
+    const layers = e
+      .messages<{ layers: { name: string; canUp: boolean; canDown: boolean }[] }>("slop:edit-layers")
+      .at(-1)!.layers;
+    expect(layers.length).toBeGreaterThan(2);
+    expect(layers[0]).toMatchObject({ canUp: false, canDown: true });
+    expect(layers.at(-1)).toMatchObject({ canUp: true, canDown: false });
+    expect(layers.slice(1, -1).every((layer) => layer.canUp && layer.canDown)).toBe(true);
   });
 });

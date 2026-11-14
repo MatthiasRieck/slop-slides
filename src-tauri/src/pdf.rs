@@ -9,13 +9,19 @@
 //! that fade out come out black, masks break), so there each slide's decor is first captured
 //! as an image with its text hidden, and the page prints that image with the text on top,
 //! still as text (see `assets/pdf.js`).
+//!
+//! Asked for, each slide with speaker notes is followed by a page that holds them, as text:
+//! the handout to leave behind (see [`Options::notes`]).
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tokio::sync::oneshot;
 
 use crate::error::{Error, Result};
+use crate::export_job::Job;
+use crate::export_scope::Scope;
 use crate::export_window::{self, Helper, Page, TIMEOUT};
 use crate::{deck, html};
 
@@ -46,12 +52,60 @@ impl PageSize {
     }
 }
 
-/// Prints the deck `file` (in the open workspace) to `dest` as a PDF.
-pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
+/// How the PDF is made.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Options {
+    /// The slides it holds, a page each.
+    #[serde(flatten)]
+    pub scope: Scope,
+    /// Each slide with speaker notes is followed by a page with them.
+    pub notes: bool,
+}
+
+/// The speaker notes of one of the PDF's slides, as the page's helper takes them.
+#[derive(Debug, PartialEq, Serialize)]
+struct Notes {
+    /// Which of the PDF's slides they belong to, from 0.
+    slide: usize,
+    /// What the notes page is headed with.
+    label: String,
+    text: String,
+}
+
+/// The notes pages of the deck `file`'s exported slides: one for each slide that has notes.
+fn notes_pages(file: &Path, scope: &Scope) -> Result<Vec<Notes>> {
+    let deck = deck::load(file)?;
+    Ok(scope
+        .of(&deck)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, slide)| !slide.notes.trim().is_empty())
+        .map(|(index, slide)| Notes {
+            slide: index,
+            label: format!("Notes for slide {}", index + 1),
+            text: slide.notes.clone(),
+        })
+        .collect())
+}
+
+/// Prints the deck `file` (in the open workspace) to `dest` as a PDF, telling `job` how far
+/// it has got. A cancelled export stops before anything is written.
+pub async fn export(
+    app: &AppHandle,
+    file: &Path,
+    dest: &Path,
+    options: &Options,
+    job: &Job,
+) -> Result<()> {
     let (width, height) = html::slide_size(&deck::read_html(file)?).pixels();
     let dest = absolute_dest(dest)?;
     let dest_file = dest.clone();
-    let (window, signals) = export_window::open(
+    let notes = match options.notes {
+        true => notes_pages(file, &options.scope)?,
+        false => Vec::new(),
+    };
+    let (window, signals, _served) = export_window::open(
         app,
         file,
         (width, height),
@@ -65,6 +119,7 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
             // Only hidden, on Linux too, as printing has always had it.
             out_of_sight: false,
         },
+        Some(&options.scope),
     )?;
 
     let mut helper = Helper {
@@ -91,9 +146,19 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
                 )
                 .await?;
         }
-        if cfg!(target_os = "macos") {
-            flatten_decor(&mut helper, slides, width).await?;
+        if !notes.is_empty() {
+            let pages = serde_json::to_string(&notes)
+                .map_err(|e| Error::msg(format!("cannot pass on the speaker notes: {e}")))?;
+            helper
+                .run(&format!("window.__slopPdf.notes({pages})"), "notes")
+                .await?;
         }
+        if cfg!(target_os = "macos") {
+            flatten_decor(&mut helper, slides, width, job).await?;
+            job.step(slides, slides)?;
+        }
+        // Nothing is written yet: the last moment a cancelled export leaves nothing behind.
+        job.check()?;
         let (tx, rx) = oneshot::channel::<Result<()>>();
         window
             .with_webview(move |platform| platform::print(platform, dest, page, tx))
@@ -195,11 +260,17 @@ fn box_top(pdf: &[u8], mut at: usize) -> Option<std::ops::Range<usize>> {
 /// Captures each slide's decor (all but its text) and has the page print that image with
 /// only the text on top.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-async fn flatten_decor(helper: &mut Helper<'_>, slides: usize, width: u32) -> Result<()> {
+async fn flatten_decor(
+    helper: &mut Helper<'_>,
+    slides: usize,
+    width: u32,
+    job: &Job,
+) -> Result<()> {
     use base64::Engine as _;
     helper.run("window.__slopPdf.decor()", "decor").await?;
     let pixels_wide = decor_pixels(width);
     for index in 0..slides {
+        job.step(index, slides)?;
         let shown = helper
             .run(&format!("window.__slopPdf.show({index})"), "shown")
             .await?;
@@ -558,6 +629,56 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_options_from_the_frontend() {
+        assert_eq!(
+            serde_json::from_str::<Options>("{}").unwrap(),
+            Options::default()
+        );
+        let options: Options =
+            serde_json::from_str(r#"{"slides":["a"],"includeHidden":true,"notes":true}"#).unwrap();
+        assert!(options.notes && options.scope.include_hidden);
+        assert_eq!(options.scope.slides, Some(vec!["a".to_string()]));
+    }
+
+    #[test]
+    fn notes_pages_follow_the_exported_slides_that_have_notes() {
+        let dir = crate::test_support::TempDir::new("pdf-notes");
+        let file = dir.write(
+            "deck.html",
+            r#"<!DOCTYPE html><html><head><title>T</title></head><body><main class="deck">
+<section class="slide" id="a"><h1>A</h1><aside class="notes">Say hello</aside></section>
+<section class="slide" id="b" data-hidden><h1>B</h1><aside class="notes">Backup</aside></section>
+<section class="slide" id="c"><h1>C</h1></section>
+<section class="slide" id="d"><h1>D</h1><aside class="notes">Wrap up</aside></section>
+</main></body></html>"#,
+        );
+        let shown = notes_pages(&file, &Scope::default()).unwrap();
+        assert_eq!(
+            shown,
+            [
+                Notes {
+                    slide: 0,
+                    label: "Notes for slide 1".into(),
+                    text: "Say hello".into()
+                },
+                Notes {
+                    slide: 2,
+                    label: "Notes for slide 3".into(),
+                    text: "Wrap up".into()
+                },
+            ]
+        );
+        let all = notes_pages(&file, &Scope::everything()).unwrap();
+        let slides: Vec<usize> = all.iter().map(|n| n.slide).collect();
+        assert_eq!(slides, [0, 1, 3], "numbered as the PDF's pages come");
+        let json = serde_json::to_string(&shown[0]).unwrap();
+        assert_eq!(
+            json,
+            r#"{"slide":0,"label":"Notes for slide 1","text":"Say hello"}"#
+        );
+    }
 
     #[test]
     fn pages_are_the_slide_size_in_points() {

@@ -83,11 +83,13 @@ describe("App", () => {
     expect(screen.getByTestId("sidebar")).toBeTruthy();
   });
 
-  it("shows the settings in the place of the slide in Settings mode", () => {
-    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), slideMode: "settings" });
+  it("shows the deck's settings over the slide, which stays", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), deckSettingsOpen: true });
     render(<App />);
     expect(screen.getByTestId("stub-settings")).toBeTruthy();
-    expect(screen.queryByTestId("stub-stage")).toBeNull();
+    expect(screen.getByTestId("stub-stage")).toBeTruthy();
+    act(() => useApp.getState().closeDeckSettings());
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
   });
 
   it("shows the timeline under the slide in View and in Edit while it is open, whatever the sidebar shows", () => {
@@ -112,11 +114,9 @@ describe("App", () => {
     expect(shown("timeline")).toBe(true);
     act(() => useApp.getState().setMode("edit"));
     expect(shown("timeline")).toBe(true);
-    // The settings and the changes have the place to themselves.
-    for (const mode of ["settings", "git"] as const) {
-      act(() => useApp.getState().setMode(mode));
-      expect(shown("timeline")).toBe(false);
-    }
+    // The changes have the place to themselves.
+    act(() => useApp.getState().setMode("git"));
+    expect(shown("timeline")).toBe(false);
     act(() => useApp.getState().setMode("view"));
     expect(shown("timeline")).toBe(true);
     act(() => useApp.getState().setTimelineOpen(false));
@@ -175,10 +175,12 @@ describe("App", () => {
     expect(shown("stage")).toBe(true);
   });
 
-  it("offers the keyboard shortcuts in any mode of an open workspace, not on the start screen", () => {
+  it("offers the keyboard shortcuts on the start screen and in any mode of an open workspace", () => {
     const help = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
     const { unmount } = render(<App />);
     fireEvent.keyDown(document.body, { key: "?" });
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(help()).toBeNull();
     unmount();
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
@@ -250,7 +252,7 @@ describe("App", () => {
 
 describe("lint status", () => {
   it("lints the deck as it opens, and again once a change to its file has settled", async () => {
-    const refreshLint = vi.fn(async () => {});
+    const refreshLint = vi.fn(async () => true);
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), lint: null, lintError: null, refreshLint });
     render(<App />);
     expect(refreshLint).toHaveBeenCalledTimes(1);
@@ -263,7 +265,7 @@ describe("lint status", () => {
   });
 
   it("does not lint without an open deck", () => {
-    const refreshLint = vi.fn(async () => {});
+    const refreshLint = vi.fn(async () => true);
     useApp.setState({ refreshLint });
     render(<App />);
     expect(refreshLint).not.toHaveBeenCalled();

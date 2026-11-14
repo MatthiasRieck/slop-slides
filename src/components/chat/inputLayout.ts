@@ -1,17 +1,14 @@
 // Laying out the composer's message input by hand: a textarea neither grows with its text nor
 // follows text put into it while it has no focus. Each function here measures as little as it can,
 // as every measurement makes the browser lay the input out on the spot.
-import { MIN_INPUT_HEIGHT } from "./InputResizeHandle";
 
-/** How tall the input grows by itself as its text gets longer, in pixels. */
+/** The smallest the message input gets, in pixels. */
+export const MIN_INPUT_HEIGHT = 64;
+/** How tall the input grows as its text gets longer, in pixels; longer text scrolls in it. */
 const AUTO_MAX_HEIGHT = 240;
 
-/** Gives `input` the height `chosen` by the user, or without one the height of its `text`. */
-export function fitInput(input: HTMLTextAreaElement, text: string, chosen: number | null) {
-  if (chosen !== null) {
-    input.style.height = `${chosen}px`;
-    return;
-  }
+/** Gives `input` the height of its `text`, between the smallest and the tallest it grows to. */
+export function fitInput(input: HTMLTextAreaElement, text: string) {
   // An empty input stays at its smallest; measuring the placeholder while the panel is still
   // opening (and narrow) would otherwise make it start out tall.
   if (!text) {

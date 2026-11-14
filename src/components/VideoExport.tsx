@@ -1,179 +1,205 @@
+import { AudioLines } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { Slide } from "../lib/api";
+import type { Deck } from "../lib/api";
+import { VIDEO_HEIGHTS } from "../lib/exportOptions";
+import { generationSize } from "../lib/narration";
 import { formatDuration } from "../lib/narrationAudio";
+import { pixelsOf } from "../lib/slideSize";
 import { layoutTimeline, spokenSeconds } from "../lib/timeline";
-import { cn } from "../lib/utils";
+import { plural } from "../lib/utils";
 import {
+  CODEC_NOTE,
   FRAME_RATES,
   loadVideoOptions,
-  MAX_PAUSE,
-  MAX_SECONDS,
-  MIN_SECONDS,
-  pauseProblem,
   saveVideoOptions,
-  secondsProblem,
   type VideoOptions,
+  videoSize,
 } from "../lib/video";
 import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { useExports, videoRunning } from "../store/exports";
 import { Button } from "./Button";
-import { CheckboxRow, Field, NumberField, selectClass } from "./Field";
+import { ExportShell, Row, Segmented, useExportForm } from "./export/ExportShell";
+import { startExport } from "./export/run";
+import { CheckboxRow, selectClass } from "./Field";
+import { TimingLine } from "./narration/TimingSettings";
 import { useDeckAudio } from "./narration/useDeckAudio";
+import { useDeckVideoOptions } from "./narration/useVideoOptions";
+
+/** "1080p", "4K", or the slides' own size. */
+const heightName = (height: number | null) => (height === null ? "Slide size" : height === 2160 ? "4K" : `${height}p`);
 
 /**
- * Picks how a video export is made: how long each slide is shown, the frame rate, whether
- * animations play or each slide is a still, and whether the narration is spoken (each slide
- * then staying until its narration and the pauses around it end). The choice is remembered as
- * it is made, each time it is one the backend takes: the timeline under the slide and the show's
- * Play lay the deck out with the same times (see `TimingSettings`, which sets them there).
+ * The video export's dialog: which slides, how large, the frame rate, whether animations play or
+ * each slide is a still, whether the narration is spoken (each slide then staying until its
+ * narration and the pauses around it end), and captions of it beside the video. How long slides
+ * show and the pauses are the deck's own times, set in one place (see `TimingSettings`) and only
+ * shown here, with the button that changes them. The rest is remembered as it is chosen.
+ * Narration that still has to be spoken is said first, which the dialog says on a line of its
+ * own, with how much goes to the service.
  */
-export function VideoExportPanel(props: {
-  /** The slides the video shows: those not hidden. */
-  slides: Slide[];
-  onExport: (options: VideoOptions) => void;
-  onCancel: () => void;
-}) {
+export function VideoExportDialog(props: { deck: Deck; onClose: () => void }) {
+  const form = useExportForm("video", props.deck);
+  const { slides, scope } = form.chosen;
+  const { videoHeight, captions } = form.choices;
   const [initial] = useState(loadVideoOptions);
-  const [seconds, setSeconds] = useState(String(initial.secondsPerSlide));
   const [fps, setFps] = useState(initial.fps);
   const [animate, setAnimate] = useState(initial.animate);
   const [narration, setNarration] = useState(initial.narration);
-  const [before, setBefore] = useState(String(initial.pauseBefore));
-  const [after, setAfter] = useState(String(initial.pauseAfter));
-  const openDeck = useApp((s) => s.deck);
-  const deck = openDeck?.id;
+  const deck = props.deck.id;
+  const timing = useDeckVideoOptions(deck);
   const audio = useDeckAudio(deck);
   const speech = useNarration((s) => s.speech);
+  const busy = useExports(videoRunning);
   useEffect(() => {
     void useNarration.getState().loadSpeech();
   }, []);
 
-  const narrated = props.slides.filter((s) => (s.narration ?? "").trim() !== "" || audio[s.id]?.recorded);
+  const narrated = slides.filter((s) => (s.narration ?? "").trim() !== "" || audio[s.id]?.recorded);
   const pending = narrated.filter((s) => audio[s.id]?.state !== "ready");
   const speaks = narration && narrated.length > 0;
-  const provider = speech && openDeck ? deckProvider(openDeck, speech) : undefined;
+  const provider = speech ? deckProvider(props.deck, speech) : undefined;
   const canSpeak = canSpeakWith(speech, provider);
-  const problem =
-    props.slides.length === 0
-      ? "Every slide is hidden; show one to export a video."
-      : (secondsProblem(seconds) ??
-        (speaks ? (pauseProblem(before) ?? pauseProblem(after)) : null) ??
-        (speaks && pending.length > 0 && speech && !canSpeak
-          ? `Add your ${provider?.name ?? "narration service's"} API key in the Narration tab, or leave the narration out.`
-          : null));
+  const needsKey = speaks && pending.length > 0 && !!speech && !canSpeak;
+  const problem = busy
+    ? "A video is being exported. Wait for it to finish, or cancel it from the Export button."
+    : needsKey
+      ? `Add your ${provider?.name ?? "narration service's"} API key, or leave the narration out.`
+      : null;
 
   const options = (): VideoOptions => ({
-    secondsPerSlide: Number(seconds),
+    secondsPerSlide: timing.secondsPerSlide,
     fps,
     animate,
     narration,
-    pauseBefore: Number(before),
-    pauseAfter: Number(after),
+    pauseBefore: timing.pauseBefore,
+    pauseAfter: timing.pauseAfter,
   });
-  // Saved as it is set, not only when exporting: each time once it is one that can be used.
-  const usable = secondsProblem(seconds) === null && pauseProblem(before) === null && pauseProblem(after) === null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `options` reads the fields listed.
+  // Saved as it is set, not only when exporting; the times are the deck's, and stay as they are here.
   useEffect(() => {
-    if (!usable) return;
-    const next = options();
     const saved = loadVideoOptions();
-    if ((Object.keys(next) as (keyof VideoOptions)[]).some((key) => next[key] !== saved[key])) saveVideoOptions(next);
-  }, [usable, seconds, fps, animate, narration, before, after]);
-  const submit = () => {
-    if (problem) return;
-    props.onExport(options());
+    if (saved.fps !== fps || saved.animate !== animate || saved.narration !== narration) {
+      saveVideoOptions({ ...saved, fps, animate, narration });
+    }
+  }, [fps, animate, narration]);
+  const showNarration = () => {
+    props.onClose();
+    useApp.getState().showNarration();
+  };
+  const save = () => {
+    props.onClose();
+    void startExport(props.deck, {
+      format: "video",
+      options: options(),
+      output: { ...scope, height: videoHeight, captions: speaks ? captions : null },
+    });
   };
 
-  const timed = narration ? props.slides.filter((s) => s.duration != null).length : 0;
+  const timed = narration ? slides.filter((s) => s.duration != null).length : 0;
   const estimated = speaks && pending.length > 0;
-  const count = props.slides.length;
-  const length = formatDuration(layoutTimeline(props.slides, spokenSeconds(props.slides, audio), options()).end);
-  const summary = `${count} ${count === 1 ? "slide" : "slides"}, ${estimated ? "about " : ""}${length} long. Hidden slides are left out.`;
+  const length = formatDuration(layoutTimeline(slides, spokenSeconds(slides, audio), options()).end);
+  const canvas = pixelsOf(props.deck);
+  const [width, height] = videoSize(canvas.width, canvas.height, videoHeight);
+  const summary = `${plural(slides.length, "slide")}, ${estimated ? "about " : ""}${length} long, ${width} × ${height} px.`;
+  const toSay = generationSize(pending, audio);
 
   return (
-    <form
-      className="flex flex-col gap-3 p-3 text-xs"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit();
-      }}
+    <ExportShell
+      form={form}
+      summary={summary}
+      problem={problem}
+      saveLabel="Save video…"
+      note={CODEC_NOTE}
+      onSave={save}
+      onClose={props.onClose}
     >
-      <div className="text-sm font-medium">Export video</div>
-      <div className="flex items-end gap-2">
-        <NumberField
-          label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
-          aria-label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
-          min={MIN_SECONDS}
-          max={MAX_SECONDS}
-          value={seconds}
-          onChange={setSeconds}
+      <Row label="Resolution">
+        <Segmented
+          label="Resolution"
+          name="export-video-height"
+          options={[null, ...VIDEO_HEIGHTS].map(String)}
+          labels={(value) => heightName(value === "null" ? null : Number(value))}
+          value={String(videoHeight)}
+          onChange={(value) => form.change({ videoHeight: value === "null" ? null : Number(value) })}
         />
-        <Field label="Frame rate" className="flex flex-col gap-1">
-          <select
-            aria-label="Frame rate"
-            value={fps}
-            onChange={(event) => setFps(Number(event.target.value))}
-            className={selectClass}
-          >
-            {FRAME_RATES.map((rate) => (
-              <option key={rate} value={rate}>
-                {rate} fps
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <CheckboxRow
-        title="Play animations"
-        description="Entrances, slide fades and morphs, as when presenting. Off, each slide is a still of its final frame."
-        checked={animate}
-        onChange={setAnimate}
-      />
-      <CheckboxRow
-        title="Speak narration"
-        description={
-          narrated.length === 0
-            ? "No shown slide has narration."
-            : `${timed > 0 ? "Slides timed on the narration timeline keep to it; the others stay until their narration ends." : "Each slide stays until its narration ends."}${pending.length > 0 ? ` ${pending.length} ${pending.length === 1 ? "slide is" : "slides are"} spoken first.` : ""}`
-        }
-        checked={narration}
-        onChange={setNarration}
-      />
-      {speaks && (
-        <div className="flex gap-2">
-          <NumberField
-            label="Pause before (s)"
-            aria-label="Pause before narration"
-            min={0}
-            max={MAX_PAUSE}
-            value={before}
-            onChange={setBefore}
+      </Row>
+      <Row label="Frame rate">
+        <select
+          aria-label="Frame rate"
+          value={fps}
+          onChange={(event) => setFps(Number(event.target.value))}
+          className={`${selectClass} self-start`}
+        >
+          {FRAME_RATES.map((rate) => (
+            <option key={rate} value={rate}>
+              {rate} fps
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Timing">
+        <TimingLine deck={deck} />
+      </Row>
+      <Row label="Playback">
+        <CheckboxRow
+          title="Play animations"
+          description="Entrances, slide fades and morphs, as when presenting. Off, each slide is a still of its final frame."
+          checked={animate}
+          onChange={setAnimate}
+        />
+        <CheckboxRow
+          title="Speak narration"
+          description={
+            narrated.length === 0
+              ? "No slide in the video has narration."
+              : timed > 0
+                ? "Slides timed on the narration timeline keep to it; the others stay until their narration ends."
+                : "Each slide stays until its narration ends."
+          }
+          checked={narration}
+          onChange={setNarration}
+        />
+        {narrated.length === 0 && (
+          <Button size="md" className="self-start" onClick={showNarration}>
+            <AudioLines />
+            Add narration
+          </Button>
+        )}
+        {speaks && (
+          <CheckboxRow
+            title="Captions"
+            description="The narration as subtitles, in a file beside the video for players and video sites."
+            checked={captions !== null}
+            onChange={(on) => form.change({ captions: on ? "srt" : null })}
           />
-          <NumberField
-            label="Pause after (s)"
-            aria-label="Pause after narration"
-            min={0}
-            max={MAX_PAUSE}
-            value={after}
-            onChange={setAfter}
+        )}
+        {speaks && captions !== null && (
+          <Segmented
+            label="Captions file"
+            name="export-video-captions"
+            options={["srt", "vtt"] as const}
+            labels={(value) => (value === "srt" ? "SubRip (.srt)" : "WebVTT (.vtt)")}
+            value={captions}
+            onChange={(value) => form.change({ captions: value })}
           />
-        </div>
+        )}
+      </Row>
+      {speaks && pending.length > 0 && canSpeak && (
+        <p data-testid="spoken-first" className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-2xs">
+          <AudioLines className="mt-px size-3.5 shrink-0 text-warning" />
+          <span>
+            {pending.length} {pending.length === 1 ? "slide is" : "slides are"} spoken by{" "}
+            {provider?.name ?? "the service"} first ({toSay.characters.toLocaleString("en-US")} characters, about{" "}
+            {formatDuration(toSay.seconds)} of audio).
+          </span>
+        </p>
       )}
-      <p
-        role={problem ? "alert" : undefined}
-        className={cn("min-h-4 text-2xs", problem ? "text-destructive" : "text-muted-foreground")}
-      >
-        {problem ?? summary}
-      </p>
-      <div className="flex justify-end gap-2">
-        <Button size="lg" onClick={props.onCancel}>
-          Cancel
+      {needsKey && (
+        <Button size="md" className="self-start" onClick={showNarration}>
+          Open Narration settings
         </Button>
-        <Button variant="primary" size="lg" type="submit" disabled={!!problem}>
-          Save video…
-        </Button>
-      </div>
-    </form>
+      )}
+    </ExportShell>
   );
 }

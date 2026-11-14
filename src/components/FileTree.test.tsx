@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
+import { useConfirmQuestion } from "../store/confirm";
 import { lastError, toastTexts } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
 import { FileTree, TREE_RELOAD_DELAY } from "./FileTree";
@@ -305,7 +306,8 @@ describe("FileTree", () => {
 
   describe("a row's menu", () => {
     const menuItems = () => within(screen.getByRole("menu")).getAllByRole("menuitem");
-    const labels = () => menuItems().map((m) => m.textContent);
+    /** Each choice's name, without its hint or keys. */
+    const labels = () => menuItems().map((m) => m.querySelector(".font-medium")?.textContent);
     const choose = (name: string | RegExp) =>
       fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name }));
     const writeText = vi.fn(async (_text: string) => {});
@@ -327,7 +329,7 @@ describe("FileTree", () => {
       const menu = screen.getByRole("menu", { name: "index.html" });
       expect(menu.parentElement!.style.left).toBe("40px");
       expect(menu.parentElement!.style.top).toBe("60px");
-      expect(labels()).toEqual(["Open", "Show in folder", "Copy path"]);
+      expect(labels()).toEqual(["Open", "Add to chat", "Rename", "Show in folder", "Copy path", "Move to Trash…"]);
     });
 
     it("opens the file", async () => {
@@ -339,7 +341,15 @@ describe("FileTree", () => {
 
     it("opens or closes a folder", async () => {
       await openMenu("talks");
-      expect(labels()).toEqual(["Expand", "Show in folder", "Copy path"]);
+      expect(labels()).toEqual([
+        "Expand",
+        "Add to chat",
+        "Rename",
+        "New folder",
+        "Show in folder",
+        "Copy path",
+        "Move to Trash…",
+      ]);
       await act(async () => choose("Expand"));
       await waitFor(() => expect(item("talks").getAttribute("aria-expanded")).toBe("true"));
       fireEvent.contextMenu(item("talks"), { clientX: 40, clientY: 60 });
@@ -367,12 +377,20 @@ describe("FileTree", () => {
     });
 
     it("offers to import a PowerPoint file as a deck", async () => {
-      const importPptx = vi.fn(async () => {});
+      const importPptx = vi.fn(async () => null);
       useApp.setState({ importPptx });
       await openMenu("q3.pptx");
-      expect(labels()).toEqual(["Open", "Import as deckThis file stays as it is", "Show in folder", "Copy path"]);
+      expect(labels()).toEqual([
+        "Open",
+        "Add to chat",
+        "Import as deck",
+        "Rename",
+        "Show in folder",
+        "Copy path",
+        "Move to Trash…",
+      ]);
       choose(/^Import as deck/);
-      expect(importPptx).toHaveBeenCalledWith("/ws/q3.pptx");
+      await waitFor(() => expect(importPptx).toHaveBeenCalledWith("/ws/q3.pptx"));
     });
 
     it("closes on Escape and on a press outside, doing nothing", async () => {
@@ -391,6 +409,265 @@ describe("FileTree", () => {
       item("notes.md").focus();
       fireEvent.keyDown(item("notes.md"), { key: "F10", shiftKey: true });
       expect(screen.getByRole("menu", { name: "notes.md" })).toBeTruthy();
+    });
+  });
+
+  describe("a deck's folder", () => {
+    beforeEach(() => {
+      folders[""] = [
+        { ...entry("untitled-deck-7", "directory"), deckTitle: "Q3 board update" },
+        entry("notes.md", "file"),
+      ];
+      folders["untitled-deck-7"] = [
+        entry("untitled-deck-7/assets", "directory"),
+        entry("untitled-deck-7/deck.html", "deck"),
+      ];
+    });
+
+    it("is one row named by the deck's title, with the folder's name after it, which opens the deck", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toEqual(["Q3 board updateuntitled-deck-7", "notes.md"]));
+      const row = item("Q3 board update");
+      expect(row.title).toBe("untitled-deck-7 · SlopSlide deck");
+      expect(row.querySelector("svg.lucide-presentation")).toBeTruthy();
+      fireEvent.click(row);
+      expect(useApp.getState().openPath).toHaveBeenCalledWith("untitled-deck-7/deck.html");
+      // Enter does what a click does.
+      fireEvent.keyDown(row, { key: "Enter" });
+      expect(useApp.getState().openPath).toHaveBeenCalledTimes(2);
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("shows the deck's own files from its arrow, without the deck file again", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(2));
+      await act(async () => fireEvent.click(within(item("Q3 board update")).getByTestId("tree-arrow")));
+      await waitFor(() => expect(items()).toEqual(["Q3 board updateuntitled-deck-7", "assets", "notes.md"]));
+      expect(useApp.getState().openPath).not.toHaveBeenCalled();
+    });
+
+    it("is the open deck's row, which stays closed", async () => {
+      useApp.setState({
+        openedFile: { path: "untitled-deck-7/deck.html", absolute: "/ws/untitled-deck-7/deck.html", kind: "deck" },
+      });
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(2));
+      expect(item("Q3 board update").getAttribute("aria-selected")).toBe("true");
+      expect(item("Q3 board update").getAttribute("aria-expanded")).toBe("false");
+      expect(listed()).toEqual([""]);
+    });
+
+    it("offers to open the deck and show its files, and to rename the folder", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(2));
+      fireEvent.contextMenu(item("Q3 board update"), { clientX: 40, clientY: 60 });
+      const menu = screen.getByRole("menu", { name: "Q3 board update" });
+      const names = within(menu)
+        .getAllByRole("menuitem")
+        .map((m) => m.querySelector(".font-medium")?.textContent);
+      expect(names).toEqual([
+        "Open deck",
+        "Show the deck's files",
+        "Add to chat",
+        "Rename folder",
+        "Show in folder",
+        "Copy path",
+        "Move to Trash…",
+      ]);
+    });
+  });
+
+  describe("the filter", () => {
+    const filter = () => screen.getByRole("searchbox", { name: "Filter files" }) as HTMLInputElement;
+    beforeEach(() => {
+      invoke.mockImplementation(async (command: string, args?: { path?: string; query?: string }) => {
+        if (command === "list_dir") return folders[args?.path ?? ""] ?? [];
+        if (command === "search_files")
+          return args?.query === "q3"
+            ? {
+                found: [
+                  entry("talks/q3", "directory"),
+                  { ...entry("talks/q3-deck", "directory"), deckTitle: "Q3 deck" },
+                ],
+                truncated: false,
+              }
+            : { found: [], truncated: false };
+      });
+    });
+
+    it("finds files anywhere in the folder, saying where each is, and goes back to the tree when cleared", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      fireEvent.change(filter(), { target: { value: "q3" } });
+      await waitFor(() => expect(items()).toEqual(["q3talks", "Q3 decktalks/q3-deck"]));
+      expect(invoke).toHaveBeenCalledWith("search_files", { query: "q3" });
+      expect(screen.getByRole("tree").getAttribute("aria-label")).toBe("Files matching q3");
+      // A deck found opens.
+      fireEvent.click(item("Q3 deck"));
+      expect(useApp.getState().openPath).toHaveBeenCalledWith("talks/q3-deck/deck.html");
+      fireEvent.click(screen.getByRole("button", { name: "Clear the filter" }));
+      expect(items()).toEqual(["talks", "index.html", "notes.md"]);
+      expect(document.activeElement).toBe(filter());
+    });
+
+    it("says when nothing matches, and clears on Escape", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      fireEvent.change(filter(), { target: { value: "zzz" } });
+      await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Nothing in ws matches “zzz”."));
+      fireEvent.keyDown(filter(), { key: "Escape" });
+      expect(filter().value).toBe("");
+      expect(items()).toHaveLength(3);
+    });
+
+    it("shows a folder found in the tree, open", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      fireEvent.change(filter(), { target: { value: "q3" } });
+      await waitFor(() => expect(items()).toHaveLength(2));
+      await act(async () => fireEvent.click(item("q3")));
+      expect(filter().value).toBe("");
+      await waitFor(() =>
+        expect(items()).toEqual(["talks", "q3", "deck.html", "intro.html", "index.html", "notes.md"]),
+      );
+    });
+  });
+
+  describe("changing files", () => {
+    const backend = (handle: (command: string, args: Record<string, string>) => unknown) =>
+      invoke.mockImplementation(async (command: string, args?: Record<string, string>) => {
+        if (command === "list_dir") {
+          const listing = folders[args?.path ?? ""];
+          if (!listing) throw `cannot read "${args?.path}"`;
+          return listing;
+        }
+        return handle(command, args ?? {});
+      });
+    const menu = async (name: string) => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      fireEvent.contextMenu(item(name), { clientX: 40, clientY: 60 });
+    };
+    const choose = (name: string) =>
+      fireEvent.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: new RegExp(`^${name}`) }));
+    const nameField = () => screen.getByRole("textbox", { name: /^New name for/ }) as HTMLInputElement;
+
+    it("renames a row in place: F2 opens its name, selected up to the extension, and Enter renames", async () => {
+      backend((command, args) => {
+        if (command === "rename_entry") {
+          folders[""] = [entry("talks", "directory"), entry("index.html", "webpage"), entry("plans.md", "file")];
+          return args.name;
+        }
+      });
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      item("notes.md").focus();
+      fireEvent.keyDown(item("notes.md"), { key: "F2" });
+      expect(document.activeElement).toBe(nameField());
+      expect([nameField().selectionStart, nameField().selectionEnd]).toEqual([0, 5]);
+      fireEvent.change(nameField(), { target: { value: "plans.md" } });
+      await act(async () => fireEvent.keyDown(nameField(), { key: "Enter" }));
+      expect(invoke).toHaveBeenCalledWith("rename_entry", { path: "notes.md", name: "plans.md" });
+      await waitFor(() => expect(items()).toEqual(["talks", "index.html", "plans.md"]));
+    });
+
+    it("leaves the name as it was on Escape, and says why a rename was refused", async () => {
+      backend((command) => {
+        if (command === "rename_entry") throw "There is already something named index.html here. Choose another name.";
+      });
+      await menu("notes.md");
+      choose("Rename");
+      fireEvent.keyDown(nameField(), { key: "Escape" });
+      expect(screen.queryByRole("textbox", { name: /^New name for/ })).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("rename_entry", expect.anything());
+      fireEvent.contextMenu(item("notes.md"), { clientX: 40, clientY: 60 });
+      choose("Rename");
+      fireEvent.change(nameField(), { target: { value: "index.html" } });
+      await act(async () => fireEvent.blur(nameField()));
+      expect(lastError(useApp.getState())).toBe(
+        "Could not rename notes.md: There is already something named index.html here. Choose another name.",
+      );
+      expect(items()).toEqual(["talks", "index.html", "notes.md"]);
+    });
+
+    it("closes the open file inside a folder renamed, and opens it again where it is now", async () => {
+      const closeDeck = vi.fn(async () => true);
+      useApp.setState({
+        closeDeck,
+        openedFile: { path: "talks/intro.html", absolute: "/ws/talks/intro.html", kind: "deck" },
+      });
+      backend((command) => (command === "rename_entry" ? "Talks 2026" : undefined));
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(5));
+      fireEvent.contextMenu(item("talks"), { clientX: 40, clientY: 60 });
+      choose("Rename");
+      fireEvent.change(nameField(), { target: { value: "Talks 2026" } });
+      await act(async () => fireEvent.keyDown(nameField(), { key: "Enter" }));
+      expect(closeDeck).toHaveBeenCalledOnce();
+      expect(useApp.getState().openPath).toHaveBeenCalledWith("Talks 2026/intro.html");
+    });
+
+    it("makes a new folder in a folder, and starts naming it", async () => {
+      backend((command) => {
+        if (command === "create_folder") {
+          folders.talks = [...folders.talks!, entry("talks/New folder", "directory")];
+          return "talks/New folder";
+        }
+      });
+      await menu("talks");
+      await act(async () => choose("New folder"));
+      expect(invoke).toHaveBeenCalledWith("create_folder", { parent: "talks" });
+      await waitFor(() => expect(nameField().value).toBe("New folder"));
+      expect(item("talks").getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("makes a folder at the top from the header", async () => {
+      backend((command) => (command === "create_folder" ? "New folder" : undefined));
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "New folder" })));
+      expect(invoke).toHaveBeenCalledWith("create_folder", { parent: "" });
+    });
+
+    it("moves a file to the trash once the user says so, and says it did", async () => {
+      backend((command) => {
+        if (command === "trash_entry") folders[""] = folders[""]!.filter((e) => e.path !== "notes.md");
+      });
+      await menu("notes.md");
+      await act(async () => choose("Move to Trash"));
+      const question = useConfirmQuestion.getState().question!;
+      expect(question).toMatchObject({
+        title: "Move “notes.md” to the Trash?",
+        confirmLabel: "Move to Trash",
+        destructive: true,
+      });
+      await act(async () => question.answer(true));
+      expect(invoke).toHaveBeenCalledWith("trash_entry", { path: "notes.md" });
+      await waitFor(() => expect(items()).toEqual(["talks", "index.html"]));
+      expect(toastTexts(useApp.getState(), "success")).toEqual(["Moved “notes.md” to the Trash."]);
+    });
+
+    it("leaves the file where it is when the user says no", async () => {
+      backend(() => undefined);
+      await menu("notes.md");
+      await act(async () => choose("Move to Trash"));
+      await act(async () => useConfirmQuestion.getState().question!.answer(false));
+      expect(invoke).not.toHaveBeenCalledWith("trash_entry", expect.anything());
+    });
+
+    it("adds a file to the chat's next message, showing the chat", async () => {
+      useApp.setState({ composerImages: [], sidebarTab: "files" });
+      await menu("notes.md");
+      choose("Add to chat");
+      expect(useApp.getState().composerImages).toEqual(["notes.md"]);
+      expect(useApp.getState().sidebarTab).toBe("chat");
+    });
+
+    it("starts a new deck from the header", async () => {
+      useApp.setState({ newDeckOpen: false });
+      render(<FileTree />);
+      fireEvent.click(screen.getByRole("button", { name: "New deck…" }));
+      expect(useApp.getState().newDeckOpen).toBe(true);
     });
   });
 });

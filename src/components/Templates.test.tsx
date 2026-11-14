@@ -198,7 +198,7 @@ describe("SlideRail pickers", () => {
   it("opens the new slide gallery from + and closes it on Escape", () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
     render(<SlideRail />);
-    fireEvent.click(screen.getByTitle("New slide"));
+    fireEvent.click(screen.getByRole("button", { name: "New slide" }));
     const dialog = screen.getByRole("dialog", { name: "New slide" });
     expect(
       within(dialog)
@@ -216,7 +216,7 @@ describe("SlideRail pickers", () => {
 
   it("closes the picker on a click outside", () => {
     render(<SlideRail />);
-    fireEvent.click(screen.getByTitle("New slide"));
+    fireEvent.click(screen.getByRole("button", { name: "New slide" }));
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("dialog")).toBeNull();
   });

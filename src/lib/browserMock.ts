@@ -3,6 +3,7 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
 import { loadJson } from "./storage";
+import { fileUrl } from "./utils";
 
 export function installBrowserMock() {
   mockWindows("main");
@@ -22,6 +23,17 @@ export function installBrowserMock() {
         case "recent_workspaces":
         case "recent_decks":
           return [];
+        case "deck_gallery":
+          return fromServer("gallery");
+        case "deck_workspace":
+          return fromServer("library");
+        case "deck_versions":
+          return { entries: [], current: null };
+        case "create_example_deck":
+        case "duplicate_deck":
+        case "trash_deck":
+        case "restore_version":
+          throw new Error("Changing decks is not available in the browser preview.");
         case "open_workspace": {
           const path = String(a.path);
           return { path, name: path.split("/").pop() };
@@ -30,6 +42,19 @@ export function installBrowserMock() {
           return fromServer("dir", { path: String(a.path) });
         case "open_file":
           return fromServer("open", { path: String(a.path) });
+        // The preview searches the top folder only, and reads a text file as the dev server serves it.
+        case "search_files": {
+          const query = String(a.query).trim().toLowerCase();
+          const entries: { name: string; deckTitle?: string }[] = query ? await fromServer("dir", { path: "" }) : [];
+          const found = entries.filter((e) => `${e.name}\n${e.deckTitle ?? ""}`.toLowerCase().includes(query));
+          return { found, truncated: false };
+        }
+        case "read_text_file": {
+          const file = await fromServer("open", { path: String(a.path) });
+          const text = await (await fetch(fileUrl(String(file.absolute)))).text();
+          if (text.includes("\0")) throw new Error("This file is not text.");
+          return { text, truncated: false };
+        }
         case "open_deck":
         case "load_deck":
           return fromServer("deck", { id: String(a.id) });
@@ -104,16 +129,39 @@ export function installBrowserMock() {
           return true;
         case "deck_changes":
           return fromServer("changes", { id: String(a.id) });
+        case "deck_history":
+          return { undo: null, redo: null, current: null };
+        // What changes the deck answers with the deck changed, which the preview cannot write.
         case "save_deck_source":
+        case "update_slide":
+        case "set_slide_notes":
+        case "set_slide_narration":
+        case "set_slide_time":
+        case "set_slide_locked":
+        case "set_slides_locked":
+        case "set_slide_size":
+        case "add_section":
+        case "rename_section":
+        case "delete_section":
+        case "restore_slides":
+        case "rename_deck":
+        case "create_deck":
+        case "apply_template":
+        case "set_narration_provider":
+        case "set_narration_timing":
+        case "set_narration_delivery":
           throw new Error("Saving is not available in the browser preview.");
         case "save_asset":
           return `assets/${String(a.name)}`;
         case "copy_to_clipboard":
         case "copy_slides":
         case "new_window":
+        case "set_menu_state":
         case "present_on":
         case "present_in_windows":
         case "close_presenter_view":
+        case "restore_show_window":
+        case "keep_awake":
           return null;
         case "list_screens":
         case "screen_previews":
@@ -148,6 +196,7 @@ export function installBrowserMock() {
                 name: "OpenAI",
                 key: null,
                 voices: [{ id: "marin", name: "Marin", description: "Natural, clear voice" }],
+                takesStyle: true,
               },
               { id: "elevenlabs", name: "ElevenLabs", key: null, voices: [] },
             ],
@@ -157,6 +206,8 @@ export function installBrowserMock() {
           return [];
         case "narration_words":
           return null;
+        case "narration_settings":
+          return {};
         case "render_narration":
         case "time_narration":
         case "set_narration_voice":

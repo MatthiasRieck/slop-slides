@@ -1,13 +1,27 @@
 import { FileText, Loader2, MousePointerClick, PenLine, Presentation, Undo2, X } from "lucide-react";
 
 import type { EditElement } from "../../lib/editTools";
+import { slideNumbers } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { ComposerComments } from "../Comments";
+import { slideLabel, slideRanges } from "./mentions";
 
 /** A chip that goes along with the message. */
 const CHIP = "flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs";
 const SENT = "border-primary/30 bg-primary/10 text-primary";
+
+/**
+ * The numbers of slides `ids` in the deck (0 for one that is gone). Taken as one text, so that a
+ * save of the deck that leaves them where they are renders nothing.
+ */
+function useSlideNumbers(ids: readonly string[]): number[] {
+  const text = useApp((s) => {
+    const numbers = s.deck ? slideNumbers(s.deck.slides) : null;
+    return ids.map((id) => numbers?.get(id) ?? 0).join(",");
+  });
+  return text ? text.split(",").map(Number) : [];
+}
 
 /** The button on a chip that leaves it out of the message: a target of its own, as tall as the chip. */
 function ChipRemove(props: { label: string; title?: string; onClick: () => void }) {
@@ -26,15 +40,20 @@ function ChipRemove(props: { label: string; title?: string; onClick: () => void 
 
 /**
  * What goes along with the message besides its text and images, as chips above the composer's
- * input: the slide it is about (pressed, it goes along), the element, the sketch, the comments,
- * the undone turns the agent is told about, the attached files, and those still being saved.
- * Each can be left out.
+ * input: the slide it is about, or the slides picked in the rail (pressed, they go along), each
+ * slide referred to with "@", the element, the sketch, the comments, the undone turns the agent
+ * is told about, the attached files, and those still being saved. Each can be left out.
  */
 export function ComposerChips(props: {
   /** The selected slide's number, 0 without one. */
   slideNumber: number;
+  /** The slides picked in the rail when there are several (the selected one among them); empty otherwise. */
+  picked: string[];
   includeSlide: boolean;
   onToggleSlide: () => void;
+  /** The slides referred to with "@", by id. */
+  mentioned: string[];
+  onDropMentioned: (id: string) => void;
   element: EditElement | null;
   onDropElement: () => void;
   /** Whether the marks on the selected slide (`selected`) go along with the message. */
@@ -46,10 +65,16 @@ export function ComposerChips(props: {
   /** How many attachments are still being saved. */
   pending: number;
 }) {
-  const { slideNumber, includeSlide, element, sendsSketch, selected, files, onRemove, pending } = props;
-  const { onToggleSlide, onDropElement } = props;
+  const { slideNumber, includeSlide, element, sendsSketch, selected, files, onRemove, pending, mentioned } = props;
+  const { onToggleSlide, onDropElement, onDropMentioned } = props;
   const revertNotes = useApp((s) => s.revertNotes);
-  if (!(files.length > 0 || slideNumber > 0 || element || revertNotes.length > 0 || pending > 0)) return null;
+  const pickedNumbers = useSlideNumbers(props.picked).filter((n) => n > 0);
+  const mentionedNumbers = useSlideNumbers(mentioned);
+  const slideChip = pickedNumbers.length > 1 ? slideRanges(pickedNumbers) : `Slide ${slideNumber}`;
+  if (
+    !(files.length > 0 || slideNumber > 0 || mentioned.length > 0 || element || revertNotes.length > 0 || pending > 0)
+  )
+    return null;
   return (
     <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
       {slideNumber > 0 && (
@@ -58,15 +83,32 @@ export function ComposerChips(props: {
           aria-pressed={includeSlide}
           onClick={onToggleSlide}
           title={
-            includeSlide
-              ? "The agent will know which slide you are on. Click to leave it out."
-              : "Not referencing the current slide. Click to include it."
+            pickedNumbers.length > 1
+              ? includeSlide
+                ? "The agent will know which slides you picked. Click to leave them out."
+                : "Not referencing the picked slides. Click to include them."
+              : includeSlide
+                ? "The agent will know which slide you are on. Click to leave it out."
+                : "Not referencing the current slide. Click to include it."
           }
           className={cn(CHIP, "shrink-0", includeSlide ? SENT : "text-muted-foreground line-through")}
         >
           <Presentation className="size-3 shrink-0" />
-          Slide {slideNumber}
+          {slideChip}
         </button>
+      )}
+      {mentioned.map((id, at) =>
+        mentionedNumbers[at] ? (
+          <span
+            key={id}
+            title={`The agent is told you refer to ${slideLabel(mentionedNumbers[at]!, id)}`}
+            className={cn(CHIP, SENT)}
+          >
+            <Presentation className="size-3 shrink-0" />
+            <span className="truncate">Slide {mentionedNumbers[at]}</span>
+            <ChipRemove label={`Don't refer to slide ${mentionedNumbers[at]}`} onClick={() => onDropMentioned(id)} />
+          </span>
+        ) : null,
       )}
       {element && (
         <span title={`The agent gets this element's markup:\n${element.path}`} className={cn(CHIP, SENT)}>

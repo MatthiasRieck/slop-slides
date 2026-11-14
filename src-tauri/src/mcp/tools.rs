@@ -309,11 +309,12 @@ const EXPORT: Tool = Tool {
         (
             format!(
                 "Export a deck as the app's Export menu does, when the user \
-                asks for an export: `html` (one standalone HTML file with its assets inlined), \
+                asks for an export: `html` (one standalone HTML file with its assets inlined, \
+                the shown slides without speaker notes, narration scripts or review marks), \
                 `pdf` (one page per shown slide, selectable text), `pptx` (PowerPoint, one slide \
                 per shown slide), `video` (an MP4 of the deck playing, with its animations and \
                 narration audio, timed as {TIMELINE_TOOL} says; narration audio that is missing \
-                is generated first) or `images` (a PNG of every slide, the canvas size, in a \
+                is generated first) or `images` (a PNG of every shown slide, the canvas size, in a \
                 folder). It goes to `dest` in the workspace, or to `{}/` next to the deck, named \
                 after its title. Lint the deck first. A video takes a while (minutes for a long \
                 deck); ask for it once. Then tell the user where it is, or show it with \
@@ -337,7 +338,7 @@ const EXPORT: Tool = Tool {
                 },
                 "seconds_per_slide": {
                     "type": "number",
-                    "description": format!("video: how long each slide shows, in seconds ({} to {}); with narration, at least. Default {}.", video::MIN_SECONDS, video::MAX_SECONDS, narration::timeline::DEFAULTS.seconds_per_slide),
+                    "description": format!("video: how long each slide shows, in seconds ({} to {}); with narration, at least. Default: the deck's timing ({} unless it sets its own).", video::MIN_SECONDS, video::MAX_SECONDS, narration::timeline::DEFAULTS.seconds_per_slide),
                 },
                 "fps": {
                     "type": "integer",
@@ -354,11 +355,11 @@ const EXPORT: Tool = Tool {
                 },
                 "pause_before": {
                     "type": "number",
-                    "description": format!("video: seconds of silence before a slide's narration, 0 to {}. Default {}.", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_before),
+                    "description": format!("video: seconds of silence before a slide's narration, 0 to {}. Default: the deck's timing ({} unless it sets its own).", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_before),
                 },
                 "pause_after": {
                     "type": "number",
-                    "description": format!("video: seconds the slide stays after its narration, 0 to {}. Default {}.", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_after),
+                    "description": format!("video: seconds the slide stays after its narration, 0 to {}. Default: the deck's timing ({} unless it sets its own).", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_after),
                 },
             }, "required": ["format"] }),
         )
@@ -374,9 +375,10 @@ const EXPORT: Tool = Tool {
     },
 };
 
-/// The video options `arguments` give, over the narration timeline's defaults.
-fn video_options(arguments: &Value) -> Result<video::Options> {
-    let mut options = narration::timeline::DEFAULTS;
+/// The video options `arguments` give, over the times the deck `file` plays with (see
+/// [`narration::timeline::defaults_for`]).
+fn video_options(arguments: &Value, file: &Path) -> Result<video::Options> {
+    let mut options = narration::timeline::defaults_for(file);
     let number = |key: &str, into: &mut f64| -> Result<()> {
         match &arguments[key] {
             Value::Null => Ok(()),
@@ -428,11 +430,11 @@ pub(super) fn export_deck(
             .as_str()
             .ok_or_else(|| Error::msg("format is required"))?,
     )?;
+    let (rel, file) = deck_argument(dir, arguments)?;
     let video = match format {
-        export::Format::Video => Some(video_options(arguments)?),
+        export::Format::Video => Some(video_options(arguments, &file)?),
         _ => None,
     };
-    let (rel, file) = deck_argument(dir, arguments)?;
     let deck = deck::load(&file)?;
     let dest = export::destination(
         dir,
@@ -450,7 +452,7 @@ pub(super) fn export_deck(
     };
     if format == export::Format::Html {
         let path = dir.join(&request.dest);
-        deck::export(&file, &path)?;
+        crate::export_scope::web_page(&file, &path, &Default::default())?;
         return Ok(export::report(&request, None, &path));
     }
     let session = session.ok_or_else(|| Error::msg("no workspace session"))?;

@@ -462,6 +462,7 @@ fn permission(request: &Value, mode: PermissionMode, session_dir: &Path) -> Perm
             rule
         })
         .collect();
+    let scope = permissions::claude_session_scope(&rules);
     let for_session = (!rules.is_empty()).then(|| {
         let mut session = allow.clone();
         session["updatedPermissions"] = json!(rules);
@@ -472,7 +473,10 @@ fn permission(request: &Value, mode: PermissionMode, session_dir: &Path) -> Perm
         for_session,
         json!({"behavior": "deny", "message": "The user declined this request."}),
     );
-    Permission::Ask(Approval::new(title, reason, details, decisions), choices)
+    Permission::Ask(
+        Approval::new(title, reason, details, decisions).covering(scope),
+        choices,
+    )
 }
 
 /// Whether `tool` reads a template staged in `session_dir` (see [`crate::templates::stage`]):

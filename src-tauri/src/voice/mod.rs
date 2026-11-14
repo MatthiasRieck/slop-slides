@@ -37,6 +37,8 @@ pub const LEVEL_EVENT: &str = "voice-level";
 pub const PARTIAL_EVENT: &str = "voice-partial";
 /// Emitted while following a speaker: the words of the last few seconds.
 pub const HEARD_EVENT: &str = "voice-heard";
+/// The error a download of the model the user cancelled ends with.
+pub const DOWNLOAD_CANCELLED: &str = "the download was cancelled";
 /// Emitted when following a speaker fails for good: what went wrong.
 pub const FOLLOW_FAILED_EVENT: &str = "voice-follow-failed";
 /// Emitted when recording narration goes wrong: what went wrong.
@@ -66,6 +68,10 @@ pub struct Voice {
     /// loaded on the first timing and kept. Voice input does without, as it costs time.
     timer: Arc<Mutex<Option<WhisperContext>>>,
     downloading: AtomicBool,
+    /// Told to stop the download running (see [`Voice::cancel_download`]).
+    stop_download: tokio::sync::Notify,
+    /// Whether the last download was stopped, for those who waited for it.
+    download_cancelled: AtomicBool,
 }
 
 /// What recording narration keeps of what is said.
@@ -83,6 +89,9 @@ pub struct NarrationTarget {
     pub deck: String,
     pub file: PathBuf,
     pub mode: RecordMode,
+    /// The audio recorded takes the place of what each slide had, rather than going on from
+    /// its end: the first of it kept for a slide replaces, the rest of this recording adds.
+    pub replace: bool,
 }
 
 /// What a session is for.
@@ -129,12 +138,32 @@ impl Voice {
             }
             return match dest.is_file() {
                 true => Ok(()),
+                false if self.download_cancelled.load(Ordering::SeqCst) => {
+                    Err(Error::msg(DOWNLOAD_CANCELLED))
+                }
                 false => Err(Error::msg("Downloading the speech model failed.")),
             };
         }
-        let result = model::download(app, &MODEL, &dest).await;
+        self.download_cancelled.store(false, Ordering::SeqCst);
+        // Dropping the download ends it; what came so far is deleted.
+        let result = tokio::select! {
+            done = model::download(app, &MODEL, &dest) => done,
+            _ = self.stop_download.notified() => {
+                let _ = std::fs::remove_file(model::part_path(&dest));
+                self.download_cancelled.store(true, Ordering::SeqCst);
+                Err(Error::msg(DOWNLOAD_CANCELLED))
+            }
+        };
         self.downloading.store(false, Ordering::SeqCst);
         result
+    }
+
+    /// Stops the model's download, if one runs: it ends with [`DOWNLOAD_CANCELLED`], and so
+    /// does whoever waited for it.
+    pub fn cancel_download(&self) {
+        if self.downloading.load(Ordering::SeqCst) {
+            self.stop_download.notify_one();
+        }
     }
 
     /// Starts recording the default microphone (asking for access first, where the system

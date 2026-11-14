@@ -5,12 +5,13 @@ export const IDLE_MS = 2500;
 
 /**
  * Whether the show's controls (and the cursor) are in sight: at the start of the show, while the
- * pointer moves and for `IDLE_MS` after, and for as long as they are `held` (a drawing tool is
- * picked, say) or the pointer is on them. A move over the slide happens in its own page, which
- * tells the show (`slop:pointer`, see src-tauri/assets/runtime.js); the show calls `wake` then,
- * as it does when a key changes something the controls show.
+ * pointer moves and for `IDLE_MS` after, and for as long as the pointer is on them. A tool that
+ * is picked does not hold them: the audience would have them in sight for the rest of the talk
+ * (the show leaves a small mark of the tool instead). A move over the slide happens in its own
+ * page, which tells the show (`slop:pointer`, see src-tauri/assets/runtime.js); the show calls
+ * `wake` then, as it does when a key changes something the controls show.
  */
-export function useShowControls(held: boolean) {
+export function useShowControls() {
   const [idle, setIdle] = useState(false);
   const [over, setOver] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -31,7 +32,7 @@ export function useShowControls(held: boolean) {
   }, [wake]);
 
   return {
-    visible: !idle || held || over,
+    visible: !idle || over,
     wake,
     /** For the controls themselves: the pointer on them keeps them in sight. */
     zoneProps: { onMouseEnter: () => setOver(true), onMouseLeave: () => setOver(false) },

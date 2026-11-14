@@ -1,38 +1,89 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { DECK_HTML, deckFor } from "../test/fixtures";
 import { freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
 
 describe("sidebar", () => {
-  it("shows the chat tab first, and opens on the tab picked", async () => {
+  /** A store as a fresh launch has it, with a deck open or not. */
+  const launch = async (withDeck = false) => {
+    const useApp = await freshStore();
+    if (withDeck) useApp.setState({ deck: deckFor(DECK_HTML) });
+    return useApp;
+  };
+
+  it("has the chat and the files without a deck, and the deck's panels with one", async () => {
     localStorage.clear();
-    let useApp = await freshStore();
-    expect(useApp.getState().sidebarTab).toBe("chat");
+    const useApp = await launch();
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files"], sidebarTab: "chat" });
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "narration", "code"]);
+    useApp.setState({ deck: null });
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files"]);
+  });
+
+  it("opens on the tab picked, and remembers it across launches", async () => {
+    localStorage.clear();
+    let useApp = await launch();
     useApp.getState().setSidebarOpen(false);
     useApp.getState().setSidebarTab("files");
     expect(useApp.getState()).toMatchObject({ sidebarTab: "files", sidebarOpen: true });
-    useApp = await freshStore();
+    useApp = await launch();
     expect(useApp.getState().sidebarTab).toBe("files");
-    // Narration was a sidebar tab before it became a mode.
-    localStorage.setItem("slopslide.sidebarTab", "narration");
-    expect((await freshStore()).getState().sidebarTab).toBe("chat");
-    localStorage.setItem("slopslide.sidebarTab", "bogus");
-    useApp = await freshStore();
-    expect(useApp.getState().sidebarTab).toBe("chat");
   });
 
-  it("opens the chat and files tabs first, and remembers which tabs are open", async () => {
+  it("brings a deck's tab back with the next deck, showing the chat in between", async () => {
     localStorage.clear();
-    let useApp = await freshStore();
-    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files"]);
-    useApp.getState().setSidebarTab("settings");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files", "settings"], sidebarTab: "settings" });
-    useApp.getState().setSidebarTab("chat");
-    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "settings"]);
-    useApp.getState().closeSidebarTab("files");
-    useApp = await freshStore();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "chat" });
+    const useApp = await launch(true);
+    useApp.getState().setSidebarTab("code");
+    useApp.setState({ deck: null });
+    expect(useApp.getState()).toMatchObject({ sidebarTab: "chat", sidebarWanted: "code" });
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    expect(useApp.getState().sidebarTab).toBe("code");
+    // Asked for without a deck, it waits for one too.
+    useApp.setState({ deck: null });
+    useApp.getState().setSidebarTab("narration");
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    expect((await launch(true)).getState().sidebarTab).toBe("narration");
+  });
+
+  it("keeps the chat and the files: closing them does nothing", async () => {
+    localStorage.clear();
+    const useApp = await launch(true);
+    for (const tab of ["chat", "files", "narration", "code"] as const) useApp.getState().closeSidebarTab(tab);
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "narration", "code"]);
+  });
+
+  it("opens the drawing's tab while it is edited, and goes back to the tab before when it closes", async () => {
+    localStorage.clear();
+    const useApp = await launch(true);
+    useApp.getState().setSidebarTab("files");
+    useApp.getState().setSidebarTab("svg");
+    expect(useApp.getState()).toMatchObject({
+      sidebarTabs: ["chat", "files", "narration", "code", "svg"],
+      sidebarTab: "svg",
+    });
+    // It stays with the deck coming and going, and is not remembered for the next launch.
+    useApp.setState({ deck: null });
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "svg"]);
+    expect((await launch()).getState().sidebarTab).toBe("files");
+    useApp.getState().closeSidebarTab("svg");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files"], sidebarTab: "files" });
+    useApp.getState().closeSidebarTab("svg");
+    expect(useApp.getState().sidebarTab).toBe("files");
+  });
+
+  it("closes the drawing's tab while another shows, leaving that one", async () => {
+    localStorage.clear();
+    const useApp = await launch(true);
+    useApp.getState().setSidebarTab("svg");
+    useApp.getState().setSidebarTab("code");
+    useApp.getState().closeSidebarTab("svg");
+    expect(useApp.getState()).toMatchObject({
+      sidebarTabs: ["chat", "files", "narration", "code"],
+      sidebarTab: "code",
+    });
   });
 
   it("maximizes the sidebar over the window, opening it, and never leaves a closed one maximized", async () => {
@@ -52,83 +103,51 @@ describe("sidebar", () => {
     expect((await freshStore()).getState().sidebarMaximized).toBe(false);
   });
 
-  it("shows the tab beside a closed one, and none once all are closed", async () => {
-    localStorage.clear();
-    let useApp = await freshStore();
-    useApp.getState().setSidebarTab("settings");
-    useApp.getState().setSidebarTab("files");
-    useApp.getState().closeSidebarTab("files");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "settings" });
-    useApp.getState().closeSidebarTab("chat");
-    expect(useApp.getState().sidebarTab).toBe("settings");
-    useApp.getState().closeSidebarTab("settings");
-    useApp.getState().closeSidebarTab("settings");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
-    useApp = await freshStore();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null, sidebarOpen: false });
-    useApp.getState().setSidebarTab("files");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files", sidebarOpen: true });
-  });
+  it.each(["notes", "settings", "svg", "bogus"])(
+    "opens on the chat when the tab saved, %s, is no tab to open on",
+    async (saved) => {
+      // Speaker notes and the app's settings were tabs once; the drawing's tab is for the moment.
+      localStorage.clear();
+      localStorage.setItem("slopslide.sidebarTab", saved);
+      localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["chat", saved]));
+      const useApp = await launch(true);
+      expect(useApp.getState()).toMatchObject({ sidebarTab: "chat", sidebarWanted: "chat" });
+      expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "narration", "code"]);
+    },
+  );
+});
 
-  it("collapses once the last tab is closed, and stays open while any is left", async () => {
-    localStorage.clear();
+describe("the app's settings", () => {
+  it("open as a dialog and close again, but not during a show", async () => {
     const useApp = await freshStore();
-    useApp.getState().setSidebarMaximized(true);
-    useApp.getState().closeSidebarTab("files");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarOpen: true, sidebarMaximized: true });
-    useApp.getState().closeSidebarTab("chat");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarOpen: false, sidebarMaximized: false });
-    expect(localStorage.getItem("slopslide.sidebarOpen")).toBe("false");
-  });
-
-  it("brings back the chat when opened with every tab closed", async () => {
-    localStorage.clear();
-    const useApp = await freshStore();
-    useApp.getState().closeSidebarTab("chat");
-    useApp.getState().closeSidebarTab("files");
-    expect(useApp.getState().sidebarOpen).toBe(false);
-    useApp.getState().setSidebarOpen(true);
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarTab: "chat", sidebarOpen: true });
-  });
-
-  it("drops saved tabs that are no more, and a showing tab that is not open", async () => {
-    localStorage.clear();
-    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["bogus", "files", "files", 3]));
-    localStorage.setItem("slopslide.sidebarTab", "chat");
-    expect((await freshStore()).getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files" });
-    localStorage.setItem("slopslide.sidebarTabs", "not json");
-    expect((await freshStore()).getState().sidebarTabs).toEqual(["chat", "files"]);
-  });
-
-  it("reopens the narration tab left open at the last launch", async () => {
-    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["chat", "narration", "bogus"]));
-    localStorage.setItem("slopslide.sidebarTab", "narration");
-    const useApp = await freshStore();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "narration"], sidebarTab: "narration" });
+    useApp.getState().openAppSettings();
+    expect(useApp.getState().appSettingsOpen).toBe(true);
+    useApp.getState().closeAppSettings();
+    expect(useApp.getState().appSettingsOpen).toBe(false);
+    useApp.setState({ presenting: true });
+    useApp.getState().openAppSettings();
+    expect(useApp.getState().appSettingsOpen).toBe(false);
   });
 });
 
 describe("the deck's settings", () => {
-  it("open over the mode the deck is in, and close back to it", async () => {
+  it("open as a dialog over the deck, whose mode stays, and close again", async () => {
     const useApp = await freshStore();
+    useApp.setState({ deck: { id: "/w/talk/deck.html", title: "Talk", slides: [] } as never });
     useApp.getState().setMode("edit");
     useApp.getState().openDeckSettings();
-    expect(useApp.getState()).toMatchObject({ slideMode: "settings", editing: false, settingsReturn: "edit" });
+    expect(useApp.getState()).toMatchObject({ deckSettingsOpen: true, slideMode: "view", editing: true });
     useApp.getState().closeDeckSettings();
-    expect(useApp.getState()).toMatchObject({ slideMode: "view", editing: true });
-
-    useApp.getState().setMode("git");
-    useApp.getState().openDeckSettings();
-    useApp.getState().closeDeckSettings();
-    expect(useApp.getState()).toMatchObject({ slideMode: "git", editing: false });
+    expect(useApp.getState()).toMatchObject({ deckSettingsOpen: false, editing: true });
   });
 
-  it("keep the mode to go back to when opened again while open", async () => {
+  it("do not open without a deck, nor during a show", async () => {
     const useApp = await freshStore();
-    useApp.getState().setMode("edit");
     useApp.getState().openDeckSettings();
+    expect(useApp.getState().deckSettingsOpen).toBe(false);
+    useApp.setState({ deck: { id: "/w/talk/deck.html", title: "Talk", slides: [] } as never, presenting: true });
     useApp.getState().openDeckSettings();
-    expect(useApp.getState().settingsReturn).toBe("edit");
+    expect(useApp.getState().deckSettingsOpen).toBe(false);
   });
 
   it("stay closed when closed from another mode", async () => {

@@ -5,7 +5,7 @@
  * player, in the slide's iframe. How it pans and zooms with the editor on top is covered in
  * slideEditor.test.ts.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
@@ -130,6 +130,33 @@ describe("comments", () => {
     expect(posted("slop:comment-pick")[0]).toMatchObject({ x: 0.5, y: 0.5, target: null });
     pointer("pointerdown", doc.body, 50, 50);
     expect(posted("slop:comment-pick")).toHaveLength(1);
+  });
+
+  it("picks what is at a point the app asks about, with no tool on, and takes a point off the slide as the nearest on it", () => {
+    const { $, fromParent, posted, stack } = commented();
+    fromParent({ type: "slop:comment-at", x: 250, y: 225 });
+    expect(posted("slop:comment-pick")).toEqual([
+      { type: "slop:comment-pick", slide: "intro", x: 0.15, y: 0.25, target: h1 },
+    ]);
+    stack.under = [$("#intro")];
+    fromParent({ type: "slop:comment-at", x: 20, y: 9000 });
+    expect(posted("slop:comment-pick")[1]).toMatchObject({ x: 0, y: 1, target: null });
+    fromParent({ type: "slop:comment-at", x: "left", y: 10 });
+    expect(posted("slop:comment-pick")).toHaveLength(2);
+  });
+
+  it("asks for the editor on a double-click on the slide, unless a comment is being placed or a control was hit", () => {
+    const { $, doc, window, fromParent, posted } = commented();
+    const twice = (target: Element) =>
+      target.dispatchEvent(new window.MouseEvent("dblclick", { button: 0, bubbles: true, cancelable: true }));
+    twice($("#intro h1"));
+    expect(posted("slop:edit-ask")).toEqual([{ type: "slop:edit-ask", slide: "intro" }]);
+    const link = doc.createElement("a");
+    $("#intro").appendChild(link);
+    twice(link);
+    fromParent({ type: "slop:comment-tool", on: true });
+    twice($("#intro h1"));
+    expect(posted("slop:edit-ask")).toHaveLength(1);
   });
 
   it("looks through an invisible layer to what shows", () => {
@@ -306,7 +333,10 @@ describe("pasteboard", () => {
     expect(frame.style.cssText).toContain("width: 1920px");
     const css = [...p.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
     expect(css).toMatch(/html, body \{ background: transparent !important/);
-    expect(css).toMatch(/\[data-slop-frame\] \{[^}]*box-shadow:[^}]*outline: 1px solid var\(--slop-border/);
+    // A screen pixel wide, however far the app scales the preview (see slop:fit).
+    expect(css).toMatch(
+      /\[data-slop-frame\] \{[^}]*box-shadow:[^}]*outline: calc\(1px \* var\(--slop-ui, 1\)\) solid var\(--slop-border/,
+    );
     // Only the editor lets the slide show what runs past its edge.
     expect(css).not.toContain("overflow: visible");
   });
@@ -357,10 +387,12 @@ describe("pasteboard", () => {
 
   it("shrinks with a scale in a show fit to a window smaller than the slide", () => {
     const p = pasteboard({ show: true });
-    p.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
+    Object.defineProperty(p.window, "innerWidth", { value: 960, configurable: true });
+    Object.defineProperty(p.window, "innerHeight", { value: 540, configurable: true });
+    p.window.dispatchEvent(new p.window.Event("resize"));
     const deck = p.$(".deck");
     expect(deck.style.zoom).toBe("1");
-    expect(deck.style.transform).toBe(`translate(0px,0px) scale(${(4 / 3) * 0.5})`);
+    expect(deck.style.transform).toBe("translate(0px,0px) scale(0.5)");
   });
 
   it("centers and frames a slide of another size", () => {
@@ -396,6 +428,30 @@ describe("pasteboard", () => {
     // The middle button pans too, even from links.
     p.drag(p.$("a"), 50, 0, 1);
     expect(p.transform()).toBe("translate(420px,150px) scale(1)");
+  });
+
+  it("keeps what it draws and how far a press may wander at their size on screen, as the app scales the preview", () => {
+    const p = pasteboard();
+    const api = (p.window as unknown as { slopPasteboard: { ui: () => number; onChange: (fn: () => void) => void } })
+      .slopPasteboard;
+    const changed = vi.fn();
+    api.onChange(changed);
+    expect(api.ui()).toBe(1);
+    // Shown at half its size, a screen pixel is two of the preview's.
+    p.fromParent({ type: "slop:fit", scale: 0.5 });
+    expect(api.ui()).toBe(2);
+    expect(p.doc.documentElement.style.getPropertyValue("--slop-ui")).toBe("2");
+    expect(changed).toHaveBeenCalledTimes(1);
+    // The same again changes nothing; what is no scale is ignored.
+    p.fromParent({ type: "slop:fit", scale: 0.5 });
+    p.fromParent({ type: "slop:fit", scale: 0 });
+    p.fromParent({ type: "slop:fit", scale: "big" });
+    expect(changed).toHaveBeenCalledTimes(1);
+    // 5 of its pixels are under 3 on screen: a click, not a pan.
+    p.drag(p.$("h1"), 5, 0);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    p.drag(p.$("h1"), 8, 0);
+    expect(p.transform()).toBe("translate(328px,180px) scale(1)");
   });
 
   it("asks the app for keyboard focus on a press while it has none, since panning cancels the press", () => {
@@ -572,22 +628,72 @@ describe("pasteboard", () => {
     expect(p.$("[data-slop-frame]").style.cssText).toContain(`width: ${1920 * k}px`);
   });
 
-  it("zooms with the mouse wheel in view mode too, in Chromium and in WebKit", async () => {
+  it("scrolls with the mouse wheel in view mode too, only as far as the zoomed-in slide reaches, in Chromium and in WebKit", async () => {
     const p = pasteboard();
-    const notch = async (deltaY: number, wheelDeltaY: number) => {
-      const event = new p.window.WheelEvent("wheel", { deltaY, cancelable: true, bubbles: true });
+    const notch = async (deltaY: number, wheelDeltaY: number, shiftKey = false) => {
+      const event = new p.window.WheelEvent("wheel", { deltaY, shiftKey, cancelable: true, bubbles: true });
       Object.defineProperty(event, "timeStamp", { value: (p.views().length + 1) * 1000 });
       Object.defineProperty(event, "wheelDeltaY", { value: wheelDeltaY });
       p.doc.body.dispatchEvent(event);
       await p.frame();
+      return event;
     };
-    await notch(-40, 120);
-    expect(p.views().at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
-    await notch(-4.000244140625, 12);
-    // WebKit's notch is a fraction of a line; it zooms rather than panning.
-    expect(p.views().at(-1)!.k).toBeCloseTo(Math.exp(0.2 + 4.000244140625 * 0.005), 5);
-    // Still turning, the zoom is a scale (see "zooms with a scale during a pinch").
-    expect(Number(/scale\((.+)\)/.exec(p.transform())![1])).toBeCloseTo(p.views().at(-1)!.k, 5);
+    // The whole slide is in view: a notch moves nothing, and zooms nothing.
+    expect((await notch(40, -120)).defaultPrevented).toBe(true);
+    expect(p.views()).toEqual([]);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    // Zoomed in to twice its size (3840 × 2160 in a 2560 × 1440 view), the slide scrolls.
+    p.fromParent({ type: "slop:camera", x: -960, y: -540, k: 2 });
+    await notch(40, -120);
+    expect(p.views().at(-1)).toMatchObject({ x: -960, y: -580, k: 2 });
+    // WebKit's notch is a fraction of a line; it scrolls a line.
+    await notch(4.000244140625, -12);
+    expect(p.views().at(-1)!.y).toBeCloseTo(-620.0024, 3);
+    // With Shift, sideways; never past the slide's edge and a margin.
+    await notch(40, -120, true);
+    expect(p.views().at(-1)!.x).toBe(-1000);
+    for (let i = 0; i < 40; i++) await notch(-400, 1200, true);
+    expect(p.views().at(-1)!.x).toBe(48 - 320);
+    expect(p.views().at(-1)!.k).toBe(2);
+  });
+
+  it("shows the slide at its real size with ⇧0 or when the app asks, and zooms to a box of it", () => {
+    const p = pasteboard();
+    // The app shows the preview at half its size: 100% is twice the slide's size here.
+    p.fromParent({ type: "slop:fit", scale: 0.5 });
+    const shifted = (key: string, code: string) => {
+      const event = new p.window.KeyboardEvent("keydown", {
+        key,
+        code,
+        shiftKey: true,
+        cancelable: true,
+        bubbles: true,
+      });
+      p.doc.body.dispatchEvent(event);
+      return event;
+    };
+    expect(shifted(")", "Digit0").defaultPrevented).toBe(true);
+    expect(p.views().at(-1)).toMatchObject({ x: -960, y: -540, k: 2 });
+    expect(p.keys()).toEqual([]);
+    p.fromParent({ type: "slop:camera", home: true });
+    p.fromParent({ type: "slop:camera", actual: true });
+    expect(p.views().at(-1)).toMatchObject({ k: 2 });
+    // Where Shift types the 0 itself (AZERTY), it is the 0: back to the whole slide.
+    shifted("0", "Digit0");
+    expect(p.views().at(-1)).toMatchObject({ x: 0, y: 0, k: 1 });
+    // A box of the slide fills the view, with room around it, centered.
+    p.fromParent({ type: "slop:camera", box: { x: 100, y: 100, w: 400, h: 100 } });
+    const room = 2 * 48 * 2;
+    const k = Math.min((2560 - room) / 400, (1440 - room) / 100);
+    const view = p.views().at(-1)!;
+    expect(view.k).toBeCloseTo(k, 5);
+    // The box's middle (300, 150) is the view's middle.
+    expect(320 + view.x + 300 * view.k).toBeCloseTo(1280, 5);
+    expect(180 + view.y + 150 * view.k).toBeCloseTo(720, 5);
+    // A box that says nothing is no zoom.
+    const before = p.views().length;
+    p.fromParent({ type: "slop:camera", box: { x: "a", y: 0, w: 1, h: 1 } });
+    expect(p.views()).toHaveLength(before);
   });
 
   /** The slide's box on screen, as a browser lays the deck out from its `zoom` and transform. */
@@ -924,13 +1030,28 @@ describe("pasteboard", () => {
       const reached: string[] = [];
       p.doc.addEventListener("keydown", (event) => reached.push((event as KeyboardEvent).key));
       p.key("0");
-      expect(reached).toEqual(["0"]);
+      p.key("Enter");
+      expect(reached).toEqual(["0", "Enter"]);
       p.wheel({ ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 }, 1000);
       await p.frame();
-      // Zoomed in, it fits the slide again and goes no further.
+      // Zoomed in, with no number being typed, it fits the slide again and goes no further.
       expect(p.key("0").defaultPrevented).toBe(true);
-      expect(reached).toEqual(["0"]);
+      expect(reached).toEqual(["0", "Enter"]);
       expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 0, y: 0, k: 1 });
+    });
+
+    it("takes 0 as a digit too while the player says a slide number is being typed", async () => {
+      const p = pasteboard({ show: true });
+      const reached: string[] = [];
+      p.doc.addEventListener("keydown", (event) => reached.push((event as KeyboardEvent).key));
+      p.wheel({ ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 }, 1000);
+      await p.frame();
+      // "10", then Enter: the slide stays zoomed and the show goes to the slide numbered so.
+      p.key("1");
+      expect(p.key("0").defaultPrevented).toBe(true);
+      expect(reached).toEqual(["1", "0"]);
+      expect(p.zooms().at(-1)!.k).toBeCloseTo(Math.exp(0.3), 5);
+      expect(p.posted("slop:typed").at(-1)).toEqual({ type: "slop:typed", typed: "10" });
     });
 
     it("zooms with a mouse notch and a pinch, pans with a swipe, and follows the window's size", async () => {
@@ -942,26 +1063,65 @@ describe("pasteboard", () => {
       p.wheel({ deltaY: -3, deltaMode: 1, clientX: 0, clientY: 0 }, 2000);
       await p.frame();
       expect(p.zooms().at(-1)!.k).toBeGreaterThan(Math.exp(0.3));
-      p.key("0");
+      p.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
       p.wheel({ deltaX: 30, deltaY: 100 }, 3000);
       await p.frame();
-      expect(p.transform()).toBe(`translate(-30px,-100px) scale(${4 / 3})`);
-      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: -30, y: -100, k: 1 });
+      expect(p.transform()).toBe(`translate(-30px,-100px) scale(${8 / 3})`);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: -30, y: -100, k: 2 });
       Object.defineProperty(p.window, "innerWidth", { value: 1920, configurable: true });
       p.window.dispatchEvent(new p.window.Event("resize"));
       // Now letterboxed, 180px down, and still panned.
-      expect(p.transform()).toBe("translate(-30px,80px) scale(1)");
+      expect(p.transform()).toBe("translate(-30px,80px) scale(2)");
     });
 
-    it("leaves clicks and Space to the player, and pans with the middle button", () => {
+    it("moves and shrinks nothing while the slide is fit to the window", async () => {
+      const p = pasteboard({ show: true });
+      const fit = `translate(0px,0px) scale(${4 / 3})`;
+      // A hand resting on the trackpad, a wheel notch down, a pinch together, a middle drag.
+      p.wheel({ deltaX: 30, deltaY: 100 }, 1000);
+      await p.frame();
+      expect(p.transform()).toBe(fit);
+      p.wheel({ deltaY: 3, deltaMode: 1, clientX: 500, clientY: 500 }, 2000);
+      await p.frame();
+      expect(p.transform()).toBe(fit);
+      p.wheel({ ctrlKey: true, deltaY: 60, clientX: 500, clientY: 500 }, 3000);
+      await p.frame();
+      expect(p.transform()).toBe(fit);
+      p.drag(p.$("h1"), 50, 20, 1);
+      expect(p.transform()).toBe(fit);
+      p.fromParent({ type: "slop:camera", x: 40, y: 40, k: 0.5 });
+      expect(p.transform()).toBe(fit);
+      expect(p.zooms()).toEqual([]);
+    });
+
+    it("pans a zoomed slide only as far as its edges, so it always covers its place", async () => {
+      const p = pasteboard({ show: true });
+      p.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
+      // The fitted slide is 2560×1440: at twice that there is one window's width and height to go.
+      p.wheel({ deltaX: -500, deltaY: -500 }, 1000);
+      await p.frame();
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 0, y: 0, k: 2 });
+      p.wheel({ deltaX: 9000, deltaY: 9000 }, 2000);
+      await p.frame();
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: -2560, y: -1440, k: 2 });
+      // Zooming out again brings the slide back into its place.
+      p.wheel({ ctrlKey: true, deltaY: 600, clientX: 0, clientY: 0 }, 3000);
+      p.wheel({ ctrlKey: true, deltaY: 600, clientX: 0, clientY: 0 }, 3010);
+      p.wheel({ ctrlKey: true, deltaY: 600, clientX: 0, clientY: 0 }, 3020);
+      await p.frame();
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 0, y: 0, k: 1 });
+    });
+
+    it("leaves clicks and Space to the player, and pans a zoomed slide with the middle button", () => {
       const p = pasteboard({ show: true });
       p.drag(p.$("h1"), 50, 0);
       expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+      p.fromParent({ type: "slop:camera", x: -100, y: -100, k: 2 });
+      p.drag(p.$("h1"), 50, 20, 1);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: -50, y: -80, k: 2 });
       p.key(" ");
       expect(p.$("#outro").classList.contains("active")).toBe(true);
       expect(p.doc.documentElement.style.cursor).toBe("");
-      p.drag(p.$("h1"), 50, 20, 1);
-      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 50, y: 20, k: 1 });
     });
 
     it("fits each slide the show moves to, and when the app asks", async () => {

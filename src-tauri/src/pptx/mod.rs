@@ -6,8 +6,17 @@ mod export;
 mod import;
 mod xml;
 
-pub use export::export;
-pub use import::{import, Imported};
+pub use export::{export, Exported};
+pub use import::{import, Imported, Progress as ImportProgress};
+
+/// Something a conversion changed or left out, in words for the user, and the slides it
+/// happened on, numbered from 1 as the result has them; none when it is about the whole
+/// presentation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Change {
+    pub what: String,
+    pub slides: Vec<usize>,
+}
 
 /// English Metric Units per inch, PowerPoint's unit of length.
 const EMU_PER_INCH: f64 = 914_400.0;

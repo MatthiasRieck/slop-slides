@@ -77,6 +77,39 @@ describe("the stage's keys, by where they are pressed", () => {
     expect(putAway).toHaveBeenCalledOnce();
   });
 
+  it("extends the picked range with ⇧ and the arrows pressed on the slide list, and only there", () => {
+    const extendRailBy = vi.fn();
+    const extendRailTo = vi.fn();
+    const { getByText } = setUp();
+    useApp.setState({ extendRailBy, extendRailTo, deck: { slides: [{ id: "a" }, { id: "b" }] } as never });
+    fireEvent.keyDown(getByText("Rail"), { key: "ArrowDown", shiftKey: true });
+    expect(extendRailBy).toHaveBeenCalledWith(1);
+    fireEvent.keyDown(getByText("Rail"), { key: "Home", shiftKey: true });
+    expect(extendRailTo).toHaveBeenCalledWith("a");
+    fireEvent.pointerDown(getByText("Plain"));
+    fireEvent.keyDown(getByText("Plain"), { key: "ArrowDown", shiftKey: true });
+    expect(extendRailBy).toHaveBeenCalledOnce();
+    expect(selectRelative).toHaveBeenCalledWith(1);
+    useApp.setState({ extendRailBy: real.extendRailBy, extendRailTo: real.extendRailTo, deck: null });
+  });
+
+  it("organises the slides in View as in Edit: ⇧⌘N opens the layouts, ⌘D on the list duplicates", () => {
+    const setAddingSlide = vi.fn();
+    const duplicateSlides = vi.fn(async () => {});
+    const { getByText } = setUp();
+    useApp.setState({ setAddingSlide, duplicateSlides, selected: "a" });
+    fireEvent.keyDown(getByText("Plain"), { key: "N", ctrlKey: true, shiftKey: true });
+    expect(setAddingSlide).toHaveBeenCalledWith(true);
+    fireEvent.pointerDown(getByText("Rail"));
+    fireEvent.keyDown(getByText("Rail"), { key: "d", ctrlKey: true });
+    expect(duplicateSlides).toHaveBeenCalledOnce();
+    useApp.setState({
+      setAddingSlide: real.setAddingSlide,
+      duplicateSlides: real.duplicateSlides,
+      selected: null,
+    });
+  });
+
   describe("forwarded by the slide preview", () => {
     const fromSlide = (container: HTMLElement, data: unknown) =>
       act(

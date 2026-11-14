@@ -7,7 +7,6 @@
 //! that image, whatever its scale factor, and crops, downsizes and encodes it.
 
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tauri::Webview;
@@ -87,24 +86,6 @@ pub async fn snapshot_within(
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
-}
-
-/// Saves `rect` of `webview` (one slide, shown whole) as the `index`th of `total` exported
-/// slide images in `dir`, at most `width` pixels wide (the slides' canvas width; by default
-/// [`SLIDE_WIDTH`]). Returns the image's path.
-pub async fn save_slide_image(
-    webview: &Webview,
-    dir: &Path,
-    index: usize,
-    total: usize,
-    rect: Rect,
-    viewport: Size,
-    width: Option<u32>,
-) -> Result<PathBuf> {
-    let png = snapshot(webview, rect, viewport, slide_image_width(width)).await?;
-    let path = dir.join(crate::files::slide_image_name(index, total));
-    std::fs::write(&path, png)?;
-    Ok(path)
 }
 
 /// The widest a slide image may be: `width`, or [`SLIDE_WIDTH`], within the size limit.

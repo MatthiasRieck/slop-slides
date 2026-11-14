@@ -1,26 +1,126 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { File, FileUp, FolderSearch, MonitorPlay } from "lucide-react";
-import { useRef, useState } from "react";
+import { File, FileUp, FolderSearch, Loader2, MonitorPlay, SquareArrowOutUpRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import type { OpenedFile } from "../lib/api";
-import { isImage } from "../lib/drop";
+import { api, errorMessage, type OpenedFile, type TextPreview } from "../lib/api";
+import { previewKind } from "../lib/filePreview";
 import { isPowerPoint } from "../lib/opening";
-import { basename, fileUrl, revealLabel } from "../lib/utils";
-import { useApp } from "../store";
+import { basename, fileUrl, isMac, isWindows, revealLabel } from "../lib/utils";
+import { showError, useApp } from "../store";
 import { Button } from "./Button";
+import { importPowerPoint } from "./export/importPowerPoint";
 import { ImportPptxButton, NewDeckForm, usePptxImport } from "./Home";
+
+/** The window can show a PDF itself: the macOS and Windows web views can, Linux's cannot. */
+const SHOWS_PDFS = isMac || isWindows;
 
 /**
  * The main area when no deck is open: the open page as it is (any HTML that is not a
- * SlopSlide deck), an image, a note for files there is no viewer for yet, or, with nothing
- * open, a way to start a deck.
+ * SlopSlide deck), an image, a PDF, a text file, a note with a way to open what it cannot show
+ * in the app the system opens it in, or, with nothing open, a way to start a deck.
  */
 export function FileViewer() {
   const file = useApp((s) => s.openedFile);
   if (!file) return <StartDeck />;
   if (file.kind === "webpage" || file.kind === "slideshow") return <PageView file={file} />;
-  if (isImage(file.path)) return <ImageView file={file} />;
-  return <NoViewer file={file} />;
+  switch (previewKind(file.path, SHOWS_PDFS)) {
+    case "image":
+      return <ImageView file={file} />;
+    case "pdf":
+      return <PdfView file={file} />;
+    case "text":
+      return <TextView file={file} />;
+    default:
+      return <NoViewer file={file} />;
+  }
+}
+
+/** Opens the file in the app the system opens it in, saying what went wrong. */
+function openInDefaultApp(file: OpenedFile) {
+  api
+    .openInDefaultApp(file.path)
+    .catch((error) => showError(error, { doing: `Could not open ${basename(file.path)}` }));
+}
+
+/** Under a file that shows: its path, and buttons to open it elsewhere or find it in the file manager. */
+function FileBar({ file }: { file: OpenedFile }) {
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-1.5 text-xs">
+      <span className="min-w-0 truncate text-muted-foreground">{file.path}</span>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button size="md" onClick={() => openInDefaultApp(file)}>
+          <SquareArrowOutUpRight />
+          Open in default app
+        </Button>
+        <Button size="md" onClick={() => void revealItemInDir(file.absolute)}>
+          <FolderSearch />
+          {revealLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** A PDF, as the window's own viewer shows it, loaded again when the file changes. */
+function PdfView({ file }: { file: OpenedFile }) {
+  const rev = useApp((s) => s.fileRev);
+  return (
+    <div className="flex h-full flex-col bg-canvas">
+      <iframe
+        key={file.absolute}
+        title={basename(file.path)}
+        src={fileUrl(file.absolute, `v=${rev}`)}
+        className="min-h-0 w-full flex-1"
+      />
+      <FileBar file={file} />
+    </div>
+  );
+}
+
+/** How a text file's reading went. */
+type TextState = { loading: true } | { loading: false; preview: TextPreview | null; error: string | null };
+
+/** A text file, read-only, read again when it changes. A file that turns out not to be text has no preview. */
+function TextView({ file }: { file: OpenedFile }) {
+  const rev = useApp((s) => s.fileRev);
+  const [state, setState] = useState<TextState>({ loading: true });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again when the file changes on disk (`rev`)
+  useEffect(() => {
+    let gone = false;
+    api.readTextFile(file.path).then(
+      (preview) => !gone && setState({ loading: false, preview, error: null }),
+      (error) => !gone && setState({ loading: false, preview: null, error: errorMessage(error) }),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [file.path, rev]);
+  if (!state.loading && !state.preview) return <NoViewer file={file} reason={state.error} />;
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-auto bg-card">
+        {state.loading ? (
+          <p className="flex items-center gap-1.5 p-4 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            Loading…
+          </p>
+        ) : (
+          <pre
+            data-testid="preview-text"
+            className="selectable min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed"
+          >
+            {state.preview?.text}
+          </pre>
+        )}
+        {!state.loading && state.preview?.truncated && (
+          <p className="border-t px-4 py-2 text-2xs text-muted-foreground">
+            Only the start of this file is shown. Open it in its app to see all of it.
+          </p>
+        )}
+      </div>
+      <FileBar file={file} />
+    </div>
+  );
 }
 
 /** Nothing is open: start a deck in the workspace, or import one from PowerPoint. */
@@ -78,18 +178,17 @@ function ImageView({ file }: { file: OpenedFile }) {
           className="max-h-full max-w-full rounded-md object-contain shadow-thumbnail"
         />
       </div>
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-1.5 text-xs">
-        <span className="min-w-0 truncate text-muted-foreground">{file.path}</span>
-        <Button size="md" onClick={() => void revealItemInDir(file.absolute)} className="shrink-0">
-          <FolderSearch />
-          {revealLabel}
-        </Button>
-      </div>
+      <FileBar file={file} />
     </div>
   );
 }
 
-function NoViewer({ file }: { file: OpenedFile }) {
+/**
+ * A file the app cannot show: open it in the app the system opens it in, or find it in the file
+ * manager; a PowerPoint file can become a deck. `reason` says why it does not show, when that
+ * is more than its kind.
+ */
+function NoViewer({ file, reason }: { file: OpenedFile; reason?: string | null }) {
   const powerPoint = isPowerPoint(file.path);
   const [importing, setImporting] = useState(false);
   /** Set at once, where the state only shows on the next render. */
@@ -100,7 +199,7 @@ function NoViewer({ file }: { file: OpenedFile }) {
     busy.current = true;
     setImporting(true);
     try {
-      await useApp.getState().importPptx(file.absolute);
+      await importPowerPoint(file.absolute);
     } finally {
       busy.current = false;
       setImporting(false);
@@ -114,7 +213,7 @@ function NoViewer({ file }: { file: OpenedFile }) {
       <p className="text-xs text-muted-foreground">
         {powerPoint
           ? "Import it to make an editable deck. This file stays as it is."
-          : "There is no preview for this kind of file yet."}
+          : (reason ?? "SlopSlide cannot show this kind of file. Open it in the app it belongs to.")}
       </p>
       {powerPoint && (
         <Button variant="primary" size="lg" busy={importing} onClick={() => void importDeck()} className="mt-1">
@@ -128,10 +227,16 @@ function NoViewer({ file }: { file: OpenedFile }) {
           )}
         </Button>
       )}
-      <Button size="lg" onClick={() => void revealItemInDir(file.absolute)} className="mt-1">
-        <FolderSearch className="size-3.5" />
-        {revealLabel}
-      </Button>
+      <div className="mt-1 flex items-center gap-2">
+        <Button variant={powerPoint ? "outline" : "primary"} size="lg" onClick={() => openInDefaultApp(file)}>
+          <SquareArrowOutUpRight className="size-3.5" />
+          Open in default app
+        </Button>
+        <Button size="lg" onClick={() => void revealItemInDir(file.absolute)}>
+          <FolderSearch className="size-3.5" />
+          {revealLabel}
+        </Button>
+      </div>
     </div>
   );
 }

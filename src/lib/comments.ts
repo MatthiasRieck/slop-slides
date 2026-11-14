@@ -40,6 +40,11 @@ export interface SlideComment {
    * playhead held the slide when it was made. Absent for a comment on the slide whenever.
    */
   time?: number | null;
+  /**
+   * It went to the agent with a chat message. It stays on its slide, marked as sent, until the
+   * user resolves it; changing what it says makes it one to send again. Absent until it is sent.
+   */
+  sent?: boolean;
 }
 
 /** Which comments go out with a message: the selected slide's, or the whole deck's. */

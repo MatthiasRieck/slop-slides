@@ -857,6 +857,12 @@ mod tests {
         );
     }
     #[test]
+    fn system_prompt_asks_for_slides_to_be_linked_by_id() {
+        // The chat turns `#<slide id>` links into a way to that slide.
+        assert!(SYSTEM_PROMPT.contains("`[slide 3](#market-size)`"));
+    }
+
+    #[test]
     fn reads_tool_output_from_text_blocks_and_objects() {
         assert_eq!(tool_output(&json!("ok\n")), Some("ok".into()));
         assert_eq!(

@@ -74,3 +74,38 @@ describe("cleaning up recorded narration", () => {
     expect(useApp.getState().sidebarTab).toBe("chat");
   });
 });
+
+describe("speaker notes as the script", () => {
+  it("makes the notes of every slide without a script its script, and says how many", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    const withNotes = {
+      ...deck,
+      slides: deck.slides.map((s) => ({
+        ...s,
+        notes: s.id === "outro" ? "" : `Notes of ${s.id}.`,
+        narration: s.id === "#2" ? "Mine." : "",
+      })),
+    };
+    backend({
+      set_slide_narration: ({ slide, text }) => ({
+        ...withNotes,
+        slides: withNotes.slides.map((s) => (s.id === slide ? { ...s, narration: text } : s)),
+      }),
+    });
+    useApp.setState({ deck: withNotes, selected: "intro" });
+    await useApp.getState().scriptsFromNotes();
+    expect(calls("set_slide_narration")).toEqual([
+      { id: "/decks/talk/deck.html", slide: "intro", text: "Notes of intro." },
+    ]);
+    expect(useApp.getState().toasts.at(-1)?.text).toBe("Made the speaker notes of 1 slide their script.");
+  });
+
+  it("opens the Narration tab", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    useApp.getState().showNarration();
+    expect(useApp.getState().sidebarTab).toBe("narration");
+    expect(useApp.getState().sidebarOpen).toBe(true);
+  });
+});

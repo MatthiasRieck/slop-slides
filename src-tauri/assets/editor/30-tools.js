@@ -236,16 +236,15 @@
     if (!create.el) create.el = create.tool === "text" ? newText(x, y, w) : newShape(create.tool, x, y, w, h);
     if (OUTLINES[create.tool]) drawOutline(create.el, x, y, w, h);
     else place(create.el, x, y, w, create.tool === "text" ? null : h);
-    // A figure is redrawn at its new size once per frame, with the paint it was given.
+    // A figure is redrawn at its new size, with the paint it was given.
     if (create.paint === undefined) create.paint = resizedPaint(create.el);
-    if (create.paint) scheduleFigure(create.el, create.paint);
+    if (create.paint) fitFigureWith(create.el, create.paint);
     scheduleHandles();
   }
 
   function finishCreating() {
     var done = create;
     create = null;
-    flushFigures();
     if (done.line) {
       if (!done.sticks) done.sticks = stickCandidates(done.el);
       if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });

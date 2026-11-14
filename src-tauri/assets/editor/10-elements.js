@@ -71,7 +71,6 @@
     nudgeGroup = null;
     nudgeLines = null;
     // What was waiting for the next frame is part of what is saved, and shows with it.
-    flushFigures();
     flushHandles();
     var markup = serialize();
     if (markup === saved) return;

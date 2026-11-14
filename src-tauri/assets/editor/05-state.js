@@ -594,7 +594,6 @@
   var reportFrame = 0;
   var handlesFrame = 0;
   var hoverFrame = 0;
-  var figuresFrame = 0;
   // Looks at the whole slide (what overflows, its layers) wait for a pause in the typing, and for
   // the end of a drag, of adding an element and of a marquee.
   var TYPING_PAUSE_MS = 250;

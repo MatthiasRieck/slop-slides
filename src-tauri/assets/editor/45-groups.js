@@ -159,7 +159,7 @@
       if (b.vectors && b.size.w && b.size.h) spreadVectors(b.vectors, kx, ky);
       if (b.members) spreadMembers(b.members, kx, ky);
       if (first) b.figure = resizedPaint(el);
-      if (b.figure) scheduleFigure(el, b.figure);
+      if (b.figure) fitFigureWith(el, b.figure);
     });
   }
 

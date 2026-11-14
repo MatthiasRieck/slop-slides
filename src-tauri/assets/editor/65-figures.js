@@ -189,45 +189,24 @@
   }
 
   /**
-   * What to redraw `el` with (see scheduleFigure) as its box changes size: its paint, read once
-   * for all the steps of a resize. An old cut-out is made a figure first; null for anything else.
+   * What to redraw `el` with (see fitFigureWith) as its box changes size: its paint, read once
+   * for all the steps of a resize, as reading it takes the figure's image apart. An old cut-out
+   * is made a figure first; null for anything else.
    */
   function resizedPaint(el) {
     upgradeCutOut(el);
     return figureOf(el) ? figurePaint(el) : null;
   }
 
-  /** Redraws figure `el` at its size with `paint` (see figurePaint), when it has a size. */
+  /**
+   * Redraws figure `el` at its size with `paint` (see figurePaint), when it has a size. A resize
+   * draws it in the same step that changes its box, never in the frame's own callbacks: the
+   * webview only has a new image ready some time after it is set, and one set right before the
+   * frame is painted leaves the figure blank in it, so a resize would flicker.
+   */
   function fitFigureWith(el, paint) {
     var size = sizeOf(el);
     if (size.w && size.h) paintFigure(el, paint);
-  }
-
-  // The figures whose box changed size since they were last drawn, each with its paint.
-  var pendingFigures = [];
-
-  /**
-   * Redraws figure `el` at its size next frame, with the `paint` read when its resize started:
-   * drawing one builds its image anew, and reading its paint takes that image apart, which is
-   * too much for every pointer move. `flushFigures` draws what waits right away.
-   */
-  function scheduleFigure(el, paint) {
-    var waiting = Array.prototype.find.call(pendingFigures, function (item) {
-      return item.el === el;
-    });
-    if (waiting) waiting.paint = paint;
-    else pendingFigures.push({ el: el, paint: paint });
-    if (!figuresFrame) figuresFrame = window.requestAnimationFrame(flushFigures);
-  }
-
-  function flushFigures() {
-    if (figuresFrame) window.cancelAnimationFrame(figuresFrame);
-    figuresFrame = 0;
-    var due = pendingFigures;
-    pendingFigures = [];
-    due.forEach(function (item) {
-      if (item.el.isConnected) fitFigureWith(item.el, item.paint);
-    });
   }
 
   /** A box cut out with a `clip-path` polygon the editor cannot redraw, which shows no border or shadow. */

@@ -29,7 +29,17 @@
     var now = Date.now();
     var double = el && el === lastDown.el && now - lastDown.at < DOUBLE_CLICK_MS;
     lastDown = { el: el, at: double ? 0 : now };
-    if (!isSelected(el) && (!el || isBackdrop(el)) && startMarquee(event, el, false)) return;
+    if (!isSelected(el) && (!el || isBackdrop(el))) {
+      // Nothing to pick here but a locked element: a click selects it, with its frame and no
+      // handles, so that it can be unlocked; a drag draws the marquee all the same.
+      var held = lockedAt(event.target, event.clientX, event.clientY);
+      if (startMarquee(event, held || el, false)) return;
+      if (held) {
+        event.preventDefault();
+        select(held);
+        return;
+      }
+    }
     if (!isSelected(el)) select(el);
     if (!el) {
       pasteboard.startPan(event);
@@ -201,9 +211,7 @@
     }
     drag = null;
     clearDragMarks();
-    // What waited for the next frame during the drag shows where it ended, and the handles to
-    // add points, away during a drag, are back.
-    flushFigures();
+    // The handles to add points, away during a drag, are back.
     if (moved || point) placeHandles();
     if (moved) {
       refit(el);

@@ -785,7 +785,7 @@ describe("groups, locks and layers", () => {
     expect(e.commits()).toEqual([]);
   });
 
-  it("keeps a locked element from being picked, moved or deleted, but lets it be unlocked", () => {
+  it("keeps a locked element from being moved, deleted or picked with the others, but lets it be unlocked", () => {
     const e = editor();
     e.click(e.$("#a"));
     e.fromParent({ type: "slop:edit-lock", locked: true });
@@ -800,8 +800,15 @@ describe("groups, locks and layers", () => {
     e.fromParent({ type: "slop:edit-geometry", x: 500 });
     expect(e.$("#a").style.translate).toBe("");
     e.key("Escape");
-    e.click(e.$("#a"));
     expect(e.ids()).toEqual([]);
+    // A click brings it back, to unlock it: with its frame, and nothing to drag it by.
+    e.click(e.$("#a"));
+    expect(e.ids()).toEqual(["a"]);
+    expect(e.$("[data-slop-ui]").hasAttribute("data-locked")).toBe(true);
+    e.down(e.$("#a"), 10, 10);
+    e.move(e.$("#a"), 90, 60);
+    e.up(e.$("#a"), 90, 60);
+    expect(e.$("#a").style.translate).toBe("");
     e.fromParent({ type: "slop:edit-select-all" });
     expect(e.ids()).toEqual(["b", "c", "d"]);
     e.fromParent({ type: "slop:edit-lock", locked: false, path: [0] });

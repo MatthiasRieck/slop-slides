@@ -59,8 +59,9 @@
    holds) as one; a double-click goes into it, to select what it holds, until something outside it
    is picked. ⇧⌘G (or { type: "slop:edit-ungroup" }) takes it apart, everything staying where it
    shows. { type: "slop:edit-lock", locked, path } locks (`data-lock`) or unlocks the selection, or
-   the element at `path`: a locked element (and what it holds) cannot be picked on the slide, by
-   the marquee, ⌘A or Tab, and when selected (from the Layers panel) shows its frame without
+   the element at `path`: a locked element (and what it holds) is out of the way on the slide: a
+   press picks what is under it, and the marquee, ⌘A and Tab pass it by. A click where nothing
+   else is to pick selects it (as the Layers panel does), and it then shows its frame without
    handles and is not moved, aligned or deleted. The editor reports the slide's layers, the
    top-most first, whenever they change: { type: "slop:edit-layers", slide, layers: [{ path, name,
    group, locked, held, selected, depth }] }, `held` when something it is in is locked, `depth` how

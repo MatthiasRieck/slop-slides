@@ -533,7 +533,6 @@
       var state = { el: el, size: size, scale: scale, offset: offset, zoom: zoom() };
       holdContents(state);
       resizeTo(state, sx, sy, shift);
-      flushFigures();
     } else {
       scaleTo(el, sx, sy);
       moveTo(el, offset.x + shift.x, offset.y + shift.y);

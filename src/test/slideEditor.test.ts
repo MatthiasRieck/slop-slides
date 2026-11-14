@@ -4995,24 +4995,30 @@ describe("slide editor: shapes, styling and media", () => {
       expect(e.commits().at(-1)!.markup).toContain("data-shape=");
     });
 
-    it("reads a figure's paint once per resize, and redraws it once per frame and at the end", async () => {
+    // A figure drawn in the frame's callbacks is set right before the webview paints, which has
+    // no image for it yet: the figure would show blank, in every frame of a resize.
+    it("reads a figure's paint once per resize, and redraws it with every step, waiting for no frame", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "bubble", style: SHAPE_STYLE });
       dragOut(e, [100, 100], [400, 300]);
       const shape = added(e)[0]!;
       const handle = e.$('[data-slop-ui] [data-dir="1 1"]');
       e.down(handle, 400, 300);
+      const frames = vi.spyOn(e.window, "requestAnimationFrame");
       e.move(handle, 410, 310, { metaKey: true });
-      await e.frame();
       expect(drawn(shape)).toContain("viewBox='0 0 310 210'");
       const decode = vi.spyOn(e.window, "decodeURIComponent");
-      for (let i = 2; i <= 12; i++) e.move(handle, 400 + i * 10, 300 + i * 10, { metaKey: true });
-      // The box follows every move; its image is neither read nor drawn for them.
+      for (let i = 2; i <= 12; i++) {
+        e.move(handle, 400 + i * 10, 300 + i * 10, { metaKey: true });
+        // The image is drawn anew with the box, and not read for it.
+        expect(drawn(shape)).toContain(`viewBox='0 0 ${300 + i * 10} ${200 + i * 10}'`);
+      }
       expect([shape.style.width, shape.style.height]).toEqual(["420px", "320px"]);
       expect(decode).not.toHaveBeenCalled();
-      expect(drawn(shape)).toContain("viewBox='0 0 310 210'");
-      await e.frame();
-      expect(drawn(shape)).toContain("viewBox='0 0 420 320'");
+      // Nothing the frames run draws a figure: the handles, the geometry and the checks only.
+      const drawnAt = drawn(shape);
+      for (const [callback] of frames.mock.calls) callback(0);
+      expect(drawn(shape)).toBe(drawnAt);
       e.move(handle, 540, 440, { metaKey: true });
       e.up(handle, 540, 440);
       // Exactly as it ends up, in what is saved.
@@ -5022,7 +5028,7 @@ describe("slide editor: shapes, styling and media", () => {
       expect(pads(shape)).toEqual([20, 22, 88, 22]);
     });
 
-    it("redraws a figure in a group once per frame as the group is resized", async () => {
+    it("redraws a figure in a group with every step as the group is resized", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "diamond", style: SHAPE_STYLE });
       dragOut(e, [100, 100], [300, 300]);
@@ -5042,14 +5048,13 @@ describe("slide editor: shapes, styling and media", () => {
       const handle = e.$('[data-slop-ui] [data-dir="1 0"]');
       e.down(handle, 500, 200);
       e.move(handle, 600, 200, { metaKey: true });
-      await e.frame();
-      const before = drawn(diamond!);
+      expect(drawn(diamond!)).toContain("viewBox='0 0 250 200'");
       const decode = vi.spyOn(e.window, "decodeURIComponent");
       for (let i = 2; i <= 4; i++) e.move(handle, 500 + i * 100, 200, { metaKey: true });
       expect(group.style.width).toBe("800px");
       expect(diamond!.style.width).toBe("400px");
       expect(decode).not.toHaveBeenCalled();
-      expect(drawn(diamond!)).toBe(before);
+      expect(drawn(diamond!)).toContain("viewBox='0 0 400 200'");
       e.up(handle, 900, 200);
       expect(drawn(diamond!)).toContain("viewBox='0 0 400 200'");
       expect(e.commits().at(-1)!.markup).toContain("0 0 400 200");

@@ -199,10 +199,21 @@ describe("clear formatting", () => {
 describe("locked elements", () => {
   const LOCKED = DECK.replace('id="a" data-added="shape"', 'id="a" data-added="shape" data-lock=""');
 
+  it("selects a locked element on a click, so it can be unlocked", () => {
+    const e = editor(LOCKED);
+    e.click(e.$("#a"));
+    expect(e.selected()).toEqual([e.$("#a")]);
+    // Something in a locked element is as locked: the click selects what holds the lock.
+    const held = e.doc.createElement("p");
+    held.textContent = "Held";
+    e.$("#a").append(held);
+    e.click(e.$("#b"));
+    e.click(held);
+    expect(e.selected()).toEqual([e.$("#a")]);
+  });
+
   it("selects a locked element on a right-click, so the menu can unlock it", () => {
     const e = editor(LOCKED);
-    e.down(e.$("#a"));
-    expect(e.selected()).toEqual([]);
     e.rightClick(e.$("#a"));
     expect(e.selected()).toEqual([e.$("#a")]);
     expect(e.menu()).toMatchObject({ locked: true, editable: false });

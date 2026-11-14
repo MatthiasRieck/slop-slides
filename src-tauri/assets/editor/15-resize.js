@@ -250,7 +250,7 @@
     if (state.vectors && w && h) spreadVectors(state.vectors, nw / w, nh / h);
     if (state.members && w && h) spreadMembers(state.members, nw / w, nh / h);
     if (first) sizing.figure = resizedPaint(el);
-    if (sizing.figure) scheduleFigure(el, sizing.figure);
+    if (sizing.figure) fitFigureWith(el, sizing.figure);
     // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
     moveTo(el, state.offset.x + shift.x - (nw - w) / 2, state.offset.y + shift.y - (nh - h) / 2);
   }

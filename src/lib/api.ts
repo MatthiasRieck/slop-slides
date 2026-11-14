@@ -166,6 +166,13 @@ export interface SlideTiming {
 }
 
 /** What a change from the slide rail did. The deck's history takes it back. */
+/** What giving every slide a background did (see `setBackgroundOfAll`). */
+export interface BackgroundEdit {
+  deck: Deck;
+  /** How many slides it changed. */
+  changed: number;
+}
+
 export interface RailEdit {
   deck: Deck;
   /** Ids of the slides it added. */
@@ -696,6 +703,17 @@ export const api = {
    */
   updateSlide: (id: string, slide: string, markup: string, base: string, group?: string) =>
     invoke<Deck>("update_slide", { id, slide, markup, base, group }),
+  /**
+   * Gives every slide that is not locked `color` as its own background (null: the deck's own
+   * again), as one step to undo and one write of the deck; says how many slides it changed.
+   */
+  setBackgroundOfAll: (id: string, color: string | null) =>
+    invoke<BackgroundEdit>("set_background_of_all", { id, color }),
+  /**
+   * The slide picture at `url` (see `pictureUrl`) is no longer shown where it was asked for:
+   * unless it is shown elsewhere too, the backend does not make it when its turn comes.
+   */
+  forgetThumbnail: (url: string) => invoke<void>("forget_thumbnail", { url }),
   /** One slide's markup as it is in the file, with the hash `updateSlide` takes as its base. */
   slideSource: (id: string, slide: string) => invoke<SlideSource>("slide_source", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>

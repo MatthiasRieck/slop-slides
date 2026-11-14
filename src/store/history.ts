@@ -63,14 +63,13 @@ function moveInHistory(
       if (app.getState().deck?.id !== deck.id) return undefined;
       const before = (id: string | null) => deck.slides.find((s) => s.id === id)?.hash;
       const changed = done.deck.slides.filter((slide) => before(slide.id) !== slide.hash).map((s) => s.id);
+      // The stage follows by itself: the slide it shows changed under its editor is patched in
+      // place, and new styles for the deck load it again (see components/stage/stageDocument.ts).
       app.getState().setDeck(done.deck);
       adoptReview(app, done.deck);
       historyRun++;
       const { selected } = app.getState();
-      // The slide editor starts again only when what it shows changed under it: the slide on the
-      // stage, or the deck's styles. A change to another slide leaves it running.
-      const reloads = done.deck.shellHash !== deck.shellHash || (selected !== null && changed.includes(selected));
-      app.setState((s) => ({ history: done.status, editReload: reloads ? s.editReload + 1 : s.editReload }));
+      app.setState({ history: done.status });
       if (changed[0] && !(selected && changed.includes(selected))) app.getState().select(changed[0]);
       return done.entry;
     } catch (error) {

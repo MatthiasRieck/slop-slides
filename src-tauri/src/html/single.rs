@@ -17,7 +17,9 @@
 use std::borrow::Cow;
 
 use super::scan::{parse_tag, tags};
-use super::spans::{find_slides, SlideSpan};
+#[cfg(test)]
+use super::spans::find_slides;
+use super::spans::SlideSpan;
 
 /// What stands in for the slides a preview does not show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,19 +107,48 @@ fn id_holders(html: &str, slide: &SlideSpan, out: &mut String) {
     }
 }
 
-/// `html` with only the slide `reference` names (an id, or a position as `#3`) left whole: the
-/// other slides are stand-ins, as `others` says. `html` itself when it has no slides.
+/// [`single_slide_of`] of a page given as its source alone, for tests.
+#[cfg(test)]
 pub fn single_slide<'a>(html: &'a str, reference: &str, others: Others) -> Cow<'a, str> {
-    let slides = find_slides(html);
-    let Some(kept) = index_for(&slides, reference) else {
+    single_slide_of(html, &find_slides(html), reference, others)
+}
+
+/// `html` with only the slide `reference` names (an id, or a position as `#3`) left whole: the
+/// other slides are stand-ins, as `others` says. `html` itself when it has no slides. `slides`
+/// are its slides (see [`super::find_slides`]), known already: the previews of one deck share them.
+pub fn single_slide_of<'a>(
+    html: &'a str,
+    slides: &[SlideSpan],
+    reference: &str,
+    others: Others,
+) -> Cow<'a, str> {
+    slides_of(html, slides, &[reference], others)
+}
+
+/// [`single_slide_of`] keeping every slide `references` name whole: one page in which each of
+/// them shows as it does in a preview of its own, for the thumbnails made in one go (see
+/// `thumbnails.rs`).
+pub fn slides_of<'a>(
+    html: &'a str,
+    slides: &[SlideSpan],
+    references: &[&str],
+    others: Others,
+) -> Cow<'a, str> {
+    let mut kept: Vec<usize> = references
+        .iter()
+        .filter_map(|reference| index_for(slides, reference))
+        .collect();
+    if kept.is_empty() {
         return Cow::Borrowed(html);
-    };
-    let mut out =
-        String::with_capacity(html.len() - slides_len(&slides) + slides[kept].range.len());
+    }
+    kept.sort_unstable();
+    kept.dedup();
+    let kept_len: usize = kept.iter().map(|&k| slides[k].range.len()).sum();
+    let mut out = String::with_capacity(html.len() - slides_len(slides) + kept_len);
     let mut at = 0;
     for (index, slide) in slides.iter().enumerate() {
         out.push_str(&html[at..slide.range.start]);
-        if index == kept {
+        if kept.binary_search(&index).is_ok() {
             out.push_str(&html[slide.range.clone()]);
         } else {
             out.push_str(&stub_tag(html, slide));
@@ -203,6 +234,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn keeps_several_slides_whole_each_as_in_a_preview_of_its_own() {
+        let whole = find_slides(PICTURES);
+        let several = slides_of(PICTURES, &whole, &["d", "#1", "nope", "d"], Others::Empty);
+        let slides = find_slides(&several);
+        assert_eq!(shell(&several), shell(PICTURES), "same shell");
+        assert_eq!(slides.len(), whole.len());
+        // "nope" names no slide, so it falls back on the first, as a preview of it does.
+        for (index, slide) in slides.iter().enumerate() {
+            match index {
+                0 | 3 => assert_eq!(
+                    &several[slide.range.clone()],
+                    &PICTURES[whole[index].range.clone()]
+                ),
+                _ => assert_eq!(body(&several, slide), "", "slide {index} is empty"),
+            }
+        }
+        for reference in ["a", "b", "#3", "d"] {
+            assert_eq!(
+                slides_of(PICTURES, &whole, &[reference], Others::Empty),
+                single_slide(PICTURES, reference),
+                "one slide is the preview of it"
+            );
+        }
+        assert_eq!(
+            slides_of("<p>no slides</p>", &[], &["a"], Others::Empty),
+            "<p>no slides</p>"
+        );
     }
 
     #[test]

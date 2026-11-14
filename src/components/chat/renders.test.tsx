@@ -41,6 +41,15 @@ vi.mock("./Composer", async (importOriginal) => {
   };
   return { ...actual, Composer };
 });
+// Under every message whose actions show: what renders inside a message, whatever made it.
+vi.mock("./CopyButton", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./CopyButton")>();
+  const CopyButton: typeof actual.CopyButton = (props) => {
+    count("copy");
+    return actual.CopyButton(props);
+  };
+  return { CopyButton };
+});
 // The messages render when the list hands them something new, which is what these count.
 vi.mock("./AssistantBlock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./AssistantBlock")>();
@@ -65,7 +74,7 @@ import { forgetDrafts } from "../../store/composer";
 import { DECK_HTML, deckFor } from "../../test/fixtures";
 import { invoke } from "../../test/tauri";
 import { ChatPanel } from "../ChatPanel";
-import { MessageList } from "./MessageList";
+import { MessageElements, MessageList } from "./MessageList";
 
 const said = (id: string, text: string, slide: string | null = null): ChatMessage => ({
   id,
@@ -209,7 +218,48 @@ describe("a reply coming in", () => {
     expect(parsed).toEqual([]);
     // The header and the composer show that the agent is done; of the messages only the reply changed.
     const { header: _header, composer: _composer, ...messages } = renders;
-    expect(messages).toEqual({ now: 1 });
+    // The reply's own Copy is new, now that it is done.
+    expect(messages).toEqual({ now: 1, copy: 1 });
+  });
+});
+
+describe("the elements of the conversation", () => {
+  it("hands a message over as the very element it was, while it and its place stay the same", () => {
+    const elements = new MessageElements();
+    const message = said("u", "Hi");
+    const first = elements.place(message, { newDay: false, latest: true });
+    expect(elements.place(message, { newDay: false, latest: true })).toBe(first);
+    // Its place changed (another message is the newest now), or it is another message: made anew.
+    const older = elements.place(message, { newDay: false, latest: false });
+    expect(older).not.toBe(first);
+    expect(elements.place({ ...message }, { newDay: false, latest: false })).not.toBe(older);
+    const answer = reply("a", [text("Hello")]);
+    const last = elements.place(answer, { newDay: false, retry: false, asked: "u" });
+    expect(elements.place(answer, { newDay: false, retry: false, asked: "u" })).toBe(last);
+    expect(elements.place(answer, { newDay: false, retry: false, asked: undefined })).not.toBe(last);
+    expect(elements.place(answer, { newDay: true, retry: false, asked: undefined })).not.toBe(last);
+  });
+});
+
+describe("a turn starting and ending", () => {
+  it("renders nothing inside the messages before it, however many there are", () => {
+    useApp.setState({ messages: transcript(40) });
+    render(<ChatPanel />);
+    startCounting();
+    act(() => useApp.setState({ running: true }));
+    act(() => useApp.setState({ running: false }));
+    // Only Edit under each of the user's messages follows the turn, and nothing else of the message.
+    expect(renders.copy).toBeUndefined();
+    expect(screen.getAllByRole("button", { name: "Edit message" })).toHaveLength(40);
+  });
+
+  it("still takes Edit away from every message of the user's while the turn runs", () => {
+    useApp.setState({ messages: transcript(5) });
+    render(<ChatPanel />);
+    act(() => useApp.setState({ running: true }));
+    expect(screen.queryAllByRole("button", { name: "Edit message" })).toHaveLength(0);
+    act(() => useApp.setState({ running: false }));
+    expect(screen.getAllByRole("button", { name: "Edit message" })).toHaveLength(5);
   });
 });
 

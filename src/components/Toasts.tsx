@@ -68,11 +68,13 @@ function useToastPlace(any: boolean): CSSProperties {
     const measure = () => {
       const rect = area.getBoundingClientRect();
       if (rect.width === 0) return setPlace(EVERYWHERE);
-      setPlace({
-        left: Math.round(rect.left + rect.width / 2),
-        bottom: Math.round(window.innerHeight - rect.bottom + AREA_BOTTOM),
-        maxWidth: Math.max(0, rect.width - 32),
-      });
+      const left = Math.round(rect.left + rect.width / 2);
+      const bottom = Math.round(window.innerHeight - rect.bottom + AREA_BOTTOM);
+      const maxWidth = Math.max(0, Math.round(rect.width) - 32);
+      // The same place again (the area grew and shrank, a report of the same size) renders nothing.
+      setPlace((was) =>
+        was.left === left && was.bottom === bottom && was.maxWidth === maxWidth ? was : { left, bottom, maxWidth },
+      );
     };
     measure();
     // The area changes its size with the window and with the panels beside it.

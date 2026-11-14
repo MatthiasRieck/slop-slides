@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { useContentSize } from "../hooks/useContentSize";
+import { type BoxSize, useContentFit } from "../hooks/useContentSize";
 import { useMenuKeys } from "../hooks/useMenuKeys";
 import { api, type DeckVersions, type HistoryEntry, type OpenedFile, type WorkspaceInfo } from "../lib/api";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
@@ -68,9 +68,9 @@ export function TopBar() {
   const hasDeck = useApp((s) => s.deck !== null);
   const deckTitle = useApp((s) => s.deck?.title ?? null);
   const openedFile = useApp((s) => s.openedFile);
-  const sidebarOpen = useApp((s) => s.sidebarOpen);
   const header = useRef<HTMLElement>(null);
-  const room = topBarRoom(useContentSize(header)?.width ?? null);
+  // Renders as the bar crosses a width where its room changes, not at every pixel of a drag.
+  const room = useContentFit(header, roomFor);
   if (!workspace) return null;
 
   return (
@@ -108,12 +108,24 @@ export function TopBar() {
             <DeckActions exportLabel={room.labels} presentLabel={room.presentLabel} />
           </div>
         )}
-        {/* Open, the sidebar carries these: the app's settings, the shortcuts, and its toggle. */}
-        {!sidebarOpen && <ShellButtons />}
-        {!sidebarOpen && <SidebarToggle />}
+        <SidebarClosedButtons />
       </div>
       <NewDeckDialog />
     </header>
+  );
+}
+
+const roomFor = (size: BoxSize | null) => topBarRoom(size?.width ?? null);
+
+/** While the sidebar is closed, what it carries when open: the app's settings, the shortcuts, and its toggle. */
+function SidebarClosedButtons() {
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
+  if (sidebarOpen) return null;
+  return (
+    <>
+      <ShellButtons />
+      <SidebarToggle />
+    </>
   );
 }
 

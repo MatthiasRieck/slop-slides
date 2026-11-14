@@ -15,7 +15,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, type FileKind, type FileSearch, type WorkspaceEntry } from "../lib/api";
 import {
@@ -198,9 +198,6 @@ interface OpenMenu {
 
 function WorkspaceTree({ root, name }: { root: string; name: string }) {
   const openedPath = useApp((s) => s.openedFile?.path ?? null);
-  const change = useApp((s) => s.workspaceChange);
-  /** The tree is on show: the sidebar is open on its tab. */
-  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "files");
   const { folders, errors, load, reload, forget } = useDirectoryEntries(root);
   const [expanded, setExpanded] = useState(() => loadExpanded(root));
   const [refreshing, setRefreshing] = useState(false);
@@ -232,32 +229,10 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
     setExpanded((prev) => (open.every((f) => prev.has(f)) ? prev : new Set([...prev, ...open])));
   }, [openedPath, folders]);
 
-  // Follow the watcher. Its reports come in bursts while the agent works: what changed adds up,
-  // and once the reports pause the folders on show are listed again, each once. A collapsed
-  // folder is only forgotten, to be listed when it opens; and nothing is listed while the tree
-  // is out of sight, which catches up as it shows again.
   const loadedRef = useRef(folders);
   loadedRef.current = folders;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
-  const changed = useRef(new Set<string>());
-  /** The report there was before the tree was: it has just listed what it shows. */
-  const reported = useRef(change);
-  useEffect(() => {
-    if (change && change !== reported.current) {
-      reported.current = change;
-      for (const path of change.paths) changed.current.add(path);
-    }
-    if (!showing || changed.current.size === 0) return;
-    const timer = setTimeout(() => {
-      const stale = foldersToReload([...changed.current], loadedRef.current.keys());
-      changed.current.clear();
-      const shown = (folder: string) => folder === "" || expandedRef.current.has(folder);
-      forget(stale.filter((folder) => !shown(folder)));
-      void reload(stale.filter(shown));
-    }, TREE_RELOAD_DELAY);
-    return () => clearTimeout(timer);
-  }, [change, showing, reload, forget]);
 
   const treeRows = useMemo(() => visibleRows(folders, expanded), [folders, expanded]);
   // With a filter, what it found anywhere in the folder shows instead of the tree, as a flat list.
@@ -362,6 +337,7 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
   const found = search.results?.found.length ?? 0;
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <FollowWatcher loaded={loadedRef} expanded={expandedRef} reload={reload} forget={forget} />
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-2">
         <span title={root} className="min-w-0 flex-1 truncate px-1 text-xs font-medium">
           {name}
@@ -504,6 +480,44 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
       )}
     </div>
   );
+}
+
+/**
+ * Follows the watcher for the tree. Its reports come in bursts while the agent works: what
+ * changed adds up, and once the reports pause the folders on show are listed again, each once. A
+ * collapsed folder is only forgotten, to be listed when it opens; and nothing is listed while the
+ * tree is out of sight, which catches up as it shows again. It shows nothing, and renders on its
+ * own as reports come and the tree shows or hides, not the tree with its rows.
+ */
+function FollowWatcher(props: {
+  loaded: RefObject<ReadonlyMap<string, unknown>>;
+  expanded: RefObject<ReadonlySet<string>>;
+  reload: (paths: readonly string[]) => Promise<unknown>;
+  forget: (paths: readonly string[]) => void;
+}) {
+  const { loaded, expanded, reload, forget } = props;
+  const change = useApp((s) => s.workspaceChange);
+  /** The tree is on show: the sidebar is open on its tab. */
+  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "files");
+  const changed = useRef(new Set<string>());
+  /** The report there was before the tree was: it has just listed what it shows. */
+  const reported = useRef(change);
+  useEffect(() => {
+    if (change && change !== reported.current) {
+      reported.current = change;
+      for (const path of change.paths) changed.current.add(path);
+    }
+    if (!showing || changed.current.size === 0) return;
+    const timer = setTimeout(() => {
+      const stale = foldersToReload([...changed.current], loaded.current.keys());
+      changed.current.clear();
+      const shown = (folder: string) => folder === "" || expanded.current.has(folder);
+      forget(stale.filter((folder) => !shown(folder)));
+      void reload(stale.filter(shown));
+    }, TREE_RELOAD_DELAY);
+    return () => clearTimeout(timer);
+  }, [change, showing, reload, forget, loaded, expanded]);
+  return null;
 }
 
 function Loading({ text }: { text: string }) {

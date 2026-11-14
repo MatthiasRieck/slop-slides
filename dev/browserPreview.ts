@@ -48,8 +48,16 @@ export function stageScripts(query: URLSearchParams): StageScript[] {
 /** First path segment of the app's scripts, as in src-tauri/src/protocol/scripts.rs. */
 const APP_PREFIX = ".app";
 
-/** What a script is, as a few hex digits: the version in its address, which is kept for good. */
-const scriptVersion = (script: StageScript) => createHash("sha1").update(script.source).digest("hex").slice(0, 16);
+/**
+ * What the scripts are, as a few hex digits: the version in their addresses, which is kept for
+ * good. One for all of them, as `version` in src-tauri/src/protocol/scripts.rs has it: the
+ * pasteboard finds the editor beside its own address, to run it on a page that has none.
+ */
+const scriptVersion = (_script: StageScript) => {
+  const hash = createHash("sha1");
+  for (const script of stageScripts(new URLSearchParams("edit"))) hash.update(script.source);
+  return hash.digest("hex").slice(0, 16);
+};
 
 /**
  * Like `tags` in src-tauri/src/protocol/scripts.rs: the tags that load `scripts`, each from an
@@ -154,7 +162,8 @@ export function singleSlide(html: string, reference: string, ids = false): strin
  */
 export function pageFor(html: string, query: URLSearchParams): string {
   const slide = query.has("embed") ? query.get("slide") : null;
-  const page = slide === null ? html : singleSlide(html, slide, query.has("edit"));
+  // The stage's pages may get the slide editor later, without loading again (see protocol.rs).
+  const page = slide === null ? html : singleSlide(html, slide, query.has("edit") || query.has("pan"));
   const added = stageScripts(query);
   return added.length > 0 ? beforeBodyEnd(page, scriptTags(added)) : page;
 }

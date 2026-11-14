@@ -75,6 +75,12 @@ objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "objc2
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 xcap = "0.9"
 
+# A deck's history names each version by its SHA-256 (see src/history.rs), one hash of the whole
+# deck per save: on Apple silicon with the CPU's SHA-2 instructions, which sha2 only uses with
+# `asm` there (on x86 it finds SHA-NI at run time by itself).
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+
 [target.'cfg(target_arch = "aarch64")'.dependencies]
 rav1e = { version = "0.8", default-features = false, features = ["threading", "asm"] }
 

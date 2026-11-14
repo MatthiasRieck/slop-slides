@@ -133,23 +133,31 @@ describe("editing slides on the stage", () => {
     expect(lastError(useApp.getState())).toBeNull();
   });
 
-  it("gives every slide that is not locked a background, as one step to undo", async () => {
+  it("gives every slide that is not locked a background in one backend call, as one step to undo", async () => {
     const useApp = await freshStore();
-    backend({
-      slide_source: ({ slide }) => ({ markup: `<section class="slide" id="${String(slide)}">x</section>`, hash: "h" }),
-      update_slide: () => deckFor(DECK_HTML, "2"),
-    });
     const deck = deckFor(DECK_HTML);
-    deck.slides = deck.slides.map((slide, i) => (i === 1 ? { ...slide, locked: true } : slide));
+    const next = deckFor(DECK_HTML, "2");
+    next.slides = next.slides.map((slide, i) => (i === 1 ? deck.slides[1]! : { ...slide, hash: `${slide.hash}-bg` }));
+    backend({ set_background_of_all: () => ({ deck: next, changed: next.slides.length - 1 }) });
     useApp.setState({ deck, selected: "intro", editedSlides: [] });
     const changed = await useApp.getState().applyBackgroundToAll("#ff0000");
-    const saves = calls("update_slide") as { slide: string; markup: string; group: string }[];
-    expect(saves.map((save) => save.slide)).toEqual(deck.slides.filter((s) => !s.locked).map((s) => s.id));
-    expect(changed).toBe(saves.length);
-    expect(saves[0]!.markup).toContain('style="background-color: #ff0000; background-image: none"');
-    // One group for all of them: the history keeps them as one step.
-    expect(new Set(saves.map((save) => save.group)).size).toBe(1);
-    expect(saves[0]!.group).toMatch(/^background:/);
+    expect(calls("set_background_of_all")).toEqual([{ id: deck.id, color: "#ff0000" }]);
+    expect(calls("slide_source")).toEqual([]);
+    expect(calls("update_slide")).toEqual([]);
+    expect(changed).toBe(next.slides.length - 1);
+    expect(useApp.getState().deck?.slides.map((s) => s.hash)).toEqual(next.slides.map((s) => s.hash));
+    // The slides it changed count as edited; the one it left alone does not.
+    expect(useApp.getState().editedSlides).toEqual(next.slides.filter((_, i) => i !== 1).map((s) => s.id));
+  });
+
+  it("leaves the deck alone when no slide changes", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    backend({ set_background_of_all: () => ({ deck: deckFor(DECK_HTML, "2"), changed: 0 }) });
+    useApp.setState({ deck, selected: "intro", editedSlides: [] });
+    expect(await useApp.getState().applyBackgroundToAll(null)).toBe(0);
+    expect(calls("set_background_of_all")).toEqual([{ id: deck.id, color: null }]);
+    expect(useApp.getState().deck).toBe(deck);
   });
 
   it("changes a slide's markup as it is in the file, saving it against the hash it was read at", async () => {

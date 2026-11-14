@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import { zoomBox } from "../../lib/ink";
 import { isMod, keepsKey } from "../../lib/keys";
 import { perFrame } from "../../lib/perFrame";
 import { editingSlide, useApp } from "../../store";
@@ -9,11 +8,6 @@ import type { FrameMessages } from "./messages";
 import { type PasteboardView, useStageView } from "./stageView";
 
 export type { PasteboardView };
-
-/** Puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
-export function inkBox(view: PasteboardView | null, scale: number) {
-  return view && scale ? zoomBox(view.x * scale, view.y * scale, view.k) : zoomBox(0, 0, 1);
-}
 
 /** How much one press of a zoom button or key zooms; the pasteboard's own keys step the same. */
 export const ZOOM_STEP = 1.25;
@@ -126,12 +120,15 @@ export function usePasteboard(messages: FrameMessages) {
     zoomBy: useCallback((factor: number) => send({ zoomBy: factor }), [send]),
     /** Zooms to `k` times the size the slide fits the stage at, around the middle of the view. */
     zoomTo: useCallback((k: number) => send({ zoomTo: k }), [send]),
-    onFrameReady: useCallback((loaded: HTMLIFrameElement) => {
+    /** The preview has loaded, or (`warmed`) one loaded ahead is shown, panned however it was when last shown. */
+    onFrameReady: useCallback((loaded: HTMLIFrameElement, warmed = false) => {
       frame.current = loaded;
       const { view, fitScale } = useStageView.getState();
       postFit(loaded, fitScale);
       if (view && view.slide === useApp.getState().selected) {
         loaded.contentWindow?.postMessage({ type: "slop:camera", x: view.x, y: view.y, k: view.k }, "*");
+      } else if (warmed) {
+        loaded.contentWindow?.postMessage({ type: "slop:camera", home: true }, "*");
       }
     }, []),
   };

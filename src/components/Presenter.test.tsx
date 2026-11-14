@@ -2479,6 +2479,19 @@ describe("PresenterWindow", () => {
     expect(screen.getByText("The end of the show.")).toBeTruthy();
   });
 
+  it("has the slide after the next one ready out of sight, to become Next as it is", async () => {
+    const { deck, send } = await opened();
+    const [, , waiting] = screen.getAllByTestId("fitted-slide");
+    expect(waiting?.closest("[aria-hidden=true]")).not.toBeNull();
+    expect(waiting?.closest("[inert]")).not.toBeNull();
+    send({ slide: deck.slides[1]?.id });
+    const [, next] = screen.getAllByTestId("fitted-slide");
+    // The very element that waited is Next, in sight and pressable.
+    expect(next).toBe(waiting);
+    expect(next?.closest("[aria-hidden=true]")).toBeNull();
+    expect(next?.querySelector("button")?.getAttribute("aria-label")).toBe("Go to the next slide");
+  });
+
   it("moves the show on when the next slide's picture is pressed", async () => {
     await opened();
     emit.mockClear();
@@ -2625,5 +2638,63 @@ describe("PresenterWindow", () => {
     fireEvent.keyDown(window, { key: "?", shiftKey: true });
     expect(screen.getByRole("dialog", { name: "Keys while presenting" })).toBeTruthy();
     expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("the presenter view's next slide", () => {
+  const NoLayout = globalThis.ResizeObserver;
+  /** Measures every picture 300 px wide, as a browser does after layout: only then does a picture load. */
+  class MeasuringObserver {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      this.callback([{ target, contentRect: { width: 300 } } as unknown as ResizeObserverEntry], this as never);
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  beforeEach(() => {
+    globalThis.ResizeObserver = MeasuringObserver as unknown as typeof ResizeObserver;
+    const deck = deckFor(DECK_HTML);
+    const slides = Array.from({ length: 5 }, (_, i) => ({ ...deck.slides[0]!, id: `s${i}`, hash: `h${i}` }));
+    useApp.setState({ deck: { ...deck, slides }, selected: "s0" });
+  });
+  afterEach(() => {
+    globalThis.ResizeObserver = NoLayout;
+  });
+
+  /** The page of slide `id`'s picture in the presenter view. */
+  const picture = (id: string) => screen.queryByTitle(id) as HTMLIFrameElement | null;
+  const outOfSight = (frame: HTMLIFrameElement) => frame.closest("[aria-hidden=true]") !== null;
+
+  it("is loaded before the show moves on to it, and shows at once when it does", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    fromFrame({ type: "slop:slide", id: "s0", index: 0 });
+    const next = picture("s1")!;
+    const after = picture("s2")!;
+    expect(outOfSight(next)).toBe(false);
+    // The one after it loads meanwhile, out of sight and out of reach.
+    expect(outOfSight(after)).toBe(true);
+    expect(after.closest("[inert]")).not.toBeNull();
+    fireEvent.load(after);
+
+    fromFrame({ type: "slop:slide", id: "s1", index: 1 });
+    // The page that waited is the one shown now, as it was: nothing loads anew for it.
+    expect(picture("s2")).toBe(after);
+    expect(outOfSight(after)).toBe(false);
+    expect(picture("s1")).toBeNull();
+    expect(outOfSight(picture("s3")!)).toBe(true);
+    // Back again: the picture shown stays as it is and waits, the one before it comes back.
+    fromFrame({ type: "slop:slide", id: "s0", index: 0 });
+    expect(picture("s2")).toBe(after);
+    expect(outOfSight(after)).toBe(true);
+  });
+
+  it("has nothing waiting at the last slides", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    fromFrame({ type: "slop:slide", id: "s3", index: 3 });
+    expect(outOfSight(picture("s4")!)).toBe(false);
+    expect(screen.queryAllByTitle(/^s\d$/)).toHaveLength(1);
   });
 });

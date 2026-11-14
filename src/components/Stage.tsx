@@ -1,6 +1,5 @@
 import { Lock, LockOpen, MessageSquare, Plus, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { useStageCommands } from "../commands/stage";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
@@ -19,7 +18,7 @@ import { Button } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
-import { FindBar, useDeckSearch, useFindShortcut } from "./FindReplace";
+import { FindBar, useDeckSearch, useFindShortcut, useSearchHighlight } from "./FindReplace";
 import { NotesPane } from "./NotesPanel";
 import { Popover } from "./Popover";
 import { useAnnotations } from "./PresenterTools";
@@ -119,10 +118,7 @@ export function Stage() {
     if (editing) postToEditor(toolMessage(editTool, editStyles));
   }, [editing, editTool, editStyles, postToEditor]);
   // The preview marks what the toolbar's search finds on this slide.
-  const highlight = useApp(useShallow(searchHighlight));
-  useEffect(() => {
-    postToEditor({ type: "slop:search", ...highlight });
-  }, [highlight, postToEditor]);
+  useSearchHighlight(postToEditor);
 
   // What the edit tools do, the same functions for as long as the stage is there.
   const editTools = useMemo(
@@ -222,12 +218,13 @@ export function Stage() {
           size={canvas}
           editing={editing}
           inkRef={inkRef}
-          onFrameReady={(frame) => {
-            pasteboard.onFrameReady(frame);
-            editor.onFrameReady(frame);
+          onFrameReady={(frame, warmed) => {
+            pasteboard.onFrameReady(frame, warmed);
+            editor.onFrameReady(frame, warmed);
             commentPins.onFrameReady();
+            // One loaded ahead may still mark what an earlier search found.
             const search = searchHighlight(useApp.getState());
-            if (search.query) postToEditor({ type: "slop:search", ...search });
+            if (search.query || warmed) postToEditor({ type: "slop:search", ...search });
           }}
           ink={
             <>

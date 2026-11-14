@@ -166,6 +166,14 @@ export function showsPicture(left: number, width: number, picture: number, from:
 }
 
 /**
+ * Whether a stretch of the track from `left`, `width` wide, is in sight between `from` and `to`
+ * (all in pixels along the track).
+ */
+export function inSight(left: number, width: number, from: number, to: number): boolean {
+  return left < to && left + width > from;
+}
+
+/**
  * How far a track is scrolled, in steps of `step` pixels: what is in sight is worked out anew
  * only from one step to the next, not with every pixel scrolled.
  */

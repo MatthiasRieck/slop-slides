@@ -14,6 +14,7 @@
 //! - [`single`]: the deck cut down to one slide, for a preview;
 //! - [`slide_attrs`]: a slide's own attributes (hidden, locked, timing);
 //! - [`batch`]: one change to many slides at once;
+//! - [`background`]: every slide's own background, in one change;
 //! - [`locked`]: putting locked slides back after the agent changed them;
 //! - [`asides`]: a slide's narration and speaker notes;
 //! - [`content`]: what the app shows of a slide, read in one pass;
@@ -26,6 +27,7 @@
 mod asides;
 mod assets;
 mod attrs;
+mod background;
 mod batch;
 mod content;
 mod edit;
@@ -49,6 +51,7 @@ pub use asides::{
 };
 pub use assets::{asset_refs, inline_assets};
 pub use attrs::*;
+pub use background::set_background_of_all;
 pub use batch::edit_slides;
 pub use content::{slide_content, SlideContent};
 pub(crate) use edit::{end_of_deck, indent_before, remove, with_indent};
@@ -69,13 +72,13 @@ pub use runtime::{ensure_runtime, without_runtime};
 pub(crate) use runtime::{CSS_START, JS_START};
 pub(crate) use scan::{find_ci, has_class, parse_tag, Attr, Tag, VOID_ELEMENTS};
 pub use sections::{add_section, delete_section, rename_section};
-pub use single::{single_slide, Others};
+pub use single::{single_slide_of, slides_of, Others};
 pub use slide_attrs::{is_locked, parse_duration, parse_narration_start, parse_time, set_time};
 #[cfg(test)]
 pub use slide_attrs::{set_duration, set_hidden, set_narration_start};
 pub use slides::{
     copy_slide, insert, normalize_ids, paste_slide, reorder, replace_slide, replace_slide_at,
-    slide_markup, slugify, strip_slides,
+    slide_markup, slugify, strip_slides, ReplacedSlide,
 };
 #[cfg(test)]
 pub use slides::{delete, duplicate, has_moved};

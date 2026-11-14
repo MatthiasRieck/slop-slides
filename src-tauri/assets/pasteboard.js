@@ -48,6 +48,12 @@
 
    The slide editor (assets/editor/) runs after this and builds on window.slopPasteboard, which
    also tells it where the slide is on screen (`origin()`, `scale()`), so it need not measure.
+   The editor comes and goes with Edit mode, with no page load either way: a page asked for with
+   ?edit has it from the start, and { type: "slop:edit-attach" } puts it on a page that has none
+   (it runs the editor's script, from beside this one's address), with the slide on its final
+   animation frame (`data-slop-static`) as the editor shows it; { type: "slop:edit-detach", still }
+   takes it off again (`window.slopEditor.detach()`), the slide then on its final frame or not as
+   `still` says. Without the editor the page is the player's, as one loaded without it.
 
    A wheel turn, a pinch and a drag move the view once a frame, however many events a frame
    brings. While such a gesture lasts, the slide keeps the zoom it is laid out at and is scaled
@@ -77,7 +83,14 @@
   var DRAG_THRESHOLD = 3;
   // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
   var WHEEL_GESTURE_MS = 150;
-  var editor = params.has("edit");
+  // Whether the slide editor is wanted on the page (see above), and where its script is.
+  var editorWanted = params.has("edit");
+  var editorScript = document.currentScript && document.currentScript.src
+    ? document.currentScript.src.replace(/pasteboard\.js(\?.*)?$/, "editor.js")
+    : "";
+  var editorLoading = false;
+  // The search last asked for, marked again when the slide's markup changes in place.
+  var lastSearch = null;
 
   var deck = slide.parentElement;
   var root = document.documentElement;
@@ -170,6 +183,33 @@
     /** Calls `fn` whenever the view moves, or the size the preview shows at changes. */
     onChange: function (fn) {
       listeners.push(fn);
+    },
+    /** No longer calls `fn` (see onChange). */
+    offChange: function (fn) {
+      listeners = listeners.filter(function (other) {
+        return other !== fn;
+      });
+    },
+    /** Whether the app wants the slide editor on the page: it starts only then. */
+    editorWanted: function () {
+      return editorWanted;
+    },
+    /** Runs the editor's script on the page (once more, should it have run before and gone). */
+    loadEditor: function () {
+      if (!editorScript || editorLoading) return;
+      editorLoading = true;
+      var script = document.createElement("script");
+      script.src = editorScript;
+      script.onload = script.onerror = function () {
+        editorLoading = false;
+        script.remove();
+      };
+      document.head.appendChild(script);
+    },
+    /** The slide's markup changed in place (see the editor's `slop:edit-patch`): what marks it is found again. */
+    contentChanged: function () {
+      if (lastSearch) highlight(lastSearch);
+      reportCommentSpots();
     },
     /** Whether keys and Space+drag belong to something else, like text being edited. */
     busy: function () {
@@ -644,14 +684,12 @@
       },
       true,
     );
-    // The slide is only shown: a double-click on it asks the app for its editor.
-    if (!editor) {
-      document.addEventListener("dblclick", function (event) {
-        if (commenting || event.button !== 0) return;
-        if (event.target.closest("a, button, input, select, textarea, video, audio")) return;
-        window.parent.postMessage({ type: "slop:edit-ask", slide: slide.id }, "*");
-      });
-    }
+    // While the slide is only shown, a double-click on it asks the app for its editor.
+    document.addEventListener("dblclick", function (event) {
+      if (editorOn() || commenting || event.button !== 0) return;
+      if (event.target.closest("a, button, input, select, textarea, video, audio")) return;
+      window.parent.postMessage({ type: "slop:edit-ask", slide: slide.id }, "*");
+    });
   }
 
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
@@ -671,7 +709,7 @@
       return;
     }
     if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
-      if (!primary || editor || show) return;
+      if (!primary || editorOn() || show) return;
       if (event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
       var text = textAt(event.clientX, event.clientY);
       if (text && !text.covers.length) return;
@@ -894,6 +932,7 @@
   var searchMarks = null;
 
   function highlight(data) {
+    lastSearch = data;
     // Older WebKits have no CSS highlights: the slide shows no marks, and the search still works.
     if (typeof Highlight === "undefined" || !CSS.highlights) return;
     if (!searchMarks) {
@@ -926,10 +965,32 @@
     document.head.appendChild(marks);
   }
 
+  /** Whether the slide editor is on the page. */
+  function editorOn() {
+    return !!window.slopEditor;
+  }
+
+  /** Puts the slide editor on the page, showing the slide's final animation frame. */
+  function attachEditor() {
+    editorWanted = true;
+    root.setAttribute("data-slop-static", "");
+    if (!editorOn()) api.loadEditor();
+  }
+
+  /** Takes the slide editor off the page; `still` keeps the slide on its final animation frame. */
+  function detachEditor(still) {
+    editorWanted = false;
+    if (editorOn()) window.slopEditor.detach();
+    if (still) root.setAttribute("data-slop-static", "");
+    else root.removeAttribute("data-slop-static");
+  }
+
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
     if (data.type === "slop:layer") layerOpen = !!data.open;
+    if (data.type === "slop:edit-attach" && !show) attachEditor();
+    if (data.type === "slop:edit-detach" && !show) detachEditor(!!data.still);
     if (data.type === "slop:search") highlight(data);
     if (data.type === "slop:comment-tool" && !show) setCommenting(data.on);
     if (data.type === "slop:comment-at" && !show && [data.x, data.y].every(Number.isFinite)) commentAt(data.x, data.y);

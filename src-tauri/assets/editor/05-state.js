@@ -4,6 +4,27 @@
   var slide = document.querySelector(".deck > .slide.active");
   var pasteboard = window.slopPasteboard;
   if (!slide || !pasteboard || window.parent === window) return;
+  // One editor at a time, and only while the app wants one (see "Attaching and detaching").
+  if (window.slopEditor || (typeof pasteboard.editorWanted === "function" && !pasteboard.editorWanted())) return;
+
+  // What the editor puts on the page, the listeners it adds to the window and the document, and
+  // what it says to the app go through these, so that detaching takes all of it away again and
+  // nothing is said after (see 75-life.js).
+  var detached = false;
+  var listening = [];
+  var added = [];
+  function listen(target, type, fn, options) {
+    target.addEventListener(type, fn, options);
+    listening.push([target, type, fn, options]);
+  }
+  function addToPage(parent, el) {
+    parent.appendChild(el);
+    added.push(el);
+    return el;
+  }
+  function tellApp(message) {
+    if (!detached) window.parent.postMessage(message, "*");
+  }
   var overflow = window.__slopOverflow;
   // A group shows what it holds.
   var paints = function (el) {
@@ -569,7 +590,7 @@
     " .deck > .slide.active[data-slop-typing] [data-slop-editing] * { pointer-events: auto !important; }" +
     ".deck > .slide.active [data-slop-editing], .deck > .slide.active [data-slop-editing] * {" +
     " -webkit-user-select: text; user-select: text; cursor: text !important; }";
-  document.head.appendChild(style);
+  addToPage(document.head, style);
 
   // Scale, rotate, and tilt handles, outside the slide so they never end up in its markup. They
   // sit just outside the frame, so even small text stays clickable (and double-clickable) inside
@@ -592,14 +613,14 @@
         ' title="Resize (Shift keeps the aspect ratio, Alt resizes from the center)"></div>'
       );
     }).join("");
-  document.body.appendChild(ui);
+  addToPage(document.body, ui);
   var scaleHandles = Array.prototype.slice.call(ui.querySelectorAll("[data-handle=scale]"));
 
   // The line around what is hovered, and around the text being typed in (see FRAME_LINE).
   function outlineBox(kind) {
     var box = document.createElement("div");
     box.setAttribute("data-slop-outline", kind);
-    document.body.appendChild(box);
+    addToPage(document.body, box);
     return box;
   }
   var hoverBox = outlineBox("hover");
@@ -608,11 +629,11 @@
 
   var pointUi = document.createElement("div");
   pointUi.setAttribute("data-slop-points", "");
-  document.body.appendChild(pointUi);
+  addToPage(document.body, pointUi);
 
   var edgeUi = document.createElementNS(SVG_NS, "svg");
   edgeUi.setAttribute("data-slop-edge", "");
-  document.body.appendChild(edgeUi);
+  addToPage(document.body, edgeUi);
 
   var svgButton = document.createElement("button");
   svgButton.type = "button";
@@ -622,11 +643,11 @@
     'Edit SVG<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"' +
     ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
   svgButton.hidden = true;
-  document.body.appendChild(svgButton);
+  addToPage(document.body, svgButton);
 
   var wires = document.createElement("div");
   wires.setAttribute("data-slop-overflow", "");
-  document.body.appendChild(wires);
+  addToPage(document.body, wires);
 
   // The runtime's text fit (data-autofit="shrink"); see runtime.js.
   var autofit = window.slopAutofit || null;
@@ -665,6 +686,8 @@
   var pointer = null;
   var overflowFrame = 0;
   var reportFrame = 0;
+  // What the last selection report said (see report), so one that says the same is not posted.
+  var reportedSelection = null;
   var handlesFrame = 0;
   var hoverFrame = 0;
   // Looks at the whole slide (what overflows, its layers) wait for a pause in the typing, and for
@@ -717,9 +740,10 @@
   // Whatever may change the slide comes after its markup was kept: what the user does, and the
   // app's messages, but for the settings it sends as the slide loads.
   ["pointerdown", "keydown", "dblclick", "contextmenu", "paste"].forEach(function (type) {
-    window.addEventListener(type, keepSaved, true);
+    listen(window, type, keepSaved, true);
   });
-  window.addEventListener(
+  listen(
+    window,
     "message",
     function (event) {
       var type = event.data ? String(event.data.type) : "";
@@ -729,6 +753,8 @@
   );
   afterPaint(keepSaved);
   // Space and 0 are text while typing, and Space+drag selects it.
+  // What the pasteboard says without the editor, for when it is detached.
+  var idleBusy = pasteboard.busy;
   pasteboard.busy = function () {
     return !!editing;
   };

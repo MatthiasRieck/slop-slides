@@ -1,8 +1,7 @@
 import { FileText, Pencil } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 
 import { isImage } from "../../lib/drop";
-import { slideNumbers } from "../../lib/slideNumbers";
 import { basename, cn, workspaceChatFileUrl } from "../../lib/utils";
 import { type UserMessage, useApp } from "../../store";
 import { sendOptionsOf } from "../../store/messages";
@@ -11,6 +10,7 @@ import { timeLabel } from "./activity";
 import { CopyButton } from "./CopyButton";
 import { slideLabel, slideRanges } from "./mentions";
 import { actionsShown, MESSAGE } from "./messageStyles";
+import { type SlideNumbers, useSlideNumbers } from "./useSlideNumbers";
 
 /** What a picture sent along with a message shows, for those who cannot see it. */
 type Picture = { path: string; alt: string };
@@ -76,13 +76,38 @@ function Thumbnail({ picture, workspace }: { picture: Picture; workspace: string
  * renders nothing.
  */
 function useMessageSlides(message: UserMessage): { slide: number; others: number[] } {
-  const text = useApp((s) => {
-    const numbers = s.deck ? slideNumbers(s.deck.slides) : null;
-    const of = (id: string | null) => (id && numbers?.get(id)) || 0;
-    return [of(message.slide), ...(message.slides ?? []).map(of)].join(",");
-  });
+  const { slide: about, slides: also } = message;
+  const text = useSlideNumbers(
+    useCallback(
+      (numbers: SlideNumbers) => {
+        const of = (id: string | null) => (id && numbers?.get(id)) || 0;
+        return [of(about), ...(also ?? []).map(of)].join(",");
+      },
+      [about, also],
+    ),
+  );
   const [slide = 0, ...others] = text.split(",").map(Number);
   return { slide, others: others.filter((n) => n > 0) };
+}
+
+/**
+ * Edit, under a message of the user's: not while the agent's turn runs. It alone follows the
+ * turn starting and ending, so the conversation's messages do not render again for that.
+ */
+function EditButton({ latest, onEdit }: { latest: boolean; onEdit: () => void }) {
+  const running = useApp((s) => s.running);
+  if (running) return null;
+  return (
+    <button
+      type="button"
+      aria-label="Edit message"
+      title="Edit: change this message and send it again from here; the replies after it go"
+      onClick={onEdit}
+      className={cn("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground", actionsShown(latest))}
+    >
+      <Pencil className="size-3" />
+    </button>
+  );
 }
 
 /**
@@ -103,7 +128,6 @@ export const UserBubble = memo(function UserBubble({
   const [expanded, setExpanded] = useState(false);
   const collapsible = message.text.length > 900 || message.text.split("\n").length > 12;
   const workspace = useApp((s) => s.workspace?.path ?? "");
-  const running = useApp((s) => s.running);
   const { slide: slideNumber, others } = useMessageSlides(message);
   const pictures = picturesOf(message);
   const files = message.attachments.filter((a) => !isImage(a));
@@ -199,20 +223,7 @@ export const UserBubble = memo(function UserBubble({
         )}
       </div>
       <div className="flex items-center">
-        {!message.command && !running && (
-          <button
-            type="button"
-            aria-label="Edit message"
-            title="Edit: change this message and send it again from here; the replies after it go"
-            onClick={edit}
-            className={cn(
-              "rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground",
-              actionsShown(latest),
-            )}
-          >
-            <Pencil className="size-3" />
-          </button>
-        )}
+        {!message.command && <EditButton latest={latest} onEdit={edit} />}
         <CopyButton text={message.text} label="Copy message" className={actionsShown(latest)} />
       </div>
       {meta.length > 0 && (

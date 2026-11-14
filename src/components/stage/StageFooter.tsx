@@ -296,13 +296,12 @@ const percent = (zoom: number) => `${Math.round(zoom * 100)}%`;
 function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => void; onZoomTo: (k: number) => void }) {
   // How far the view is zoomed once it is panned or zoomed; null while it shows the whole slide.
   const zoomed = useShownView((view) => (view && isMoved(view) ? view.k : null));
-  const fitScale = useStageView((s) => s.fitScale);
+  // The level as it reads: "Fit" whatever the size of the stage, which changes with every pixel a panel is dragged.
+  const level = useStageView((s) => (zoomed === null ? "Fit" : percent(zoomed * s.fitScale)));
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const menu = useMenuKeys();
   const moved = zoomed !== null;
-  const zoom = (zoomed ?? 1) * fitScale;
-  const level = moved ? percent(zoom) : "Fit";
   const item =
     "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5";
   const pick = (go: () => void) => {
@@ -355,14 +354,14 @@ function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => 
               {!moved && <Check className="text-muted-foreground" />}
             </button>
             {ZOOM_LEVELS.map((to) => {
-              const here = moved && percent(zoom) === percent(to);
+              const here = moved && level === percent(to);
               return (
                 <button
                   key={to}
                   type="button"
                   role="menuitemradio"
                   aria-checked={here}
-                  onClick={() => pick(() => props.onZoomTo(to / fitScale))}
+                  onClick={() => pick(() => props.onZoomTo(to / useStageView.getState().fitScale))}
                   className={item}
                 >
                   <span className="flex-1">{percent(to)}</span>

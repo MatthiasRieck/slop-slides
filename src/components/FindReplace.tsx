@@ -1,11 +1,14 @@
 import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWord, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
+import { shallow } from "zustand/shallow";
 import type { ReplacedText, Slide } from "../lib/api";
 import { formatKeys, isMod } from "../lib/keys";
 import { memoizeLast } from "../lib/memo";
 import { plural } from "../lib/utils";
-import { activeMatch, useApp } from "../store";
+
+import { activeMatch, searchHighlight, useApp } from "../store";
+import type { SearchHighlight } from "../store/search";
+import type { AppState } from "../store/types";
 import { Button, ToolButton } from "./Button";
 import { Popover } from "./Popover";
 
@@ -188,22 +191,56 @@ export function useFindShortcut() {
 /** What the deck's slides hold, as one key: worked out once per list of slides, however often it is asked for. */
 const slidesVersion = memoizeLast((slides: Slide[] | undefined) => slides?.map((slide) => slide.hash).join(",") ?? "");
 
+/** What a search depends on: when any of it changes, the deck is searched again. */
+const searchInputs = (s: AppState) =>
+  [s.deck?.id ?? "", s.search.query, s.search.options, slidesVersion(s.deck?.slides)] as const;
+
 /**
  * Searches the deck for the query in the store once typing settles, and again whenever a slide
  * changes, as after a replace. Leaving the stage (for the deck's settings, say) ends the search.
+ * It follows the store without rendering its caller: the stage, which calls it, does not render
+ * with every key typed in the field.
  */
 export function useDeckSearch() {
-  const deckId = useApp((s) => s.deck?.id ?? "");
-  const version = useApp((s) => slidesVersion(s.deck?.slides));
-  const query = useApp((s) => s.search.query);
-  const options = useApp((s) => s.search.options);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: these are what a search depends on
   useEffect(() => {
-    if (!deckId || !query.trim()) return;
-    const timer = setTimeout(() => void useApp.getState().runSearch(), SEARCH_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [deckId, query, options, version]);
-  useEffect(() => () => useApp.getState().clearSearch(), []);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let inputs = searchInputs(useApp.getState());
+    const schedule = () => {
+      clearTimeout(timer);
+      const [deckId, query] = inputs;
+      if (!deckId || !query.trim()) return;
+      timer = setTimeout(() => void useApp.getState().runSearch(), SEARCH_DELAY_MS);
+    };
+    schedule();
+    const stop = useApp.subscribe((state) => {
+      const next = searchInputs(state);
+      if (next.every((input, i) => input === inputs[i])) return;
+      inputs = next;
+      schedule();
+    });
+    return () => {
+      stop();
+      clearTimeout(timer);
+      useApp.getState().clearSearch();
+    };
+  }, []);
+}
+
+/**
+ * Hands `post` what the slide shown is to highlight of what Find found (see `searchHighlight`):
+ * at once, and again each time that changes. It follows the store without rendering its caller.
+ */
+export function useSearchHighlight(post: (message: { type: "slop:search" } & SearchHighlight) => void) {
+  useEffect(() => {
+    let shown = searchHighlight(useApp.getState());
+    post({ type: "slop:search", ...shown });
+    return useApp.subscribe((state) => {
+      const next = searchHighlight(state);
+      if (shallow(next, shown)) return;
+      shown = next;
+      post({ type: "slop:search", ...next });
+    });
+  }, [post]);
 }
 
 /** Opens the replacing of what Find found, in View and in Edit alike: each replace is one step to undo. */

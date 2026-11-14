@@ -1,10 +1,18 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The tree's own buttons, counted: each render of the tree renders its four.
+vi.mock("./Button", async (original) => {
+  const actual = await original<typeof import("./Button")>();
+  return { ...actual, ToolButton: vi.fn(actual.ToolButton) };
+});
+
 import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
 import { useConfirmQuestion } from "../store/confirm";
 import { lastError, toastTexts } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
+import { ToolButton } from "./Button";
 import { FileTree, TREE_RELOAD_DELAY } from "./FileTree";
 
 const entry = (path: string, kind: WorkspaceEntry["kind"]): WorkspaceEntry => ({
@@ -46,6 +54,24 @@ const item = (name: string) => screen.getByRole("treeitem", { name }) as HTMLBut
 const listed = () => invoke.mock.calls.filter(([c]) => c === "list_dir").map(([, a]) => (a as { path: string }).path);
 
 describe("FileTree", () => {
+  it("does not render the tree as the sidebar closes and opens, or as the watcher reports", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<FileTree />);
+      await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+      expect(items()).toHaveLength(3);
+      const renders = vi.mocked(ToolButton).mock.calls.length;
+      act(() => useApp.setState({ sidebarOpen: false }));
+      act(() => useApp.setState({ workspaceChange: { paths: ["talks/new.html"], rev: 1 } }));
+      act(() => useApp.setState({ sidebarOpen: true }));
+      act(() => useApp.setState({ sidebarTab: "chat" }));
+      act(() => useApp.setState({ sidebarTab: "files" }));
+      expect(vi.mocked(ToolButton).mock.calls.length).toBe(renders);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lists the workspace root, folders first", async () => {
     render(<FileTree />);
     await waitFor(() => expect(items()).toEqual(["talks", "index.html", "notes.md"]));

@@ -5,6 +5,9 @@
 //!
 //! Order is kept: any other event (a tool call, a result, the end of the turn) sends the text
 //! waiting before it first.
+//!
+//! A provider may also say it is thinking once per piece of its reasoning; said again with
+//! nothing in between, that changes nothing, so only the first goes out.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,6 +26,8 @@ struct Waiting {
     text: String,
     /// Whether a send of it is already due at the end of the frame.
     due: bool,
+    /// Whether the last event sent says the agent is thinking.
+    thinking: bool,
     sink: Sink,
 }
 
@@ -30,8 +35,13 @@ impl Waiting {
     fn send_text(&mut self) {
         if !self.text.is_empty() {
             let text = std::mem::take(&mut self.text);
-            (self.sink)(&AgentEvent::TextDelta { text });
+            self.send(&AgentEvent::TextDelta { text });
         }
+    }
+
+    fn send(&mut self, event: &AgentEvent) {
+        self.thinking = matches!(event, AgentEvent::Thinking);
+        (self.sink)(event);
     }
 }
 
@@ -63,6 +73,7 @@ impl Deltas {
             waiting: Arc::new(Mutex::new(Waiting {
                 text: String::new(),
                 due: false,
+                thinking: false,
                 sink: Box::new(sink),
             })),
             after_frame: Box::new(after_frame),
@@ -75,7 +86,9 @@ impl Deltas {
         let mut waiting = self.waiting.lock().unwrap_or_else(|e| e.into_inner());
         let AgentEvent::TextDelta { text } = event else {
             waiting.send_text();
-            (waiting.sink)(event);
+            if !(waiting.thinking && matches!(event, AgentEvent::Thinking)) {
+                waiting.send(event);
+            }
             return;
         };
         waiting.text.push_str(text);
@@ -197,6 +210,34 @@ mod tests {
         assert!(
             stage.frames.lock().unwrap().is_empty(),
             "no frame is waited for"
+        );
+    }
+
+    #[test]
+    fn thinking_said_again_with_nothing_in_between_goes_out_once() {
+        let stage = Stage::default();
+        let deltas = stage.deltas();
+        // A provider that says so for each piece of its reasoning.
+        for _ in 0..200 {
+            deltas.emit(&AgentEvent::Thinking);
+        }
+        deltas.emit(&tool());
+        deltas.emit(&AgentEvent::Thinking);
+        deltas.emit(&AgentEvent::Thinking);
+        deltas.emit(&delta("Text"));
+        // Text waiting for its frame goes before the thinking, which is new after it.
+        deltas.emit(&AgentEvent::Thinking);
+        deltas.emit(&AgentEvent::Thinking);
+        stage.tick();
+        assert_eq!(
+            stage.sent(),
+            [
+                AgentEvent::Thinking,
+                tool(),
+                AgentEvent::Thinking,
+                delta("Text"),
+                AgentEvent::Thinking,
+            ]
         );
     }
 

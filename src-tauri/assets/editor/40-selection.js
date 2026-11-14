@@ -48,7 +48,7 @@
   function overlay(attr) {
     var el = document.createElement("div");
     el.setAttribute(attr, "");
-    document.body.appendChild(el);
+    addToPage(document.body, el);
     return el;
   }
   var frames = overlay("data-slop-multi");
@@ -342,7 +342,8 @@
   }
 
   // A press ends a marquee whose release never arrived.
-  window.addEventListener(
+  listen(
+    window,
     "pointerdown",
     function () {
       if (marquee) finishMarquee();
@@ -601,7 +602,7 @@
     var key = JSON.stringify(now);
     if (key === reportedGeometry) return;
     reportedGeometry = key;
-    window.parent.postMessage({ type: "slop:edit-geometry", slide: slide.id, geometry: now }, "*");
+    tellApp({ type: "slop:edit-geometry", slide: slide.id, geometry: now });
   }
 
   function scheduleGeometry() {
@@ -1000,7 +1001,8 @@
 
   // Alt pressed or let go in the middle of a move takes effect at once, wherever the pointer rests.
   ["keydown", "keyup"].forEach(function (type) {
-    window.addEventListener(
+    listen(
+      window,
       type,
       function (event) {
         var last = drag && drag.mode === "move" && drag.moved ? drag.last : null;

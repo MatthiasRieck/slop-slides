@@ -4,10 +4,17 @@ import { invoke, listen, open as openDialog, revealItemInDir, save } from "../te
 
 const unlisten = vi.fn();
 
+// The Export menu, counted: each render of the deck's actions renders it.
+vi.mock("./ExportMenu", async (original) => {
+  const actual = await original<typeof import("./ExportMenu")>();
+  return { ...actual, ExportMenu: vi.fn(actual.ExportMenu) };
+});
+
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckActions } from "./DeckActions";
+import { ExportMenu } from "./ExportMenu";
 import { usePresent, usePresentKeys } from "./presenter/present";
 
 /** Mounts the keys that start a show, as the app does next to its other global keys. */
@@ -47,6 +54,17 @@ beforeEach(() => {
 });
 
 describe("deck actions", () => {
+  it("renders as the deck gains or loses its slides, not with every change to it", () => {
+    render(<DeckActions />);
+    const renders = vi.mocked(ExportMenu).mock.calls.length;
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML, "2") }));
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML, "3") }));
+    expect(vi.mocked(ExportMenu).mock.calls.length).toBe(renders);
+    act(() => useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } }));
+    expect(vi.mocked(ExportMenu).mock.calls.length).toBe(renders + 1);
+    expect((screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: "Present" }) as HTMLButtonElement;
 

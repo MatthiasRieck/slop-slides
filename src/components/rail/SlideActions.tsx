@@ -1,5 +1,5 @@
 import { Copy, Eye, EyeOff, Lock, LockOpen, MoreHorizontal, Trash2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import type { Slide } from "../../lib/api";
 import { cn, plural } from "../../lib/utils";
@@ -65,9 +65,13 @@ export function actionTargets(slide: Slide, picked: Slide[]): ActionTargets {
  * keyboard's focus is in it (the list they are in keeps them to one row at a time). On a
  * thumbnail too small to carry four buttons without hiding the slide's title they fold into one
  * that opens the slide's menu. Done on one of several picked slides, an action is about all of
- * them. It reads the picks for itself, so its thumbnail does not render as they change.
+ * them. It reads the picks for itself, so its thumbnail does not render as they change, and it
+ * renders only for its slide, the picks or the menu: not with every render of its row.
  */
-export function SlideActions(props: { slide: Slide; onMenu: (event: React.MouseEvent, slide: string) => void }) {
+export const SlideActions = memo(function SlideActions(props: {
+  slide: Slide;
+  onMenu: (event: React.MouseEvent, slide: string) => void;
+}) {
   const { slide } = props;
   const picks = useApp((s) => (s.railSelected.includes(slide.id) ? s.railSelected : ONLY_ITSELF));
   const app = useApp.getState;
@@ -122,7 +126,7 @@ export function SlideActions(props: { slide: Slide; onMenu: (event: React.MouseE
       </div>
     </div>
   );
-}
+});
 
 /** One of the quick actions: a small dark button that reads on any slide. Off, it stays, saying why. */
 function RailAction(props: {

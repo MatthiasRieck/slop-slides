@@ -10,7 +10,6 @@ import {
 } from "../lib/editTools";
 import { memoizeLast } from "../lib/memo";
 import { parseRecentColors, withRecentColor } from "../lib/palette";
-import { withSlideBackground } from "../lib/slideBackground";
 import { loadFlag, loadJson, loadText, saveFlag, saveJson, trySaveText } from "../lib/storage";
 import { captureSlide } from "./capture";
 import { promptAgent } from "./composer";
@@ -360,23 +359,21 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
     queueEdit(async () => {
       const { deck } = get();
       if (!deck) return 0;
-      // One name for all the saves, so the deck's history keeps them as one step.
-      const group = `background:${Date.now()}`;
-      let changed = 0;
       try {
-        for (const slide of deck.slides) {
-          if (slide.locked) continue;
-          const source = await api.slideSource(deck.id, slide.id);
-          const markup = withSlideBackground(source.markup, color);
-          if (markup === source.markup) continue;
-          const next = await api.updateSlide(deck.id, slide.id, markup, source.hash, group);
-          if (get().deck?.id !== deck.id) return changed;
-          showEdited(app, slide.id, next);
-          changed += 1;
-        }
+        // One call: the backend changes every slide in one write, as one step to undo.
+        const { deck: next, changed } = await api.setBackgroundOfAll(deck.id, color);
+        if (changed === 0 || get().deck?.id !== deck.id) return changed;
+        const before = new Map(deck.slides.map((slide) => [slide.id, slide.hash]));
+        const edited = next.slides.filter((slide) => before.has(slide.id) && before.get(slide.id) !== slide.hash);
+        const { editedSlides } = get();
+        const added = edited.map((slide) => slide.id).filter((id) => !editedSlides.includes(id));
+        // Before the deck, so the stage never sees the new versions without knowing whose they are.
+        if (added.length > 0) app.setState({ editedSlides: [...editedSlides, ...added] });
+        get().setDeck(next);
+        return changed;
       } catch (error) {
         showErrorIn(app, error);
+        return 0;
       }
-      return changed;
     }),
 });

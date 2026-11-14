@@ -1,9 +1,9 @@
 import { Check, ChevronRight, Shield, ShieldAlert, ShieldX } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
+import { codeSpans } from "../lib/codeSpans";
 import { formatKeys } from "../lib/keys";
 import { hasOpenLayer } from "../lib/layers";
-import { codeSpans } from "../lib/markdown";
 import { PROVIDERS } from "../lib/models";
 import {
   ALLOW_IN_CHAT,

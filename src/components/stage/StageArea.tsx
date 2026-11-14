@@ -1,16 +1,24 @@
 import { type ReactNode, type RefObject, useLayoutEffect } from "react";
 
-import { useContentSize } from "../../hooks/useContentSize";
 import type { Slide } from "../../lib/api";
+import { zoomBox } from "../../lib/ink";
 import type { Pixels } from "../../lib/slideSize";
-import { SKETCH_TARGET_ATTR } from "../../store";
+import { SKETCH_TARGET_ATTR, useApp } from "../../store";
 import { AnnotationLayer, type Annotations } from "../PresenterTools";
 import { CurrentSlide } from "./CurrentSlide";
-import { useShownView, useStageView } from "./stageView";
-import { inkBox } from "./usePasteboard";
+import { isMoved, useShownView, useStageView } from "./stageView";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
+
+/**
+ * The room the preview fills around the slide, as CSS lengths: the whole area, its padding too.
+ * The area is a size container, so these follow it as it resizes, with nothing rendering.
+ */
+const ARENA = {
+  width: `calc(100cqw + ${2 * AREA_PADDING}px)`,
+  height: `calc(100cqh + ${2 * AREA_PADDING}px)`,
+};
 
 /**
  * The area the stage shows its slide in (which `areaRef` then holds): the slide as large as fits,
@@ -20,9 +28,10 @@ const AREA_PADDING = 32;
  * slide. The area clips the ink, which zooms past the slide along with the pasteboard, so it
  * stays off the bar below.
  *
- * Whatever depends on the size of the area is in here, and nothing else: as the area resizes
- * (a panel's separator dragged) this renders, and the stage around it, with its toolbars, does
- * not; nor does what is handed in to lie on the slide or float over it.
+ * The size of the area is the browser's to follow, in CSS (the area is a size container): as it
+ * resizes (a panel's separator dragged), nothing here renders, nor does the preview, nor what is
+ * handed in to lie on the slide or float over it. Only the size the slide fits at (`fitScale`)
+ * is worked out, into its own store, for what reads it.
  */
 export function StageArea(props: {
   areaRef: RefObject<HTMLDivElement | null>;
@@ -33,32 +42,38 @@ export function StageArea(props: {
   editing: boolean;
   /** Takes the box what lies on the slide is in, to screenshot areas of it. */
   inkRef: RefObject<HTMLDivElement | null>;
-  onFrameReady: (frame: HTMLIFrameElement) => void;
+  /** The preview has loaded; `warmed` when it had loaded ahead and was just shown. */
+  onFrameReady: (frame: HTMLIFrameElement, warmed: boolean) => void;
   ink: ReactNode;
   children: ReactNode;
 }) {
   const { areaRef, size, slide } = props;
-  // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
-  const inside = useContentSize(areaRef);
-  const arena = inside
-    ? { width: inside.width + 2 * AREA_PADDING, height: inside.height + 2 * AREA_PADDING }
-    : undefined;
-  const width = inside ? Math.max(0, Math.min(inside.width, (inside.height * size.width) / size.height)) : 0;
-  const fitScale = size.width ? width / size.width : 0;
+  const ratio = size.height ? size.width / size.height : 1;
   // The zoom level under the slide is in the slide's own pixels, which takes the size it fits at.
   useLayoutEffect(() => {
-    if (useStageView.getState().fitScale !== fitScale) useStageView.setState({ fitScale });
-  }, [fitScale]);
+    const area = areaRef.current;
+    if (!area) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      const fitScale = size.width ? Math.max(0, Math.min(width, height * ratio)) / size.width : 0;
+      if (useStageView.getState().fitScale !== fitScale) useStageView.setState({ fitScale });
+    });
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, [areaRef, size.width, ratio]);
 
   return (
     <div
       ref={areaRef}
       data-testid="stage-area"
       className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8"
+      style={{ containerType: "size" }}
     >
       {slide && (
         <div
-          style={{ width }}
+          // As large as fits the area, in the slide's shape (see SlideFrame).
+          style={{ width: `min(100cqw, ${ratio} * 100cqh)` }}
           {...{ [SKETCH_TARGET_ATTR]: "" }}
           data-editing={props.editing || undefined}
           className="relative"
@@ -68,13 +83,11 @@ export function StageArea(props: {
             slide={slide}
             size={size}
             editing={props.editing}
-            arena={arena}
+            arena={ARENA}
             canvas={areaRef}
             onFrameReady={props.onFrameReady}
           />
-          <InkBox ref={props.inkRef} scale={fitScale}>
-            {props.ink}
-          </InkBox>
+          <InkBox ref={props.inkRef}>{props.ink}</InkBox>
         </div>
       )}
       {props.children}
@@ -82,15 +95,24 @@ export function StageArea(props: {
   );
 }
 
-/** Keeps what lies on the slide on it, wherever the pasteboard has moved it: it follows the view by itself. */
-function InkBox(props: { ref: RefObject<HTMLDivElement | null>; scale: number; children: ReactNode }) {
-  const view = useShownView((shown) => shown);
+/**
+ * Keeps what lies on the slide on it, wherever the pasteboard has moved it: it follows the view by
+ * itself. Resized with the slide, it renders only while the view is moved: the pan is in screen
+ * pixels, which the size the slide fits at turns slide pixels into.
+ */
+function InkBox(props: { ref: RefObject<HTMLDivElement | null>; children: ReactNode }) {
+  const selected = useApp((s) => s.selected);
+  const place = useStageView((s) => {
+    const view = s.view?.slide === selected ? s.view : null;
+    return view && isMoved(view) ? `${view.x * s.fitScale} ${view.y * s.fitScale} ${view.k}` : "";
+  });
+  const [x = 0, y = 0, k = 1] = place ? place.split(" ").map(Number) : [];
   return (
     <div
       ref={props.ref}
       data-testid="annotation-view"
       className="pointer-events-none absolute"
-      style={inkBox(view, props.scale)}
+      style={zoomBox(x, y, k)}
     >
       {props.children}
     </div>

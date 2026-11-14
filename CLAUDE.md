@@ -8,5 +8,6 @@ where files live:
 - app content (system prompt, reference docs, runtime) is compiled into the app and injected, never copied into decks
 - config shared by all decks (MCP config, user templates) goes in ~/.slopslides
 - chat state (chat, provider session ids, sketches) goes in the chat's session, ~/.slopslides/sessions/<id> (src-tauri/src/sessions.rs); a session is one chat, about one deck (keyed by the deck file's path) or, with no deck open, about the workspace folder
+- pictures of slides for the lists of slides go in ~/.slopslides/thumbnails (src-tauri/src/thumbnails.rs), named by what the slide's page and assets are: a per-slide picture cache, derived, safe to delete
 - each deck's undo history (whole-file versions of every change, whatever made it) goes in ~/.slopslides/history/<key of the deck's path> (src-tauri/src/history.rs), as it outlives chats
 - a workspace may hold many decks and other files; new decks use <name>/deck.html with assets/ next to the deck file

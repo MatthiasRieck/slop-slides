@@ -4,10 +4,12 @@
  * hidden window that renders slides for the agent. It answers each step by navigating to
  * /.render-signal?<answer>.
  */
-import { describe, expect, it, vi } from "vitest";
 
+import type { DOMWindow } from "jsdom";
+import { describe, expect, it, vi } from "vitest";
 import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
 import RENDER from "../../src-tauri/assets/render.js?raw";
+
 import { openHelper } from "./deckDom";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
@@ -20,6 +22,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
 interface Helper {
   ready: () => void;
   show: (id: string, at?: number | null) => void;
+  preview: (ref: string) => void;
 }
 
 const box = (left: number, top: number, width: number, height: number) => ({
@@ -31,8 +34,11 @@ const box = (left: number, top: number, width: number, height: number) => ({
   bottom: top + height,
 });
 
-/** Loads the deck, lays it out at half size, runs the helper, and records its answers. */
-function helper() {
+/**
+ * Loads the deck, lays it out at half size, runs the helper, and records its answers. `paint` is
+ * what the app tells it a capture waits for the page to be drawn (render.rs): nothing on macOS.
+ */
+function helper({ paint, setup }: { paint?: number; setup?: (window: DOMWindow) => void } = {}) {
   const resizes = vi.fn();
   const {
     window,
@@ -48,6 +54,8 @@ function helper() {
         return box(0, 0, 100, 100) as DOMRect;
       };
       Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", { get: () => 1920 });
+      if (paint !== undefined) Object.assign(window, { __slopRenderPaint: paint });
+      setup?.(window);
     },
     scripts: [OVERFLOW, RENDER],
   });
@@ -91,12 +99,10 @@ describe("the render helper", () => {
     expect(word.state).toBe("running");
   });
 
-  it("reports every slide once fonts and images are ready, hidden ones too", async () => {
+  it("reports every slide as soon as the page has loaded, hidden ones too", () => {
     const { answers } = helper();
-    await vi.waitFor(() => {
-      vi.advanceTimersByTime(100);
-      expect(answers).toEqual(["ready&slides=3"]);
-    });
+    // Each slide is waited for as it shows, not the page as a whole for a while.
+    expect(answers).toEqual(["ready&slides=3"]);
   });
 
   it("does not restart when WebView2 finishes a canceled signal navigation", async () => {
@@ -111,13 +117,13 @@ describe("the render helper", () => {
     expect((window as unknown as { __slopRender: Helper }).__slopRender).toBe(render);
   });
 
-  it("shows only the asked slide and says where it is", () => {
+  it("shows only the asked slide and says where it is", async () => {
     const { render, answers, slide, resizes } = helper();
     render.show("intro");
     expect(slide("intro").classList.contains("active")).toBe(true);
     expect(slide("long").classList.contains("active")).toBe(false);
     expect(resizes).toHaveBeenCalled();
-    vi.advanceTimersByTime(150);
+    await vi.advanceTimersByTimeAsync(100);
     const shown = answered(answers.at(-1) as string);
     expect(shown.get("shown")).toBe("intro");
     expect(shown.get("rect")).toBe("0,0,960,540");
@@ -132,10 +138,10 @@ describe("the render helper", () => {
     expect(slide("intro").classList.contains("active")).toBe(false);
   });
 
-  it("reports what runs past the slide in slide pixels, leaving out decoration", () => {
+  it("reports what runs past the slide in slide pixels, leaving out decoration", async () => {
     const { render, answers } = helper();
     render.show("long");
-    vi.advanceTimersByTime(150);
+    await vi.advanceTimersByTimeAsync(100);
     const shown = answered(answers.at(-1) as string);
     expect(JSON.parse(shown.get("overflow") as string)).toEqual(['<p> "Too long" runs past the bottom edge by 120px']);
   });
@@ -148,11 +154,91 @@ describe("the render helper", () => {
     expect(slide("intro").classList.contains("active")).toBe(true);
   });
 
-  it("caps the findings an answer carries", () => {
+  it("caps the findings an answer carries", async () => {
     const { render, answers, slide } = helper();
     slide("long").innerHTML = Array.from({ length: 30 }, (_, n) => `<p class="big">Line ${n}</p>`).join("");
     render.show("long");
-    vi.advanceTimersByTime(150);
+    await vi.advanceTimersByTimeAsync(100);
     expect(JSON.parse(answered(answers.at(-1) as string).get("overflow") as string)).toHaveLength(20);
+  });
+  it("captures a slide once it is ready, with no fixed wait where the capture draws the page", async () => {
+    const { render, answers } = helper({ paint: 0 });
+    render.show("intro");
+    // Promises only: no timer has to run out.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answered(answers.at(-1) as string).get("shown")).toBe("intro");
+    expect(vi.getTimerCount()).toBe(1); // only the safety cap, never reached
+  });
+
+  it("waits for the slide's images, fonts and background images, and no longer", async () => {
+    let decoded: () => void = () => {};
+    let fontsIn: () => void = () => {};
+    const loads: string[] = [];
+    const { render, answers, slide } = helper({
+      paint: 0,
+      setup(window) {
+        Object.defineProperty(window.document, "fonts", {
+          value: { ready: new Promise<void>((resolve) => (fontsIn = resolve)) },
+        });
+        window.HTMLImageElement.prototype.decode = function (this: HTMLImageElement) {
+          loads.push(this.getAttribute("src") ?? this.src);
+          return this.isConnected ? new Promise<void>((resolve) => (decoded = resolve)) : Promise.resolve();
+        };
+      },
+    });
+    slide("long").innerHTML = '<img src="assets/photo.png"><div style="background-image: url(assets/bg.png)"></div>';
+    render.show("long");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loads).toEqual(["assets/photo.png", "assets/bg.png"]);
+    expect(answers).toHaveLength(1);
+    fontsIn();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answers).toHaveLength(1);
+    decoded();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answers).toHaveLength(1);
+    // A large background image is decoded as it is drawn: given a moment for that.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(answered(answers.at(-1) as string).get("shown")).toBe("long");
+  });
+
+  it("captures a slide that never gets ready after a short cap", async () => {
+    const { render, answers } = helper({
+      paint: 0,
+      setup(window) {
+        Object.defineProperty(window.document, "fonts", { value: { ready: new Promise(() => {}) } });
+      },
+    });
+    render.show("intro");
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(answers).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(answered(answers.at(-1) as string).get("shown")).toBe("intro");
+  });
+
+  it("shows the slide a preview names, as the player finds it, fitted, without overflow findings", async () => {
+    const fit = vi.fn();
+    const { render, answers, slide } = helper({
+      paint: 0,
+      setup(window) {
+        Object.assign(window, { slopAutofit: { fit } });
+      },
+    });
+    slide("long").insertAdjacentHTML("beforeend", '<div data-autofit="shrink">Fit me</div>');
+    for (const [ref, shown] of [
+      ["long", "long"],
+      ["#2", "secret"],
+      ["nope", "intro"],
+      ["", "intro"],
+    ] as const) {
+      render.preview(ref);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(slide(shown).classList.contains("active"), ref).toBe(true);
+      const answer = answered(answers.at(-1) as string);
+      expect(answer.get("shown")).toBe(ref);
+      expect(answer.has("rect")).toBe(true);
+      expect(answer.has("overflow")).toBe(false);
+    }
+    expect(fit).toHaveBeenCalledTimes(1);
   });
 });

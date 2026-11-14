@@ -102,8 +102,11 @@ fn canonical(path: &Path) -> PathBuf {
 }
 
 impl WorkspaceWatcher {
+    /// Watches `dir`, the folder `window` has open, and tells that window (no other) what
+    /// changed in it.
     pub fn watch(&self, app: AppHandle, window: &str, dir: PathBuf) -> Result<()> {
         let root = dir.to_string_lossy().into_owned();
+        let label = window.to_string();
         // Deleted files cannot be canonicalized, so match against both spellings of the root.
         let roots = [
             dir.canonicalize().unwrap_or_else(|_| dir.clone()),
@@ -116,7 +119,8 @@ impl WorkspaceWatcher {
                 let events = events.iter().map(|e| e.path.as_path());
                 let paths = changed_paths(&roots, events, own_writes());
                 if !paths.is_empty() {
-                    let _ = app.emit(
+                    let _ = app.emit_to(
+                        label.as_str(),
                         "workspace-changed",
                         WorkspaceChanged {
                             root: root.clone(),

@@ -37,7 +37,7 @@ import { importPowerPoint } from "./export/importPowerPoint";
 import { chooseDeck, chooseWorkspace, pickPptx } from "./openDialogs";
 import { SectionLabel } from "./SectionLabel";
 import { ShellButtons } from "./ShellButtons";
-import { SlideFrame } from "./SlideFrame";
+import { SlideImage } from "./SlideImage";
 import { StyleChoice } from "./Templates";
 import { TitleField } from "./TitleField";
 
@@ -467,11 +467,10 @@ function DeckCard({ deck, onChanged }: { deck: GalleryDeck; onChanged: () => voi
         onClick={() => void app().openDeckFile(deck.path, deck.workspace)}
         className="overflow-hidden rounded-lg shadow-thumbnail ring-1 ring-border transition hover:ring-2 hover:ring-primary"
       >
-        <SlideFrame
+        <SlideImage
           deckId={deck.path}
           slideId="#1"
           version={String(deck.modifiedMs)}
-          thumbnail
           lazy
           size={pixelsOf(deck)}
           className="pointer-events-none bg-paper"

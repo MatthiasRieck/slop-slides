@@ -9,6 +9,7 @@ vi.mock("../lib/ink", async (original) => {
 
 import * as ink from "../lib/ink";
 import { fakeCanvas2D } from "../test/fakeCanvas";
+import { countRenders } from "../test/renderCounts";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 
 const { strokePath: fullPath } = await vi.importActual<typeof import("../lib/ink")>("../lib/ink");
@@ -209,6 +210,44 @@ describe("AnnotationLayer", () => {
     act(() => resized.forEach((callback) => void callback()));
     expect(ink.strokePath).toHaveBeenCalledTimes(2);
     expect(strokes()[0]!.getAttribute("d")).toBe("M200 200L400 300");
+    vi.unstubAllGlobals();
+  });
+
+  it("neither measures nor renders for a zoom or a resize while there is nothing to draw, and draws at the zoom of then", () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const { rerender } = render(<Ink zoom={1} />);
+    const measured = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    measured.mockClear();
+    const counts = countRenders();
+    // A pinch: the layer is laid out larger with every frame, and told the zoom.
+    for (let k = 2; k <= 30; k++) {
+      measured.mockReturnValue(new DOMRect(0, 0, 1000 * k, 500 * k));
+      rerender(<Ink zoom={k} />);
+      act(() => resized.forEach((callback) => void callback()));
+    }
+    counts.stop();
+    expect(counts.of("Ink")).toBe(29);
+    expect(counts.of("AnnotationLayer")).toBe(0);
+    expect(measured).not.toHaveBeenCalled();
+    // A pen picked up: the layer is measured as it is now, and draws at the zoom of now.
+    measured.mockReturnValue(new DOMRect(0, 0, 30_000, 15_000));
+    pick("pen");
+    draw([
+      [3000, 3000],
+      [6000, 4500],
+    ]);
+    expect(strokes()[0]!.getAttribute("d")).toBe("M3000 3000L6000 4500");
+    expect(strokes()[0]!.getAttribute("stroke-width")).toBe("120");
     vi.unstubAllGlobals();
   });
 

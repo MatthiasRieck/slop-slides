@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::export_job::Job;
 use crate::export_scope::{self, Scope, WebPage};
 use crate::workspace::OpenWorkspace;
-use crate::{deck, html, pdf, pptx, protocol, render, video};
+use crate::{deck, html, pdf, pptx, protocol, render, thumbnails, video};
 
 pub const FLAG: &str = "--export-smoke";
 /// The label the workspace is opened under; no window has it, the exports only need the
@@ -71,6 +71,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
     let result_code = code.clone();
     let app = tauri::Builder::default()
         .manage(OpenWorkspace::default())
+        .manage(thumbnails::Thumbnails::default())
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
@@ -128,6 +129,13 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
         .collect();
     let canvas = html::slide_size(&deck::read_html(&file)?).pixels();
     let job = Job::unattended();
+
+    step("Thumbnails", async {
+        let dir = out.join("thumbnails");
+        check_thumbnails(app, &file, &shown, &dir).await?;
+        Ok(dir)
+    })
+    .await?;
 
     step("PDF export", async {
         let pdf_file = out.join("deck.pdf");
@@ -297,6 +305,86 @@ async fn check_renders(
         std::fs::write(dir.join(format!("{}.png", slide.id)), png)?;
     }
     Ok(rendered)
+}
+
+/// How many pictures the slide list asks for at once (`MAX_PICTURE_LOADS` in
+/// src/lib/frameLoads.ts), and how many of them a window shows without scrolling.
+const PICTURES_AT_ONCE: usize = 6;
+const PICTURES_IN_VIEW: usize = 7;
+
+/// Asks for the thumbnail of each of the `shown` slides of the deck `file` as the slide list
+/// does (see thumbnails.rs): in order, a few at a time. Checks each picture and saves it in
+/// `dir`; then asks again, when every one must come from the cache.
+async fn check_thumbnails(
+    app: &AppHandle,
+    file: &Path,
+    shown: &[String],
+    dir: &Path,
+) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for pass in ["made", "cached"] {
+        let started = std::time::Instant::now();
+        let room = Arc::new(tokio::sync::Semaphore::new(PICTURES_AT_ONCE));
+        let mut asked = Vec::new();
+        for id in shown {
+            let turn = room.clone().acquire_owned().await.expect("never closed");
+            let preview = protocol::file_url(file, &format!("embed&slide={id}&v=smoke&static"));
+            let url = preview.replacen("/.file/", &format!("/{}/.file/", thumbnails::PREFIX), 1);
+            let request = tauri::http::Request::builder()
+                .uri(url)
+                .body(Vec::new())
+                .map_err(|e| Error::msg(e.to_string()))?;
+            let app = app.clone();
+            asked.push(tauri::async_runtime::spawn(async move {
+                let answer = thumbnails::respond(app, request).await;
+                drop(turn);
+                (answer, started.elapsed())
+            }));
+        }
+        let mut in_view = std::time::Duration::ZERO;
+        for (n, (id, asked)) in shown.iter().zip(asked).enumerate() {
+            let (answer, at) = asked.await.map_err(|e| Error::msg(e.to_string()))?;
+            if n < PICTURES_IN_VIEW {
+                in_view = in_view.max(at);
+            }
+            check_thumbnail(id, answer.status(), answer.body(), dir)?;
+        }
+        println!(
+            "  {} thumbnails {pass} in {:.2}s, the first {} in {:.2}s",
+            shown.len(),
+            started.elapsed().as_secs_f64(),
+            PICTURES_IN_VIEW.min(shown.len()),
+            in_view.as_secs_f64(),
+        );
+    }
+    Ok(())
+}
+
+/// Checks the thumbnail of slide `id` the app answered with, and saves it in `dir`.
+fn check_thumbnail(
+    id: &str,
+    status: tauri::http::StatusCode,
+    png: &[u8],
+    dir: &Path,
+) -> Result<()> {
+    if !status.is_success() {
+        return Err(Error::msg(format!("slide {id}: {status}")));
+    }
+    std::fs::write(dir.join(format!("{id}.png")), png)?;
+    let image = capture::decode_png(png)?;
+    if image.width != thumbnails::WIDTH || is_blank(&image) {
+        return Err(Error::msg(format!(
+            "slide {id}: a {}×{} picture, {}",
+            image.width,
+            image.height,
+            if is_blank(&image) {
+                "blank"
+            } else {
+                "not the thumbnail width"
+            }
+        )));
+    }
+    Ok(())
 }
 
 /// Exports the shown slides of the deck `file` as images into `dir`, as the Export menu does.

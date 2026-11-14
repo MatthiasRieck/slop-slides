@@ -68,6 +68,27 @@ export function useSlideEditing(
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
   /**
+   * Sets a fresh editor up as the app has it: snapping, how handles size, the tool; and selects
+   * again what the last save had selected, on its slide. A fresh editor starts with nothing
+   * selected, and reports a selection it restores itself.
+   */
+  const setUpEditor = useCallback(() => {
+    editorRestarted();
+    const app = useApp.getState();
+    if (!editingSlide(app)) return;
+    const { sizeMode, keepRatio } = useEditorState.getState();
+    post({ type: "slop:edit-snap", on: app.editSnap });
+    post({ type: "slop:edit-size-mode", mode: sizeMode });
+    post({ type: "slop:edit-keep-ratio", on: keepRatio });
+    post(toolMessage(app.editTool, app.editStyles));
+    const again = restore.current;
+    if (again && again.slide === app.selected) {
+      const also = again.also.length > 0 ? { also: again.also } : {};
+      post({ type: "slop:edit-select", path: again.path, ...also });
+    }
+  }, [post]);
+
+  /**
    * Pastes from the clipboard: where pastes go, or with `at` (a point in the preview), centered
    * there. With `plain`, only its text, as a text box; without any text there, what it holds.
    */
@@ -160,6 +181,8 @@ export function useSlideEditing(
         if (editingSlide(app) && data.slide === app.selected) handle(data, event);
       };
     const offMessages = messages.on({
+      // The editor came to a page that had loaded without it (see ./stageDocument.ts).
+      "slop:edit-attached": aboutSlide(() => setUpEditor()),
       "slop:edit-commit": aboutSlide((data) => {
         if (typeof data.markup !== "string") return;
         restore.current = Array.isArray(data.select)
@@ -292,7 +315,7 @@ export function useSlideEditing(
       window.removeEventListener("keydown", onSelectionKey, true);
       window.removeEventListener("pointerdown", onPress, true);
     };
-  }, [messages, paste, post]);
+  }, [messages, paste, post, setUpEditor]);
 
   // What the editor said is the stage's while it is there.
   useEffect(() => resetEditorState, []);
@@ -392,25 +415,12 @@ export function useSlideEditing(
       askForInsert: (kind: AgentInsert) => afterResetView(() => void useApp.getState().askForInsert(kind)),
       /** Gives focus back to the slide, as after typing a value into the toolbar. */
       focus: () => frame.current?.focus(),
-      onFrameReady: (loaded: HTMLIFrameElement) => {
+      onFrameReady: (loaded: HTMLIFrameElement, warmed = false) => {
         frame.current = loaded;
-        // A fresh editor starts with the select tool and nothing selected; it reports a restored
-        // selection itself.
-        editorRestarted();
-        const { selected, editTool, editStyles, editSnap } = useApp.getState();
-        const { sizeMode, keepRatio } = useEditorState.getState();
-        const editing = editingSlide(useApp.getState());
-        if (editing) {
-          post({ type: "slop:edit-snap", on: editSnap });
-          post({ type: "slop:edit-size-mode", mode: sizeMode });
-          post({ type: "slop:edit-keep-ratio", on: keepRatio });
-          post(toolMessage(editTool, editStyles));
-        }
-        const again = restore.current;
-        if (editing && again && again.slide === selected) {
-          const also = again.also.length > 0 ? { also: again.also } : {};
-          post({ type: "slop:edit-select", path: again.path, ...also });
-        }
+        // One that loaded ahead out of sight (or was kept since it was last shown) starts over
+        // as a fresh editor does, and says again what it reported, unheard, meanwhile.
+        if (warmed) post({ type: "slop:edit-show" });
+        setUpEditor();
       },
       // Takes the selection, wires and any panning out of the preview, for a screenshot of just the slide.
       clearSelection: () => {
@@ -419,7 +429,7 @@ export function useSlideEditing(
         post({ type: "slop:edit-select", path: null, quiet: true });
       },
     };
-  }, [paste, post, resetView]);
+  }, [paste, post, resetView, setUpEditor]);
 }
 
 /**

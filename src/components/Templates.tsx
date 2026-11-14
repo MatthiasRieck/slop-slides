@@ -9,7 +9,7 @@ import { cn, layoutLabel, templateSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { Popover } from "./Popover";
-import { SlideFrame } from "./SlideFrame";
+import { SlideImage } from "./SlideImage";
 
 const LAST_TEMPLATE_KEY = "slopslide.layoutTemplate";
 
@@ -25,11 +25,10 @@ export function useTemplates(): TemplateSummary[] | undefined {
 /** A still preview of one of a template's slides, loaded when the list it is in shows it. */
 export function TemplateSlide(props: { template: string; slide: string; size?: Pixels; className?: string }) {
   return (
-    <SlideFrame
+    <SlideImage
       deckId={props.template}
       slideId={props.slide}
       version=""
-      thumbnail
       lazy
       size={props.size}
       url={templateSlideUrl(props.template, props.slide)}

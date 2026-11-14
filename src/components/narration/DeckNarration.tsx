@@ -3,14 +3,8 @@ import { useState } from "react";
 
 import { api, type Deck, errorMessage, type Slide, type SlideAudio } from "../../lib/api";
 import { markdownText } from "../../lib/markdown";
-import {
-  describeGeneration,
-  generationSize,
-  MARK_LABELS,
-  type NarrationMark,
-  narrationMark,
-  slidesToScriptFromNotes,
-} from "../../lib/narration";
+import { MARK_LABELS, type NarrationMark, narrationMark, slidesToScriptFromNotes } from "../../lib/narration";
+import { describeGeneration, generationSize } from "../../lib/narrationSize";
 import { loadFlag, saveFlag } from "../../lib/storage";
 import { cn } from "../../lib/utils";
 import { formatBytes } from "../../lib/voice";

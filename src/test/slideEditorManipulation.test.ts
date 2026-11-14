@@ -168,6 +168,66 @@ describe("typing with an element selected", () => {
   });
 });
 
+describe("what typing costs", () => {
+  it("posts the toolbar's report only when it says something new, however many keys are typed", async () => {
+    const e = editor();
+    click(e, e.$("#box"));
+    e.key("Enter");
+    caretAtEnd(e);
+    await e.frame();
+    const reports = () => e.messages("slop:edit-selection").length;
+    const before = reports();
+    for (let i = 0; i < 6; i++) {
+      type(e, "x");
+      // The webview tells of the caret moving as well, in a task of its own.
+      e.doc.dispatchEvent(new e.window.Event("selectionchange"));
+      await e.frame();
+    }
+    expect(e.$("#box").textContent).toBe("Helloxxxxxx");
+    expect(reports()).toBe(before);
+    // A change the toolbar shows is reported, once.
+    selectAllText(e);
+    e.fromParent({ type: "slop:edit-style", style: { bold: true } });
+    await e.frame();
+    expect(reports()).toBe(before + 1);
+    expect(e.messages<{ selection: { bold: boolean } }>("slop:edit-selection").at(-1)!.selection.bold).toBe(true);
+  });
+});
+
+describe("shown again", () => {
+  it("starts over as a preview just loaded, and reports everything again, when the app shows it after loading it ahead", async () => {
+    const e = editor();
+    await e.frame();
+    await e.frame();
+    const count = (type: string) => e.messages(type).length;
+    const kinds = [
+      "slop:edit-layers",
+      "slop:edit-overflow",
+      "slop:edit-background",
+      "slop:edit-fonts",
+      "slop:edit-colors",
+    ];
+    const before = kinds.map(count);
+    expect(before.every((n) => n > 0)).toBe(true);
+    click(e, e.$("#box"));
+    e.key("q");
+    expect(editing(e)).toBe(e.$("#box"));
+    e.fromParent({ type: "slop:edit-show" });
+    // The typing is saved and done, and nothing is selected.
+    expect(editing(e)).toBeNull();
+    expect(e.selected()).toEqual([]);
+    expect(e.commits().at(-1)!.markup).toContain("Helloq");
+    expect(e.messages<{ selected: boolean }>("slop:edit-selection").at(-1)!.selected).toBe(false);
+    const reports = count("slop:edit-selection");
+    await e.frame();
+    // What it said before, it says again, though nothing changed.
+    expect(kinds.map(count)).toEqual(before.map((n) => n + 1));
+    // Shown again with nothing selected, it still says so, once.
+    e.fromParent({ type: "slop:edit-show" });
+    expect(count("slop:edit-selection")).toBe(reports + 1);
+  });
+});
+
 describe("undo while typing", () => {
   it("undoes and redoes the typing and the toolbar's formatting in the order they were made", () => {
     const e = editor();

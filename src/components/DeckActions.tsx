@@ -2,7 +2,6 @@ import { AppWindow, Check, ChevronDown, Play, type Share, SkipBack } from "lucid
 
 import { useDropdown } from "../hooks/useDropdown";
 import { useMenuKeys } from "../hooks/useMenuKeys";
-import type { Deck } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
@@ -25,15 +24,23 @@ export function DeckActions({
   exportLabel?: boolean;
   presentLabel?: boolean;
 }) {
-  const deck = useApp((s) => s.deck);
+  // Whether there is a deck, and whether it has a slide: not the deck, which changes with every edit.
+  const deck = useApp((s) => (s.deck ? (s.deck.slides.length === 0 ? "empty" : "slides") : null));
   if (!deck) return null;
-  return <Actions deck={deck} exportLabel={exportLabel} presentLabel={presentLabel} />;
+  return <Actions empty={deck === "empty"} exportLabel={exportLabel} presentLabel={presentLabel} />;
 }
 
-function Actions({ deck, exportLabel, presentLabel }: { deck: Deck; exportLabel: boolean; presentLabel: boolean }) {
+function Actions({
+  empty,
+  exportLabel,
+  presentLabel,
+}: {
+  empty: boolean;
+  exportLabel: boolean;
+  presentLabel: boolean;
+}) {
   const picker = usePresent();
 
-  const empty = deck.slides.length === 0;
   return (
     <div className="flex items-center gap-2">
       <ExportMenu label={exportLabel} disabledReason={empty ? EMPTY_DECK : null} />

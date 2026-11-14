@@ -90,8 +90,18 @@ export function activeMatch(state: Pick<AppState, "search" | "selected">): numbe
   return matches.findIndex((m) => m.slide === state.selected);
 }
 
+/** What the slide on the stage highlights of what Find found. */
+export interface SearchHighlight {
+  /** What to highlight; empty for nothing. */
+  query: string;
+  matchCase: boolean;
+  wholeWord: boolean;
+  /** Which of the slide's matches is the one in focus, counted on that slide; -1 for none. */
+  active: number;
+}
+
 /** What the slide on the stage highlights; `active` counts the matches on that slide. */
-export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
+export function searchHighlight(state: Pick<AppState, "search" | "selected">): SearchHighlight {
   const { query, options, matches } = state.search;
   const first = matches?.findIndex((m) => m.slide === state.selected) ?? -1;
   return {

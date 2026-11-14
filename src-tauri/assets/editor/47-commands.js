@@ -160,7 +160,7 @@
     if (!selected || !slide.contains(selected)) return;
     var source = leavesOf([selected])[0];
     if (!source) return;
-    window.parent.postMessage({ type: "slop:edit-style-copied", slide: slide.id, style: paintableStyle(source) }, "*");
+    tellApp({ type: "slop:edit-style-copied", slide: slide.id, style: paintableStyle(source) });
   }
 
   /** Gives every selected element the look `taken` (from copyStyle); fill and line only go between likes. */
@@ -280,12 +280,12 @@
     report();
   }
   // Anything done on the slide itself ends a preview the app never finished.
-  document.addEventListener("pointerdown", endPreview, true);
-  window.addEventListener("keydown", endPreview, true);
+  listen(document, "pointerdown", endPreview, true);
+  listen(window, "keydown", endPreview, true);
 
   /** Asks the app for something only it can do: open its Link popover, or hand back the copied look. */
   function askApp(what) {
-    window.parent.postMessage({ type: "slop:edit-request", slide: slide.id, what: what }, "*");
+    tellApp({ type: "slop:edit-request", slide: slide.id, what: what });
   }
 
   /** The letter of a key. With Alt held a key types something else, so there it goes by its place on the keyboard. */

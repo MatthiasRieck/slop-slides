@@ -5,7 +5,8 @@ import remarkRehype from "remark-rehype";
 import { unified } from "unified";
 import { describe, expect, it } from "vitest";
 
-import { codeSpans, linkTarget, markdownText, rehypePieces, splitBlocks } from "./markdown";
+import { codeSpans } from "./codeSpans";
+import { linkTarget, markdownText, rehypePieces, splitBlocks } from "./markdown";
 import { follow, pieces, startTrack, toScript } from "./teleprompter";
 
 describe("markdownText", () => {

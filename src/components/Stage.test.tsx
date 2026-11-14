@@ -16,10 +16,12 @@ import { wroteAsset } from "../lib/ownAssets";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { lastError } from "../store/errors";
+import { historyEntry, historyStatus } from "../store/testing";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
-import { useStageView } from "./stage/stageView";
+import { PATCH_WAIT } from "./stage/stageDocument";
+import { useOverflowPaths, useStageView } from "./stage/stageView";
 
 // Drawing schedules a save of the review marks; finish it here, not in the next test.
 afterEach(() => flushReviewSave());
@@ -1369,16 +1371,87 @@ describe("Stage", () => {
       vi.restoreAllMocks();
     });
 
+    describe("loading the slides next to it ahead", () => {
+      const twoSlides = () => {
+        const deck = deckFor(
+          `<section class="slide" id="intro"><h1>A</h1></section><section class="slide" id="outro"><h1>B</h1></section>`,
+        );
+        useApp.setState({ deck, selected: "intro", templates: [] });
+      };
+      const shown = (container: HTMLElement) =>
+        [...container.querySelectorAll<HTMLIFrameElement>("iframe")].filter((f) => f.style.visibility !== "hidden");
+      const ahead = (container: HTMLElement) => [...container.querySelectorAll<HTMLIFrameElement>("iframe[data-warm]")];
+
+      it("switches to the next slide in edit mode without loading its editor, and has it start over", () => {
+        twoSlides();
+        toggleEditing();
+        const { container } = render(<Stage />);
+        const first = [...container.querySelectorAll("iframe")].find((f) => f.src.includes("&edit="))!;
+        expect(ahead(container)).toEqual([]);
+        fireEvent.load(first);
+        // Once the slide shown has loaded, the next one's editor loads out of sight.
+        const [next] = ahead(container);
+        expect(next!.getAttribute("src")).toContain("slide=outro");
+        expect(next!.getAttribute("src")).toContain("&edit=0");
+        const post = vi.spyOn(next!.contentWindow!, "postMessage");
+        fireEvent.load(next!);
+        // Before it shows, it only learns the colors around it.
+        expect(post.mock.calls.map(([data]) => (data as { type: string }).type)).toEqual(["slop:canvas"]);
+        // What it says meanwhile is not the stage's to hear.
+        fromFrame(next!, { type: "slop:edit-overflow", slide: "outro", items: ["x"], paths: [[0]] });
+        fromFrame(next!, { type: "slop:edit-layers", slide: "outro", layers: [] });
+        expect(useOverflowPaths.getState().slide).not.toBe("outro");
+
+        act(() => useApp.getState().select("outro"));
+        // The same document, shown at once: nothing to load.
+        expect(shown(container)).toEqual([next]);
+        expect(next!.hasAttribute("data-warm")).toBe(false);
+        const types = post.mock.calls.map(([data]) => (data as { type: string }).type);
+        expect(types).toContain("slop:edit-show");
+        expect(types.indexOf("slop:edit-show")).toBeLessThan(types.indexOf("slop:edit-tool"));
+        // The slide it came from stays loaded, as the one before it, and is out of sight.
+        expect(ahead(container)).toEqual([first]);
+        // Coming back is as quick.
+        act(() => useApp.getState().select("intro"));
+        expect(shown(container)).toEqual([first]);
+        expect(ahead(container)).toEqual([next]);
+      });
+
+      it("loads nothing ahead while the agent is at work", () => {
+        twoSlides();
+        useApp.setState({ running: true });
+        toggleEditing();
+        const { container } = render(<Stage />);
+        fireEvent.load([...container.querySelectorAll("iframe")].find((f) => f.src.includes("&edit="))!);
+        expect(ahead(container)).toEqual([]);
+        act(() => useApp.setState({ running: false }));
+        expect(ahead(container)).toHaveLength(1);
+      });
+
+      it("loads nothing ahead in view mode, nor for a locked slide", () => {
+        twoSlides();
+        const { container } = render(<Stage />);
+        fireEvent.load(shown(container)[0]!);
+        expect(ahead(container)).toEqual([]);
+        const deck = useApp.getState().deck!;
+        useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, locked: s.id === "outro" })) } });
+        toggleEditing();
+        // The editor came to the page shown; the slide next to it is locked.
+        expect(shown(container)[0]!.getAttribute("src")).not.toContain("&edit=");
+        expect(ahead(container)).toEqual([]);
+      });
+    });
+
     it("asks nothing of the agent about a locked slide, and edits nothing on one, staying in edit mode", () => {
       const locked = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`));
       useApp.setState({ deck: locked, templates: [] });
-      render(<Stage />);
       toggleEditing();
+      render(<Stage />);
       expect(useApp.getState().editing).toBe(true);
       expect(screen.queryByText("Locked")).toBeNull();
 
-      const edited = () =>
-        [...document.querySelectorAll("iframe")].some((f) => f.getAttribute("src")?.includes("edit="));
+      // The newest page, the one shown once it has loaded.
+      const edited = () => !![...document.querySelectorAll("iframe")].at(-1)?.getAttribute("src")?.includes("edit=");
       expect(edited()).toBe(true);
       act(() => useApp.getState().select("outro"));
       // Still Edit mode, for the slide list and the timeline, but no editor and none of its tools.
@@ -1386,7 +1459,7 @@ describe("Stage", () => {
       expect(edited()).toBe(false);
       expect(screen.queryByRole("toolbar", { name: "Edit tools" })).toBeNull();
       expect(screen.queryByRole("toolbar", { name: "View tools" })).toBeNull();
-      expect(screen.getByRole("status").textContent).toContain("This slide is locked");
+      expect(screen.getByText(/This slide is locked/).closest("[role=status]")).toBeTruthy();
       // The timeline's tools stay, as in either ribbon.
       expect(screen.getByRole("button", { name: "Show the timeline under the slide" })).toBeTruthy();
       expect(screen.getByText("Locked")).toBeTruthy();
@@ -1413,20 +1486,59 @@ describe("Stage", () => {
       expect(screen.getByRole("toolbar", { name: "Edit tools" })).toBeTruthy();
     });
 
-    it("loads the slide editor into the preview in edit mode", () => {
+    it("loads the slide with its editor in edit mode", () => {
+      toggleEditing();
       const { container } = render(<Stage />);
-      expect(stageFrame(container).getAttribute("src")).not.toContain("edit=");
+      expect(stageFrame(container).getAttribute("src")).toContain("&static&pan&edit=0");
+    });
+
+    it("puts the editor on the slide shown entering Edit, and takes it off leaving, without loading the slide again", () => {
+      const { container } = render(<Stage />);
+      const page = stageFrame(container);
+      expect(page.getAttribute("src")).not.toContain("edit=");
+      const post = vi.spyOn(page.contentWindow!, "postMessage");
+      const told = () =>
+        post.mock.calls.map(([data]) => data as { type: string }).filter((d) => /edit-(at|de)tach/.test(d.type));
+      fireEvent.load(page);
+      // In and out, a few times: the same page throughout, told each time.
+      for (let round = 0; round < 3; round++) {
+        toggleEditing();
+        toggleEditing();
+      }
+      expect([...container.querySelectorAll("iframe")]).toEqual([page]);
+      expect(told()).toEqual(
+        Array.from({ length: 3 }, () => [
+          { type: "slop:edit-attach" },
+          { type: "slop:edit-detach", still: false },
+        ]).flat(),
+      );
+      // The editor that came says so, and is set up as one loaded with the page would be.
       toggleEditing();
-      expect(useApp.getState().editing).toBe(true);
-      const sources = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src"));
-      expect(sources.some((src) => src?.includes("&static&pan&edit=0"))).toBe(true);
+      post.mockClear();
+      fromFrame(page, { type: "slop:edit-attached", slide: "intro" });
+      const types = post.mock.calls.map(([data]) => (data as { type: string }).type);
+      expect(types).toEqual(["slop:edit-snap", "slop:edit-size-mode", "slop:edit-keep-ratio", "slop:edit-tool"]);
+      // View showing its slides still, the slide stays on its final frame once the editor goes.
+      useApp.setState({ finalState: true });
+      post.mockClear();
       toggleEditing();
-      expect(useApp.getState().editing).toBe(false);
+      expect(told()).toEqual([{ type: "slop:edit-detach", still: true }]);
+      expect([...container.querySelectorAll("iframe")]).toEqual([page]);
+    });
+
+    it("tells a page that loaded after the mode changed what the mode is now", () => {
+      const { container } = render(<Stage />);
+      const page = stageFrame(container);
+      const post = vi.spyOn(page.contentWindow!, "postMessage");
+      toggleEditing();
+      expect(post).not.toHaveBeenCalled();
+      fireEvent.load(page);
+      expect(post).toHaveBeenCalledWith({ type: "slop:edit-attach" }, "*");
     });
 
     it("shows the slide as it plays while narration plays over it, even in edit mode", () => {
-      const { container } = render(<Stage />);
       toggleEditing();
+      const { container } = render(<Stage />);
       const sources = () => [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
       expect(sources().some((src) => src.includes("edit="))).toBe(true);
       const selected = useApp.getState().selected!;
@@ -2593,7 +2705,10 @@ describe("Stage", () => {
         const deck = useApp.getState().deck!;
         return { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, hash } : s)) };
       };
-      const frames = (container: HTMLElement) => [...container.querySelectorAll("iframe")];
+      // The slides next to it load ahead, out of sight (see "loading the slides next to it ahead").
+      const frames = (container: HTMLElement) => [
+        ...container.querySelectorAll<HTMLIFrameElement>("iframe:not([data-warm])"),
+      ];
       /** The editor's preview, once it has loaded in place of the slide's. */
       const editorFrame = (container: HTMLElement) => {
         const frame = frames(container).at(-1)!;
@@ -2622,26 +2737,119 @@ describe("Stage", () => {
         expect(frame.getAttribute("src")).toBe(src);
       });
 
-      it("loads the slide again for a change the editor did not make, or a save that failed", async () => {
+      /** The backend, answering the slide's markup at `hash` and moving the deck through its history. */
+      const backend = (hash: () => string, history: Record<string, () => unknown> = {}) =>
+        vi.mocked(invoke).mockImplementation(async (command) => {
+          if (command === "slide_source")
+            return { markup: `<section class="slide" id="intro">${hash()}</section>`, hash: hash() };
+          if (command in history) return history[command]!();
+          return undefined;
+        });
+      /** The patches posted to `frame`. */
+      const patches = (post: { mock: { calls: unknown[][] } }) =>
+        post.mock.calls
+          .map(([data]) => data as { type: string; hash?: string; markup?: string })
+          .filter((d) => d.type === "slop:edit-patch");
+
+      it("patches an undo of the editor's change into the slide shown, without loading it again, in Edit and after", async () => {
         useApp.setState({ selected: "intro" });
         const { container } = render(<Stage />);
         toggleEditing();
         const frame = editorFrame(container);
+        const src = frame.getAttribute("src");
         await commit(frame, "saved-1");
-        // The agent changes the slide.
-        act(() => useApp.getState().setDeck(withHash("agent")));
-        const [, next] = frames(container);
-        expect(next!.getAttribute("src")).toContain("agent");
-        fireEvent.load(next!);
-        expect(frames(container)).toEqual([next]);
-        // An undo back to what the editor saved shows the file, not what the editor has now.
-        act(() => {
-          useApp.getState().setDeck(withHash("saved-1"));
-          useApp.setState((s) => ({ editReload: s.editReload + 1 }));
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        let now = "undone";
+        const step = () => ({ deck: withHash(now), entry: historyEntry("Edit slide"), status: historyStatus() });
+        backend(() => now, { undo_deck: step, redo_deck: step, deck_history: () => historyStatus() });
+        await act(() => useApp.getState().undo());
+        await waitFor(() => expect(patches(post)).toHaveLength(1));
+        expect(patches(post)[0]).toEqual({
+          type: "slop:edit-patch",
+          slide: "intro",
+          hash: "undone",
+          markup: `<section class="slide" id="intro">undone</section>`,
         });
-        const undone = frames(container).at(-1)!;
-        expect(undone).not.toBe(next);
-        expect(undone.getAttribute("src")).toContain("saved-1");
+        fromFrame(frame, { type: "slop:edit-patched", slide: "intro", hash: "undone", ok: true });
+        // The redo goes back to what the editor saved, which it no longer shows: patched too.
+        now = "saved-1";
+        await act(() => useApp.getState().redo());
+        await waitFor(() => expect(patches(post)).toHaveLength(2));
+        expect(patches(post)[1]!.hash).toBe("saved-1");
+        fromFrame(frame, { type: "slop:edit-patched", slide: "intro", hash: "saved-1", ok: true });
+        // The same page throughout, and leaving Edit keeps it: it shows the slide as it is.
+        toggleEditing();
+        expect(frames(container)).toEqual([frame]);
+        expect(frame.getAttribute("src")).toBe(src);
+        expect(useApp.getState().editReload).toBe(0);
+      });
+
+      it("patches the agent's change too, and in View loads a change again, as before", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const frame = editorFrame(container);
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        backend(() => "agent");
+        act(() => useApp.getState().setDeck(withHash("agent")));
+        await waitFor(() => expect(patches(post)).toHaveLength(1));
+        fromFrame(frame, { type: "slop:edit-patched", slide: "intro", hash: "agent", ok: true });
+        expect(frames(container)).toEqual([frame]);
+        toggleEditing();
+        act(() => useApp.getState().setDeck(withHash("agent-2")));
+        expect(frames(container).at(-1)!.getAttribute("src")).toContain("agent-2");
+        expect(patches(post)).toHaveLength(1);
+      });
+
+      it("loads the slide again when the patch cannot be made: refused, unanswered, or the deck moved on", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        let frame = editorFrame(container);
+        // Refused (markup with a script, say).
+        let post = vi.spyOn(frame.contentWindow!, "postMessage");
+        backend(() => "refused");
+        act(() => useApp.getState().setDeck(withHash("refused")));
+        await waitFor(() => expect(patches(post)).toHaveLength(1));
+        fromFrame(frame, { type: "slop:edit-patched", slide: "intro", hash: "refused", ok: false });
+        expect(frames(container).at(-1)!.getAttribute("src")).toContain("refused");
+        frame = editorFrame(container);
+        // The file holds another version than the deck shown (a change on its way).
+        post = vi.spyOn(frame.contentWindow!, "postMessage");
+        backend(() => "newer");
+        act(() => useApp.getState().setDeck(withHash("older")));
+        await waitFor(() => expect(frames(container).at(-1)!.getAttribute("src")).toContain("older"));
+        expect(patches(post)).toEqual([]);
+        frame = editorFrame(container);
+        // No answer.
+        vi.useFakeTimers();
+        try {
+          post = vi.spyOn(frame.contentWindow!, "postMessage");
+          backend(() => "silent");
+          act(() => useApp.getState().setDeck(withHash("silent")));
+          await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+          expect(patches(post)).toHaveLength(1);
+          expect(frames(container)).toEqual([frame]);
+          await act(async () => void (await vi.advanceTimersByTimeAsync(PATCH_WAIT)));
+          expect(frames(container).at(-1)!.getAttribute("src")).toContain("silent");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("loads the slide again after a save that failed", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const frame = editorFrame(container);
+        vi.mocked(invoke).mockImplementation(async (command) => {
+          if (command === "update_slide") throw "The slide changed since";
+          return undefined;
+        });
+        fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] });
+        await waitFor(() => expect(useApp.getState().editReload).toBe(1));
+        expect(frames(container).at(-1)).not.toBe(frame);
+        expect(frames(container).at(-1)!.getAttribute("src")).toContain("&edit=1");
       });
 
       it("forgets what the editor saved when edit mode is left", async () => {
@@ -3346,16 +3554,18 @@ describe("Stage", () => {
     it("keeps the slide at its size on a pasteboard filling the area, in view and edit mode, and sends the panel colors", () => {
       const { container } = render(<Stage />);
       const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!;
-      expect(slideBox().style.width).toBe("960px");
+      // As large as fits the area, which is a size container, in the slide's shape.
+      const fits = "min(100cqw, 1.7777777777777777*100cqh)";
+      expect(slideBox().style.width).toBe(fits);
       expect(slideBox().className).not.toContain("overflow-hidden");
       const viewer = stageFrame(container);
       expect(viewer.getAttribute("src")).toContain("&pan");
       expect(viewer.getAttribute("src")).not.toContain("edit=");
-      // The 960x540 area plus its 32px padding, at the slide's 0.5 scale.
-      expect(viewer.style.width).toBe("2048px");
-      expect(viewer.style.height).toBe("1208px");
-      expect(viewer.style.left).toBe("-32px");
-      expect(viewer.style.top).toBe("-32px");
+      // The area plus its 32px padding, at the slide's scale.
+      expect(viewer.style.width).toContain("max(calc(100cqw + 64px), 100%)");
+      expect(viewer.style.height).toContain("max(calc(100cqh + 64px), 100%)");
+      expect(viewer.style.width).toContain("var(--slide-scale)");
+      expect(viewer.parentElement!.style.getPropertyValue("--slide-scale")).toBe("0.5");
       const viewPost = vi.spyOn(viewer.contentWindow!, "postMessage");
       fireEvent.load(viewer);
       const colors = {
@@ -3375,15 +3585,15 @@ describe("Stage", () => {
       };
       expect(viewPost).toHaveBeenCalledWith(colors, "*");
       toggleEditing();
-      expect(slideBox().style.width).toBe("960px");
+      expect(slideBox().style.width).toBe(fits);
       const frame = [...container.querySelectorAll("iframe")].at(-1)!;
       expect(frame.getAttribute("src")).toContain("edit=");
-      expect(frame.style.width).toBe("2048px");
+      expect(frame.style.width).toBe(viewer.style.width);
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
       fireEvent.load(frame);
       expect(post).toHaveBeenCalledWith(colors, "*");
       toggleEditing();
-      expect(slideBox().style.width).toBe("960px");
+      expect(slideBox().style.width).toBe(fits);
     });
 
     it("fits a slide of another size into the area in its own shape", () => {
@@ -3393,8 +3603,10 @@ describe("Stage", () => {
       });
       const { container } = render(<Stage />);
       const slideBox = container.querySelector<HTMLElement>("[data-sketch-target]")!;
-      // The 960x540 area fits a 4:5 slide 432 px wide (540 px tall).
-      expect(slideBox.style.width).toBe("432px");
+      // The area fits a 4:5 slide as wide as 0.8 times its height, or as wide as it is.
+      expect(slideBox.style.width).toBe("min(100cqw, 0.8*100cqh)");
+      // 960x540 fits it 432 px wide (540 px tall).
+      expect(useStageView.getState().fitScale).toBe(432 / 1080);
       const viewer = stageFrame(container);
       expect(viewer.parentElement!.style.aspectRatio).toBe("1080 / 1350");
     });
@@ -3534,14 +3746,20 @@ describe("Stage", () => {
         fireEvent.load(viewer);
         fromFrame(viewer, { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
         expect(level()).toBe("100%");
+        const post = vi.spyOn(viewer.contentWindow!, "postMessage");
         toggleEditing();
         expect(level()).toBe("100%");
-        const editor = [...container.querySelectorAll("iframe")].at(-1)!;
-        const post = vi.spyOn(editor.contentWindow!, "postMessage");
-        fireEvent.load(editor);
-        expect(post).toHaveBeenCalledWith({ type: "slop:camera", x: 40, y: -20, k: 2 }, "*");
+        // The same page, panned and zoomed as it was: the editor comes to it.
+        expect([...container.querySelectorAll("iframe:not([data-warm])")]).toEqual([viewer]);
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:camera" }), "*");
         toggleEditing();
         expect(level()).toBe("100%");
+        // Loaded again (the agent changed the slide), it is put back where it was.
+        act(() => useApp.getState().setDeck(deckFor(DECK_HTML, "2")));
+        const again = stageFrame(container);
+        const postAgain = vi.spyOn(again.contentWindow!, "postMessage");
+        fireEvent.load(again);
+        expect(postAgain).toHaveBeenCalledWith({ type: "slop:camera", x: 40, y: -20, k: 2 }, "*");
       });
 
       it("starts each slide centered at full size", () => {
@@ -3586,7 +3804,7 @@ describe("Stage", () => {
         fireEvent.load(frame);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:camera" }), "*");
         fromFrame(frame, { type: "slop:view", slide: "intro", x: -400, y: 120, k: 0.5 });
-        fireEvent.load(container.querySelectorAll("iframe")[container.querySelectorAll("iframe").length - 1]!);
+        fireEvent.load([...container.querySelectorAll("iframe:not([data-warm])")].at(-1)!);
         expect(post).toHaveBeenCalledWith({ type: "slop:camera", x: -400, y: 120, k: 0.5 }, "*");
       });
 

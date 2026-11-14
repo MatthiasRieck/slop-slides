@@ -1,7 +1,7 @@
   // ---- Pointer and clipboard: presses, drags and hover, the context menu, focus, pasted and dropped
   // text and images, and copying and pasting elements.
 
-  document.addEventListener("pointerdown", function (event) {
+  listen(document, "pointerdown", function (event) {
     // The pasteboard takes the middle button and Space+drag before this sees them.
     if (event.button !== 0) return;
     wires.removeAttribute("data-quiet");
@@ -175,7 +175,7 @@
   // A right-click selects what is under it and the app shows its menu; with a tool in hand, the
   // tool goes back to Select first. Where nothing else is, it selects the locked element there, so
   // the menu can unlock it. While typing, the webview's own menu stays, for its spelling suggestions.
-  document.addEventListener("contextmenu", function (event) {
+  listen(document, "contextmenu", function (event) {
     if (editing && editing.contains(event.target)) return;
     event.preventDefault();
     if (tool !== "select") {
@@ -193,31 +193,28 @@
     if (!isSelected(el) && (!selected || !el || !selected.contains(el))) select(el);
     var group = selected ? inDocumentOrder(allSelected()) : [];
     var parent = group.length === 1 && selected.parentElement !== slide ? selected.parentElement : null;
-    window.parent.postMessage(
-      {
-        type: "slop:edit-menu",
-        slide: slide.id,
-        x: event.clientX,
-        y: event.clientY,
-        element: selected && menuElement(selected),
-        // Every selected element, in the slide's order, for what the menu does to them all.
-        elements: group.map(menuElement),
-        // The one selected element holds text that can be edited.
-        editable: group.length === 1 && canEditText(selected),
-        // Something on the slide is locked, so the menu can unlock it all.
-        locked: !!slide.querySelector("[" + LOCK_ATTR + "]"),
-        // What lies at the pointer, the top-most first, for the menu to select any of, and what
-        // holds the one selected element.
-        under: stackAt(event.target, event.clientX, event.clientY).map(function (item) {
-          return { path: pathOf(item), name: layerName(item), selected: isSelected(item) };
-        }),
-        parent: parent ? { path: pathOf(parent), name: layerName(parent) } : null,
-      },
-      "*",
-    );
+    tellApp({
+      type: "slop:edit-menu",
+      slide: slide.id,
+      x: event.clientX,
+      y: event.clientY,
+      element: selected && menuElement(selected),
+      // Every selected element, in the slide's order, for what the menu does to them all.
+      elements: group.map(menuElement),
+      // The one selected element holds text that can be edited.
+      editable: group.length === 1 && canEditText(selected),
+      // Something on the slide is locked, so the menu can unlock it all.
+      locked: !!slide.querySelector("[" + LOCK_ATTR + "]"),
+      // What lies at the pointer, the top-most first, for the menu to select any of, and what
+      // holds the one selected element.
+      under: stackAt(event.target, event.clientX, event.clientY).map(function (item) {
+        return { path: pathOf(item), name: layerName(item), selected: isSelected(item) };
+      }),
+      parent: parent ? { path: pathOf(parent), name: layerName(parent) } : null,
+    });
   });
 
-  document.addEventListener("pointermove", function (event) {
+  listen(document, "pointermove", function (event) {
     pointer = { x: event.clientX, y: event.clientY };
     if (create) {
       createTo(event);
@@ -359,18 +356,18 @@
     }
     if (click) select(el);
   }
-  document.addEventListener("pointerup", endDrag);
-  document.addEventListener("pointercancel", endDrag);
-  document.documentElement.addEventListener("pointerleave", function () {
+  listen(document, "pointerup", endDrag);
+  listen(document, "pointercancel", endDrag);
+  listen(document.documentElement, "pointerleave", function () {
     pointer = null;
     dropHover();
   });
-  window.addEventListener("resize", cameraMoved);
+  listen(window, "resize", cameraMoved);
   // What overflows is looked for right away, and once more when the page's images and fonts are
   // all in, which may lay it out anew.
   scheduleOverflow();
   whenSettled(scheduleOverflow);
-  document.addEventListener("input", function (event) {
+  listen(document, "input", function (event) {
     // Typing over everything can take the body away, or leave text beside it.
     if (editing && !event.isComposing) ensureBody(editing);
     // Fitting the text again lays it out several times over: it waits for a pause in the typing.
@@ -378,20 +375,21 @@
     placeHandles();
     if (editing) scheduleReport();
   });
-  document.addEventListener("selectionchange", function () {
+  listen(document, "selectionchange", function () {
     if (editing && editRange()) scheduleReport();
   });
   // Clicking the app's toolbar keeps the text being edited, and its selection, for the toolbar
   // to restyle; a click elsewhere in the app ends editing ({ type: "slop:edit-finish" }).
-  window.addEventListener("blur", function () {
+  listen(window, "blur", function () {
     if (editing) editRange();
   });
-  window.addEventListener("focus", function () {
+  listen(window, "focus", function () {
     var range = editRange();
     if (range) useRange(range);
   });
   // Links on the slide do not go anywhere while editing it.
-  document.addEventListener(
+  listen(
+    document,
     "click",
     function (event) {
       var link = event.target && event.target.closest ? event.target.closest("a") : null;
@@ -399,7 +397,7 @@
     },
     true,
   );
-  document.addEventListener("dblclick", function (event) {
+  listen(document, "dblclick", function (event) {
     if (tool !== "select" || editing || Date.now() - enteredAt < DOUBLE_CLICK_MS) return;
     var el = pickable(event.target, event.clientX, event.clientY);
     // An image's double-click was the press's to take (see editAt).
@@ -410,7 +408,7 @@
   });
 
   // Pasted text keeps its formatting (cleaned, see pastedFragment), or with ⌘⇧V comes as plain text.
-  document.addEventListener("paste", function (event) {
+  listen(document, "paste", function (event) {
     if (!editing) return;
     event.preventDefault();
     var data = event.clipboardData;
@@ -423,7 +421,7 @@
     insertAtCaret(content);
     textStepDone(before);
   });
-  document.addEventListener("drop", function (event) {
+  listen(document, "drop", function (event) {
     if (editing) event.preventDefault();
   });
 
@@ -487,7 +485,7 @@
     var text = group.map(function (el) {
       return (typeof el.innerText === "string" ? el.innerText : el.textContent).trim();
     }).join("\n");
-    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: html, text: text }, "*");
+    tellApp({ type: "slop:edit-copied", slide: slide.id, html: html, text: text });
     if (cut) removeSelected();
   }
 

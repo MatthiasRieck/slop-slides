@@ -73,14 +73,6 @@ export function rehypePieces(pieces: Piece[], className: (piece: Piece) => strin
   };
 }
 
-/** Stretches of a sentence, those written between backticks marked as code. */
-export function codeSpans(text: string): { text: string; code: boolean }[] {
-  return text
-    .split("`")
-    .map((part, index) => ({ text: part, code: index % 2 === 1 }))
-    .filter((part) => part.text !== "");
-}
-
 /**
  * Where a link in a chat message leads: a page for the browser, a file of the workspace, a slide
  * of the open deck (by the id its `#…` names; whether there is such a slide is for the chat to

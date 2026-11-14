@@ -9,7 +9,7 @@
     tool = TOOLS.indexOf(next) >= 0 ? next : "select";
     painting = tool === "paint" && selected ? paintableStyle(selected) : null;
     // The look the painter took is the copied look too: ⌘⌥V pastes it, on any slide.
-    if (painting) window.parent.postMessage({ type: "slop:edit-style-copied", slide: slide.id, style: painting }, "*");
+    if (painting) tellApp({ type: "slop:edit-style-copied", slide: slide.id, style: painting });
     if (tool === "select") {
       keptTool = null;
       document.documentElement.removeAttribute("data-slop-tool");
@@ -18,7 +18,7 @@
       hover(null);
     }
     placeSvgButton();
-    if (tell) window.parent.postMessage({ type: "slop:edit-tool", slide: slide.id, tool: tool }, "*");
+    if (tell) tellApp({ type: "slop:edit-tool", slide: slide.id, tool: tool });
   }
 
   /** After the tool added something: back to Select, unless the tool is kept for the next one. */

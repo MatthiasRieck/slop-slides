@@ -249,6 +249,8 @@ const dotPlace = (at: { x: number; y: number }) => `translate(${at.x}px, ${at.y}
  * What follows the pointer is drawn without rendering: the stroke in hand grows by its new points
  * only, the laser dot is moved, and the trail is painted on its canvas, so a move costs the same
  * however much ink the slide has. The ink itself renders when a stroke is finished or taken away.
+ * With no ink on the slide and no tool in hand there is nothing to draw: a zoom or a resize then
+ * neither measures nor renders the layer (see `inkless`), which catches up once there is.
  */
 export const AnnotationLayer = memo(function AnnotationLayer({
   annotations,
@@ -263,6 +265,11 @@ export const AnnotationLayer = memo(function AnnotationLayer({
   const sizeNow = useRef(size);
   sizeNow.current = size;
   const active = tool !== "pointer";
+  const idle = inkless(annotations);
+  const idleNow = useRef(idle);
+  idleNow.current = idle;
+  // The layer resized while there was nothing to draw: it is measured once there is.
+  const sizeStale = useRef(false);
 
   // The look of the stroke being drawn, which mounts what draws it; its points are `draft`'s.
   const [drafting, setDrafting] = useState<Pick<Stroke, "tool" | "color"> | null>(null);
@@ -285,21 +292,35 @@ export const AnnotationLayer = memo(function AnnotationLayer({
 
   // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width
   // (times the zoom) as the layer resizes.
+  const measure = useRef(() => {
+    const el = layerRef.current;
+    if (!el) return;
+    sizeStale.current = false;
+    const rect = el.getBoundingClientRect();
+    const next = { width: el.offsetWidth || rect.width, height: el.offsetHeight || rect.height };
+    // A layer that is the size it was has nothing to draw again.
+    if (sizeNow.current.width !== next.width || sizeNow.current.height !== next.height) setSize(next);
+  }).current;
   useLayoutEffect(() => {
     const el = layerRef.current!;
-    const measure = () => {
-      const rect = el.getBoundingClientRect();
-      const next = { width: el.offsetWidth || rect.width, height: el.offsetHeight || rect.height };
-      // A layer that is the size it was has nothing to draw again.
-      if (sizeNow.current.width !== next.width || sizeNow.current.height !== next.height) setSize(next);
+    const resized = () => {
+      if (idleNow.current) sizeStale.current = true;
+      else measure();
     };
-    measure();
+    resized();
     // Redraw before the resized layer is painted: a zoom resizes it at once, and ink drawn a
     // frame later at the old size flickers.
-    const observer = new ResizeObserver(() => flushSync(measure));
+    const observer = new ResizeObserver(() => {
+      if (idleNow.current) sizeStale.current = true;
+      else flushSync(measure);
+    });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [measure]);
+  // Something to draw again, at the size the layer is now.
+  useLayoutEffect(() => {
+    if (!idle && sizeStale.current) measure();
+  }, [idle, measure]);
 
   /** Shows the stroke being drawn as its path is now: a dot until it has moved. */
   const drawDraft = () => {
@@ -537,7 +558,24 @@ export const AnnotationLayer = memo(function AnnotationLayer({
       )}
     </div>
   );
-});
+}, sameLayer);
+
+/** Whether the layer has nothing to draw: no ink on the slide, and no tool in hand that makes some. */
+function inkless(annotations: Annotations): boolean {
+  return annotations.tool === "pointer" && annotations.strokes.length === 0;
+}
+
+/**
+ * The layer draws the ink at the zoom it is given, so a new zoom renders it, unless there is
+ * nothing to draw: then, as the slide is pinched or zoomed, it stays as it is. Anything that
+ * gives it something to draw comes with new `annotations`, and so with the zoom of then.
+ */
+function sameLayer(
+  before: { annotations: Annotations; zoom?: number },
+  after: { annotations: Annotations; zoom?: number },
+) {
+  return before.annotations === after.annotations && (before.zoom === after.zoom || inkless(after.annotations));
+}
 
 /**
  * The presenter's ink tools, as the buttons of a toolbar: the tools, each pressed again (or

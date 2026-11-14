@@ -1,7 +1,6 @@
 import { AlertTriangle, ChevronRight, FoldVertical, Redo2, RotateCw, Undo2 } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
-import { slideNumbers } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
 import { type AssistantMessage, useApp } from "../../store";
 import type { TurnChanges } from "../../store/messages";
@@ -17,6 +16,7 @@ import { explainError } from "./replyErrors";
 import { ToolRow, ToolSteps } from "./ToolRow";
 import { groupParts, partKey } from "./toolCalls";
 import { useElapsed } from "./useElapsed";
+import { type SlideNumbers, useSlideNumbers } from "./useSlideNumbers";
 
 /**
  * A reply of the agent's: its text, tool calls and approvals, and how the turn went. Steps in a
@@ -234,6 +234,9 @@ function ChangedSlides({ label, ids, numbers }: { label: string; ids: string[]; 
   );
 }
 
+/** The numbers of slides `ids` as one text, "0" for a slide gone: "3,5,0". */
+const numbersText = (ids: readonly string[], numbers: SlideNumbers) => ids.map((id) => numbers?.get(id) ?? 0).join(",");
+
 /**
  * What the turn changed in the deck: "Changed slides 3, 5 · Added slide 7 · Removed 1 slide",
  * each number a way to its slide. Of the deck, which changes with every save, it takes the
@@ -241,12 +244,8 @@ function ChangedSlides({ label, ids, numbers }: { label: string; ids: string[]; 
  * is not named.
  */
 const TurnSummary = memo(function TurnSummary({ changes }: { changes: TurnChanges }) {
-  const numbersOf = (ids: string[]) => (s: ReturnType<typeof useApp.getState>) => {
-    const numbers = s.deck ? slideNumbers(s.deck.slides) : null;
-    return ids.map((id) => numbers?.get(id) ?? 0).join(",");
-  };
-  const changed = useApp(numbersOf(changes.changed));
-  const added = useApp(numbersOf(changes.added));
+  const changed = useSlideNumbers(useCallback((numbers) => numbersText(changes.changed, numbers), [changes.changed]));
+  const added = useSlideNumbers(useCallback((numbers) => numbersText(changes.added, numbers), [changes.added]));
   const parts = [
     changes.changed.length > 0 && /[1-9]/.test(changed) && (
       <ChangedSlides key="changed" label="Changed" ids={changes.changed} numbers={changed} />

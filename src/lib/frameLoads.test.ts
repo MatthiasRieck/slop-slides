@@ -1,7 +1,15 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FRAME_LOAD_LIMIT, holdFrameLoads, MAX_FRAME_LOADS, queueFrameLoad } from "./frameLoads";
+import {
+  FRAME_LOAD_LIMIT,
+  holdFrameLoads,
+  MAX_FRAME_LOADS,
+  MAX_PICTURE_LOADS,
+  PICTURE_LOAD_LIMIT,
+  queueFrameLoad,
+  queuePictureLoad,
+} from "./frameLoads";
 
 describe("the order slide previews load in", () => {
   let started: string[];
@@ -72,5 +80,29 @@ describe("the order slide previews load in", () => {
     expect(started).toEqual(["a", "b", "c"]);
     vi.advanceTimersByTime(FRAME_LOAD_LIMIT);
     expect(started).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("the order pictures of slides load in", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("loads more at once than live previews, without waiting for the stage's slide", () => {
+    const loaded = holdFrameLoads();
+    const started: string[] = [];
+    const finish: (() => void)[] = [];
+    const names = Array.from({ length: MAX_PICTURE_LOADS + 1 }, (_, i) => `p${i}`);
+    for (const name of names)
+      queuePictureLoad((done) => {
+        started.push(name);
+        finish.push(done);
+      }, false);
+    expect(MAX_PICTURE_LOADS).toBeGreaterThan(MAX_FRAME_LOADS);
+    expect(started).toEqual(names.slice(0, MAX_PICTURE_LOADS));
+    // One the backend takes long to make gives its place up in the end.
+    vi.advanceTimersByTime(PICTURE_LOAD_LIMIT);
+    expect(started).toEqual(names);
+    for (const done of finish) done();
+    loaded();
   });
 });

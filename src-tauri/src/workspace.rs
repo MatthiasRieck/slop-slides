@@ -281,6 +281,17 @@ impl OpenWorkspace {
             .map(|(window, _)| window.clone())
     }
 
+    /// The windows that have the folder `root` open, given resolved (as [`root`] gives it).
+    pub fn windows_in(&self, root: &Path) -> Vec<String> {
+        self.windows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, open)| open.root == root)
+            .map(|(window, _)| window.clone())
+            .collect()
+    }
+
     /// What the chats of the windows other than `except` are about.
     pub fn chats_except(&self, except: &str) -> Vec<PathBuf> {
         self.windows
@@ -949,6 +960,26 @@ mod tests {
         assert!(!open.contains(&t.join("ws/missing.html")));
         open.set("main", None);
         assert!(!open.contains(&inner));
+    }
+
+    #[test]
+    fn the_agents_events_go_to_the_windows_on_its_folder() {
+        let t = TempDir::new("ws");
+        t.write("a/talk/deck.html", DECK);
+        t.write("b/deck.html", DECK);
+        let open = OpenWorkspace::default();
+        open.set("main", Some(t.join("a")));
+        open.set("second", Some(t.join("b")));
+        open.set("third", Some(t.join("a")));
+        let a = root(&t.join("a").to_string_lossy()).unwrap();
+        let mut windows = open.windows_in(&a);
+        windows.sort();
+        assert_eq!(windows, ["main", "third"]);
+        // Not a folder inside it, nor one around it.
+        assert!(open.windows_in(&a.join("talk")).is_empty());
+        assert!(open
+            .windows_in(&root(&t.to_string_lossy()).unwrap())
+            .is_empty());
     }
 
     #[test]

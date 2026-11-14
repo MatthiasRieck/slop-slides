@@ -27,6 +27,7 @@ import {
   edgeTargets,
   formatTenths,
   formatZoom,
+  inSight,
   layoutTimeline,
   MAX_ZOOM,
   moveClip,
@@ -57,7 +58,7 @@ import { useDeckVideoOptions } from "./narration/useVideoOptions";
 const STEP = 0.1;
 /** How far J steps back, in seconds. */
 const JUMP = 1;
-/** How far out of sight a slide's picture is already there, in pixels, so scrolling finds it loaded. */
+/** How far out of sight a slide's picture, or a narration's words, are already there, in pixels, so scrolling finds them. */
 const OVERSCAN = 200;
 /** How else the timeline zooms, for the zoom buttons' tooltips. */
 const ZOOM_GESTURE = `${formatKeys("mod")}-scroll or pinch`;
@@ -349,9 +350,13 @@ function Tracks(props: {
     () => new Map(shown.slides.map((slide, index) => [slide.id, { number: index + 1, locked: slide.locked }])),
     [shown.slides],
   );
-  const reset = (editable ? slides : [])
-    .filter((s) => !s.locked && (s.duration != null || s.narrationStart != null))
-    .map((s) => ({ slide: s.id, duration: null, narrationStart: null }));
+  const reset = useMemo(
+    () =>
+      (editable ? slides : [])
+        .filter((s) => !s.locked && (s.duration != null || s.narrationStart != null))
+        .map((s) => ({ slide: s.id, duration: null, narrationStart: null })),
+    [editable, slides],
+  );
 
   /** Sets the height, kept for the next time the timeline opens. */
   const resize = (next: number | null) => {
@@ -359,6 +364,9 @@ function Tracks(props: {
     setHeight(to);
     saveJson(HEIGHT_KEY, to);
   };
+
+  // The same from one render to the next: scrolling the track, which renders it, leaves the bar be.
+  const barOn = useHandlers({ play, freeze, step, rate: () => changeRate(nextRate(rate)), zoomTo, resize });
 
   return (
     // biome-ignore lint/a11y/noNoninteractiveElementInteractions: the keys of what is focused in it.
@@ -368,80 +376,18 @@ function Tracks(props: {
       className="relative flex shrink-0 flex-col border-t bg-background"
       style={{ height }}
     >
-      <HeightHandle height={height} onResize={resize} />
-      {/* The time on the left, zoom on the right, and what plays it in the middle between them. */}
-      <div
-        data-timeline-bar=""
-        className="@container grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 border-b px-2 py-1 text-xs"
-      >
-        <TimeReadout clock={clock} limit={shown.end} total={shown.end} playing={playing} />
-        <Transport
-          clock={clock}
-          limit={shown.end}
-          end={timeline.end}
-          playing={playing}
-          rate={rate}
-          onPlay={play}
-          onFreeze={freeze}
-          onStep={on.step}
-          onRate={() => changeRate(nextRate(rate))}
-        />
-        <div className="flex min-w-0 items-center justify-end gap-1.5">
-          <TimingButton deck={deck.id} />
-          {reset.length > 0 && (
-            <Button
-              size="xs"
-              title={`Let every slide follow its narration again: ${reset.length} ${reset.length === 1 ? "slide is" : "slides are"} timed by hand. Undo brings the timing back.`}
-              aria-label="Reset all timing"
-              onClick={() => void useApp.getState().setSlideTiming(reset)}
-            >
-              <RotateCcw />
-              <span className="hidden @[44rem]:inline">Reset all timing</span>
-            </Button>
-          )}
-          <div className="flex items-center">
-            <Button
-              size="xs"
-              aria-label="Zoom timeline out"
-              title={zoom <= 1 ? "The whole timeline is in sight" : `Zoom timeline out (${ZOOM_GESTURE})`}
-              disabled={zoom <= 1}
-              onClick={() => zoomTo(zoom / 2)}
-            >
-              <Minus />
-            </Button>
-            <button
-              type="button"
-              data-testid="timeline-zoom"
-              title={zoom <= 1 ? "Timeline zoom: the whole timeline is in sight" : "Fit the whole timeline in"}
-              aria-label={`Timeline zoom ${formatZoom(zoom)}; fit the whole timeline in`}
-              disabled={zoom <= 1}
-              onClick={() => zoomTo(1)}
-              className="hidden min-w-8 rounded-md px-1 text-center tabular-nums text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground @[36rem]:block"
-            >
-              {formatZoom(zoom)}
-            </button>
-            <Button
-              size="xs"
-              aria-label="Zoom timeline in"
-              title={
-                zoom >= MAX_ZOOM ? "Zoomed in all the way" : `Zoom timeline in, around the playhead (${ZOOM_GESTURE})`
-              }
-              disabled={zoom >= MAX_ZOOM}
-              onClick={() => zoomTo(zoom * 2)}
-            >
-              <Plus />
-            </Button>
-          </div>
-          <Button
-            size="xs"
-            aria-label="Hide timeline"
-            title="Fold the timeline away, leaving the room to the slide"
-            onClick={() => useApp.getState().setTimelineOpen(false)}
-          >
-            <ChevronDown />
-          </Button>
-        </div>
-      </div>
+      <HeightHandle height={height} onResize={barOn.resize} />
+      <TimelineBar
+        deck={deck.id}
+        clock={clock}
+        limit={shown.end}
+        end={timeline.end}
+        playing={playing}
+        rate={rate}
+        zoom={zoom}
+        reset={reset}
+        on={barOn}
+      />
       <div className="flex min-h-0 flex-1">
         {/* What each track is, beside it. */}
         <div aria-hidden="true" className="flex w-16 shrink-0 flex-col border-r pl-2 text-2xs text-muted-foreground">
@@ -521,6 +467,12 @@ function Tracks(props: {
                   start={clip.start}
                   end={clip.end}
                   audio={audio[clip.slide]}
+                  worded={inSight(
+                    measured.track * (clip.start / end),
+                    measured.track * ((clip.end - clip.start) / end),
+                    sight.from,
+                    sight.to,
+                  )}
                   movable={editable && !placed.get(clip.slide)?.locked}
                   dragging={dragging?.name === `clip:${clip.slide}`}
                   on={on}
@@ -552,10 +504,110 @@ function Tracks(props: {
 }
 
 /**
+ * The timeline's bar: the time on the left, zoom on the right, and what plays it in the middle
+ * between them. It renders for what it shows, not for the track scrolling under it.
+ */
+const TimelineBar = memo(function TimelineBar(props: {
+  deck: string;
+  clock: PlaybackClock;
+  /** Where the playhead stops: the end of the timeline as shown. */
+  limit: number;
+  end: number;
+  playing: boolean;
+  rate: number;
+  zoom: number;
+  /** What resetting all timing saves: the slides timed by hand. */
+  reset: SlideTiming[];
+  on: {
+    play: () => void;
+    freeze: (at: number) => void;
+    step: (event: { shiftKey: boolean }, direction: 1 | -1) => void;
+    rate: () => void;
+    zoomTo: (zoom: number) => void;
+  };
+}) {
+  const { deck, clock, limit, end, playing, rate, zoom, reset, on } = props;
+  return (
+    <div
+      data-timeline-bar=""
+      className="@container grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 border-b px-2 py-1 text-xs"
+    >
+      <TimeReadout clock={clock} limit={limit} total={limit} playing={playing} />
+      <Transport
+        clock={clock}
+        limit={limit}
+        end={end}
+        playing={playing}
+        rate={rate}
+        onPlay={on.play}
+        onFreeze={on.freeze}
+        onStep={on.step}
+        onRate={on.rate}
+      />
+      <div className="flex min-w-0 items-center justify-end gap-1.5">
+        <TimingButton deck={deck} />
+        {reset.length > 0 && (
+          <Button
+            size="xs"
+            title={`Let every slide follow its narration again: ${reset.length} ${reset.length === 1 ? "slide is" : "slides are"} timed by hand. Undo brings the timing back.`}
+            aria-label="Reset all timing"
+            onClick={() => void useApp.getState().setSlideTiming(reset)}
+          >
+            <RotateCcw />
+            <span className="hidden @[44rem]:inline">Reset all timing</span>
+          </Button>
+        )}
+        <div className="flex items-center">
+          <Button
+            size="xs"
+            aria-label="Zoom timeline out"
+            title={zoom <= 1 ? "The whole timeline is in sight" : `Zoom timeline out (${ZOOM_GESTURE})`}
+            disabled={zoom <= 1}
+            onClick={() => on.zoomTo(zoom / 2)}
+          >
+            <Minus />
+          </Button>
+          <button
+            type="button"
+            data-testid="timeline-zoom"
+            title={zoom <= 1 ? "Timeline zoom: the whole timeline is in sight" : "Fit the whole timeline in"}
+            aria-label={`Timeline zoom ${formatZoom(zoom)}; fit the whole timeline in`}
+            disabled={zoom <= 1}
+            onClick={() => on.zoomTo(1)}
+            className="hidden min-w-8 rounded-md px-1 text-center tabular-nums text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground @[36rem]:block"
+          >
+            {formatZoom(zoom)}
+          </button>
+          <Button
+            size="xs"
+            aria-label="Zoom timeline in"
+            title={
+              zoom >= MAX_ZOOM ? "Zoomed in all the way" : `Zoom timeline in, around the playhead (${ZOOM_GESTURE})`
+            }
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => on.zoomTo(zoom * 2)}
+          >
+            <Plus />
+          </Button>
+        </div>
+        <Button
+          size="xs"
+          aria-label="Hide timeline"
+          title="Fold the timeline away, leaving the room to the slide"
+          onClick={() => useApp.getState().setTimelineOpen(false)}
+        >
+          <ChevronDown />
+        </Button>
+      </div>
+    </div>
+  );
+});
+
+/**
  * The timeline's top edge, which drags it taller or lower (the arrows too, Home and End to the
  * lowest and tallest); a double click gives it its first height back. `height` is the height now.
  */
-function HeightHandle(props: { height: number; onResize: (height: number | null) => void }) {
+const HeightHandle = memo(function HeightHandle(props: { height: number; onResize: (height: number | null) => void }) {
   const start = useRef<{ y: number; height: number } | null>(null);
   return (
     // biome-ignore lint/a11y/useSemanticElements: a focusable window splitter supports resizing; hr cannot take the keys.
@@ -605,7 +657,7 @@ function HeightHandle(props: { height: number; onResize: (height: number | null)
       }}
     />
   );
-}
+});
 
 /**
  * What plays the timeline and steps along it, in the middle of its bar. Back and forward go as

@@ -31,10 +31,26 @@ static INBOX: Inbox = Inbox {
     results: "render-results",
 };
 /// Where the page's helper answers; the navigation is caught, never made.
-const SIGNAL_PATH: &str = "/.render-signal";
+pub(crate) const SIGNAL_PATH: &str = "/.render-signal";
+/// How long the helper (`assets/render.js`) gives a shown slide to be drawn before it is
+/// captured, in milliseconds. A window out of sight draws no frames; macOS's capture draws the
+/// page afresh, the others capture what was drawn last.
+#[cfg(target_os = "macos")]
+macro_rules! paint_prelude {
+    () => {
+        "window.__slopRenderPaint = 0;\n"
+    };
+}
+#[cfg(not(target_os = "macos"))]
+macro_rules! paint_prelude {
+    () => {
+        "window.__slopRenderPaint = 100;\n"
+    };
+}
 /// The page's helper, run once it has loaded; it starts by reporting when it is ready.
-const RENDER_JS: &str = concat!(
+pub(crate) const RENDER_JS: &str = concat!(
     include_str!("../assets/overflow.js"),
+    paint_prelude!(),
     include_str!("../assets/render.js"),
 );
 /// What the hidden window is for, as its errors name it.

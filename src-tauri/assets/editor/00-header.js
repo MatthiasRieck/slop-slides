@@ -227,6 +227,14 @@
      in an <a>; `#slide-id` links go to another slide) or with a null href removes its link.
    - { type: "slop:edit-finish" } ends text editing (the app sends it on a click outside its
      edit toolbar).
+   - { type: "slop:edit-show" } says the app shows this preview, which it loaded ahead out of
+     sight (or kept loaded since it last showed it) and did not listen to meanwhile: the editor
+     lets go of the selection and the text, as a preview just loaded has none, and reports
+     everything again (selection, background, fonts, colors, layers, what overflows).
+   - { type: "slop:edit-patch", slide, hash, markup } shows the slide's markup as the deck has it
+     now (an undo, say) in place of what the slide shows, without a page load, selecting again
+     what is still there, and answers { type: "slop:edit-patched", slide, hash, ok } (see
+     75-life.js; not ok, the app loads the slide again).
    - { type: "slop:edit-order", to, path, any } moves it "front", "forward", "backward" or "back"
      among the elements it overlaps, with an inline z-index; with `path` (from the Layers panel),
      the element there, and with `any`, past the next layer whether or not they overlap.
@@ -274,6 +282,10 @@
    fonts and sizes are dropped), ⌘⇧V as plain text: the editor asks the app for the clipboard's
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
    { type: "slop:edit-insert-text", text }.
+
+   It comes and goes with Edit mode without the page loading again: the pasteboard runs it when
+   the app asks for it and takes it off the page when the app no longer wants it, which leaves
+   the page as the player shows it (see 75-life.js).
 
    It runs on the pasteboard (pasteboard.js), which pans and zooms the view (Space+drag, the
    middle button, a trackpad swipe). The slide no longer clips, so content that runs past its edge stays visible (dimmed

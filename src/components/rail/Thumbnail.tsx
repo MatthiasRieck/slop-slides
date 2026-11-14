@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { useSettled } from "../../hooks/useSettled";
 import type { Slide } from "../../lib/api";
@@ -9,7 +9,9 @@ import { pixelsOf } from "../../lib/slideSize";
 import { slideTitle } from "../../lib/slideTitle";
 import { cn, plural } from "../../lib/utils";
 import { useApp } from "../../store";
-import { SlideFrame, useSlideVersion } from "../SlideFrame";
+import type { AppState } from "../../store/types";
+import { useSlideVersion } from "../SlideFrame";
+import { SlideImage } from "../SlideImage";
 import { SlideActions } from "./SlideActions";
 import { SlideMarks } from "./SlideMarks";
 
@@ -57,6 +59,55 @@ export function slideLabel(index: number, slide: Slide, comments: number): strin
     .join(", ");
 }
 
+/** The picture of a thumbnail: it renders only when the slide's version, its size or its look changes. */
+const Picture = memo(SlideImage);
+
+/**
+ * What a double-click on a thumbnail does, said after the slide's name in its tooltip: always
+ * the same words, or words that depend on the app's state (the mode, say), or none.
+ */
+export type ThumbnailHint = string | ((app: AppState) => string | undefined);
+
+/** Whether two slides look the same in the list: the same values, whether or not the same object. */
+function sameSlide(a: Slide, b: Slide): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a) as (keyof Slide)[];
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.is(a[key], b[key]));
+}
+
+/** A row renders for what it shows: a deck read again with its slides as they were renders none. */
+function sameRow<P extends { slide: Slide }>(before: P, after: P): boolean {
+  const keys = Object.keys(after) as (keyof P)[];
+  return (
+    keys.length === Object.keys(before).length &&
+    keys.every((key) => (key === "slide" ? sameSlide(before.slide, after.slide) : Object.is(before[key], after[key])))
+  );
+}
+
+/**
+ * Keeps the tooltip of `button` saying the slide's `name` and the `hint`, following the app's
+ * state when the hint depends on it. It is set on the button as that changes: a hint that
+ * changes with the mode would otherwise render every row of the list as the mode changes.
+ */
+function useTooltip(button: React.RefObject<HTMLButtonElement | null>, name: string, hint: ThumbnailHint | undefined) {
+  useLayoutEffect(() => {
+    const hintOf = (app: AppState) => (typeof hint === "function" ? hint(app) : hint);
+    const show = (said: string | undefined) => {
+      const title = said ? `${name} · ${said}` : name;
+      if (button.current && button.current.title !== title) button.current.title = title;
+    };
+    let said = hintOf(useApp.getState());
+    show(said);
+    if (typeof hint !== "function") return;
+    return useApp.subscribe((app) => {
+      const now = hintOf(app);
+      if (now === said) return;
+      said = now;
+      show(said);
+    });
+  }, [button, name, hint]);
+}
+
 /**
  * One slide of the slide list or of the grid of all slides: its number and its thumbnail, a single
  * button (one tab stop) that picks the slide, is what a drag or the keyboard (Space, then the
@@ -66,7 +117,9 @@ export function slideLabel(index: number, slide: Slide, comments: number): strin
  * keyboard's focus in the row.
  *
  * Memoized, and given nothing that changes with the other rows: picking another slide or saving
- * one renders the rows concerned, not the whole list.
+ * one renders the rows concerned, not the whole list, and switching modes or reading the deck
+ * again renders none (see `sameRow`, `useTooltip`). What a row holds renders only for itself:
+ * its picture for a new version, its quick actions for the picks.
  */
 export const Thumbnail = memo(function Thumbnail(props: {
   deckId: string;
@@ -82,7 +135,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
   /** How many matches of the search the slide has; undefined while none is on. */
   matches?: number;
   /** What a double-click does, said after the slide's name in the tooltip: "double-click to edit". */
-  hint?: string;
+  hint?: ThumbnailHint;
   /** Enter opens the slide as a double-click does, rather than only picking it. */
   opensOnEnter?: boolean;
   /** Where the slide being dragged would land: before this one, or after it. Only the grid marks it. */
@@ -122,6 +175,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
   }, [selected]);
 
   const deckSize = useApp((s) => s.deck?.size);
+  const size = useMemo(() => pixelsOf({ size: deckSize }), [deckSize]);
   const app = useApp.getState;
 
   const onClick = (event: React.MouseEvent) => {
@@ -134,6 +188,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
   // button, pressed while its slide is picked, and works whether or not it can be dragged.
   const { role: _role, "aria-pressed": _pressed, "aria-disabled": undraggable, ...sortable } = attributes;
   const name = [`Slide ${index + 1}`, slideName(slide)].filter(Boolean).join(" · ");
+  useTooltip(buttonRef, name, props.hint);
 
   return (
     <li
@@ -184,7 +239,6 @@ export const Thumbnail = memo(function Thumbnail(props: {
           aria-label={slideLabel(index, slide, comments)}
           aria-current={selected ? "true" : undefined}
           aria-pressed={picked || selected}
-          title={props.hint ? `${name} · ${props.hint}` : name}
           onClick={onClick}
           onDoubleClick={() => onOpen(slide.id)}
           onKeyDown={(event) => {
@@ -207,12 +261,11 @@ export const Thumbnail = memo(function Thumbnail(props: {
                 : "hover:ring-1 hover:ring-input",
           )}
         >
-          <SlideFrame
+          <Picture
             deckId={deckId}
             slideId={slide.id}
             version={version}
-            size={pixelsOf({ size: deckSize })}
-            thumbnail
+            size={size}
             lazy
             className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
@@ -221,4 +274,4 @@ export const Thumbnail = memo(function Thumbnail(props: {
       </div>
     </li>
   );
-});
+}, sameRow);

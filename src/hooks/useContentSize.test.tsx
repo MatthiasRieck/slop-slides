@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useContentSize } from "./useContentSize";
+import { type BoxSize, useContentFit, useContentSize } from "./useContentSize";
 
 /** The observers made, each reporting the sizes a test hands it. */
 const observers: { report: (width: number, height: number) => void; disconnected: boolean }[] = [];
@@ -62,5 +62,34 @@ describe("useContentSize", () => {
     expect(screen.getByText("320x180")).toBeTruthy();
     act(() => observers[0]!.report(321, 180));
     expect(renders).toBe(measured + 1);
+  });
+});
+
+let fitRenders = 0;
+const wide = (size: BoxSize | null) => (size === null ? "unmeasured" : size.width >= 600 ? "wide" : "narrow");
+
+function Fitted() {
+  const ref = useRef<HTMLDivElement>(null);
+  const fit = useContentFit(ref, wide);
+  fitRenders++;
+  return <div ref={ref}>{fit}</div>;
+}
+
+describe("useContentFit", () => {
+  it("renders only when what it makes of the size changes, not with every pixel of a drag", () => {
+    vi.stubGlobal("ResizeObserver", ReportingObserver);
+    render(<Fitted />);
+    expect(screen.getByText("unmeasured")).toBeTruthy();
+    act(() => observers[0]!.report(320, 180));
+    expect(screen.getByText("narrow")).toBeTruthy();
+    const measured = fitRenders;
+    // A drag: every pixel from 320 to 599 is still narrow.
+    for (let width = 321; width < 600; width++) act(() => observers[0]!.report(width, 180));
+    expect(fitRenders).toBe(measured);
+    act(() => observers[0]!.report(600, 180));
+    expect(screen.getByText("wide")).toBeTruthy();
+    expect(fitRenders).toBe(measured + 1);
+    for (let width = 601; width < 900; width += 7) act(() => observers[0]!.report(width, 180));
+    expect(fitRenders).toBe(measured + 1);
   });
 });

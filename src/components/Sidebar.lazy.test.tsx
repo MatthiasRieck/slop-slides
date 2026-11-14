@@ -48,7 +48,7 @@ describe("the sidebar's lazy tabs", () => {
     expect(screen.queryByTestId("code")).toBeNull();
   });
 
-  it("imports the code view when the HTML tab first shows, and keeps the tab's place until then", async () => {
+  it("imports the code view when the Code tab first shows, and keeps the tab's place until then", async () => {
     render(<Sidebar />);
     act(() => useApp.getState().setSidebarTab("code"));
     expect(await screen.findByTestId("code")).toBeTruthy();

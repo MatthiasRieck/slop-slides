@@ -3,7 +3,8 @@
 
   function startEditing(el, x, y) {
     if (!el || editing || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName) || isGroup(el) || isLocked(el)) return;
-    if (!el.textContent.trim() && !/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return;
+    // A card or layout around several texts is not one text to type in (see holdsOwnText).
+    if (!holdsOwnText(el)) return;
     select(el);
     editing = el;
     textRange = null;
@@ -225,7 +226,10 @@
       return Object.prototype.hasOwnProperty.call(changes, key);
     };
     var tag = el.tagName.toLowerCase();
-    var props = { color: "color", fontSize: "font-size", fontFamily: "font-family", bold: "font-weight", italic: "font-style", letterSpacing: "letter-spacing" };
+    var props = {
+      color: "color", fontSize: "font-size", fontFamily: "font-family", bold: "font-weight", weight: "font-weight", italic: "font-style",
+      letterSpacing: "letter-spacing", highlight: "background-color", textCase: "text-transform",
+    };
     Object.keys(props).forEach(function (key) {
       if (has(key)) el.style.removeProperty(props[key]);
     });
@@ -245,6 +249,7 @@
       (has("strike") && /^(s|strike|del)$/.test(tag)) ||
       (has("script") && /^(sup|sub)$/.test(tag)) ||
       (has("link") && tag === "a") ||
+      (has("highlight") && tag === "mark") ||
       (/^(span|font)$/.test(tag) && !el.attributes.length);
     if (means && !keep) unwrap(el);
   }
@@ -265,7 +270,12 @@
     var around = getComputedStyle(own ? t.parentNode.parentNode : t.parentNode);
     var span = own ? t.parentNode : document.createElement("span");
     if (has("bold") && changes.bold !== weightOf(around) >= 600) span.style.fontWeight = changes.bold ? "700" : "400";
+    if (has("weight") && changes.weight > 0 && changes.weight !== weightOf(around)) span.style.fontWeight = String(changes.weight);
     if (has("italic") && changes.italic !== (around.fontStyle === "italic")) span.style.fontStyle = changes.italic ? "italic" : "normal";
+    if (has("highlight") && changes.highlight && toHex(changes.highlight)) span.style.backgroundColor = changes.highlight;
+    if (has("textCase") && caseOf(around) !== (TEXT_CASES[changes.textCase] ? changes.textCase : null)) {
+      span.style.textTransform = TEXT_CASES[changes.textCase] || "none";
+    }
     if (has("color") && changes.color && toHex(around.color) !== changes.color) span.style.color = changes.color;
     if (has("fontSize") && changes.fontSize > 0 && Math.round(parseFloat(around.fontSize)) !== Math.round(changes.fontSize)) {
       span.style.fontSize = Math.round(changes.fontSize) + "px";
@@ -405,6 +415,153 @@
       if (again) useRange(again);
     }
     report();
+  }
+
+  // How text is written out, whatever was typed: the toolbar's names for `text-transform`.
+  var TEXT_CASES = { upper: "uppercase", lower: "lowercase", capitalize: "capitalize" };
+  // How far one press of the toolbar's indent buttons moves text that is not in a list, in slide pixels.
+  var INDENT_STEP = 40;
+
+  /** The toolbar's name for the case `style` (a computed style) writes text in; null as it was typed. */
+  function caseOf(style) {
+    var value = style.textTransform || "";
+    return value === "uppercase" ? "upper" : value === "lowercase" ? "lower" : value === "capitalize" ? "capitalize" : null;
+  }
+
+  /** The first text of `el` that shows, or null when it holds none. */
+  function firstText(el) {
+    var walker = document.createTreeWalker(textRoot(el), 4);
+    for (var t = walker.nextNode(); t; t = walker.nextNode()) {
+      if (t.data.trim()) return t;
+    }
+    return null;
+  }
+
+  /** The highlight behind the text at `node` in `el` (or, for `el` itself, behind its first text): a color, or null. */
+  function highlightOf(el, node) {
+    var first = node === el ? firstText(el) : null;
+    for (var n = first ? first.parentNode : node; n && n !== el && el.contains(n); n = n.parentNode) {
+      var color = n.nodeType === 1 && INLINE.test(n.tagName) ? toHex(getComputedStyle(n).backgroundColor) : null;
+      if (color) return color;
+    }
+    return null;
+  }
+
+  /**
+   * What space before and after a paragraph goes on in `el`: its list items when it holds a
+   * list, else the blocks its text is in when there are several, else `el` itself (a heading or
+   * a paragraph of the deck's is one paragraph).
+   */
+  function paragraphsOf(el) {
+    if (vectorsOf(el).length || isImage(el)) return [el];
+    var root = textRoot(el);
+    var items = Array.prototype.slice.call(root.querySelectorAll("li"));
+    if (items.length) return items;
+    var blocks = Array.prototype.filter.call(root.children, function (child) {
+      return /^(p|div|h[1-6]|blockquote)$/i.test(child.tagName) && child.namespaceURI !== SVG_NS;
+    });
+    return blocks.length > 1 ? blocks : [el];
+  }
+
+  /** The lists a bullet style goes to: the one the caret is in while typing, else every list in `el`. */
+  function listsOf(el) {
+    var item = editing === el ? caretItem() : null;
+    if (item) return [item.parentElement];
+    return withDescendants(textRoot(el)).filter(isList);
+  }
+
+  /**
+   * The text styles `describe` reports beyond the classic ones: the weight (100 to 900), the
+   * case, the highlight behind the text, the space before and after its paragraphs in pixels,
+   * and its list's bullets or numbering (null without a list).
+   */
+  function textExtras(el, node, text) {
+    var paragraph = paragraphsOf(el)[0];
+    var spacing = paragraph === el ? getComputedStyle(el) : getComputedStyle(paragraph);
+    var list = listsOf(el)[0];
+    return {
+      weight: weightOf(text),
+      textCase: caseOf(text),
+      highlight: highlightOf(el, node),
+      spaceBefore: Math.round(parseFloat(spacing.marginTop) || 0),
+      spaceAfter: Math.round(parseFloat(spacing.marginBottom) || 0),
+      listStyle: list ? list.style.listStyleType || getComputedStyle(list).listStyleType || null : null,
+    };
+  }
+
+  /** Puts `color` behind all the text of `el`, or with null takes every highlight off it. */
+  function highlightAll(el, color) {
+    if (vectorsOf(el).length || isImage(el) || !firstText(el)) return;
+    var root = isTextBox(el) ? ensureBody(el, true) : el;
+    var texts = [];
+    var walker = document.createTreeWalker(root, 4);
+    for (var t = walker.nextNode(); t; t = walker.nextNode()) {
+      if (t.data.trim()) texts.push(t);
+    }
+    texts.forEach(function (t) {
+      formatText(t, { highlight: color }, root);
+    });
+    tidy(root);
+  }
+
+  /**
+   * The text styles of `changes` that are not the classic ones, onto `el` as a whole (see
+   * `textExtras`; `applyStyle` calls this): what its own inline elements set for them has given
+   * way already.
+   */
+  function applyTextExtras(el, changes) {
+    var has = function (key) {
+      return Object.prototype.hasOwnProperty.call(changes, key);
+    };
+    if (has("weight")) el.style.fontWeight = changes.weight >= 100 && changes.weight <= 900 ? String(Math.round(changes.weight / 100) * 100) : "";
+    if (has("textCase")) setOwn(el, "text-transform", TEXT_CASES[changes.textCase] || null, "none");
+    if (has("highlight") && (changes.highlight === null || toHex(changes.highlight))) highlightAll(el, changes.highlight);
+    [["spaceBefore", "margin-top"], ["spaceAfter", "margin-bottom"]].forEach(function (pair) {
+      if (!has(pair[0]) || !isFinite(changes[pair[0]])) return;
+      var space = Math.max(0, Math.round(changes[pair[0]]));
+      paragraphsOf(el).forEach(function (paragraph) {
+        paragraph.style.setProperty(pair[1], space + "px");
+      });
+    });
+    if (has("listStyle") && typeof changes.listStyle === "string" && /^[a-z-]+$|^"[^"\\;{}<>]{1,4}"$/.test(changes.listStyle)) {
+      listsOf(el).forEach(function (list) {
+        list.style.listStyleType = changes.listStyle;
+      });
+    }
+  }
+
+  /**
+   * The toolbar's indent buttons: in a list, the item the caret is in (or every item of the
+   * selection's lists) goes a level in (`step` 1) or out (-1), as Tab and Shift+Tab do while
+   * typing; text that is not in a list moves in or out from its box's left edge.
+   */
+  function indentSelection(step) {
+    if (editing) {
+      var item = caretItem();
+      if (item) {
+        changeText(editing, function () {
+          if (step > 0) indent(item);
+          else outdent(item);
+        });
+        report();
+        return;
+      }
+    }
+    var targets = (editing ? [editing] : leavesOf(movable())).filter(function (el) {
+      return vectorsOf(el).length === 0 && !isImage(el);
+    });
+    if (!targets.length) return;
+    if (!editing) saveNudges();
+    targets.forEach(function (el) {
+      if (autofit) autofit.unfit(el);
+      var now = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+      setOwn(el, "padding-left", Math.max(0, Math.round(now + step * INDENT_STEP)) + "px", "");
+      if (!el.getAttribute("style")) el.removeAttribute("style");
+      refit(el);
+    });
+    placeHandles();
+    report();
+    if (!editing) commit();
   }
 
   /** ⌘B / ⌘I / ⌘U: turns bold, italic or underline on or off, as the selected text has it now. */

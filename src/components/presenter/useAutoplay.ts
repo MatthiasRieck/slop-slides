@@ -4,8 +4,7 @@ import type { Deck } from "../../lib/api";
 import { setSlideClock } from "../../lib/slideClock";
 import { layoutTimeline, slideAt } from "../../lib/timeline";
 import { playTimeline } from "../../lib/timelinePlayback";
-import { loadVideoOptions } from "../../lib/video";
-import { useNarration } from "../../narrationStore";
+import { deckVideoOptions, useNarration } from "../../narrationStore";
 
 /**
  * Runs the show by itself while playing, on the deck's timeline (see `layoutTimeline`), as the
@@ -42,7 +41,7 @@ export function useAutoplay(deck: Deck | null, current: string | null, next: () 
         return [s.id, said ? (audio[s.id]?.seconds ?? null) : null];
       }),
     );
-    const timeline = layoutTimeline(shown, spoken, { ...loadVideoOptions(), narration: true });
+    const timeline = layoutTimeline(shown, spoken, { ...deckVideoOptions(deck.id), narration: true });
     const start = timeline.slides.find((s) => s.id === slide)?.start;
     // A hidden slide has no place on the timeline.
     if (start === undefined) return void nextRef.current();

@@ -239,7 +239,9 @@ describe("VoiceInput", () => {
     fireEvent.click(micButton());
     await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
     act(() => voice.current!.finishAndSend());
-    await waitFor(() => expect(lastError(useApp.getState())).toBe("Transcription failed."));
+    await waitFor(() =>
+      expect(lastError(useApp.getState())).toBe("Could not turn the recording into text: Transcription failed."),
+    );
     expect(h.onEnd).toHaveBeenCalledWith("", false);
   });
 
@@ -304,7 +306,7 @@ describe("VoiceInput", () => {
     backend({ ready: true, startError: "No microphone found." });
     render(<VoiceInput {...handlers()} />);
     fireEvent.click(micButton());
-    await waitFor(() => expect(lastError(useApp.getState())).toBe("No microphone found."));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Could not start recording: No microphone found."));
     expect(micButton().getAttribute("aria-pressed")).toBe("false");
     expect((micButton() as HTMLButtonElement).disabled).toBe(false);
   });

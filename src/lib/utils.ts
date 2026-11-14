@@ -10,6 +10,9 @@ export const isWindows = navigator.userAgent.includes("Windows");
 /** What revealing a file in the system's file manager is called here. */
 export const revealLabel = revealLabelFor(navigator.userAgent);
 
+/** What the system calls where deleted files go, to get them back from. */
+export const trashName = isWindows ? "Recycle Bin" : "Trash";
+
 /** `n` and the word for that many, like `1 slide` or `3 slides`; `many` is `one` with an s unless given. */
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;

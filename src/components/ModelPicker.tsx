@@ -1,9 +1,11 @@
-import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
+import { AlertTriangle, Check, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatKeys, isMod } from "../lib/keys";
+import { contextPercent, formatCost, formatTokens, windowTokens } from "../lib/context";
 import { memoizeLast } from "../lib/memo";
 import {
+  contextWindowHint,
   contextWindowLabel,
+  effortHint,
   effortLabel,
   modelKey,
   PROVIDER_IDS,
@@ -11,9 +13,12 @@ import {
   type Provider,
   type ProviderInfo,
   type ProviderModel,
+  shortEffortLabel,
+  shortModelLabel,
 } from "../lib/models";
 import { cn } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
+import { chatContext, chatCost } from "../store/messages";
 import { InstallHint } from "./chat/InstallHint";
 import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
@@ -25,11 +30,23 @@ type Row = ProviderModel & { provider: Provider };
 const triggerClass =
   "flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground";
 
+/**
+ * The model that answers, in the composer's footer: its provider's icon and its name without the
+ * provider's ("Opus 5.5"), which fits beside effort and permissions at the sidebar's normal
+ * width. It also opens when the app asks for it (see `openModelPicker`).
+ */
 export function ModelPicker() {
   const selection = useApp((s) => s.selection);
+  const ask = useApp((s) => s.modelPickerAsk);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
+  const asked = useRef(ask);
+  useEffect(() => {
+    if (ask === asked.current) return;
+    asked.current = ask;
+    setOpen(true);
+  }, [ask]);
 
   return (
     <div ref={rootRef} className="relative min-w-0 shrink">
@@ -37,14 +54,15 @@ export function ModelPicker() {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        title={selection.label}
+        title={`Model: ${selection.label}`}
         aria-label={selection.label}
         className={cn(triggerClass, "max-w-full")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
-        {/* The name always shows, cut short as room runs out; effort and permissions give way first. */}
-        <span className="truncate font-medium text-foreground/90">{selection.label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
+        {/* Cut short only when even the short name has no room: effort and permissions give way first. */}
+        <span className="truncate font-medium text-foreground/90">
+          {shortModelLabel(selection.provider, selection.label)}
+        </span>
       </button>
       {open && (
         <Popover
@@ -119,9 +137,6 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       choose(rows[active]);
-    } else if (isMod(e) && /^[1-9]$/.test(e.key)) {
-      e.preventDefault();
-      choose(rows[Number(e.key) - 1]);
     }
   };
 
@@ -244,11 +259,6 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                   {row.provider === selection.provider && row.id === selection.model && (
                     <Check className="size-3.5 shrink-0 text-primary" />
                   )}
-                  {index < 9 && (
-                    <kbd className="shrink-0 font-sans text-2xs text-muted-foreground/80">
-                      {formatKeys(`mod+${index + 1}`)}
-                    </kbd>
-                  )}
                   <button
                     type="button"
                     title={isFavorite ? "Remove from favorites" : "Add to favorites"}
@@ -314,7 +324,12 @@ const modelOf = memoizeLast((providers: ProviderInfo[] | undefined, provider: Pr
   providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model),
 );
 
-/** Reasoning effort and context window for the selected model, like T3 Code's traits menu. */
+/**
+ * How long the agent thinks and how much of the chat it can keep in mind, for the selected model,
+ * with a line on what each choice trades. Where room is short the effort is named in a few
+ * letters ("Med"). The menu also says how full the chat is and what it cost so far, which the
+ * chat itself only brings up once it gets full (see `ContextMeter`).
+ */
 export function EffortPicker() {
   const selection = useApp((s) => s.selection);
   const [open, setOpen] = useState(false);
@@ -327,23 +342,22 @@ export function EffortPicker() {
   if (efforts.length === 0 && contextWindows.length === 0) return null;
 
   const showContextWindow = contextWindows.length > 0 && selection.contextWindow !== null;
-  const label = [
-    efforts.length > 0 ? effortLabel(selection.effort) : null,
-    showContextWindow ? contextWindowLabel(selection.contextWindow!) : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const window = showContextWindow ? contextWindowLabel(selection.contextWindow!) : null;
+  const label = [efforts.length > 0 ? effortLabel(selection.effort) : null, window].filter(Boolean).join(" · ");
+  const short = efforts.length > 0 ? shortEffortLabel(selection.effort) : window;
 
   const sections = [
     {
       title: "Effort",
-      options: efforts.map((id) => ({ id, label: effortLabel(id) })),
+      about: "How long the agent thinks before it answers.",
+      options: efforts.map((id) => ({ id, label: effortLabel(id), hint: effortHint(id) })),
       current: selection.effort,
       choose: (id: string) => useApp.getState().setEffort(id),
     },
     {
-      title: "Context Window",
-      options: contextWindows.map((id) => ({ id, label: contextWindowLabel(id) })),
+      title: "Context window",
+      about: "How much of the chat the agent can keep in mind.",
+      options: contextWindows.map((id) => ({ id, label: contextWindowLabel(id), hint: contextWindowHint(id) })),
       current: selection.contextWindow,
       choose: (id: string) => useApp.getState().setContextWindow(id),
     },
@@ -354,37 +368,84 @@ export function EffortPicker() {
       <button
         type="button"
         aria-expanded={open}
-        title={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
+        title={showContextWindow ? `Effort and context window: ${label}` : `Effort: ${label}`}
         aria-label={label}
         onClick={() => setOpen((v) => !v)}
         className={cn(triggerClass, "shrink-0")}
       >
-        <Gauge className="size-3.5 @[26rem]:hidden" />
+        <Gauge className="size-3.5 shrink-0" />
+        <span className="@[26rem]:hidden">{short}</span>
         <span className="hidden @[26rem]:inline">{label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
-        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">
+        <Popover anchor={rootRef} onClose={close} width={264} variant="menu" portal follow className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
-              <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>
+              <div className="px-2 pt-1 pb-1.5">
+                <div className="text-2xs font-medium text-foreground">{section.title}</div>
+                <div className="text-2xs text-muted-foreground">{section.about}</div>
+              </div>
               {section.options.map((option) => (
                 <button
                   key={option.id}
                   type="button"
+                  aria-pressed={option.id === section.current}
                   onClick={() => {
                     section.choose(option.id);
                     close();
                   }}
-                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent"
+                  className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-accent"
                 >
-                  {option.label}
-                  {option.id === section.current && <Check className="size-3.5 text-primary" />}
+                  <span className="min-w-0">
+                    <span className="block text-sm">{option.label}</span>
+                    {option.hint && <span className="block text-2xs text-muted-foreground">{option.hint}</span>}
+                  </span>
+                  {option.id === section.current && <Check className="size-3.5 shrink-0 text-primary" />}
                 </button>
               ))}
             </div>
           ))}
+          <ChatUsage className="mt-1.5 border-t px-2 pt-2 pb-1" />
         </Popover>
+      )}
+    </div>
+  );
+}
+
+/**
+ * How full the chat is and what it cost so far, in a line or two of small print; nothing until
+ * the agent reported either. The cost is what the agent's provider says the turns would cost at
+ * its API prices, which is not a bill for those on a plan: so it stays here, out of the replies.
+ */
+export function ChatUsage({ className }: { className?: string }) {
+  const provider = useApp((s) => s.selection.provider);
+  const selectedWindow = useApp((s) => s.selection.contextWindow);
+  const context = useApp(chatContext);
+  const cost = useApp(chatCost);
+  if (!context && cost === null) return null;
+  // Claude runs the next turn with the chosen window, which may differ from the last one.
+  const window = (provider === "claude" && windowTokens(selectedWindow)) || (context?.window ?? null);
+  const tokens = context?.tokens ?? null;
+  const percent = contextPercent(tokens, window);
+  return (
+    <div data-testid="chat-usage" className={cn("flex flex-col gap-0.5 text-2xs text-muted-foreground", className)}>
+      <div className="font-medium text-foreground">This chat</div>
+      {context && (
+        <div className="tabular-nums">
+          {tokens === null
+            ? "Compacted: its new size shows after the next message"
+            : percent !== null && window
+              ? `${Math.round(percent)}% full (${formatTokens(tokens)} of ${formatTokens(window)} tokens)`
+              : `${formatTokens(tokens)} tokens`}
+        </div>
+      )}
+      {cost !== null && (
+        <div
+          className="tabular-nums"
+          title="What the turns of this chat would cost at the provider's API prices. On a subscription plan this is not what you pay."
+        >
+          About {formatCost(cost)} at API prices
+        </div>
       )}
     </div>
   );

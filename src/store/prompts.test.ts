@@ -7,6 +7,7 @@ import type { UserMessage } from "./messages";
 import {
   buildPrompt,
   cleanNarrationPrompt,
+  editNote,
   lintFixPrompt,
   type PromptContext,
   resizePrompt,
@@ -125,5 +126,13 @@ describe("resizePrompt", () => {
     expect(prompt).toContain("from landscape, 1920 × 1080 px to portrait, 8.5 × 11 in (816 × 1056 px)");
     expect(prompt).toContain("Re-lay out every slide for the new canvas");
     expect(prompt).toContain("Keep all content, slide ids");
+  });
+});
+
+describe("editNote", () => {
+  it("tells the agent the message was changed, and whether the files were put back", () => {
+    expect(editNote('"Blue"', true)).toMatch(/^\[note\]The user edited their message "Blue" and sent it again/);
+    expect(editNote('"Blue"', true)).toContain("were undone");
+    expect(editNote('"Blue"', false)).toContain("as they are now");
   });
 });

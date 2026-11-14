@@ -5,13 +5,13 @@ import { searchHighlight, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { FindBar, SlideSearch, useDeckSearch, useFindShortcut } from "./FindReplace";
+import { FindBar, useDeckSearch, useFindShortcut } from "./FindReplace";
 
-/** The search as the stage has it: its shortcut and its searching, with View's ribbon rows or Edit's bar. */
-function Find({ bar = false }: { bar?: boolean }) {
+/** Find as the stage has it, in View and in Edit alike: its shortcut, its searching and its bar. */
+function Find() {
   useFindShortcut();
   useDeckSearch();
-  return bar ? <FindBar /> : <SlideSearch />;
+  return <FindBar />;
 }
 
 const DECK = deckFor(DECK_HTML);
@@ -29,7 +29,7 @@ const match = (slide: string, index: number, more: Partial<FindMatch> = {}): Fin
 const MATCHES = [match("intro", 0), match("outro", 2), match("outro", 2, { locked: true })];
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
-const field = () => screen.getByLabelText("Search slides") as HTMLInputElement;
+const field = () => screen.getByLabelText("Text to find") as HTMLInputElement;
 const search = (value: string) => fireEvent.change(field(), { target: { value } });
 const status = () => screen.getByRole("status");
 const found = (matches: FindMatch[]) =>
@@ -38,11 +38,13 @@ const found = (matches: FindMatch[]) =>
 beforeEach(() => {
   invoke.mockReset();
   useApp.getState().clearSearch();
-  useApp.setState({ deck: DECK, selected: "intro", toasts: [], editing: false, sidebarTab: "chat" });
+  useApp.setState({ deck: DECK, selected: "intro", toasts: [], editing: false, sidebarTab: "chat", notesOpen: false });
+  // The bar is up, as the Find button or ⌘F brings it.
+  useApp.getState().openFind();
 });
 
 describe("search", () => {
-  it("searches as you type, with case and whole-word options, and ends with the toolbar", async () => {
+  it("searches as you type, with case and whole-word options, and ends with the stage", async () => {
     found(MATCHES);
     const { unmount } = render(<Find />);
     expect(screen.queryByRole("status")).toBeNull();
@@ -124,16 +126,19 @@ describe("search", () => {
     render(<Find />);
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
-    fireEvent.click(button("Clear search"));
+    fireEvent.click(button("Clear the text"));
     expect(field().value).toBe("");
     expect(useApp.getState().search.matches).toBeNull();
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
+    // Escape ends the search, and the bar goes with it.
     fireEvent.keyDown(field(), { key: "Escape" });
-    expect(field().value).toBe("");
+    expect(screen.queryByLabelText("Text to find")).toBeNull();
+    expect(useApp.getState().search.query).toBe("");
   });
 
   it("gets focus with ⌘F, in the app or in the slide", () => {
+    act(() => useApp.getState().clearSearch());
     render(<Find />);
     fireEvent.keyDown(window, { key: "f", ctrlKey: true });
     expect(document.activeElement).toBe(field());
@@ -145,7 +150,8 @@ describe("search", () => {
     expect(document.activeElement).toBe(field());
   });
 
-  it("leaves ⌘F to the HTML tab's editor, which has a search of its own", () => {
+  it("leaves ⌘F to the code editor, which has a search of its own", () => {
+    useApp.getState().clearSearch();
     render(
       <>
         <Find />
@@ -158,7 +164,7 @@ describe("search", () => {
     screen.getByText("Code").dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
     expect(useApp.getState().search.open).toBe(false);
-    expect(document.activeElement).not.toBe(field());
+    expect(screen.queryByLabelText("Text to find")).toBeNull();
   });
 
   it("says that a search failed, which is not the same as finding nothing", async () => {
@@ -169,7 +175,7 @@ describe("search", () => {
     render(<Find />);
     search("hello");
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("Search failed");
+    expect(alert.textContent).toBe("Could not search");
     expect(alert.title).toBe("the deck file is gone");
     expect(screen.queryByRole("status")).toBeNull();
     expect(useApp.getState().search).toMatchObject({ matches: null, failed: "the deck file is gone" });
@@ -180,39 +186,54 @@ describe("search", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("opens the Notes tab when it steps to a match in a slide's notes", async () => {
+  it("opens the notes under the slide when it steps to a match in a slide's notes", async () => {
     found([match("intro", 0), match("outro", 2, { notes: true })]);
     render(<Find />);
     search("hello");
     await waitFor(() => expect(status().textContent).toBe("1 / 2"));
-    expect(useApp.getState().sidebarTab).toBe("chat");
+    expect(useApp.getState().notesOpen).toBe(false);
     fireEvent.click(button("Next match"));
     expect(status().textContent).toBe("2 / 2 in notes");
-    expect(useApp.getState().sidebarTab).toBe("notes");
+    expect(useApp.getState()).toMatchObject({ notesOpen: true, sidebarTab: "chat" });
   });
 
-  describe("in Edit, as a bar over the stage", () => {
-    beforeEach(() => useApp.setState({ editing: true }));
+  it("goes past the last match to the first and back, so Next and Previous are never stuck", async () => {
+    found([match("intro", 0), match("outro", 2)]);
+    render(<Find />);
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("1 / 2"));
+    fireEvent.click(button("Previous match"));
+    expect(status().textContent).toBe("2 / 2");
+    fireEvent.click(button("Next match"));
+    expect(status().textContent).toBe("1 / 2");
+  });
 
+  describe("as one bar over the stage, in View and in Edit", () => {
     it("shows once it is asked for, takes the focus, and goes away with Escape or its button", () => {
-      render(<Find bar />);
-      expect(screen.queryByLabelText("Search slides")).toBeNull();
+      act(() => useApp.getState().clearSearch());
+      render(<Find />);
+      expect(screen.queryByLabelText("Text to find")).toBeNull();
       fireEvent.keyDown(window, { key: "f", ctrlKey: true });
       expect(document.activeElement).toBe(field());
       fireEvent.keyDown(field(), { key: "Escape" });
-      expect(screen.queryByLabelText("Search slides")).toBeNull();
+      expect(screen.queryByLabelText("Text to find")).toBeNull();
       act(() => useApp.getState().openFind());
-      fireEvent.click(button("Close the search"));
-      expect(screen.queryByLabelText("Search slides")).toBeNull();
+      fireEvent.click(button("Close Find"));
+      expect(screen.queryByLabelText("Text to find")).toBeNull();
     });
 
-    it("keeps what was searched for in View, without taking the focus for it", async () => {
+    it("keeps what was searched for as the mode changes, without taking the focus for it", async () => {
       found(MATCHES);
-      act(() => useApp.getState().setSearch({ query: "hello" }));
-      render(<Find bar />);
+      act(() => {
+        useApp.getState().clearSearch();
+        useApp.getState().setSearch({ query: "hello" });
+      });
+      render(<Find />);
       expect(field().value).toBe("hello");
       expect(document.activeElement).not.toBe(field());
       await waitFor(() => expect(status().textContent).toBe("1 / 3"));
+      act(() => useApp.setState({ editing: true }));
+      expect(field().value).toBe("hello");
       expect(button("Replace…").disabled).toBe(false);
     });
   });
@@ -236,22 +257,19 @@ describe("search", () => {
 });
 
 describe("replace", () => {
-  // Replacing changes the slides, which is Edit mode's.
   beforeEach(() => useApp.setState({ editing: true }));
 
-  it("is off in View, saying where it is on, and closes when the deck goes back to View", async () => {
+  it("works in View too, and stays open as the mode changes: each replace is one step to undo", async () => {
     found(MATCHES);
     useApp.setState({ editing: false });
     render(<Find />);
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
-    expect(button("Replace…").disabled).toBe(true);
-    expect(button("Replace…").title).toBe("Switch to Edit to change the slides");
-    act(() => useApp.setState({ editing: true }));
+    expect(button("Replace…").disabled).toBe(false);
     fireEvent.click(button("Replace…"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
-    act(() => useApp.setState({ editing: false }));
-    expect(screen.queryByRole("dialog", { name: "Replace" })).toBeNull();
+    act(() => useApp.setState({ editing: true }));
+    expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
   });
 
   it("counts what each button would replace, and says what stays for being locked", async () => {

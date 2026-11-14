@@ -1,8 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { duplicate, subtreeSize, withAncestors } from "./drawing";
+import { duplicate, scaling, subtreeSize, withAncestors } from "./drawing";
 
 const svgOf = (markup: string) => new DOMParser().parseFromString(markup, "image/svg+xml").documentElement;
+
+describe("resizing", () => {
+  const box = { x: 10, y: 20, w: 100, h: 50 };
+  const keys = { shiftKey: false, altKey: false };
+
+  it("scales from the opposite corner or side, which stays put", () => {
+    expect(scaling([1, 1], box, 50, 25, keys)).toEqual({ sx: 1.5, sy: 1.5, ox: 10, oy: 20 });
+    expect(scaling([-1, 0], box, 50, 999, keys)).toEqual({ sx: 0.5, sy: 1, ox: 110, oy: 45 });
+    expect(scaling([0, -1], box, 0, -50, keys)).toEqual({ sx: 1, sy: 2, ox: 60, oy: 70 });
+  });
+
+  it("keeps the proportions with Shift, and resizes from the middle with Alt", () => {
+    expect(scaling([1, 1], box, 100, 0, { ...keys, shiftKey: true })).toEqual({ sx: 2, sy: 2, ox: 10, oy: 20 });
+    expect(scaling([1, 0], box, 50, 0, { ...keys, shiftKey: true })).toEqual({ sx: 1.5, sy: 1.5, ox: 10, oy: 45 });
+    expect(scaling([1, 0], box, 50, 0, { ...keys, altKey: true })).toEqual({ sx: 2, sy: 1, ox: 60, oy: 45 });
+  });
+
+  it("never shrinks an element to nothing or turns it over", () => {
+    expect(scaling([1, 1], box, -500, -500, keys)).toMatchObject({ sx: 0.02, sy: 0.02 });
+  });
+});
 
 describe("the drawing's elements", () => {
   it("counts an element with all inside it", () => {

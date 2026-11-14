@@ -4,7 +4,7 @@ import { vi } from "vitest";
 
 import type { AgentEvent, HistoryEntry } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ask, backend, calls, type Handler, invoke, listen } from "../test/tauri";
+import { answerQuestionsWithAsk, ask, backend, calls, type Handler, invoke, listen } from "../test/tauri";
 import type { AssistantMessage, UserMessage } from "./messages";
 
 /** Handlers registered through `listen`, by event name. */
@@ -28,6 +28,7 @@ export function resetBackend() {
 export async function freshModule(withWorkspace = true) {
   vi.resetModules();
   const module = await import("../store");
+  answerQuestionsWithAsk((await import("./confirm")).useConfirmQuestion);
   if (withWorkspace) {
     module.useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, chatKey: "/decks/talk" });
   }

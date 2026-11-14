@@ -50,12 +50,17 @@ struct DownloadProgress {
     total: u64,
 }
 
+/// Where a download to `dest` is kept until it is whole and checked.
+pub(super) fn part_path(dest: &Path) -> PathBuf {
+    dest.with_extension("part")
+}
+
 /// Downloads `model` to `dest`, reporting progress as [`DOWNLOAD_EVENT`]; a failed or damaged
 /// download leaves nothing behind.
 pub(super) async fn download(app: &AppHandle, model: &Model, dest: &Path) -> Result<()> {
     let dir = dest.parent().expect("model path has a folder");
     fs::create_dir_all(dir)?;
-    let part = dest.with_extension("part");
+    let part = part_path(dest);
     let result = fetch(app, model, &part).await;
     if result.is_err() {
         let _ = fs::remove_file(&part);

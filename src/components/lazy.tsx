@@ -12,12 +12,14 @@ export const CodePanel = lazyPart(() => import("./CodeView").then((m) => m.CodeP
 export const SvgEditor = lazyPart(() => import("./SvgEditor").then((m) => m.SvgEditor), panelPlaceholder);
 export const ChangesView = lazyPart(() => import("./ChangesView").then((m) => m.ChangesView), panelPlaceholder);
 export const ChangesRail = lazyPart(() => import("./ChangesView").then((m) => m.ChangesRail), panelPlaceholder);
-export const DeckSettings = lazyPart(() => import("./DeckSettings").then((m) => m.DeckSettings), panelPlaceholder);
+export const DeckSettings = lazyPart(() => import("./DeckSettings").then((m) => m.DeckSettings));
 export const NarrationTimeline = lazyPart(() => import("./NarrationTimeline").then((m) => m.NarrationTimeline));
 export const Presenter = lazyPart(() => import("./Presenter").then((m) => m.Presenter));
 export const RewindDialog = lazyPart(() => import("./RewindDialog").then((m) => m.RewindDialog));
-export const SlideImageExport = lazyPart(() => import("./SlideImageExport").then((m) => m.SlideImageExport));
-export const VideoExportPanel = lazyPart(() => import("./VideoExport").then((m) => m.VideoExportPanel));
+/** The Export menu's dialog, with each format's options. */
+export const ExportDialog = lazyPart(() => import("./ExportDialog").then((m) => m.ExportDialog));
+/** The command palette (⇧⌘P). */
+export const CommandPalette = lazyPart(() => import("./CommandPalette").then((m) => m.CommandPalette));
 
 /** In the order they are likely to be wanted. */
 const PARTS = [
@@ -27,9 +29,9 @@ const PARTS = [
   ChangesView,
   ChangesRail,
   DeckSettings,
-  VideoExportPanel,
-  SlideImageExport,
+  ExportDialog,
   RewindDialog,
+  CommandPalette,
   SvgEditor,
 ];
 

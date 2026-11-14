@@ -59,6 +59,29 @@ describe("the chat following an undone agent turn", () => {
     expect(calls("save_chat").at(-1)).toMatchObject({ chat: [expect.objectContaining({ id: "m0" })] });
   });
 
+  it("rewinding puts the message back with what went along with it", async () => {
+    const useApp = await freshStore();
+    const sent: UserMessage = {
+      ...user("m1", "Bigger"),
+      slide: "outro",
+      slides: ["intro"],
+      attachments: ["assets/a.png"],
+      screenshot: "/s/shot.png",
+    };
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", messages: [sent], rewindAsk: null });
+    const turn = entry("Bigger", "chat", "m1");
+    backend({ undo_deck: () => ({ deck: deckFor(DECK_HTML), entry: turn, status: status(null, turn) }) });
+    await useApp.getState().undo();
+    await useApp.getState().answerRewind("rewind");
+    expect(useApp.getState().composerFill).toMatchObject({
+      text: "Bigger",
+      attachments: ["assets/a.png"],
+      slides: ["intro"],
+      includeSlide: true,
+      screenshot: "/s/shot.png",
+    });
+  });
+
   it("keeping the chat marks the message and tells the agent with the next message", async () => {
     const { useApp } = await undoneTurn();
     await useApp.getState().answerRewind("deck");

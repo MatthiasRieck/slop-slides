@@ -19,11 +19,17 @@ export interface Playback {
  * Plays a slide's narration audio (its WAV file in the deck's `narration/` folder), `from`
  * seconds in. Loading the audio takes a moment, long for a long file: a function for `from`
  * is asked once it has loaded, so it starts where it should be by then. Audio played before is
- * still there (see ./narrationCache.ts), and starts at once.
+ * still there (see ./narrationCache.ts), and starts at once. `rate` above 1 plays it faster.
  */
-export async function playNarration(deck: string, slide: string, from: number | (() => number) = 0): Promise<Playback> {
+export async function playNarration(
+  deck: string,
+  slide: string,
+  from: number | (() => number) = 0,
+  rate = 1,
+): Promise<Playback> {
   const sound = await borrowNarrationSound(deck, slide);
   const audio = new Audio(sound.url);
+  audio.playbackRate = rate;
   audio.currentTime = Math.max(0, typeof from === "function" ? from() : from);
   let finish = () => {};
   const ended = new Promise<void>((resolve) => {

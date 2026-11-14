@@ -38,6 +38,19 @@ describe("a playback clock", () => {
     expect(clock.time()).toBe(4.25);
   });
 
+  it("runs faster or slower at a rate, until it is started again", () => {
+    const clock = createPlaybackClock();
+    clock.runFrom(1, 2);
+    now += 500;
+    expect(clock.time()).toBe(2);
+    clock.sync(3);
+    now += 250;
+    expect(clock.time()).toBe(3.5);
+    clock.runFrom(0);
+    now += 500;
+    expect(clock.time()).toBe(0.5);
+  });
+
   it("tells its followers every frame while it runs, and asks for no frame otherwise", () => {
     const clock = createPlaybackClock();
     const follower = vi.fn();

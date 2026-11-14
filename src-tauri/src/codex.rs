@@ -669,6 +669,7 @@ fn approval_request(method: &str, p: &Value) -> Option<(Approval, Choices)> {
             }
             .into(),
             decisions,
+            session_scope: None,
         },
         result,
     ))

@@ -1,39 +1,57 @@
-// The workbench's own keyboard shortcuts: which keys ask for what. Acting on them is
-// hooks/useShellKeys.ts; the specs here are what the tooltips and the shortcut help show.
+// The workbench's own keyboard shortcuts: which keys ask for what. They are commands of the
+// registry (./commands.json), whose keys the menu bar, the palette and the shortcut help show;
+// acting on them is hooks/useShellKeys.ts, through the registry.
+import { type CommandSpec, commandForKeys, commandSpec, type PressedKeys } from "./commands";
 
-/** What a shell shortcut asks for: a mode, a panel shown or hidden, the app's settings, another folder. */
-export type ShellCommand = "view" | "edit" | "git" | "sidebar" | "rail" | "appSettings" | "openFolder";
+/**
+ * What a shell shortcut asks for: a mode, a panel shown or hidden, the app's settings, another
+ * deck or folder, the word that everything is saved, closing the deck or the window, and the
+ * command palette.
+ */
+export type ShellCommand =
+  | "view"
+  | "edit"
+  | "git"
+  | "sidebar"
+  | "rail"
+  | "appSettings"
+  | "openDeck"
+  | "openFolder"
+  | "save"
+  | "close"
+  | "closeWindow"
+  | "palette";
 
-/** The keys of each command, as `formatKeys` specs. */
-export const SHELL_SHORTCUTS: Record<ShellCommand, string> = {
-  view: "mod+1",
-  edit: "mod+2",
-  git: "mod+3",
-  sidebar: "mod+\\",
-  rail: "mod+shift+\\",
-  appSettings: "mod+,",
-  openFolder: "mod+o",
+/** The registry's command each shell shortcut is. */
+export const SHELL_COMMAND_IDS: Record<ShellCommand, string> = {
+  view: "view.view",
+  edit: "view.edit",
+  git: "view.changes",
+  sidebar: "view.sidebar",
+  rail: "view.rail",
+  appSettings: "app.settings",
+  openDeck: "file.openDeck",
+  openFolder: "file.openFolder",
+  save: "file.save",
+  close: "file.close",
+  closeWindow: "file.closeWindow",
+  palette: "help.palette",
 };
 
-/** A key as pressed: in the app (a keyboard event) or in a slide preview, which forwards it. */
-export interface PressedKey {
-  key: string;
-  /** The physical key, when known: Shift turns `\` into `|`, and layouts move both. */
-  code?: string;
-  /** The platform's command modifier is held (see `isMod`). */
-  mod: boolean;
-  shift: boolean;
-  alt?: boolean;
-}
+const SHELL = Object.entries(SHELL_COMMAND_IDS) as [ShellCommand, string][];
+const SPECS: CommandSpec[] = SHELL.map(([, id]) => commandSpec(id));
 
-const MODES: Record<string, ShellCommand> = { "1": "view", "2": "edit", "3": "git" };
+/** The keys of each command, as `formatKeys` specs. */
+export const SHELL_SHORTCUTS = Object.fromEntries(
+  SHELL.map(([command, id]) => [command, commandSpec(id).keys!]),
+) as Record<ShellCommand, string>;
+
+/** A key as pressed: in the app (a keyboard event) or in a slide preview, which forwards it. */
+export type PressedKey = PressedKeys;
 
 /** The command the pressed key asks for; null when it is not a shell shortcut. */
-export function shellCommand({ key, code, mod, shift, alt = false }: PressedKey): ShellCommand | null {
-  if (!mod || alt) return null;
-  if (key === "\\" || key === "|" || code === "Backslash") return shift ? "rail" : "sidebar";
-  if (shift) return null;
-  if (key === ",") return "appSettings";
-  if (key.toLowerCase() === "o") return "openFolder";
-  return MODES[key] ?? null;
+export function shellCommand(pressed: PressedKey): ShellCommand | null {
+  if (!pressed.mod) return null;
+  const id = commandForKeys(pressed, SPECS);
+  return SHELL.find(([, other]) => other === id)?.[0] ?? null;
 }

@@ -1,15 +1,21 @@
 // The chat's messages as the chat shows them, the helpers that settle them, and saving them.
 import { api } from "../lib/api";
 import type { PlacedComment } from "../lib/comments";
-import { type ContextUsage, latestContext } from "../lib/context";
+import { type ContextUsage, latestContext, totalCost } from "../lib/context";
 import type { EditElement } from "../lib/editTools";
 import { memoizeLast } from "../lib/memo";
 import type { Provider } from "../lib/models";
-import type { Approval } from "../lib/permissions";
+import type { Approval, ApprovalDecision } from "../lib/permissions";
 import type { AppState, AppStore } from "./types";
 
 export type ChatPart =
-  | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
+  | {
+      kind: "approval";
+      approval: Approval;
+      status: "pending" | "resolved" | "expired";
+      /** How the user answered it; absent while they have not, and in chats saved before it was kept. */
+      decision?: ApprovalDecision;
+    }
   | { kind: "approvalReview"; id: string; status: string; detail: string | null }
   | { kind: "text"; text: string }
   | {
@@ -29,6 +35,8 @@ export interface UserMessage {
   role: "user";
   text: string;
   slide: string | null;
+  /** The other slides the message refers to, by id; absent when there are none. */
+  slides?: string[];
   attachments: string[];
   /** The user drew on the slide before sending; absent in chats saved before sketches. */
   sketch?: Sketch | null;
@@ -70,7 +78,38 @@ export interface AssistantMessage {
   compacting?: boolean;
   /** The conversation was summarized during this reply. */
   compacted?: boolean;
+  /** What the turn this reply ended changed in the deck; absent when it changed no slide, and on the replies before a steer. */
+  changes?: TurnChanges;
   createdAt: number;
+}
+
+/** What an agent's turn changed in the deck's slides, by their ids. */
+export interface TurnChanges {
+  /** The user's message that started the turn, which the deck's history knows its changes by. */
+  message: string;
+  /** Slides that were there before and are different now, in deck order. */
+  changed: string[];
+  /** Slides that are new, in deck order. */
+  added: string[];
+  /** How many slides are gone. */
+  removed: number;
+}
+
+/**
+ * What differs between the slides a turn started with (`before`) and those it left (`after`);
+ * null when they are the same slides. A slide only moved counts as neither changed nor new.
+ */
+export function slideChanges(
+  message: string,
+  before: readonly { id: string; hash: string }[],
+  after: readonly { id: string; hash: string }[],
+): TurnChanges | null {
+  const was = new Map(before.map((slide) => [slide.id, slide.hash]));
+  const is = new Set(after.map((slide) => slide.id));
+  const changed = after.filter((slide) => was.has(slide.id) && was.get(slide.id) !== slide.hash).map((s) => s.id);
+  const added = after.filter((slide) => !was.has(slide.id)).map((s) => s.id);
+  const removed = before.filter((slide) => !is.has(slide.id)).length;
+  return changed.length + added.length + removed > 0 ? { message, changed, added, removed } : null;
 }
 
 export type ChatMessage = UserMessage | AssistantMessage;
@@ -83,6 +122,8 @@ export interface SendOptions {
   element?: EditElement;
   /** The slide it is about, when not the one selected now (a queued message keeps its own). */
   slide?: string | null;
+  /** The other slides it refers to, by id: those picked beside the one it is about, and those added with "@". */
+  slides?: string[];
 }
 
 /** A message waiting for the agent's turn to end (see `ChatSlice.queue`). */
@@ -162,6 +203,7 @@ export function sendOptionsOf(message: UserMessage): SendOptions {
   return {
     includeSlide: message.slide !== null,
     slide: message.slide,
+    ...(message.slides?.length && { slides: message.slides }),
     attachments: message.attachments,
     ...(message.screenshot && { screenshot: message.screenshot }),
     ...(message.element && { element: message.element }),
@@ -184,6 +226,33 @@ const contextIn = memoizeLast(latestContext);
  */
 export function chatContext(state: Pick<AppState, "messages" | "selection">): ContextUsage | null {
   return contextIn(state.messages, state.selection.provider);
+}
+
+const costIn = memoizeLast(totalCost);
+
+/**
+ * What the chat's replies cost together, in US dollars, as their agents reported it; null when
+ * none did. A selector, added up again only when the messages changed.
+ */
+export function chatCost(state: Pick<AppState, "messages">): number | null {
+  return costIn(state.messages);
+}
+
+/**
+ * What the chat on show is called while the user gave it no name: the start of its first
+ * message, as the list of past chats names it; null for a chat with no message yet.
+ */
+export function firstMessageTitle(messages: readonly ChatMessage[]): string | null {
+  const first = messages.find((m) => m.role === "user");
+  return first?.role === "user" ? first.text.replace(/\s+/g, " ").trim().slice(0, 100) || null : null;
+}
+
+/** Whether `path` went along with a message of the chat, or goes along with one that waits. */
+export function attachmentSent(state: Pick<AppState, "messages" | "queue">, path: string): boolean {
+  return (
+    state.messages.some((m) => m.role === "user" && m.attachments.includes(path)) ||
+    state.queue.some((item) => item.options.attachments.includes(path))
+  );
 }
 
 /** Saves the chat as it is now to its session. */

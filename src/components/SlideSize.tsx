@@ -1,5 +1,5 @@
 import { RectangleHorizontal, RectangleVertical, Square } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   convert,
@@ -35,8 +35,11 @@ const UNITS: { id: SizeUnit; label: string }[] = [
 
 const SIZE_BUSY = "Wait for the agent to finish to change the slide size";
 
-/** The deck's slide size, in the deck's settings. */
-export function SlideSizeSettings() {
+/**
+ * The deck's slide size, in the deck's settings. `onPending` hears of a size typed or picked and
+ * not applied yet (null once there is none), for the settings not to close on it without a word.
+ */
+export function SlideSizeSettings({ onPending }: { onPending?: (size: SlideSize | null) => void }) {
   const size = useApp((s) => s.deck?.size) ?? DEFAULT_SIZE;
   const deckId = useApp((s) => s.deck?.id);
   /** How the last Apply went, and for which deck; kept here, as the panel starts over with the new size. */
@@ -49,6 +52,7 @@ export function SlideSizeSettings() {
       current={size}
       applied={change}
       onApplied={(next) => setApplied(next && { deck: deckId, change: next })}
+      onPending={onPending}
     />
   );
 }
@@ -63,6 +67,7 @@ function SlideSizePanel(props: {
   /** How the last Apply went: the status under the form says so. */
   applied: DesignChange | null;
   onApplied: (change: DesignChange | null) => void;
+  onPending?: (size: SlideSize | null) => void;
 }) {
   const current: SlideSize = { width: props.current.width, height: props.current.height, unit: props.current.unit };
   const [unit, setUnit] = useState<SizeUnit>(current.unit);
@@ -75,6 +80,13 @@ function SlideSizePanel(props: {
   const problem = width.trim() === "" || height.trim() === "" ? "Enter a width and a height." : sizeProblem(draft);
   const orientation = problem ? null : orientationOf(draft);
   const unchanged = !problem && sameSize(draft, current);
+  // A valid size that is not the deck's waits to be applied.
+  const pending = problem || unchanged ? null : draft;
+  const pendingKey = pending && `${pending.width}x${pending.height}${pending.unit}`;
+  const { onPending } = props;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: told again only when the size waiting changes
+  useEffect(() => onPending?.(pending), [pendingKey, onPending]);
+  useEffect(() => () => onPending?.(null), [onPending]);
 
   const show = (size: SlideSize) => {
     setUnit(size.unit);

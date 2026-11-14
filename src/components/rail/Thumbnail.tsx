@@ -1,17 +1,19 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
 import { useSettled } from "../../hooks/useSettled";
 import type { Slide } from "../../lib/api";
 import { scrollBehavior } from "../../lib/motion";
 import { pixelsOf } from "../../lib/slideSize";
+import { slideTitle } from "../../lib/slideTitle";
 import { cn, plural } from "../../lib/utils";
 import { useApp } from "../../store";
 import { SlideFrame, useSlideVersion } from "../SlideFrame";
+import { SlideActions } from "./SlideActions";
+import { SlideMarks } from "./SlideMarks";
 
-/** How a slide in the rail eases into and out of being hidden or locked. */
+/** How a slide in the rail eases into and out of being hidden. */
 const MARK_TRANSITION = "transition duration-200";
 
 export const noLayoutAnimation = () => false;
@@ -22,45 +24,75 @@ export const noLayoutAnimation = () => false;
  */
 export const EDITED_THUMBNAIL_DELAY = 400;
 
-/** What a screen reader says of a slide's row: "Slide 3, hidden, locked, 2 comments". */
+/** Marks a list of thumbnails (the slide list, the grid of all slides): the keys' focus stays within one. */
+export const SLIDE_LIST_ATTR = "data-slide-list";
+
+/**
+ * On a list of thumbnails: while the pointer is on one row, no other row shows its quick actions,
+ * so the row the keyboard's focus is in and the one under the pointer never both carry them.
+ */
+export const ONE_ROW_OF_ACTIONS = "[&:has(li:hover)_li:not(:hover)_[data-slide-actions]]:hidden!";
+
+/**
+ * What a slide is called besides its number: the name the deck file gives it, in plain words
+ * (see `slideTitle`). None when that says nothing the number does not ("slide", "slide-4", "7").
+ */
+export function slideName(slide: Slide): string {
+  const title = slideTitle(slide.id);
+  return /^(slide\s*)?\d*$/i.test(title) ? "" : title;
+}
+
+/** What a screen reader says of a slide's row: "Slide 3, Market size, hidden, locked, 2 comments". */
 export function slideLabel(index: number, slide: Slide, comments: number): string {
   return [
     `Slide ${index + 1}`,
+    slideName(slide) || false,
     slide.hidden && "hidden",
     slide.locked && "locked",
     comments > 0 && plural(comments, "comment"),
+    slide.notes?.trim() && "has speaker notes",
+    slide.narration?.trim() && "has narration",
   ]
     .filter(Boolean)
     .join(", ");
 }
 
 /**
- * One slide of the rail: its number and its thumbnail, a single button (one tab stop) that picks
- * the slide, is what a drag or the keyboard (Space, then the arrows) moves it by, and takes the
- * right-click for the slide's menu. Over it, what there is to know about the slide (hidden, locked,
- * how many comments, how many matches of the search) and, in Edit, its quick actions, which show
- * under the pointer and while the focus is in the row.
+ * One slide of the slide list or of the grid of all slides: its number and its thumbnail, a single
+ * button (one tab stop) that picks the slide, is what a drag or the keyboard (Space, then the
+ * arrows) moves it by, and takes the right-click for the slide's menu. Under the number, what there
+ * is to know about the slide (see ./SlideMarks.tsx), so nothing lies on the picture; over its
+ * corner, the quick actions (./SlideActions.tsx), which show under the pointer and with the
+ * keyboard's focus in the row.
  *
  * Memoized, and given nothing that changes with the other rows: picking another slide or saving
- * one renders the rows concerned, not the whole rail.
+ * one renders the rows concerned, not the whole list.
  */
 export const Thumbnail = memo(function Thumbnail(props: {
   deckId: string;
   slide: Slide;
   index: number;
-  /** Edit mode: the slide can be locked, hidden, duplicated and deleted from here. */
-  editable: boolean;
   filteredOut: boolean;
+  /** A search is on and found nothing on the slide: it stays in its place, faded. */
+  dimmed?: boolean;
   folded: boolean;
   still: boolean;
   /** Another of the picked slides is being dragged, and this one goes along. */
   draggedAlong: boolean;
   /** How many matches of the search the slide has; undefined while none is on. */
   matches?: number;
-  /** A right-click on the slide; the same function for every row. */
+  /** What a double-click does, said after the slide's name in the tooltip: "double-click to edit". */
+  hint?: string;
+  /** Enter opens the slide as a double-click does, rather than only picking it. */
+  opensOnEnter?: boolean;
+  /** Where the slide being dragged would land: before this one, or after it. Only the grid marks it. */
+  dropMark?: "before" | "after";
+  /** A right-click on the slide, or a press on its "More actions"; the same function for every row. */
   onMenu: (event: React.MouseEvent, slide: string) => void;
+  /** A double-click on the slide; the same function for every row. */
+  onOpen: (slide: string) => void;
 }) {
-  const { deckId, slide, index, filteredOut, folded, onMenu } = props;
+  const { deckId, slide, index, filteredOut, folded, onMenu, onOpen } = props;
   const selected = useApp((s) => s.selected === slide.id);
   const picked = useApp((s) => s.railSelected.includes(slide.id));
   const comments = useApp((s) => s.comments[slide.id]?.length ?? 0);
@@ -77,9 +109,14 @@ export const Thumbnail = memo(function Thumbnail(props: {
   useEffect(() => {
     if (!selected) return;
     itemRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
-    // The keys went to another slide with the focus on a thumbnail: the focus goes along.
+    // The keys went to another slide with the focus on a thumbnail of this list: the focus goes along.
     const focused = document.activeElement;
-    if (focused !== buttonRef.current && focused?.matches("button[data-thumbnail]")) {
+    const list = buttonRef.current?.closest(`[${SLIDE_LIST_ATTR}]`);
+    if (
+      focused !== buttonRef.current &&
+      focused?.matches("button[data-thumbnail]") &&
+      focused.closest(`[${SLIDE_LIST_ATTR}]`) === list
+    ) {
       buttonRef.current?.focus({ preventScroll: true });
     }
   }, [selected]);
@@ -93,14 +130,10 @@ export const Thumbnail = memo(function Thumbnail(props: {
     else app().select(slide.id);
   };
 
-  const onDoubleClick = () => {
-    app().select(slide.id);
-    app().setMode("edit");
-  };
-
   // dnd-kit names the row a button and says whether it can be dragged; the thumbnail is a real
   // button, pressed while its slide is picked, and works whether or not it can be dragged.
   const { role: _role, "aria-pressed": _pressed, "aria-disabled": undraggable, ...sortable } = attributes;
+  const name = [`Slide ${index + 1}`, slideName(slide)].filter(Boolean).join(" · ");
 
   return (
     <li
@@ -109,26 +142,36 @@ export const Thumbnail = memo(function Thumbnail(props: {
         itemRef.current = node;
       }}
       data-rail-slide
+      data-slide={slide.id}
       data-draggable={!undraggable}
+      data-drop={props.dropMark}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
-        filteredOut ? "hidden" : "group flex gap-2",
+        filteredOut ? "hidden" : "group/slide relative flex gap-2",
         folded && "pointer-events-none -mt-3 h-0 overflow-hidden opacity-0",
         isDragging && "z-10 opacity-80",
         props.draggedAlong && "opacity-40",
+        props.dimmed && !props.draggedAlong && "opacity-40",
+        // Where the dragged slides would land, as a line in the gap beside this one.
+        props.dropMark && "after:absolute after:inset-y-0 after:w-0.5 after:rounded-full after:bg-primary",
+        props.dropMark === "before" && "after:-left-2",
+        props.dropMark === "after" && "after:-right-2",
       )}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground transition-opacity duration-200",
-          selected && "font-semibold text-foreground",
-          slide.hidden && "opacity-60",
-        )}
-      >
-        {index + 1}
-      </span>
-      <div className="relative min-w-0 flex-1">
+      <div className="flex w-4 shrink-0 flex-col items-end gap-1 pt-0.5">
+        <span
+          aria-hidden
+          className={cn(
+            "text-right text-2xs tabular-nums text-muted-foreground transition-opacity duration-200",
+            selected && "font-semibold text-foreground",
+            slide.hidden && "opacity-60",
+          )}
+        >
+          {index + 1}
+        </span>
+        <SlideMarks slide={slide} comments={comments} matches={props.matches} />
+      </div>
+      <div className="@container relative min-w-0 flex-1">
         <button
           {...sortable}
           {...listeners}
@@ -141,9 +184,16 @@ export const Thumbnail = memo(function Thumbnail(props: {
           aria-label={slideLabel(index, slide, comments)}
           aria-current={selected ? "true" : undefined}
           aria-pressed={picked || selected}
-          title={props.editable ? `Slide ${index + 1}` : `Slide ${index + 1} · double-click to edit`}
+          title={props.hint ? `${name} · ${props.hint}` : name}
           onClick={onClick}
-          onDoubleClick={onDoubleClick}
+          onDoubleClick={() => onOpen(slide.id)}
+          onKeyDown={(event) => {
+            // Space picks the row up to move it (see dnd-kit's keyboard sensor); Enter is the slide's.
+            if (props.opensOnEnter && event.key === "Enter" && !event.defaultPrevented) {
+              event.preventDefault();
+              onOpen(slide.id);
+            } else listeners?.onKeyDown?.(event);
+          }}
           onContextMenu={(event) => onMenu(event, slide.id)}
           className={cn(
             // No transition on the ring: it would repaint the slide under it for its whole length.
@@ -167,133 +217,8 @@ export const Thumbnail = memo(function Thumbnail(props: {
             className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
         </button>
-        <RailMark shown={slide.hidden} className="inset-0 flex items-center justify-center text-foreground/80">
-          <HiddenMark />
-        </RailMark>
-        <RailMark
-          shown={slide.locked}
-          testId="locked-mark"
-          title="Locked: neither you nor the agent can change it"
-          className="bottom-1 left-1 rounded bg-overlay p-1 text-overlay-foreground"
-        >
-          <Lock className="size-3" aria-label="Locked slide" />
-        </RailMark>
-        <div className="pointer-events-none absolute bottom-1 right-1 flex gap-1">
-          {props.matches !== undefined && props.matches > 0 && (
-            <Badge testId="match-count" title={`${plural(props.matches, "match", "matches")} of the search`}>
-              <Search className="size-2.5" />
-              {props.matches}
-            </Badge>
-          )}
-          {comments > 0 && (
-            <Badge testId="comment-count" title={plural(comments, "comment")}>
-              <MessageSquare className="size-2.5" />
-              {comments}
-            </Badge>
-          )}
-        </div>
-        {props.editable && (
-          <div className="absolute right-1 top-1 hidden gap-0.5 group-focus-within:flex group-hover:flex">
-            <RailAction
-              title={slide.locked ? "Unlock slide" : "Lock slide"}
-              onClick={() => void app().setSlidesLocked([slide.id], !slide.locked)}
-            >
-              {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
-            </RailAction>
-            <RailAction
-              title={slide.hidden ? "Show slide" : "Hide slide"}
-              onClick={() => void app().setSlidesHidden([slide.id], !slide.hidden)}
-            >
-              {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
-            </RailAction>
-            <RailAction title="Duplicate" onClick={() => void app().duplicateSlides([slide.id])}>
-              <Copy className="size-3" />
-            </RailAction>
-            {!slide.locked && (
-              <RailAction title="Delete" onClick={() => void app().deleteSlides([slide.id])}>
-                <Trash2 className="size-3" />
-              </RailAction>
-            )}
-          </div>
-        )}
+        <SlideActions slide={slide} onMenu={onMenu} />
       </div>
     </li>
   );
 });
-
-/** A small count over a thumbnail's corner, with an icon saying of what. */
-function Badge(props: { testId: string; title: string; children: React.ReactNode }) {
-  return (
-    <span
-      data-testid={props.testId}
-      title={props.title}
-      className="pointer-events-auto flex items-center gap-0.5 rounded bg-overlay px-1 py-0.5 text-[10px] font-medium leading-none tabular-nums text-overlay-foreground"
-    >
-      {props.children}
-    </span>
-  );
-}
-
-/** A mark over a slide's thumbnail. It stays mounted so that it can fade out the way it came in. */
-function RailMark(props: {
-  shown: boolean;
-  testId?: string;
-  title?: string;
-  className: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      data-testid={props.testId}
-      data-shown={props.shown}
-      aria-hidden={!props.shown}
-      title={props.title}
-      className={cn(
-        "pointer-events-none absolute",
-        MARK_TRANSITION,
-        props.className,
-        !props.shown && "scale-75 opacity-0",
-      )}
-    >
-      {props.children}
-    </div>
-  );
-}
-
-/** A closed eye, for a hidden slide. */
-function HiddenMark() {
-  return (
-    <svg
-      data-testid="hidden-mark"
-      aria-label="Hidden slide"
-      role="img"
-      viewBox="2 8 20 11"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      className="h-1/3 max-h-8 drop-shadow"
-    >
-      <path d="M3 10q9 8 18 0" />
-      <path d="M6.6 12.6 5 15.6M10.2 13.8l-.6 3.4M13.8 13.8l.6 3.4M17.4 12.6l1.6 3" />
-    </svg>
-  );
-}
-
-function RailAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-label={props.title}
-      title={props.title}
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        props.onClick();
-      }}
-      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
-    >
-      {props.children}
-    </button>
-  );
-}

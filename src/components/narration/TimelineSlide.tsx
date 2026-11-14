@@ -1,3 +1,4 @@
+import { Pin } from "lucide-react";
 import { type KeyboardEvent, memo, type PointerEvent, type Ref } from "react";
 
 import type { Slide } from "../../lib/api";
@@ -11,6 +12,8 @@ export interface SlideHandlers {
   goToSlide: (index: number) => void;
   pressEdge: (event: PointerEvent, index: number) => void;
   nudgeEdge: (event: KeyboardEvent, index: number) => void;
+  /** Lets the slide at `index` follow its narration again, its length and narration start no longer set by hand. */
+  followNarration: (index: number) => void;
   pointed: (event: PointerEvent) => void;
   release: () => void;
 }
@@ -31,6 +34,9 @@ function emptyFilm(picture: number): string | undefined {
  * shows: one page loaded for a slide, however long its strip. Not even that one unless `pictured`
  * (the strip has room for it, and it is in sight). `filmRef` is what holds the picture, as tall
  * as one.
+ *
+ * A slide whose length was set by hand has a pin by its seconds; double-clicking its handle (or
+ * Delete on it) lets it follow its narration again.
  *
  * Rendered again only when something of its own changes: `on` stays the same, so neither the
  * playhead nor a scroll nor another slide's edge redraws it.
@@ -59,6 +65,7 @@ export const TimelineSlide = memo(function TimelineSlide(props: {
 }) {
   const { slide, index, on } = props;
   const number = index + 1;
+  const pinned = slide.duration != null || slide.narrationStart != null;
   return (
     // A sliver apart, as cuts of film lie next to each other.
     <div className="absolute inset-y-1 px-px" style={{ left: props.left, width: props.width }}>
@@ -66,7 +73,7 @@ export const TimelineSlide = memo(function TimelineSlide(props: {
         type="button"
         aria-label={`Slide ${number}`}
         aria-current={props.selected ? "true" : undefined}
-        title={`Slide ${number}, shown for ${formatShown(props.seconds)}. Press to move the playhead to its start`}
+        title={`Slide ${number}, shown for ${formatShown(props.seconds)}${pinned ? ", timing set by hand" : ""}. Press to move the playhead to its start`}
         onClick={() => on.goToSlide(index)}
         className="relative block size-full overflow-hidden rounded-md bg-card text-left"
       >
@@ -87,6 +94,13 @@ export const TimelineSlide = memo(function TimelineSlide(props: {
           <span data-testid="slide-seconds" aria-hidden="true" className="opacity-70">
             {formatShown(props.seconds)}
           </span>
+          {pinned && (
+            <Pin
+              data-testid="slide-pinned"
+              aria-label="Timing set by hand"
+              className="size-2.5 shrink-0 self-center opacity-80"
+            />
+          )}
         </span>
         {/* Over the picture, which would cover an outline of the button itself. */}
         <span
@@ -99,13 +113,27 @@ export const TimelineSlide = memo(function TimelineSlide(props: {
       <button
         type="button"
         aria-label={`End of slide ${number}`}
-        title={props.editable ? "Drag to change how long this slide shows" : "Switch to Edit to change the timing"}
+        title={
+          !props.editable
+            ? "Switch to Edit to change the timing"
+            : pinned
+              ? "Drag to change how long this slide shows (Alt: without snapping). Double-click or press Delete to let it follow its narration again."
+              : "Drag to change how long this slide shows (Alt: without snapping)"
+        }
         disabled={!props.resizable}
         onPointerDown={(event) => on.pressEdge(event, index)}
         onPointerMove={on.pointed}
         onPointerUp={on.release}
         onPointerCancel={on.release}
-        onKeyDown={(event) => on.nudgeEdge(event, index)}
+        onDoubleClick={() => pinned && on.followNarration(index)}
+        onKeyDown={(event) => {
+          if ((event.key === "Delete" || event.key === "Backspace") && pinned) {
+            event.preventDefault();
+            event.stopPropagation();
+            return on.followNarration(index);
+          }
+          on.nudgeEdge(event, index);
+        }}
         className={cn(
           "absolute inset-y-0 z-10 w-2 cursor-ew-resize rounded-md focus-visible:bg-primary enabled:hover:bg-primary/60 disabled:cursor-default",
           props.last ? "right-0" : "-right-1",

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use crate::html;
 
+use super::text::text_changes;
 use super::{SlideChange, SlideStatus};
 
 /// Whether `a` and `b` have the same slides in the same order, whatever is between them.
@@ -203,6 +204,7 @@ pub(super) fn compare(old: &[Snapshot], new: &[Snapshot], assets: &[String]) -> 
             id: None,
             old_id: Some(slide.id.clone()),
             details: Vec::new(),
+            text_changes: Vec::new(),
             moved: false,
             old_number: Some(index + 1),
             staged: false,
@@ -231,6 +233,11 @@ fn change(
         id: Some(slide.id.clone()),
         old_id,
         details,
+        // Only a slide whose markup changed can read differently.
+        text_changes: match old {
+            Some((_, old)) if old.hash != slide.hash => text_changes(&old.markup, &slide.markup),
+            _ => Vec::new(),
+        },
         moved,
         old_number,
         staged: false,
@@ -411,6 +418,27 @@ mod tests {
         assert_eq!(list[0].status, Modified);
         assert_eq!(list[0].details, ["speaker notes"]);
         assert_eq!(list[1].details, ["hidden"]);
+    }
+
+    #[test]
+    fn says_which_words_of_a_modified_slide_changed() {
+        let old = deck(&["a=A", "b=Old title", "c=C"]);
+        let new = deck(&["c=C", "a=A", "b=New title", "d=D"]);
+        let list = compare(&snapshots(&old), &snapshots(&new), &[]);
+        let texts: Vec<Vec<(&str, &str)>> = list
+            .iter()
+            .map(|row| {
+                row.text_changes
+                    .iter()
+                    .map(|t| (t.before.as_str(), t.after.as_str()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            [vec![], vec![], vec![("Old title", "New title")], vec![]],
+            "moved, unchanged and added slides have no text to compare"
+        );
     }
 
     #[test]

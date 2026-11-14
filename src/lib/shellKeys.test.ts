@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { commandKeys } from "./commands";
 import { formatKeys } from "./keys";
 import { SHELL_SHORTCUTS, type ShellCommand, shellCommand } from "./shellKeys";
 
@@ -23,19 +24,39 @@ describe("shellCommand", () => {
     expect(mod("#", { code: "Backslash" })).toBe("sidebar");
   });
 
-  it("opens the app's settings on ⌘, and a folder on ⌘O", () => {
+  it("opens the app's settings on ⌘, a deck on ⌘O, and a folder with Shift", () => {
     expect(mod(",")).toBe("appSettings");
-    expect(mod("o")).toBe("openFolder");
-    expect(mod("O")).toBe("openFolder");
+    expect(mod("o")).toBe("openDeck");
+    expect(mod("O")).toBe("openDeck");
+    expect(mod("O", { shift: true })).toBe("openFolder");
+    expect(mod("o", { shift: true })).toBe("openFolder");
+  });
+
+  it("answers ⌘S, the habit of saving", () => {
+    expect(mod("s")).toBe("save");
+    expect(mod("S")).toBe("save");
+    expect(mod("s", { shift: true })).toBeNull();
+  });
+
+  it("closes the deck on ⌘W and the window with Shift, and opens the command palette on ⇧⌘P", () => {
+    expect(mod("w")).toBe("close");
+    expect(mod("W", { shift: true })).toBe("closeWindow");
+    expect(mod("P", { shift: true, code: "KeyP" })).toBe("palette");
+    // ⌘P alone is not the palette's.
+    expect(mod("p")).toBeNull();
+  });
+
+  it("takes its keys from the command registry", () => {
+    expect(SHELL_SHORTCUTS.palette).toBe(commandKeys("help.palette"));
+    expect(SHELL_SHORTCUTS.git).toBe(commandKeys("view.changes"));
   });
 
   it("is nothing without the command modifier, or with more than it", () => {
-    for (const key of ["1", "\\", ",", "o"]) {
+    for (const key of ["1", "\\", ",", "o", "s"]) {
       expect(shellCommand({ key, mod: false, shift: false })).toBeNull();
       expect(mod(key, { alt: true })).toBeNull();
     }
     expect(mod("1", { shift: true })).toBeNull();
-    expect(mod("o", { shift: true })).toBeNull();
     expect(mod(",", { shift: true })).toBeNull();
     expect(mod("z")).toBeNull();
   });

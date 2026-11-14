@@ -1,4 +1,4 @@
-import { Blend, Crop, Paintbrush, Replace } from "lucide-react";
+import { Image as ImageIcon, Paintbrush, Replace, Shapes, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import type { ArrangeMessage } from "../lib/arrange";
@@ -10,122 +10,132 @@ import {
   FIT_POSITION_NAMES,
   FIT_POSITIONS,
   type ImageFit,
+  isMixed,
 } from "../lib/editTools";
+import { formatKeys } from "../lib/keys";
 import { perFrame } from "../lib/perFrame";
 import { cn } from "../lib/utils";
-import { keepFocus, ToolButton } from "./Button";
+import { useApp } from "../store";
+import { Button, keepFocus, ToolButton } from "./Button";
+import { useEditPanelAsk } from "./editPanelAsk";
 import { DraftInput } from "./Field";
 import { DropdownPanel } from "./Popover";
 import { RibbonSelect } from "./Ribbon";
+import { LabelPanelButton, NEEDS_ELEMENT, PanelButton, PanelLabel, panelGrid } from "./ribbon/parts";
 
-/**
- * The toolbar's tools for how an element looks, beyond text, fill and border: opacity, shadow and
- * corner radius; the format painter; replacing, fitting and describing the selected image. Mounted
- * in EditToolbar.
- */
-export function LookTools(props: {
-  tool: EditTool;
-  selection: EditSelection | null;
-  onTool: (tool: EditTool) => void;
+/** What the sliders of a panel need to show a value in the slide as they move and to apply the one they are let go at. */
+interface LiveStyle {
   onStyle: (changes: EditStyle) => void;
   /** Previews a restyle in the slide while a slider is dragged, and takes a preview back. */
   onArrange?: (message: ArrangeMessage) => void;
-  onPickImage?: (replace: boolean) => void;
-  onReturnFocus: () => void;
-}) {
-  const { selection } = props;
-  const painting = props.tool === "paint";
-  return (
-    <>
-      <AppearanceButton
-        selection={selection}
-        onStyle={props.onStyle}
-        onArrange={props.onArrange}
-        onDone={props.onReturnFocus}
-      />
-      <ToolButton
-        keepFocus
-        label="Format painter"
-        title="Copy this look to the next element clicked"
-        active={painting}
-        disabled={!selection && !painting}
-        disabledReason="Select an element"
-        onClick={() => props.onTool(painting ? "select" : "paint")}
-      >
-        <Paintbrush />
-      </ToolButton>
-      <ImageButton
-        selection={selection?.image ? selection : null}
-        onStyle={props.onStyle}
-        onReplace={() => props.onPickImage?.(true)}
-        onDone={props.onReturnFocus}
-      />
-    </>
-  );
+  onDone: () => void;
 }
 
-const popoverPanel = "grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs";
-
-/** Opacity, shadow and corner radius of the selection, and a shape's proportions. */
-function AppearanceButton(props: {
-  selection: EditSelection | null;
-  onStyle: (changes: EditStyle) => void;
-  onArrange?: (message: ArrangeMessage) => void;
-  onDone: () => void;
-}) {
-  // The panel shows only with a selection, and comes back with it: saving reloads the slide's
-  // preview, which reports the selection again.
-  const { open, ref, toggle } = useDropdown();
-  const s = props.selection;
-  /** What a slider needs to show its value in the slide as it moves and to apply the one it is let go at. */
-  const live = (style: (value: number) => EditStyle) => ({
+/** A slider's callbacks for the style `style` makes of its value (see `Slider`). */
+function live(props: LiveStyle, style: (value: number) => EditStyle) {
+  return {
     onPreview: (value: number) => props.onArrange?.({ type: "slop:edit-style", style: style(value), preview: true }),
     onCancel: () => props.onArrange?.({ type: "slop:edit-style-cancel" }),
     onCommit: (value: number) => props.onStyle(style(value)),
     onDone: props.onDone,
-  });
+  };
+}
+
+/** Whether the selection has a shape of its own to change: a shape the tools drew with a corner radius, or a figure with proportions. */
+export function hasShapeTools(selection: EditSelection | null): boolean {
+  return !!selection && (!!selection.adjust || (selection.kind === "shape" && selection.radius !== null));
+}
+
+/**
+ * The effects any element takes: opacity and shadow, and for a box that is not one of the tools'
+ * shapes (which have "Shape" for it) its corner radius. A value the selected elements do not
+ * share shows as none until it is set for all of them.
+ */
+export function EffectsButton(props: LiveStyle & { selection: EditSelection | null }) {
+  // The panel shows only with a selection, and comes back with it: saving reloads the slide's
+  // preview, which reports the selection again.
+  const { open, ref, toggle } = useDropdown();
+  const s = props.selection;
   return (
     <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Appearance"
-        title="Opacity, shadow, corner radius and a shape's proportions"
-        aria-expanded={open}
+      <PanelButton
+        open={open && !!s}
+        label="Effects"
+        title="Effects: opacity, shadow and corner radius"
         disabled={!s}
-        disabledReason="Select an element"
+        disabledReason={NEEDS_ELEMENT}
         onClick={toggle}
       >
-        <Blend />
-      </ToolButton>
+        <SlidersHorizontal />
+      </PanelButton>
       {open && s && (
-        <DropdownPanel role="dialog" aria-label="Appearance" className={popoverPanel}>
+        <DropdownPanel role="dialog" aria-label="Effects" className={panelGrid}>
           <Slider
             label="Opacity"
             value={Math.round(s.opacity * 100)}
+            mixed={isMixed(s, "opacity")}
             min={5}
             max={100}
             step={5}
             unit="%"
-            {...live((n) => ({ opacity: n / 100 }))}
+            {...live(props, (n) => ({ opacity: n / 100 }))}
           />
           <Slider
             label="Shadow"
             value={s.shadow}
+            mixed={isMixed(s, "shadow")}
             max={80}
             step={2}
             unit="px"
             disabled={s.clipped}
-            {...live((shadow) => ({ shadow }))}
+            {...live(props, (shadow) => ({ shadow }))}
           />
-          <Slider
-            label="Corner radius"
-            value={s.radius ?? 0}
-            max={200}
-            step={2}
-            unit="px"
-            disabled={s.radius === null}
-            {...live((radius) => ({ radius }))}
-          />
+          {!hasShapeTools(s) && (
+            <Slider
+              label="Corner radius"
+              value={s.radius ?? 0}
+              mixed={isMixed(s, "radius")}
+              max={200}
+              step={2}
+              unit="px"
+              disabled={s.radius === null}
+              {...live(props, (radius) => ({ radius }))}
+            />
+          )}
+        </DropdownPanel>
+      )}
+    </div>
+  );
+}
+
+/** A shape's own look: its corner radius, and the proportions of a figure that has any (a star's points, a bubble's tail). */
+export function ShapeButton(props: LiveStyle & { selection: EditSelection }) {
+  const { open, ref, toggle } = useDropdown();
+  const s = props.selection;
+  return (
+    <div ref={ref} className="relative">
+      <LabelPanelButton
+        open={open}
+        text="Shape"
+        label="Shape options"
+        title="Shape: corner radius and proportions"
+        onClick={toggle}
+      >
+        <Shapes />
+      </LabelPanelButton>
+      {open && (
+        <DropdownPanel role="dialog" aria-label="Shape options" className={panelGrid}>
+          {s.radius !== null && (
+            <Slider
+              label="Corner radius"
+              value={s.radius}
+              mixed={isMixed(s, "radius")}
+              max={200}
+              step={2}
+              unit="px"
+              {...live(props, (radius) => ({ radius }))}
+            />
+          )}
           {s.adjust && (
             <Slider
               label={s.adjust.label}
@@ -135,7 +145,7 @@ function AppearanceButton(props: {
               step={s.adjust.step}
               // A star counts its points; the others go by a share of the shape's height.
               unit={s.adjust.label === "Points" ? "" : "%"}
-              {...live((adjust) => ({ adjust }))}
+              {...live(props, (adjust) => ({ adjust }))}
             />
           )}
         </DropdownPanel>
@@ -145,11 +155,58 @@ function AppearanceButton(props: {
 }
 
 /**
+ * The format painter: takes the selection's look and gives it to the next element clicked. The
+ * look it takes is the copied look too (⌥⌘C), so it can be pasted again and on other slides
+ * (⌥⌘V). A double-click keeps the painter in hand for one element after another.
+ */
+export function PainterButton(props: {
+  tool: EditTool;
+  selection: EditSelection | null;
+  onTool: (tool: EditTool) => void;
+  onArrange?: (message: ArrangeMessage) => void;
+}) {
+  const painting = props.tool === "paint";
+  const kept = useApp((s) => s.editToolKept) && painting;
+  const keys = `${formatKeys("mod+alt+c")} / ${formatKeys("mod+alt+v")}`;
+  return (
+    <ToolButton
+      keepFocus
+      label="Format painter"
+      title={
+        kept
+          ? "Format painter, kept: click one element after another to give each this look; Escape puts it away"
+          : `Format painter: click an element to give it this look, double-click to keep painting (${keys} copy and paste it)`
+      }
+      active={painting}
+      disabled={!props.selection && !painting}
+      disabledReason={NEEDS_ELEMENT}
+      onClick={() => props.onTool(painting ? "select" : "paint")}
+      onDoubleClick={() => {
+        if (!props.selection) return;
+        useApp.getState().setEditTool("paint", true);
+        props.onArrange?.({ type: "slop:edit-tool-keep", tool: "paint", on: true });
+      }}
+      className="relative"
+    >
+      <Paintbrush />
+      {kept && <KeptMark />}
+    </ToolButton>
+  );
+}
+
+/** The mark on a tool that stays in hand after it was used. */
+export function KeptMark() {
+  return <span aria-hidden="true" className="absolute right-0.5 bottom-0.5 size-1.5 rounded-full bg-primary" />;
+}
+
+/**
  * A slider with its value as a number to type beside it. While it is dragged the value shows in
  * the slide (`onPreview`), once per animation frame however fast it moves, and always the last
  * one before it is let go; the one it is let go at is applied, once (`onCommit`). A drag that
  * never lands (Escape, or the slider going away under the pointer) is taken back (`onCancel`).
  * A typed number applies on Enter or when the field loses focus, within the slider's range.
+ * `mixed` (the selected elements differ) shows no number and the thumb in the middle until the
+ * slider is moved or a number typed, which then goes to all of them.
  */
 function Slider(props: {
   label: string;
@@ -158,6 +215,7 @@ function Slider(props: {
   max: number;
   step: number;
   unit: string;
+  mixed?: boolean;
   disabled?: boolean;
   onPreview: (value: number) => void;
   onCommit: (value: number) => void;
@@ -168,6 +226,12 @@ function Slider(props: {
   const max = Math.max(props.max, props.value);
   const [draft, setDraft] = useState(props.value);
   useEffect(() => setDraft(props.value), [props.value]);
+  // Until it is moved, a mixed value has no place on the slider.
+  const [moved, setMoved] = useState(false);
+  const unset = !!props.mixed && !moved;
+  useEffect(() => {
+    if (!props.mixed) setMoved(false);
+  }, [props.mixed]);
   const input = useRef<HTMLInputElement>(null);
   // A value was previewed that has not been applied or taken back yet.
   const previewing = useRef(false);
@@ -200,7 +264,7 @@ function Slider(props: {
   };
   return (
     <>
-      <span className={cn("text-muted-foreground", props.disabled && "opacity-30")}>{props.label}</span>
+      <PanelLabel off={props.disabled}>{props.label}</PanelLabel>
       <span className="flex items-center gap-2">
         <input
           ref={input}
@@ -210,9 +274,11 @@ function Slider(props: {
           max={max}
           step={props.step}
           disabled={props.disabled}
-          value={draft}
+          value={unset ? Math.round((min + max) / 2 / props.step) * props.step : draft}
+          aria-valuetext={unset ? "Mixed" : undefined}
           onChange={(event) => {
             const value = Number(event.target.value);
+            setMoved(true);
             setDraft(value);
             previewing.current = true;
             preview.push(value);
@@ -230,7 +296,7 @@ function Slider(props: {
             aria-label={`${props.label} value`}
             title={`${props.label} (type a value and press Enter)`}
             disabled={props.disabled}
-            value={draft}
+            value={unset ? null : draft}
             parse={(text) => {
               const value = Number(text.trim());
               return text.trim() && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : null;
@@ -247,9 +313,12 @@ function Slider(props: {
   );
 }
 
-/** Replacing, fitting and describing the selected image. Flipping it is with the other flips, under Position and size. */
-function ImageButton(props: {
-  selection: EditSelection | null;
+/**
+ * The selected image's own tools: replacing it, how it fills its box and which part of it shows,
+ * and its description. Flipping it is with the other flips, under Rotate. Shown for an image only.
+ */
+export function ImageButton(props: {
+  selection: EditSelection;
   onStyle: (changes: EditStyle) => void;
   onReplace: () => void;
   onDone: () => void;
@@ -257,39 +326,45 @@ function ImageButton(props: {
   const s = props.selection;
   const [alt, setAlt] = useState("");
   const saveAlt = () => {
-    if (s && alt !== (s.alt ?? "")) props.onStyle({ alt });
+    if (alt !== (s.alt ?? "")) props.onStyle({ alt });
   };
   const { open, ref, toggle } = useDropdown({ onClose: saveAlt });
-  useEffect(() => setAlt(s?.alt ?? ""), [s?.alt]);
+  useEffect(() => setAlt(s.alt ?? ""), [s.alt]);
+  // "Replace image…" in the context menu opens the same picker.
+  useEditPanelAsk("replace-image", props.onReplace, { reveal: false });
+  const fit = s.fit ?? "fill";
+  // A stretched image fills its box whole: there is no part of it to choose.
+  const placed = fit !== "fill";
   return (
     <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
+      <LabelPanelButton
+        open={open}
+        text="Image"
         label="Image options"
-        title="Replace, fit and describe the image"
-        aria-expanded={open}
-        disabled={!s}
-        disabledReason="Select an image"
+        title="Image: replace it, how it fills its box, and its description"
         onClick={toggle}
       >
-        <Crop />
-      </ToolButton>
-      {open && s && (
-        <DropdownPanel role="dialog" aria-label="Image options" className={popoverPanel}>
-          <span className="text-muted-foreground">Image</span>
-          <span className="flex items-center gap-0.5">
-            <ToolButton keepFocus label="Replace the image, keeping its size and place" onClick={props.onReplace}>
-              <Replace />
-            </ToolButton>
-          </span>
-          <label htmlFor="edit-image-fit" className="text-muted-foreground">
-            Fit
-          </label>
+        <ImageIcon />
+      </LabelPanelButton>
+      {open && (
+        <DropdownPanel role="dialog" aria-label="Image options" className={panelGrid}>
+          <Button
+            variant="outline"
+            size="sm"
+            title="Replace the image with another file, keeping its size and place"
+            onMouseDown={keepFocus}
+            onClick={props.onReplace}
+            className="col-span-2 justify-center"
+          >
+            <Replace />
+            Replace image…
+          </Button>
+          <PanelLabel htmlFor="edit-image-fit">Fit</PanelLabel>
           <RibbonSelect
             id="edit-image-fit"
             title="How the image fills its box"
-            value={s.fit ?? "fill"}
-            onPick={(fit) => props.onStyle({ fit: fit as ImageFit })}
+            value={fit}
+            onPick={(next) => props.onStyle({ fit: next as ImageFit })}
             onDone={props.onDone}
             className="border"
           >
@@ -299,31 +374,35 @@ function ImageButton(props: {
               </option>
             ))}
           </RibbonSelect>
-          <span className="text-muted-foreground">Position</span>
-          <fieldset aria-label="Image position" className="grid w-max grid-cols-3 gap-0.5">
+          <PanelLabel off={!placed}>Position</PanelLabel>
+          <fieldset
+            aria-label="Image position"
+            disabled={!placed}
+            title={placed ? undefined : "A stretched image fills its box; pick another fit to choose which part shows"}
+            className="grid w-max grid-cols-3 gap-0.5 disabled:opacity-40"
+          >
             {FIT_POSITIONS.map((position, index) => (
               <button
                 key={position}
                 type="button"
                 aria-label={`Position ${position}`}
-                title={FIT_POSITION_NAMES[index]}
-                aria-pressed={s.fitPosition === position}
+                title={placed ? FIT_POSITION_NAMES[index] : undefined}
+                aria-pressed={placed && s.fitPosition === position}
                 onMouseDown={keepFocus}
                 onClick={() => props.onStyle({ fitPosition: position })}
                 className={cn(
-                  "size-5 rounded-sm border hover:bg-accent",
-                  s.fitPosition === position && "bg-foreground/60 hover:bg-foreground/60",
+                  "size-5 rounded-sm border enabled:hover:bg-accent disabled:cursor-default",
+                  placed && s.fitPosition === position && "bg-primary/60 enabled:hover:bg-primary/60",
                 )}
               />
             ))}
           </fieldset>
-          <label htmlFor="edit-image-alt" className="text-muted-foreground">
-            Alt text
-          </label>
+          <PanelLabel htmlFor="edit-image-alt">Description</PanelLabel>
           <input
             id="edit-image-alt"
             value={alt}
-            placeholder="Describe the image"
+            title="What the image shows, for people who cannot see it (its alt text)"
+            placeholder="What the image shows"
             onChange={(event) => setAlt(event.target.value)}
             onBlur={saveAlt}
             onKeyDown={(event) => {

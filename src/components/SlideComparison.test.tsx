@@ -6,7 +6,7 @@ import { DEFAULT_DIVIDER, revealMask } from "../lib/compare";
 import { SlideComparison } from "./SlideComparison";
 
 const box = { width: 960, height: 540 };
-const show = () => render(<SlideComparison box={box} scale={0.5} before={<p>before</p>} after={<p>after</p>} />);
+const show = () => render(<SlideComparison box={box} before={<p>before</p>} after={<p>after</p>} />);
 const divider = () => useChanges.getState().divider;
 const surface = () => screen.getByTestId("comparison-surface");
 
@@ -17,14 +17,16 @@ beforeEach(() => {
 
 describe("SlideComparison", () => {
   it("shows both versions, with the new one cut along the divider", () => {
-    useChanges.setState({ divider: { x: 0.25, y: 0.5, angle: 30, feather: 50 } });
+    useChanges.setState({ divider: { x: 0.25, y: 0.5, angle: 30 } });
     show();
     expect(screen.getByText("before")).toBeTruthy();
     const after = screen.getByTestId("comparison-after");
     expect(after.textContent).toBe("after");
-    expect(after.dataset.mask).toBe(revealMask(divider(), box, 0.5));
-    expect(screen.getByText("Old")).toBeTruthy();
-    expect(screen.getByText("New")).toBeTruthy();
+    expect(after.dataset.mask).toBe(revealMask(divider(), box));
+    // The halves go by the names the view switch has for them.
+    expect(screen.getByText("Before")).toBeTruthy();
+    expect(screen.getByText("After")).toBeTruthy();
+    expect(screen.queryByText("Old")).toBeNull();
   });
 
   it("moves the divider with a drag anywhere on the slide", () => {
@@ -76,5 +78,12 @@ describe("SlideComparison", () => {
     expect(divider().angle).toBe(1);
     fireEvent.keyDown(rotate, { key: "ArrowLeft", shiftKey: true });
     expect(divider().angle).toBe(-14);
+  });
+
+  it("puts the divider back upright in the middle on a double click of its round handle", () => {
+    useChanges.setState({ divider: { x: 0.2, y: 0.8, angle: 40 } });
+    show();
+    fireEvent.doubleClick(screen.getByRole("slider", { name: "Rotate the divider" }));
+    expect(divider()).toEqual(DEFAULT_DIVIDER);
   });
 });

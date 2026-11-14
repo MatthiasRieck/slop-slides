@@ -1,7 +1,8 @@
 import { api, type Deck, type SlideTiming } from "../lib/api";
+import { slidesToScriptFromNotes } from "../lib/narration";
 import { promptAgent } from "./composer";
 import { queueEdit } from "./editQueue";
-import { showErrorIn } from "./errors";
+import { showErrorIn, showSuccessIn } from "./errors";
 import { cleanNarrationPrompt } from "./prompts";
 import { editRail } from "./slides";
 import type { AppStore, Slice } from "./types";
@@ -22,6 +23,13 @@ export interface NarrationSlice {
    * slide, and shows the chat, where it waits for the user to send it.
    */
   cleanNarration: (slide: string | null) => void;
+  /**
+   * Makes the speaker notes of every slide that has notes and no script (and is not locked) that
+   * slide's script, one change of the deck each; says how many it did.
+   */
+  scriptsFromNotes: () => Promise<void>;
+  /** Shows the sidebar's Narration tab, opening the sidebar and the tab as needed. */
+  showNarration: () => void;
   /** Saves slides' timing on the narration timeline, as one change the rail's history can undo. */
   setSlideTiming: (timing: SlideTiming[]) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
@@ -52,6 +60,17 @@ export const createNarrationSlice: Slice<NarrationSlice> = (_set, _get, app) => 
   setSlideTime: (slide, seconds) => editDeck(app, (id) => api.setSlideTime(id, slide, seconds)),
 
   cleanNarration: (slide) => promptAgent(app, cleanNarrationPrompt(slide)),
+
+  scriptsFromNotes: async () => {
+    const slides = slidesToScriptFromNotes(app.getState().deck?.slides ?? []);
+    for (const slide of slides) await app.getState().setNarration(slide.id, slide.notes ?? "");
+    const done = slides.length - slidesToScriptFromNotes(app.getState().deck?.slides ?? []).length;
+    if (done > 0) {
+      showSuccessIn(app, `Made the speaker notes of ${done} ${done === 1 ? "slide" : "slides"} their script.`);
+    }
+  },
+
+  showNarration: () => app.getState().setSidebarTab("narration"),
 
   setSlideTiming: async (timing) => {
     if (timing.length > 0) await editRail(app, (id) => api.setSlideTiming(id, timing));

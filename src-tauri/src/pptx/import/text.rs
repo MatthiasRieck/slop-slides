@@ -87,7 +87,7 @@ impl Converter {
             css.push(format!("color: {}", color.css()));
         }
         if let Some(font) = &style.font {
-            css.push(format!("font-family: {}", font_family(font)));
+            css.push(format!("font-family: {}", self.font(font)));
         }
         if let Some(color) = style.highlight {
             css.push(format!("background-color: {}", color.css()));

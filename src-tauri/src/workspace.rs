@@ -9,7 +9,7 @@
 //! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`, and the decks
 //! opened in them in `~/.slopslides/recent-decks.json`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -21,13 +21,14 @@ use serde::{Deserialize, Serialize};
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::html;
+use crate::size::SizeInfo;
 
 const RECENT_FILE: &str = "recent-workspaces.json";
 const RECENT_KEPT: usize = 10;
 const RECENT_DECKS_FILE: &str = "recent-decks.json";
 /// How much of an HTML file the file tree reads to tell decks from other pages. The markers
 /// [`classify`] looks for first are in `<head>`.
-const SNIFF_BYTES: u64 = 16 * 1024;
+pub(crate) const SNIFF_BYTES: u64 = 16 * 1024;
 
 /// What a workspace file is, which decides how it opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -86,7 +87,7 @@ pub fn classify(source: &str) -> FileKind {
 }
 
 /// The kind of the file at `path`, reading at most `limit` bytes of an HTML file.
-fn kind_of(path: &Path, limit: Option<u64>) -> FileKind {
+pub(crate) fn kind_of(path: &Path, limit: Option<u64>) -> FileKind {
     if path.is_dir() {
         return FileKind::Directory;
     }
@@ -139,7 +140,7 @@ pub fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Files and folders hidden from the tree: dotfiles (`.git`, `.DS_Store`, …) and the app's
 /// atomic-write temp files.
-fn hidden(name: &str) -> bool {
+pub(crate) fn hidden(name: &str) -> bool {
     name.starts_with('.') || name.contains(".tmp-")
 }
 
@@ -212,8 +213,15 @@ struct Open {
 /// Windows may share a folder, but never a deck or a chat: two windows on one chat would
 /// overwrite each other's messages. So a deck is open in one window, and so is a folder
 /// without a deck (whose chat is the folder's own).
+///
+/// The start screen shows a first slide of decks no window has open ([`gallery`]): the folders
+/// of those decks are served too, from when they were listed ([`OpenWorkspace::list`]).
 #[derive(Default)]
-pub struct OpenWorkspace(Mutex<HashMap<String, Open>>);
+pub struct OpenWorkspace {
+    windows: Mutex<HashMap<String, Open>>,
+    /// The folders of the decks the start screen listed last, in any window.
+    listed: Mutex<HashSet<PathBuf>>,
+}
 
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -222,7 +230,7 @@ fn canonical(path: &Path) -> PathBuf {
 impl OpenWorkspace {
     /// Opens `root` in `window` with no deck, or closes the window's folder for None.
     pub fn set(&self, window: &str, root: Option<PathBuf>) {
-        let mut open = self.0.lock().unwrap();
+        let mut open = self.windows.lock().unwrap();
         match root {
             Some(root) => {
                 let root = canonical(&root);
@@ -240,24 +248,32 @@ impl OpenWorkspace {
     }
 
     pub fn get(&self, window: &str) -> Option<PathBuf> {
-        self.0.lock().unwrap().get(window).map(|o| o.root.clone())
+        self.windows
+            .lock()
+            .unwrap()
+            .get(window)
+            .map(|o| o.root.clone())
     }
 
     /// The deck `window` has open.
     pub fn deck(&self, window: &str) -> Option<PathBuf> {
-        self.0.lock().unwrap().get(window)?.deck.clone()
+        self.windows.lock().unwrap().get(window)?.deck.clone()
     }
 
     /// What the chat of `window` is about: its deck, or its folder.
     pub fn chat(&self, window: &str) -> Option<PathBuf> {
-        self.0.lock().unwrap().get(window).map(|o| o.chat.clone())
+        self.windows
+            .lock()
+            .unwrap()
+            .get(window)
+            .map(|o| o.chat.clone())
     }
 
     /// The window other than `except` whose chat is about `subject`: for a folder, the one
     /// that has it open without a deck.
     pub fn window_with(&self, subject: &Path, except: &str) -> Option<String> {
         let subject = canonical(subject);
-        self.0
+        self.windows
             .lock()
             .unwrap()
             .iter()
@@ -267,7 +283,7 @@ impl OpenWorkspace {
 
     /// What the chats of the windows other than `except` are about.
     pub fn chats_except(&self, except: &str) -> Vec<PathBuf> {
-        self.0
+        self.windows
             .lock()
             .unwrap()
             .iter()
@@ -279,7 +295,7 @@ impl OpenWorkspace {
     /// The window other than `except` that has the deck `file` open.
     pub fn window_with_deck(&self, file: &Path, except: &str) -> Option<String> {
         let file = canonical(file);
-        self.0
+        self.windows
             .lock()
             .unwrap()
             .iter()
@@ -297,7 +313,7 @@ impl OpenWorkspace {
         keep_chat: bool,
     ) -> std::result::Result<(), String> {
         let file = canonical(file);
-        let mut open = self.0.lock().unwrap();
+        let mut open = self.windows.lock().unwrap();
         let taken = open.iter().find(|(other, o)| {
             other.as_str() != window && (o.deck.as_ref() == Some(&file) || o.chat == file)
         });
@@ -316,7 +332,7 @@ impl OpenWorkspace {
     /// Closes the deck of `window`, whose chat becomes the folder's own. `Err` names the
     /// window that has the folder open without a deck already; the deck stays open then.
     pub fn close_deck(&self, window: &str) -> std::result::Result<(), String> {
-        let mut open = self.0.lock().unwrap();
+        let mut open = self.windows.lock().unwrap();
         let Some(root) = open.get(window).map(|o| o.root.clone()) else {
             return Ok(());
         };
@@ -335,7 +351,7 @@ impl OpenWorkspace {
     /// The chat of `window` is about its deck from here on: the folder's chat, which made the
     /// deck, moved there (see [`crate::sessions::Sessions::move_current`]).
     pub fn chat_follows_deck(&self, window: &str) {
-        if let Some(mine) = self.0.lock().unwrap().get_mut(window) {
+        if let Some(mine) = self.windows.lock().unwrap().get_mut(window) {
             if let Some(deck) = &mine.deck {
                 mine.chat = deck.clone();
             }
@@ -349,11 +365,41 @@ impl OpenWorkspace {
         let Ok(path) = path.canonicalize() else {
             return false;
         };
-        self.0
+        let open = self
+            .windows
             .lock()
             .unwrap()
             .values()
-            .any(|open| path.starts_with(&open.root))
+            .any(|open| path.starts_with(&open.root));
+        open || self
+            .listed
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|folder| path.starts_with(folder))
+    }
+
+    /// Serves the folders of `decks` (deck files) as well, for the start screen's previews of
+    /// them, in the place of the ones listed before. A loose deck file's folder may hold
+    /// anything, so only a deck in a folder of its own (`<name>/deck.html`) is served.
+    pub fn list(&self, decks: &[PathBuf]) {
+        let folders = decks
+            .iter()
+            .filter(|file| has_own_folder(file))
+            .filter_map(|file| Some(canonical(file.parent()?)))
+            .collect();
+        *self.listed.lock().unwrap() = folders;
+    }
+
+    /// The window that has `folder`, or a folder inside it, open.
+    pub fn window_inside(&self, folder: &Path) -> Option<String> {
+        let folder = canonical(folder);
+        self.windows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, open)| open.root.starts_with(&folder))
+            .map(|(window, _)| window.clone())
     }
 }
 
@@ -498,6 +544,259 @@ fn write_list<T: Serialize>(app_home: &Path, name: &str, list: &[T]) -> Result<(
         serde_json::to_string_pretty(list).expect("json"),
     )?;
     Ok(())
+}
+
+/// Whether the deck `file` has a folder of its own, for its assets: it is `<name>/deck.html`.
+pub fn has_own_folder(file: &Path) -> bool {
+    file.file_name().and_then(|n| n.to_str()) == Some(deck::DECK_FILE)
+}
+
+/// The folder the deck `file` opens in when it is opened by itself (picked in a dialog, dropped
+/// on the window): the folder new decks go beside it in, and the agent works in.
+///
+/// - A deck of the library opens in the library.
+/// - A deck inside a folder opened before (`recent`) opens in the nearest of them.
+/// - A deck with a folder of its own (`<name>/deck.html`) opens in the folder that folder is in:
+///   opened in its own, new decks would land among its assets. Not when that is the user's home
+///   folder or a disk's root, which are too much to watch and to hand to the agent.
+/// - Any other deck opens in the folder it is in.
+pub fn workspace_for(
+    file: &Path,
+    library: &Path,
+    recent: &[PathBuf],
+    user_home: Option<&Path>,
+) -> PathBuf {
+    let own = deck::folder(file);
+    let nests = has_own_folder(file);
+    if inside(library, file) && !(nests && canonical(own) == canonical(library)) {
+        return library.to_path_buf();
+    }
+    let opened_before = recent
+        .iter()
+        .filter(|root| !(nests && canonical(root) == canonical(own)))
+        .filter(|root| root.is_dir() && inside(root, file))
+        .max_by_key(|root| root.components().count());
+    if let Some(root) = opened_before {
+        return root.clone();
+    }
+    let around = own
+        .parent()
+        .filter(|parent| nests && parent.parent().is_some() && user_home != Some(*parent));
+    around.unwrap_or(own).to_path_buf()
+}
+
+/// A deck on the start screen: one of the library's, or one opened before.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryDeck {
+    /// The deck file, which is the deck's id.
+    pub path: String,
+    pub title: String,
+    /// The folder it opens in.
+    pub workspace: String,
+    /// When the deck file last changed.
+    pub modified_ms: u64,
+    /// When it was last opened here; None for a deck that is not among the recent ones.
+    pub opened_ms: Option<u64>,
+    /// Its slide size, which is the shape of its preview.
+    pub size: SizeInfo,
+}
+
+/// How much of a deck file the start screen reads for its title and slide size, which are in
+/// its `<head>`, before the styles.
+const GALLERY_BYTES: u64 = 64 * 1024;
+
+/// The start of the file at `path`, as text; None when it cannot be read.
+fn head_of(path: &Path, limit: u64) -> Option<String> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The deck files of the library: each `<name>/deck.html`, and each deck right in it.
+fn library_decks(library: &Path) -> Vec<PathBuf> {
+    let entries = fs::read_dir(library).into_iter().flatten();
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| !hidden(&entry.file_name().to_string_lossy()))
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file = if path.is_dir() {
+                path.join(deck::DECK_FILE)
+            } else {
+                path
+            };
+            (file.is_file() && kind_of(&file, Some(SNIFF_BYTES)) == FileKind::Deck).then_some(file)
+        })
+        .collect()
+}
+
+/// The decks the start screen shows: the ones opened before and the library's, each once, the
+/// one opened or changed last first. Each is read only as far as its `<head>`.
+pub fn gallery(app_home: &Path, library: &Path, user_home: Option<&Path>) -> Vec<GalleryDeck> {
+    let library = canonical(library);
+    let recent_folders: Vec<PathBuf> = recent(app_home)
+        .into_iter()
+        .map(|folder| PathBuf::from(folder.path))
+        .collect();
+    let recent = recent_decks(app_home);
+    let known: HashSet<PathBuf> = recent
+        .iter()
+        .map(|deck| canonical(Path::new(&deck.path)))
+        .collect();
+    let opened = recent.into_iter().map(|deck| {
+        let file = PathBuf::from(&deck.path);
+        // A deck last opened in its own folder (as decks opened by themselves used to) opens
+        // where it would now.
+        let workspace =
+            match has_own_folder(&file) && Path::new(&deck.workspace) == deck::folder(&file) {
+                true => workspace_for(&file, &library, &recent_folders, user_home),
+                false => PathBuf::from(&deck.workspace),
+            };
+        (file, workspace, Some(deck.opened_ms), Some(deck.title))
+    });
+    let unopened = library_decks(&library)
+        .into_iter()
+        .filter(|file| !known.contains(&canonical(file)))
+        .map(|file| (file, library.clone(), None, None));
+    let mut decks: Vec<GalleryDeck> = opened
+        .chain(unopened)
+        .filter_map(|(file, workspace, opened_ms, remembered)| {
+            let head = head_of(&file, GALLERY_BYTES)?;
+            let modified = fs::metadata(&file).and_then(|m| m.modified()).ok()?;
+            let title = html::title(&head)
+                .filter(|title| !title.trim().is_empty())
+                .or(remembered)
+                .unwrap_or_else(|| name_as_title(&file));
+            Some(GalleryDeck {
+                path: file.to_string_lossy().into_owned(),
+                title,
+                workspace: workspace.to_string_lossy().into_owned(),
+                modified_ms: modified
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+                opened_ms,
+                size: html::slide_size(&head).into(),
+            })
+        })
+        .collect();
+    decks.sort_by_key(|deck| std::cmp::Reverse(deck.modified_ms.max(deck.opened_ms.unwrap_or(0))));
+    decks
+}
+
+/// What the deck `file` is called when it has no title: its folder's name for a `deck.html`,
+/// else the file's, with spaces for the dashes.
+fn name_as_title(file: &Path) -> String {
+    let name = match has_own_folder(file) {
+        true => deck::folder(file).file_name(),
+        false => file.file_stem(),
+    };
+    name.map(|n| n.to_string_lossy().replace(['-', '_'], " "))
+        .unwrap_or_default()
+}
+
+/// Copies the folder `from` to `to` with all in it but what the file tree hides (a `.git`, the
+/// app's temporary files).
+fn copy_shown(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        if hidden(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_shown(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Makes a copy of the deck `file` beside it, titled "<title> copy", and returns the copy's deck
+/// file. A deck with a folder of its own is copied with that folder (its assets, its narration)
+/// as `<folder>-copy`; a loose deck file as `<name>-copy.html`, sharing what it refers to.
+pub fn duplicate(file: &Path) -> Result<PathBuf> {
+    let source = fs::read_to_string(file)?;
+    let title = html::title(&source)
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| name_as_title(file));
+    let folder = deck::folder(file);
+    let name = |path: &Path| {
+        path.file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let copy = match folder.parent().filter(|_| has_own_folder(file)) {
+        Some(parent) => {
+            let target = crate::files::unique_dir(parent, &format!("{}-copy", name(folder)));
+            copy_shown(folder, &target)?;
+            target.join(deck::DECK_FILE)
+        }
+        None => {
+            let stem = format!("{}-copy", name(file));
+            std::iter::once(format!("{stem}.html"))
+                .chain((2..).map(|n| format!("{stem}-{n}.html")))
+                .map(|name| folder.join(name))
+                .find(|path| !path.exists())
+                .expect("unbounded")
+        }
+    };
+    deck::write_html(&copy, &html::set_title(&source, &format!("{title} copy")))?;
+    Ok(copy)
+}
+
+/// How deep [`trash_target`] looks into a deck's folder for other decks.
+const OTHER_DECK_DEPTH: usize = 4;
+
+/// Whether `dir` holds a deck other than `except`, in it or in a folder inside it.
+fn holds_other_deck(dir: &Path, except: &Path, depth: usize) -> bool {
+    let entries = fs::read_dir(dir).into_iter().flatten();
+    entries.filter_map(|entry| entry.ok()).any(|entry| {
+        let path = entry.path();
+        if hidden(&entry.file_name().to_string_lossy()) || path == except {
+            return false;
+        }
+        match path.is_dir() {
+            true => depth > 0 && holds_other_deck(&path, except, depth - 1),
+            false => kind_of(&path, Some(SNIFF_BYTES)) == FileKind::Deck,
+        }
+    })
+}
+
+/// What goes to the trash with the deck `file`: the folder of a deck that has one of its own
+/// (`<name>/deck.html`), with its assets, unless another deck lives in it; else the file alone.
+pub fn trash_target(file: &Path) -> PathBuf {
+    let folder = deck::folder(file);
+    match has_own_folder(file) && !holds_other_deck(folder, file, OTHER_DECK_DEPTH) {
+        true => folder.to_path_buf(),
+        false => file.to_path_buf(),
+    }
+}
+
+/// Moves `path` to the system's trash, where the user can get it back from. On macOS through
+/// the file manager's own API rather than by asking Finder, which would take the user's
+/// permission to control it.
+pub fn move_to_trash(path: &Path) -> Result<()> {
+    #[allow(unused_mut)]
+    let mut context = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        context.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    context.delete(path).map_err(|e| {
+        Error::msg(format!(
+            "{} could not be moved to the trash: {e}",
+            display_name(path)
+        ))
+    })
 }
 
 /// The folder's name, for titles and the recent list.
@@ -819,6 +1118,205 @@ mod tests {
             t.join("talks/q3").to_string_lossy(),
             "a folder that is gone"
         );
+    }
+
+    #[test]
+    fn listed_deck_folders_are_served_until_the_next_listing() {
+        let t = TempDir::canonical("ws-listed");
+        let deck = t.write("library/a/deck.html", DECK);
+        let asset = t.write("library/a/assets/logo.svg", "<svg/>");
+        let loose = t.write("downloads/talk.html", DECK);
+        let beside = t.write("downloads/taxes.pdf", "");
+        let open = OpenWorkspace::default();
+        assert!(!open.contains(&deck));
+        open.list(&[deck.clone(), loose.clone()]);
+        assert!(open.contains(&deck) && open.contains(&asset));
+        assert!(
+            !open.contains(&loose) && !open.contains(&beside),
+            "a loose deck's folder may hold anything"
+        );
+        open.list(&[]);
+        assert!(!open.contains(&deck));
+    }
+
+    #[test]
+    fn finds_the_window_that_has_a_folder_or_one_inside_it_open() {
+        let t = TempDir::canonical("ws-window-inside");
+        fs::create_dir_all(t.join("talks/q3/assets")).unwrap();
+        let open = OpenWorkspace::default();
+        open.set("main", Some(t.join("talks/q3")));
+        assert_eq!(open.window_inside(&t.join("talks")), Some("main".into()));
+        assert_eq!(open.window_inside(&t.join("talks/q3")), Some("main".into()));
+        assert_eq!(open.window_inside(&t.join("talks/q3/assets")), None);
+    }
+
+    #[test]
+    fn a_deck_opened_by_itself_opens_in_the_folder_around_its_own() {
+        let t = TempDir::canonical("ws-for");
+        let library = t.join("library");
+        let home = t.join("home");
+        fs::create_dir_all(&home).unwrap();
+        let ours = t.write("library/pitch/deck.html", DECK);
+        let nested = t.write("library/pitch/draft/deck.html", DECK);
+        let talk = t.write("work/talks/q3/deck.html", DECK);
+        let loose = t.write("work/talks/notes.html", DECK);
+        let at_home = t.write("home/pitch/deck.html", DECK);
+        let none: &[PathBuf] = &[];
+        let folder =
+            |file: &Path, recent: &[PathBuf]| workspace_for(file, &library, recent, Some(&home));
+
+        assert_eq!(folder(&ours, none), library, "a deck of the library");
+        assert_eq!(folder(&nested, none), library);
+        assert_eq!(
+            folder(&talk, none),
+            t.join("work/talks"),
+            "beside its own folder"
+        );
+        assert_eq!(
+            folder(&loose, none),
+            t.join("work/talks"),
+            "a loose file: where it is"
+        );
+        assert_eq!(
+            folder(&talk, &[t.join("work"), t.join("elsewhere")]),
+            t.join("work"),
+            "a folder opened before that holds it"
+        );
+        assert_eq!(
+            folder(&talk, &[t.join("work"), t.join("work/talks")]),
+            t.join("work/talks"),
+            "the nearest of them"
+        );
+        assert_eq!(
+            folder(&talk, &[t.join("work/talks/q3")]),
+            t.join("work/talks"),
+            "never its own folder again"
+        );
+        assert_eq!(
+            folder(&at_home, none),
+            t.join("home/pitch"),
+            "not the whole home folder"
+        );
+        let own_library = t.write("lib2/deck.html", DECK);
+        assert_eq!(
+            workspace_for(&own_library, &t.join("lib2"), none, Some(&home)),
+            t.path(),
+            "a deck that is the library folder's own"
+        );
+    }
+
+    #[test]
+    fn the_gallery_lists_recent_and_library_decks_once_newest_first() {
+        let t = TempDir::canonical("ws-gallery");
+        let home = t.join("home");
+        let library = t.join("library");
+        let titled =
+            |title: &str| DECK.replace("<title>T</title>", &format!("<title>{title}</title>"));
+        let a = t.write("library/a/deck.html", titled("Alpha"));
+        t.write("library/b/deck.html", titled("Beta"));
+        t.write("library/b/assets/logo.svg", "<svg/>");
+        t.write(
+            "library/untitled-talk/deck.html",
+            DECK.replace("<title>T</title>", ""),
+        );
+        t.write("library/loose.html", titled("Loose"));
+        t.write("library/page.html", "<html><body>A page</body></html>");
+        t.write("library/notes/readme.md", "no deck here");
+        t.write("library/.hidden/deck.html", DECK);
+        let far = t.write(
+            "work/q3/deck.html",
+            titled("Q3").replace(
+                "<head>",
+                "<head><meta name=\"slopslide-size\" content=\"1080x1080\">",
+            ),
+        );
+        remember_deck(&home, &library, &a, "Old title").unwrap();
+        remember_deck(&home, &t.join("work/q3"), &far, "Q3").unwrap();
+
+        let decks = gallery(&home, &library, None);
+        let titles: Vec<_> = decks.iter().map(|d| d.title.as_str()).collect();
+        assert_eq!(&titles[..2], ["Q3", "Alpha"], "the ones opened last first");
+        let mut rest = titles[2..].to_vec();
+        rest.sort();
+        assert_eq!(rest, ["Beta", "Loose", "untitled talk"]);
+
+        let q3 = &decks[0];
+        assert_eq!(q3.path, far.to_string_lossy());
+        assert_eq!(
+            q3.workspace,
+            t.join("work").to_string_lossy(),
+            "one last opened in its own folder opens beside it"
+        );
+        assert!(q3.opened_ms.is_some() && q3.modified_ms > 0);
+        assert_eq!((q3.size.pixel_width, q3.size.pixel_height), (1080, 1080));
+        let alpha = &decks[1];
+        assert_eq!(alpha.workspace, library.to_string_lossy());
+        assert_eq!(
+            (alpha.size.pixel_width, alpha.size.pixel_height),
+            (1920, 1080)
+        );
+        let beta = decks.iter().find(|d| d.title == "Beta").unwrap();
+        assert_eq!(beta.opened_ms, None);
+        assert_eq!(beta.workspace, library.to_string_lossy());
+    }
+
+    #[test]
+    fn duplicating_a_deck_copies_its_folder_under_a_new_name_and_title() {
+        let t = TempDir::canonical("ws-duplicate");
+        let deck = t.write(
+            "library/pitch/deck.html",
+            DECK.replace("<title>T</title>", "<title>Pitch</title>"),
+        );
+        t.write("library/pitch/assets/logo.svg", "<svg/>");
+        t.write("library/pitch/.git/HEAD", "ref");
+
+        let copy = duplicate(&deck).unwrap();
+        assert_eq!(copy, t.join("library/pitch-copy/deck.html"));
+        let source = fs::read_to_string(&copy).unwrap();
+        assert_eq!(html::title(&source).as_deref(), Some("Pitch copy"));
+        assert!(source.contains("id=\"a\""), "with its slides");
+        assert!(t.join("library/pitch-copy/assets/logo.svg").is_file());
+        assert!(!t.join("library/pitch-copy/.git").exists());
+        assert_eq!(
+            html::title(&fs::read_to_string(&deck).unwrap()).as_deref(),
+            Some("Pitch"),
+            "the deck itself stays as it is"
+        );
+
+        let again = duplicate(&deck).unwrap();
+        assert_eq!(again, t.join("library/pitch-copy-2/deck.html"));
+    }
+
+    #[test]
+    fn duplicating_a_loose_deck_file_copies_the_file_beside_it() {
+        let t = TempDir::canonical("ws-duplicate-loose");
+        let deck = t.write("talks/q3.html", DECK.replace("<title>T</title>", ""));
+        let copy = duplicate(&deck).unwrap();
+        assert_eq!(copy, t.join("talks/q3-copy.html"));
+        assert_eq!(
+            html::title(&fs::read_to_string(&copy).unwrap()).as_deref(),
+            Some("q3 copy")
+        );
+        assert_eq!(duplicate(&deck).unwrap(), t.join("talks/q3-copy-2.html"));
+    }
+
+    #[test]
+    fn a_decks_own_folder_goes_to_the_trash_with_it_unless_another_deck_lives_there() {
+        let t = TempDir::canonical("ws-trash");
+        let alone = t.write("library/pitch/deck.html", DECK);
+        t.write("library/pitch/assets/logo.svg", "<svg/>");
+        t.write(
+            "library/pitch/preview.html",
+            "<html><body>A page</body></html>",
+        );
+        assert_eq!(trash_target(&alone), t.join("library/pitch"));
+
+        let shared = t.write("library/talks/deck.html", DECK);
+        t.write("library/talks/draft/deck.html", DECK);
+        assert_eq!(trash_target(&shared), shared, "another deck is inside");
+
+        let loose = t.write("library/loose.html", DECK);
+        assert_eq!(trash_target(&loose), loose);
     }
 
     #[test]

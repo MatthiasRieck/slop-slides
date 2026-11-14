@@ -10,6 +10,7 @@ let made: FakeAudio[] = [];
 
 class FakeAudio extends EventTarget {
   currentTime = 0;
+  playbackRate = 1;
   paused = true;
   constructor(public src: string) {
     super();
@@ -35,6 +36,12 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("playNarration", () => {
+  it("plays at the rate asked for", async () => {
+    invoke.mockResolvedValue(new ArrayBuffer(8));
+    await playNarration("deck", "intro", 0, 1.5);
+    expect(made[0]?.playbackRate).toBe(1.5);
+  });
+
   it("plays the slide's audio from where it is asked to", async () => {
     invoke.mockResolvedValue(new ArrayBuffer(8));
     const playing = await playNarration("deck", "intro", 1.5);

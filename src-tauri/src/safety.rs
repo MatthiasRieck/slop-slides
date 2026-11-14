@@ -47,7 +47,7 @@ fn decks(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
 /// workspace with one could not be handed to the agent. They are told by name, for the ones
 /// whose name means nothing else, and by the `CACHEDIR.TAG` file that tools put in the caches
 /// they make (Cargo's `target` has one). A deck in one of them is not guarded by a folder's turn.
-const DEPENDENCY_DIRS: &[&str] = &[
+pub(crate) const DEPENDENCY_DIRS: &[&str] = &[
     "node_modules",
     "bower_components",
     "__pycache__",

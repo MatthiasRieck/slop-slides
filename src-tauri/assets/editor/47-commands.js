@@ -32,7 +32,7 @@
   /** Whether double-click or Enter would edit `el`'s text. */
   function canEditText(el) {
     if (!el || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName) || isGroup(el) || isLocked(el)) return false;
-    return !!el.textContent.trim() || isTextBox(el);
+    return holdsOwnText(el);
   }
 
   /**
@@ -51,15 +51,93 @@
     });
   }
 
-  /** The next font size up (`step` 1) or down (-1) from the selection's, for all of it. */
-  function stepFontSize(step) {
-    var now = selected ? describe(selected) : null;
-    if (!now || !now.text || !now.fontSize) return;
-    var sizes = FONT_STEPS.filter(function (size) {
-      return step > 0 ? size > now.fontSize : size < now.fontSize;
+  // What the toolbar shows of a selection beyond its colors, each reported as mixed when several
+  // selected elements do not share it (see describeSelection).
+  var MIXABLE = [
+    "fontFamily", "fontSize", "weight", "bold", "italic", "underline", "strike", "textCase", "align", "valign", "lineHeight",
+    "letterSpacing", "spaceBefore", "spaceAfter", "autofit", "strokeWidth", "dash", "opacity", "shadow", "radius",
+  ];
+
+  /** The font size a step up (`step` 1) or down (-1) from `size`; null at either end of the steps. */
+  function fontStep(size, step) {
+    var sizes = FONT_STEPS.filter(function (other) {
+      return step > 0 ? other > size : other < size;
     });
-    if (!sizes.length) return;
-    restyle({ fontSize: step > 0 ? sizes[0] : sizes[sizes.length - 1] });
+    return sizes.length ? (step > 0 ? sizes[0] : sizes[sizes.length - 1]) : null;
+  }
+
+  /**
+   * Takes `el`'s text a size up or down: the element from its own size, and each run of text in
+   * it that has a size of its own from that, so a large word stays larger than the rest.
+   */
+  function stepSizesIn(el, step) {
+    if (autofit) autofit.unfit(el);
+    var sized = [el].concat(Array.prototype.filter.call(el.querySelectorAll("[style*='font-size']"), function (inner) {
+      return INLINE.test(inner.tagName) && inner.namespaceURI !== SVG_NS;
+    }));
+    // All the sizes first: one given in `em` changes with the element's.
+    var next = sized.map(function (node) {
+      return fontStep(Math.round(parseFloat(getComputedStyle(node).fontSize)), step);
+    });
+    sized.forEach(function (node, i) {
+      if (next[i]) node.style.fontSize = next[i] + "px";
+    });
+    refit(el);
+  }
+
+  /**
+   * The next font size up (`step` 1) or down (-1), each text from the size it has: every
+   * selected element, and what a group holds, from its own; while typing, each run of the
+   * selected text from its own (with only a caret, the whole element).
+   */
+  function stepFontSize(step) {
+    if (!selected) return;
+    var range = editing ? editRange() : null;
+    if (editing && range && !range.collapsed) {
+      ensureBody(editing, true);
+      range = editRange();
+      changeText(editing, function () {
+        var root = editing;
+        var at = textOffsets(root, range);
+        coveredText(range, root).forEach(function (t) {
+          var size = fontStep(Math.round(parseFloat(getComputedStyle(t.parentNode).fontSize)), step);
+          if (size) formatText(t, { fontSize: size }, root);
+        });
+        tidy(root);
+        useRange(rangeAt(root, at));
+      });
+      report();
+      return;
+    }
+    if (editing) {
+      stepSizesIn(editing, step);
+      placeHandles();
+      report();
+      return;
+    }
+    saveNudges();
+    var targets = leavesOf(movable()).filter(function (el) {
+      var now = describe(el);
+      return now.text && !!now.fontSize;
+    });
+    if (!targets.length) return;
+    withEach(targets, function (el) {
+      stepSizesIn(el, step);
+    });
+  }
+
+  /** Turns every selected element a quarter turn clockwise (`step` 1) or counterclockwise (-1), each around its own center. */
+  function rotateSelection(step) {
+    finishEditing();
+    saveNudges();
+    var targets = movable();
+    if (!targets.length) return;
+    targets.forEach(function (el) {
+      rotateTo(el, Math.round(angleOf(el)) + (step > 0 ? 90 : -90));
+      refit(el);
+    });
+    placeHandles();
+    commit();
   }
 
   /** Locks the selection, or unlocks it when its primary element is locked. */
@@ -233,10 +311,17 @@
     var letter = keyLetter(event);
     var shift = event.shiftKey;
     if (event.altKey) {
-      if (shift || editing) return false;
+      if (editing) return false;
+      // ⌥⇧H / ⌥⇧V flip: ⇧⌘V is pasting as plain text, on the slide as in its text.
+      if (shift) {
+        if (letter !== "h" && letter !== "v") return false;
+        flipSelection(letter === "h" ? "x" : "y");
+        return true;
+      }
       if (letter === "l") toggleLock();
       else if (letter === "c") copyStyle();
       else if (letter === "v") askApp("paste-style");
+      else if (letter === "r") rotateSelection(1);
       else return false;
       return true;
     }
@@ -259,20 +344,25 @@
     }
     var align = { l: "left", e: "center", r: "right", j: "justify" }[letter];
     var size = keyOfPair(event, ",<", ".>", "Comma", "Period");
-    if (align || size) {
-      if (!describe(selected).text) return false;
+    if (align || size || letter === "x") {
+      var text = describe(selected);
+      if (!text.text) return false;
       if (align) restyle({ align: align });
-      else stepFontSize(size);
+      else if (size) stepFontSize(size);
+      else toggleStyle("strike");
       return true;
     }
-    if (editing || (letter !== "h" && letter !== "v")) return false;
-    flipSelection(letter === "h" ? "x" : "y");
-    return true;
+    return false;
   }
 
   /** Handles the app's messages for this section; true when `data` was one. */
   function commandMessage(data) {
     if (data.type === "slop:edit-flip") flipSelection(String(data.axis));
+    // The tool named stays in hand once it is picked (it may come after this), until Select is.
+    else if (data.type === "slop:edit-tool-keep") keptTool = data.on === true && TOOLS.indexOf(data.tool) > 0 ? data.tool : null;
+    else if (data.type === "slop:edit-rotate") rotateSelection(data.step > 0 ? 1 : -1);
+    else if (data.type === "slop:edit-toggle-style" && /^(bold|italic|underline|strike)$/.test(data.key)) toggleStyle(data.key);
+    else if (data.type === "slop:edit-indent") indentSelection(data.step > 0 ? 1 : -1);
     else if (data.type === "slop:edit-font-step") stepFontSize(data.step > 0 ? 1 : -1);
     else if (data.type === "slop:edit-copy-style") copyStyle();
     else if (data.type === "slop:edit-paste-style") pasteStyle(data.style);

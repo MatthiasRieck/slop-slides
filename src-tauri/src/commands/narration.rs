@@ -12,6 +12,7 @@ use crate::voice;
 
 /// Starts recording the deck's narration for the calling window, from `slide` on: what is said
 /// goes to the slide on screen as text or as audio, with `narration-recorded` events as it does.
+/// With `replace`, recorded audio takes the place of what a slide had, instead of adding to it.
 #[tauri::command]
 pub async fn start_narration_recording(
     app: AppHandle,
@@ -20,11 +21,13 @@ pub async fn start_narration_recording(
     id: String,
     slide: String,
     mode: voice::RecordMode,
+    replace: Option<bool>,
 ) -> Result<()> {
     let target = voice::NarrationTarget {
         file: deck::deck_file(&id)?,
         deck: id,
         mode,
+        replace: replace.unwrap_or(false),
     };
     voice
         .record_narration(
@@ -124,6 +127,53 @@ pub async fn time_narration(
         progress,
     )
     .await
+}
+
+/// Stops timing words, before the next slide is heard; `time_narration` fails with "the
+/// narration was cancelled", and what was heard so far is kept.
+#[tauri::command]
+pub fn cancel_narration_timing() {
+    narration::cancel_timing();
+}
+
+/// What the deck keeps of how its narration is said and timed (see
+/// [`narration::DeckSettings`]): its own times, when it set them, and the pace and style.
+#[tauri::command(async)]
+pub fn narration_settings(id: String) -> Result<narration::DeckSettings> {
+    Ok(narration::deck_settings(&deck::deck_file(&id)?))
+}
+
+/// Sets the times the deck plays with wherever it plays by itself; returns all it keeps.
+#[tauri::command(async)]
+pub fn set_narration_timing(
+    id: String,
+    timing: narration::Timing,
+) -> Result<narration::DeckSettings> {
+    narration::set_timing(&deck::deck_file(&id)?, timing)
+}
+
+/// Sets how fast and in what manner the deck's narration is said; returns all it keeps. Audio
+/// said another way is out of date from then on.
+#[tauri::command(async)]
+pub fn set_narration_delivery(
+    id: String,
+    pace: narration::Pace,
+    style: String,
+) -> Result<narration::DeckSettings> {
+    narration::set_delivery(&deck::deck_file(&id)?, pace, &style)
+}
+
+/// A short sample of `voice` of `provider` in `language`, as WAV bytes: said once with the
+/// user's key, then kept in `~/.slopslides/voice-previews` for every deck.
+#[tauri::command]
+pub async fn preview_narration_voice(
+    provider: String,
+    voice: String,
+    language: String,
+) -> Result<tauri::ipc::Response> {
+    let provider = narration::Provider::named(&provider)?;
+    let file = narration::preview_voice(&files::app_home()?, provider, &voice, &language).await?;
+    Ok(tauri::ipc::Response::new(std::fs::read(file)?))
 }
 
 /// When each word of a slide's narration audio is said, in seconds from the audio's start;

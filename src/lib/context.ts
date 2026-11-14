@@ -9,8 +9,48 @@ export interface ContextUsage {
   window: number | null;
 }
 
-/** Context use above this share of the window offers to compact the conversation. */
-export const COMPACT_THRESHOLD = 70;
+/**
+ * Context use from this share of the window on is worth the user's attention: the chat says how
+ * full it is and offers to compact the conversation. Below it, how full the chat is is noise.
+ */
+export const COMPACT_THRESHOLD = 60;
+/** From this share on the chat is about to run out of room. */
+export const NEARLY_FULL = 90;
+
+/**
+ * What the chat says about a conversation that fills `percent` of its window, in plain words;
+ * null while it has room to spare (or how full it is is not known).
+ */
+export function contextNotice(percent: number | null): { text: string; advice: string; urgent: boolean } | null {
+  if (percent === null || percent < COMPACT_THRESHOLD) return null;
+  const full = Math.round(percent);
+  if (percent < NEARLY_FULL) {
+    return { text: `This chat is ${full}% full.`, advice: "Compact summarizes it to make room.", urgent: false };
+  }
+  return {
+    text: `This chat is almost full (${full}%).`,
+    advice: "Compact it or start a new chat, or the agent loses track of how it began.",
+    urgent: true,
+  };
+}
+
+/** What the replies of a chat cost together, in US dollars; null when no reply reported a cost. */
+export function totalCost(messages: readonly { role: string; costUsd?: number | null }[]): number | null {
+  let total = 0;
+  let known = false;
+  for (const message of messages) {
+    if (typeof message.costUsd === "number") {
+      total += message.costUsd;
+      known = true;
+    }
+  }
+  return known ? total : null;
+}
+
+/** A cost in dollars as the chat shows it: cents, or tenths of a cent while it is under ten cents. */
+export function formatCost(usd: number): string {
+  return `$${usd.toFixed(usd < 0.1 ? 3 : 2)}`;
+}
 
 const WINDOW_SIZES: Record<string, number> = { "200k": 200_000, "1m": 1_000_000 };
 

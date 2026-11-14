@@ -58,3 +58,18 @@ export function trySaveText(key: string, value: string | null): void {
     // Only the remembered choice is lost.
   }
 }
+
+/**
+ * A size in pixels stored under `key` (a panel's width, say); `fallback` when nothing is stored,
+ * it is no number, or it lies outside `min` to `max`: a width from a larger window does not fit a smaller one.
+ */
+export function loadSize(key: string, fallback: number, min: number, max: number): number {
+  const saved = loadText(key);
+  const size = saved === null || saved.trim() === "" ? Number.NaN : Number(saved);
+  return Number.isFinite(size) && size >= min && size <= max ? size : fallback;
+}
+
+/** Remembers a size in pixels under `key`, rounded; a failure only loses it. */
+export function trySaveSize(key: string, size: number): void {
+  trySaveText(key, String(Math.round(size)));
+}

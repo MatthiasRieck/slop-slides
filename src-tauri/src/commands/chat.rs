@@ -5,6 +5,7 @@ use tauri::{AppHandle, State, Window};
 
 use super::{session, sessions, workspace_root};
 use crate::agent::{self, AgentManager, SendArgs};
+use crate::assets;
 use crate::capture;
 use crate::codex;
 use crate::deck;
@@ -72,17 +73,60 @@ pub fn select_chat_thread(
         ));
     }
     let sessions = sessions()?;
-    let shown_elsewhere = open.chats_except(window.label()).iter().any(|chat| {
-        sessions
-            .current(chat)
-            .is_some_and(|path| path.file_name().is_some_and(|name| name == thread.as_str()))
-    });
-    if shown_elsewhere {
+    if shown_elsewhere(&sessions, &open, &window, &thread) {
         return Err(error::Error::msg(
             "This conversation is open in another window.",
         ));
     }
     sessions.open_thread(&workspace_root(&window)?, &agent::subject(&id)?, &thread)
+}
+
+/// The name the user gave the conversation on show in chat `id`; null while it has none.
+#[tauri::command(async)]
+pub fn chat_title(id: String) -> Result<Option<String>> {
+    Ok(sessions()?
+        .current(&agent::subject(&id)?)
+        .and_then(|session| sessions::title(&session)))
+}
+
+/// Names conversation `thread` of the window's workspace; a blank `title` gives it back the
+/// name its first message gives it.
+#[tauri::command]
+pub fn rename_chat_thread(window: Window, thread: String, title: String) -> Result<()> {
+    sessions()?.rename_thread(&workspace_root(&window)?, &thread, &title)
+}
+
+/// Deletes conversation `thread` of the window's workspace for good. Refused for the one on
+/// show in chat `id` and for one another window shows. On the main thread, in the order sent:
+/// like the commands that change which conversation is current.
+#[tauri::command]
+pub fn delete_chat_thread(
+    window: Window,
+    open: State<OpenWorkspace>,
+    id: String,
+    thread: String,
+) -> Result<()> {
+    let sessions = sessions()?;
+    if shown_elsewhere(&sessions, &open, &window, &thread) {
+        return Err(error::Error::msg(
+            "This conversation is open in another window.",
+        ));
+    }
+    sessions.delete_thread(&workspace_root(&window)?, &agent::subject(&id)?, &thread)
+}
+
+/// Whether conversation `thread` is the one on show in a window other than `window`.
+fn shown_elsewhere(
+    sessions: &sessions::Sessions,
+    open: &OpenWorkspace,
+    window: &Window,
+    thread: &str,
+) -> bool {
+    open.chats_except(window.label()).iter().any(|chat| {
+        sessions
+            .current(chat)
+            .is_some_and(|path| path.file_name().is_some_and(|name| name == thread))
+    })
 }
 
 /// Starts a new chat in a new session; the old conversation stays in its own.
@@ -115,6 +159,14 @@ pub fn move_chat_to_deck(
     sessions()?.move_current(&root, &deck)?;
     open.chat_follows_deck(label);
     Ok(())
+}
+
+/// Takes back `path` (`assets/<file>`), a file attached in the composer of chat `id` (a deck,
+/// or the workspace folder) and never sent; false when it stays because a deck uses it.
+#[tauri::command(async)]
+pub fn discard_attachment(window: Window, id: String, path: String) -> Result<bool> {
+    let target = assets::target(&workspace_root(&window)?, &id)?;
+    assets::discard_asset(&target, &path)
 }
 
 #[tauri::command]

@@ -5,9 +5,9 @@ import { undoNewest } from "./history";
 import type { AppState, Slice } from "./types";
 
 /**
- * The search of the deck's slides, in View and in Edit (see components/FindReplace.tsx): View
- * has it in its ribbon, Edit as a bar over the stage, and what is searched for stays as the mode
- * changes between them.
+ * The search of the deck's slides (see components/FindReplace.tsx): one bar over the stage, the
+ * same in View and in Edit, and what is searched for stays as the mode changes between them. It
+ * marks and counts what it finds; the slide list keeps every slide.
  */
 export interface SlideSearch {
   query: string;
@@ -18,7 +18,7 @@ export interface SlideSearch {
   active: number;
   /** Why the query could not be searched for; null when it could, or has not been yet. */
   failed: string | null;
-  /** The search was asked for (⌘F): Edit shows its bar for it even with nothing typed yet. */
+  /** The search was asked for (⌘F, the Find button): its bar shows even with nothing typed yet. */
   open: boolean;
   /** The search field is to take the focus, once it is there to take it (see `findFocused`). */
   focusAsked: boolean;
@@ -36,11 +36,12 @@ export interface SearchSlice {
    */
   runSearch: () => Promise<void>;
   /**
-   * Goes to the next (1) or previous (-1) match, around the deck. A match in a slide's notes
-   * opens the sidebar's Notes tab, as the slide does not show it.
+   * Goes to the next (1) or previous (-1) match, around the deck: past the last one to the
+   * first, and back. A match in a slide's notes opens the notes under the slide, as the slide
+   * does not show it.
    */
   stepSearch: (delta: 1 | -1) => void;
-  /** Ends the search: no query, nothing found, and Edit's bar away. */
+  /** Ends the search: no query, nothing found, and its bar away. */
   clearSearch: () => void;
   /** Brings the search up and asks its field to take the focus (⌘F). */
   openFind: () => void;
@@ -155,8 +156,8 @@ export const createSearchSlice: Slice<SearchSlice> = (set, get, app) => ({
     const slide = match?.slide ?? null;
     set({ search: { ...state.search, active: next } });
     if (slide !== state.selected) state.select(slide);
-    // The slide does not show its notes: the sidebar does.
-    if (match?.notes) state.setSidebarTab("notes");
+    // The slide does not show its notes: the pane under it does.
+    if (match?.notes) state.setNotesOpen(true);
   },
 
   clearSearch: () => set({ search: NO_SEARCH }),
@@ -208,7 +209,7 @@ export const createSearchSlice: Slice<SearchSlice> = (set, get, app) => ({
     set((s) => ({ search: { ...s.search, active: next } }));
     const slide = now[next]!.slide;
     if (slide !== get().selected) get().select(slide);
-    if (now[next]!.notes) get().setSidebarTab("notes");
+    if (now[next]!.notes) get().setNotesOpen(true);
     return replaced;
   },
 

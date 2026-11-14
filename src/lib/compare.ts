@@ -8,12 +8,9 @@ export interface Divider {
   y: number;
   /** Degrees clockwise. At 0 the line stands upright, with the old version on the left. */
   angle: number;
-  /** How wide the fade from one version to the other is, in slide pixels; 0 is a sharp edge. */
-  feather: number;
 }
 
-export const DEFAULT_DIVIDER: Divider = { x: 0.5, y: 0.5, angle: 0, feather: 0 };
-export const MAX_FEATHER = 400;
+export const DEFAULT_DIVIDER: Divider = { x: 0.5, y: 0.5, angle: 0 };
 /** How far from the divider's point the handle that rotates it sits, in CSS pixels. */
 const KNOB_DISTANCE = 72;
 const KNOB_ROOM = 16;
@@ -62,17 +59,15 @@ export function shifted(divider: Divider, fraction: number, box: Box): Divider {
 }
 
 /**
- * The mask that shows the new version only past the divider, for a slide shown `box` big at
- * `scale` CSS pixels per slide pixel. The gradient's line runs through the box's center, as long
- * as it takes to reach the corners.
+ * The mask that shows the new version only past the divider, for a slide shown `box` big. The
+ * gradient's line runs through the box's center, as long as it takes to reach the corners.
  */
-export function revealMask(divider: Divider, box: Box, scale: number): string {
+export function revealMask(divider: Divider, box: Box): string {
   const { x: dx, y: dy } = across(divider);
   const { x, y } = dividerPoint(divider, box);
   const length = Math.abs(box.width * dx) + Math.abs(box.height * dy);
   const at = (x - box.width / 2) * dx + (y - box.height / 2) * dy + length / 2;
-  const half = (divider.feather * scale) / 2;
-  return `linear-gradient(${normalAngle(divider.angle + 90)}deg, transparent ${round(at - half)}px, #000 ${round(at + half)}px)`;
+  return `linear-gradient(${normalAngle(divider.angle + 90)}deg, transparent ${round(at)}px, #000 ${round(at)}px)`;
 }
 
 /** Where the divider enters and leaves `box`, to draw it. */

@@ -90,13 +90,23 @@ describe("several selected elements", () => {
     expect(e.ids()).toEqual(["c"]);
   });
 
-  it("adds with Shift- or ⌘-click and takes out again, with a frame on each instead of handles", () => {
+  it("adds with Shift-click and takes out again, with a line on each and one frame around them all", () => {
     const e = editor();
     e.click(e.$("#a"));
     e.click(e.$("#b"), { shiftKey: true });
-    e.click(e.$("#c"), { metaKey: true });
+    e.click(e.$("#c"), { shiftKey: true });
     expect(e.ids()).toEqual(["a", "b", "c"]);
-    expect(e.$("[data-slop-ui]").style.display).toBe("none");
+    const ui = e.$("[data-slop-ui]");
+    expect(ui.style.display).toBe("");
+    expect(ui.hasAttribute("data-multi")).toBe(true);
+    // Upright around a, b and c: from (100, 100) to (1000, 600).
+    expect([ui.style.left, ui.style.top, ui.style.width, ui.style.height, ui.style.transform]).toEqual([
+      "100px",
+      "100px",
+      "900px",
+      "500px",
+      "rotate(0deg)",
+    ]);
     expect(e.$("[data-slop-multi]").children).toHaveLength(3);
     e.click(e.$("#b"), { shiftKey: true });
     expect(e.ids()).toEqual(["a", "c"]);
@@ -104,6 +114,26 @@ describe("several selected elements", () => {
     e.click(e.$("#a"), { shiftKey: true });
     e.click(e.$("#c"), { shiftKey: true });
     expect(e.ids()).toEqual([]);
+    expect(e.commits()).toEqual([]);
+  });
+
+  it("selects what lies under the selection with ⌘-click, one further down each time, then the top again", () => {
+    const e = editor();
+    const [a, b] = [e.$("#a"), e.$("#b")];
+    // b lies over a, which lies in the see-through wrapper: there is nothing of that to pick.
+    Object.assign(e.doc, { elementsFromPoint: () => [b, a, e.$("#wrap"), e.$("#intro")] });
+    e.click(b);
+    expect(e.ids()).toEqual(["b"]);
+    e.click(b, { metaKey: true });
+    expect(e.ids()).toEqual(["a"]);
+    e.click(b, { metaKey: true });
+    expect(e.ids()).toEqual(["b"]);
+    // Nothing at the pointer: a ⌘-drag draws a marquee that adds to the selection.
+    Object.assign(e.doc, { elementsFromPoint: () => [e.$("#intro")] });
+    e.down(e.$("#intro"), 750, 450, { metaKey: true });
+    e.move(e.$("#intro"), 900, 550, { metaKey: true });
+    e.up(e.$("#intro"), 900, 550);
+    expect(e.ids()).toEqual(["b", "c"]);
     expect(e.commits()).toEqual([]);
   });
 
@@ -224,19 +254,119 @@ describe("several selected elements", () => {
   });
 });
 
+describe("resizing and turning several together", () => {
+  /** The handle of the frame around the selection: "rotate", or a resize handle by direction, like "1 1". */
+  const handle = (e: ReturnType<typeof editor>, kind: string) =>
+    e.$(`[data-slop-ui] ${/^[a-z]+$/.test(kind) ? `[data-handle="${kind}"]` : `[data-dir="${kind}"]`}`);
+  /** a and b selected: their frame runs from (100, 100) to (600, 400). */
+  const both = () => {
+    const e = editor();
+    e.pick("#a", "#b");
+    return { e, a: e.$("#a"), b: e.$("#b") };
+  };
+  const box = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    return [r.left, r.top, r.width, r.height];
+  };
+
+  it("resizes them from a corner of the frame around them, each keeping its place in it, in one save", async () => {
+    const { e, a, b } = both();
+    const corner = handle(e, "1 1");
+    e.down(corner, 600, 400);
+    // Twice as wide and as high, the top left staying put.
+    e.move(corner, 1100, 700, { metaKey: true });
+    expect(box(a)).toEqual([100, 100, 400, 200]);
+    expect(box(b)).toEqual([700, 500, 400, 200]);
+    await e.frame();
+    expect(e.$("[data-slop-readout]").textContent).toBe("X 100  Y 100  W 1000  H 600");
+    e.up(corner, 1100, 700);
+    expect(e.commits()).toHaveLength(1);
+    expect(e.ids()).toEqual(["a", "b"]);
+    const ui = e.$("[data-slop-ui]");
+    expect([ui.style.left, ui.style.top, ui.style.width, ui.style.height]).toEqual([
+      "100px",
+      "100px",
+      "1000px",
+      "600px",
+    ]);
+  });
+
+  it("keeps the frame's aspect with Shift, and resizes from its middle with Alt", () => {
+    const shift = both();
+    const side = handle(shift.e, "1 1");
+    shift.e.down(side, 600, 400);
+    // Half again as wide, and so half again as high, not a sixth.
+    shift.e.move(side, 850, 450, { shiftKey: true, metaKey: true });
+    expect(box(shift.b)).toEqual([550, 400, 300, 150]);
+    shift.e.up(side, 850, 450);
+    const alt = both();
+    const right = handle(alt.e, "1 0");
+    alt.e.down(right, 600, 250);
+    // 100 further on the right is 100 further on the left too: 700 wide around x 350.
+    alt.e.move(right, 700, 250, { altKey: true, metaKey: true });
+    expect(box(alt.a)).toEqual([0, 100, 280, 100]);
+    expect(box(alt.b)).toEqual([420, 300, 280, 100]);
+    alt.e.up(right, 700, 250);
+  });
+
+  it("turns them together around the middle of their frame, showing by how much", async () => {
+    const { e, a, b } = both();
+    const rotate = handle(e, "rotate");
+    // From straight above the middle (350, 250) to straight right of it: a quarter turn.
+    e.down(rotate, 350, 50);
+    e.move(rotate, 650, 250);
+    expect([a.style.rotate, b.style.rotate]).toEqual(["90deg", "90deg"]);
+    // a's middle (200, 150) goes round to (450, 100), b's (500, 350) to (250, 400).
+    expect(a.style.translate).toBe("250px -50px");
+    expect(b.style.translate).toBe("-250px 50px");
+    await e.frame();
+    expect(e.$("[data-slop-readout]").textContent).toBe("90°");
+    e.up(rotate, 650, 250);
+    expect(e.commits()).toHaveLength(1);
+  });
+
+  it("puts them back as they were when Escape calls the resize off, saving nothing", () => {
+    const { e, a, b } = both();
+    const corner = handle(e, "1 1");
+    e.down(corner, 600, 400);
+    e.move(corner, 1100, 700, { metaKey: true });
+    expect(e.key("Escape").defaultPrevented).toBe(true);
+    expect([a.getAttribute("style"), b.getAttribute("style")]).toEqual(["background: red", "background: red"]);
+    expect(e.ids()).toEqual(["a", "b"]);
+    e.up(corner, 1100, 700);
+    expect(e.commits()).toEqual([]);
+  });
+
+  it("measures each element once per resize, however far it goes", () => {
+    const { e, a, b } = both();
+    const corner = handle(e, "1 1");
+    e.down(corner, 600, 400);
+    e.move(corner, 610, 410, { metaKey: true });
+    const counts = [e.measured(a), e.measured(b)];
+    for (let i = 2; i <= 10; i++) e.move(corner, 600 + i * 10, 400 + i * 10, { metaKey: true });
+    expect(counts.map((c) => c.count())).toEqual([0, 0]);
+    e.up(corner, 700, 500);
+  });
+});
+
 describe("marquee", () => {
   const slide = (e: ReturnType<typeof editor>) => e.$("#intro");
 
-  it("selects what lies fully inside as it is dragged out on the slide, without panning", () => {
+  it("selects what it touches as it is dragged out on the slide, with Alt only what lies fully inside", () => {
     const e = editor();
     e.down(slide(e), 50, 50);
     e.move(slide(e), 700, 450);
     expect(e.ids()).toEqual(["a", "b"]);
     const box = e.$("[data-slop-marquee]");
     expect([box.style.display, box.style.width, box.style.height]).toEqual(["", "650px", "400px"]);
+    // Halfway across b, which it still touches.
     e.move(slide(e), 500, 450);
+    expect(e.ids()).toEqual(["a", "b"]);
+    e.move(slide(e), 500, 450, { altKey: true });
     expect(e.ids()).toEqual(["a"]);
-    e.up(slide(e), 500, 450);
+    e.move(slide(e), 350, 150);
+    expect(e.ids()).toEqual(["a"]);
+    e.up(slide(e), 350, 150);
     expect(box.style.display).toBe("none");
     expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
     expect(e.commits()).toEqual([]);
@@ -283,18 +413,35 @@ describe("marquee", () => {
     expect(e.ids()).toEqual([]);
   });
 
-  it("leaves dragging the space around the slide to the pasteboard, and Space+drag on it", () => {
+  it("starts a marquee on the space around the slide too, leaving panning to Space+drag", () => {
     const e = editor();
     e.down(e.doc.body, 2000, 1200);
-    e.move(e.doc.body, 2050, 1230);
-    e.up(e.doc.body, 2050, 1230);
-    expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
+    e.move(e.doc.body, 900, 550);
+    expect(e.ids()).toEqual(["c", "d"]);
+    e.up(e.doc.body, 900, 550);
+    expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
     e.key(" ");
     e.down(slide(e), 50, 50);
     e.move(slide(e), 60, 50);
     e.up(slide(e), 60, 50);
-    expect(placement(e.$(".deck"))).toBe("translate(60px,30px) scale(1)");
+    expect(placement(e.$(".deck"))).toBe("translate(10px,0px) scale(1)");
     expect(e.$("[data-slop-marquee]").style.display).toBe("none");
+    expect(e.ids()).toEqual(["c", "d"]);
+  });
+
+  it("calls the marquee off with Escape, back to what was selected before", () => {
+    const e = editor();
+    e.click(e.$("#c"));
+    e.down(slide(e), 50, 50);
+    e.move(slide(e), 700, 450);
+    expect(e.ids()).toEqual(["a", "b"]);
+    expect(e.key("Escape").defaultPrevented).toBe(true);
+    expect(e.ids()).toEqual(["c"]);
+    expect(e.$("[data-slop-marquee]").style.display).toBe("none");
+    // The release that follows changes nothing.
+    e.up(slide(e), 700, 450);
+    expect(e.ids()).toEqual(["c"]);
+    expect(e.keys()).toEqual([]);
   });
 });
 
@@ -363,6 +510,71 @@ describe("duplicating", () => {
     expect(e.commits()).toHaveLength(1);
   });
 
+  it("switches between dragging a copy and the original as Alt goes down and up during the drag", () => {
+    const e = editor();
+    const a = e.$("#a");
+    const alt = (type: string) =>
+      e.window.dispatchEvent(new e.window.KeyboardEvent(type, { key: "Alt", altKey: type === "keydown" }));
+    e.down(a);
+    e.move(a, 250, 250, { metaKey: true });
+    expect(a.style.translate).toBe("150px 150px");
+    alt("keydown");
+    // The original is back in its place, and a copy is where the pointer rests.
+    const copy = e.last();
+    expect(copy).not.toBe(a);
+    expect(a.style.translate).toBe("");
+    expect(copy.style.translate).toBe("150px 150px");
+    expect(e.selected()).toEqual([copy]);
+    alt("keyup");
+    expect(copy.isConnected).toBe(false);
+    expect(a.style.translate).toBe("150px 150px");
+    expect(e.selected()).toEqual([a]);
+    // Pressed with a move it takes effect too.
+    e.move(a, 300, 300, { altKey: true, metaKey: true });
+    e.up(a, 300, 300);
+    expect(a.style.translate).toBe("");
+    expect(e.last().style.translate).toBe("200px 200px");
+    expect(e.commits()).toHaveLength(1);
+  });
+
+  it("calls an Alt-drag off with Escape: the copy goes and the original stays selected", () => {
+    const e = editor();
+    const a = e.$("#a");
+    e.down(a, 100, 100, { altKey: true });
+    e.move(a, 200, 200, { altKey: true, metaKey: true });
+    expect(e.$("#intro").querySelectorAll("div")).toHaveLength(6);
+    e.key("Escape");
+    expect(e.$("#intro").querySelectorAll("div")).toHaveLength(5);
+    expect(e.selected()).toEqual([a]);
+    expect(a.style.translate).toBe("");
+    e.up(a, 200, 200);
+    expect(e.commits()).toEqual([]);
+  });
+
+  it("goes on by as much as the last copy was moved with ⌘D, so a row is one ⌘D per copy", () => {
+    const e = editor();
+    e.click(e.$("#a"));
+    e.key("d", { metaKey: true });
+    const first = e.last();
+    expect([first.style.left, first.style.top]).toEqual(["140px", "140px"]);
+    e.lay(first, 0, 0, 200, 100);
+    // Moved to 250 right of a, level with it.
+    e.fromParent({ type: "slop:edit-geometry", x: 350, y: 100 });
+    e.key("d", { metaKey: true });
+    const second = e.last();
+    expect(second).not.toBe(first);
+    e.lay(second, 0, 0, 200, 100);
+    expect(second.getBoundingClientRect().left).toBe(600);
+    expect(second.getBoundingClientRect().top).toBe(100);
+    e.key("d", { metaKey: true });
+    e.lay(e.last(), 0, 0, 200, 100);
+    expect(e.last().getBoundingClientRect().left).toBe(850);
+    // Something else selected in between starts over with the usual step.
+    e.click(e.$("#b"));
+    e.key("d", { metaKey: true });
+    expect([e.last().style.left, e.last().style.top]).toEqual(["440px", "340px"]);
+  });
+
   it("only copies when Alt-dragged past the threshold", () => {
     const e = editor();
     e.click(e.$("#a"), { altKey: true });
@@ -416,6 +628,42 @@ describe("smart guides", () => {
     e.drag(e.$("#a"), 197, 40);
     expect(e.$("#a").style.translate).toBe("200px 40px");
     expect(e.$("#b").style.translate).toBe("200px 40px");
+  });
+
+  it("spaces a moved element evenly with two others in its row, marking each equal gap", () => {
+    const e = editor();
+    // a, b and c in a row: a and b 100 apart, c 200 past b.
+    e.lay(e.$("#b"), 400, 100, 200, 100);
+    e.lay(e.$("#c"), 800, 100, 200, 100);
+    const c = e.$("#c");
+    e.down(c, 900, 150);
+    // 4px short of being as far past b as b is past a.
+    e.move(c, 804, 150);
+    expect(c.style.translate).toBe("-100px 0px");
+    const marks = [...guides(e)].filter((line) => line.getAttribute("data-gap") === "x") as HTMLElement[];
+    expect(marks.map((m) => [m.style.left, m.style.width])).toEqual([
+      ["300px", "100px"],
+      ["600px", "100px"],
+    ]);
+    // Halfway between a and b is too narrow for c: nothing to space it with there.
+    e.move(c, 450, 150);
+    expect(c.style.translate).toBe("-450px 0px");
+    expect([...guides(e)].some((line) => line.hasAttribute("data-gap"))).toBe(false);
+    e.up(c, 450, 150);
+    expect(guides(e)).toHaveLength(0);
+  });
+
+  it("spaces a moved element halfway between two neighbours", () => {
+    const e = editor();
+    e.lay(e.$("#b"), 1000, 100, 200, 100);
+    const c = e.$("#c");
+    e.lay(c, 500, 300, 200, 100);
+    e.down(c, 600, 350);
+    // Between a (ends at 300) and b (starts at 1000): 250 on each side puts it at 550.
+    e.move(c, 653, 150);
+    expect(c.style.translate).toBe("50px -200px");
+    expect([...guides(e)].filter((line) => line.getAttribute("data-gap") === "x")).toHaveLength(2);
+    e.up(c, 653, 150);
   });
 
   it("does not snap with ⌘ or Ctrl held", () => {

@@ -3,8 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
 import {
+  clampTimelineHeight,
+  clampZoom,
+  clipTargets,
+  edgeTargets,
   formatShown,
   formatTenths,
+  formatZoom,
   LEAST_PICTURE,
   layoutTimeline,
   moveClip,
@@ -14,7 +19,9 @@ import {
   scrollToPlayhead,
   showsPicture,
   slideAt,
+  snapTime,
   spokenSeconds,
+  wheelZoom,
   withTiming,
 } from "./timeline";
 import { DEFAULT_VIDEO_OPTIONS, type VideoOptions } from "./video";
@@ -332,5 +339,58 @@ describe("scrollForZoom", () => {
     expect(scrollForZoom(0, 400, 800, 0, 400)).toBe(0);
     expect(scrollForZoom(1, 800, 400, 400, 400)).toBe(0);
     expect(scrollForZoom(1, 400, 800, 0, 400)).toBe(400);
+  });
+});
+
+describe("zooming the timeline", () => {
+  it("keeps the zoom between the whole timeline and the closest, and steps it by the wheel", () => {
+    expect(clampZoom(0.5)).toBe(1);
+    expect(clampZoom(100)).toBe(32);
+    expect(clampZoom(Number.NaN)).toBe(1);
+    expect(wheelZoom(2, -200)).toBeCloseTo(2 * Math.E);
+    expect(wheelZoom(4, 200)).toBeCloseTo(4 / Math.E);
+    expect(wheelZoom(1, 500)).toBe(1);
+    expect([formatZoom(1), formatZoom(2.54), formatZoom(12.4)]).toEqual(["1×", "2.5×", "12×"]);
+  });
+});
+
+describe("snapping", () => {
+  const timeline = {
+    slides: [
+      { id: "a", start: 0, end: 5, locked: false, duration: null, narrationStart: null },
+      { id: "b", start: 5, end: 9, locked: false, duration: null, narrationStart: null },
+    ],
+    clips: [
+      { slide: "a", start: 0.5, end: 3.5 },
+      { slide: "b", start: 5.5, end: 8 },
+    ],
+    end: 9,
+  };
+
+  it("lands on the nearest target in reach, or where it is", () => {
+    expect(snapTime(3.6, [3.5, 4.5], 0.2)).toEqual({ at: 3.5, target: 3.5 });
+    expect(snapTime(4.4, [3.5, 4.5], 0.2)).toEqual({ at: 4.5, target: 4.5 });
+    expect(snapTime(4, [3.5, 4.5], 0.2)).toEqual({ at: 4, target: null });
+  });
+
+  it("takes a slide's end to where narration ends, its own with the pause after, and the playhead", () => {
+    expect(edgeTargets(timeline, 0, 1, 2)).toEqual([3.5, 8, 4.5, 2]);
+    // Nothing before the slide's start: it cannot end there.
+    expect(edgeTargets(timeline, 1, 1, 2)).toEqual([8, 9]);
+    expect(edgeTargets(timeline, 5, 1, 2)).toEqual([]);
+  });
+
+  it("takes a narration's start to where slides change, the pause after that, the narration before and the playhead", () => {
+    expect(clipTargets(timeline, "b", 0.5, 7)).toEqual([0, 5, 0.5, 5.5, 3.5, 7]);
+  });
+});
+
+describe("clampTimelineHeight", () => {
+  it("keeps the timeline between its lowest and tallest, and in the room there is", () => {
+    expect(clampTimelineHeight(50)).toBe(120);
+    expect(clampTimelineHeight(999)).toBe(400);
+    expect(clampTimelineHeight(250.4)).toBe(250);
+    expect(clampTimelineHeight(350, 300)).toBe(300);
+    expect(clampTimelineHeight(Number.NaN)).toBe(176);
   });
 });

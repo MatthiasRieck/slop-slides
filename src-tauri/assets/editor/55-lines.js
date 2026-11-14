@@ -410,7 +410,7 @@
     var points = slidePoints(el, line);
     var shape = lineShape(points, line.heads, line.width, line.route, line.route ? endDirections(el, points) : null);
     var scale = scaleOf(el);
-    var reach = (line.width * Math.max(scale.x, scale.y)) / 2 + LINE_HIT_SLOP / (zoom() || 1);
+    var reach = (line.width * Math.max(scale.x, scale.y)) / 2 + onScreen(LINE_HIT_SLOP) / (zoom() || 1);
     if (polyDistance(p, shape.track) <= reach) return true;
     return ["start", "end"].some(function (end) {
       var head = shape.heads[end];

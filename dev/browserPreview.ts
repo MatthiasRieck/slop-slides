@@ -244,6 +244,7 @@ function deckChanges(file: string) {
     id,
     oldId,
     details: [],
+    textChanges: [],
     moved: false,
     oldNumber: null,
     staged: false,
@@ -263,9 +264,9 @@ function deckChanges(file: string) {
     const after = rows.findIndex((r) => r.id === old[index - 1]?.id);
     rows.splice(after + 1, 0, row("removed", null, slide.id));
   });
-  const subject = execFileSync("git", ["log", "-1", "--format=%h%x00%s"], { cwd: path.dirname(file) });
-  const [hash, title] = subject.toString("utf8").trim().split("\0");
-  return { ...none, tracking: "committed", commit: { hash, subject: title }, slides: rows };
+  const subject = execFileSync("git", ["log", "-1", "--format=%h%x00%ct%x00%s"], { cwd: path.dirname(file) });
+  const [hash, time, title] = subject.toString("utf8").trim().split("\0");
+  return { ...none, tracking: "committed", commit: { hash, subject: title, time: Number(time) }, slides: rows };
 }
 
 const hash = (text: string) => createHash("sha1").update(text).digest("hex").slice(0, 12);
@@ -289,13 +290,47 @@ function kindOf(file: string): Kind {
   return "webpage";
 }
 
+// A deck's folder is listed with the deck's title, as src-tauri/src/file_ops.rs `list_dir` does.
+function deckTitleOf(dir: string): { deckTitle?: string } {
+  const file = path.join(dir, "deck.html");
+  if (!fs.statSync(dir).isDirectory() || !fs.existsSync(file) || kindOf(file) !== "deck") return {};
+  const title = /<title[^>]*>([^<]*)<\/title>/i.exec(fs.readFileSync(file, "utf8"))?.[1]?.trim();
+  return { deckTitle: title || path.basename(dir) };
+}
+
+// Approximates src-tauri/src/workspace.rs `gallery`: the library's decks, the one changed last first.
+function gallery() {
+  const files = fs
+    .readdirSync(library)
+    .filter((name) => !name.startsWith("."))
+    .map((name) => path.join(library, name))
+    .map((entry) => (fs.statSync(entry).isDirectory() ? path.join(entry, "deck.html") : entry))
+    .filter((file) => fs.existsSync(file) && kindOf(file) === "deck");
+  const size = { width: 1920, height: 1080, unit: "px", pixelWidth: 1920, pixelHeight: 1080 };
+  return files
+    .map((file) => ({
+      path: file,
+      title: /<title>([^<]*)<\/title>/i.exec(fs.readFileSync(file, "utf8"))?.[1] ?? path.basename(path.dirname(file)),
+      workspace: library,
+      modifiedMs: fs.statSync(file).mtimeMs,
+      openedMs: null,
+      size,
+    }))
+    .sort((a, b) => b.modifiedMs - a.modifiedMs);
+}
+
 function listDir(rel: string) {
   const dir = inLibrary(rel);
   if (!dir || !fs.existsSync(dir)) return null;
   return fs
     .readdirSync(dir)
     .filter((name) => !name.startsWith(".") && !name.includes(".tmp-"))
-    .map((name) => ({ name, path: rel ? `${rel}/${name}` : name, kind: kindOf(path.join(dir, name)) }))
+    .map((name) => ({
+      name,
+      path: rel ? `${rel}/${name}` : name,
+      kind: kindOf(path.join(dir, name)),
+      ...deckTitleOf(path.join(dir, name)),
+    }))
     .sort((a, b) => Number(a.kind !== "directory") - Number(b.kind !== "directory") || a.name.localeCompare(b.name));
 }
 
@@ -335,6 +370,7 @@ export function browserPreview(): Plugin {
         };
         const rel = url.searchParams.get("path") ?? "";
         if (url.pathname === "/__api/library") return json(library);
+        if (url.pathname === "/__api/gallery") return json(gallery());
         if (url.pathname === "/__api/dir") return json(listDir(rel));
         if (url.pathname === "/__api/open") {
           const file = inLibrary(rel);

@@ -38,3 +38,31 @@ export function useShownView<T>(pick: (view: PasteboardView | null) => T): T {
 export function isMoved(view: PasteboardView): boolean {
   return !(view.x === 0 && view.y === 0 && view.k === 1);
 }
+
+interface OverflowPaths {
+  /** The slide the paths are of; null until the editor has reported any. */
+  slide: string | null;
+  /** For each thing the editor found running past the slide, in its order, where the element is: child indexes from the slide down. */
+  paths: (number[] | null)[];
+}
+
+/**
+ * Where the elements are that the slide editor found running past the slide or cut off, beside
+ * what it says of them (see `overflow` in ./editorState.ts): the list under the slide selects
+ * one with it. A store of its own, read only when a row of that list is pressed.
+ */
+export const useOverflowPaths = create<OverflowPaths>(() => ({ slide: null, paths: [] }));
+
+const isPath = (value: unknown): value is number[] =>
+  Array.isArray(value) && value.every((index) => Number.isInteger(index) && index >= 0);
+
+/** Takes the places the editor reported with what overflows on `slide`; what is no place is null. */
+export function reportOverflowPaths(slide: string, paths: unknown) {
+  useOverflowPaths.setState({ slide, paths: Array.isArray(paths) ? paths.map((p) => (isPath(p) ? p : null)) : [] });
+}
+
+/** Where the `index`th overflowing element of `slide` is, if the editor said. */
+export function overflowPath(slide: string | null, index: number): number[] | null {
+  const known = useOverflowPaths.getState();
+  return known.slide === slide ? (known.paths[index] ?? null) : null;
+}

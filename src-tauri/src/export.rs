@@ -12,8 +12,11 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::error::{Error, Result};
+use crate::export_job::Job;
+use crate::export_scope::{self, Scope, WebPage};
 use crate::inbox::{Inbox, Serving};
-use crate::{capture, deck, export_window, html, pdf, render, video};
+use crate::slide_images::{self, Target};
+use crate::{pdf, video};
 
 /// Longest wait for an export: a long video with narration to say takes a while.
 pub const WAIT: Duration = Duration::from_secs(60 * 60);
@@ -24,8 +27,6 @@ static INBOX: Inbox = Inbox {
 };
 /// The folder next to the deck that exports go to unless the agent names another place.
 pub const FOLDER: &str = "exports";
-/// What the hidden window is for, as its errors name it.
-const TASK: &str = "exporting";
 
 /// What a deck is exported as: the choices of the Export menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,29 +251,33 @@ async fn serve(app: &AppHandle, dir: &Path, request: &Request) -> Result<String>
     make(app, &file, request, &dest).await
 }
 
-/// Exports the deck `file` as `request` asks, to `dest`; what it made, in words.
+/// Exports the deck `file` as `request` asks, to `dest`; what it made, in words. As the Export
+/// menu does by default: the slides the show shows, and in a web page none of the author's
+/// own material (notes, narration scripts, review marks).
 async fn make(app: &AppHandle, file: &Path, request: &Request, dest: &Path) -> Result<String> {
+    let job = Job::unattended();
+    let scope = Scope::default();
     let made = match request.format {
         Format::Html => {
-            deck::export(file, dest)?;
+            export_scope::web_page(file, dest, &WebPage::default())?;
             None
         }
         Format::Pdf => {
-            pdf::export(app, file, dest).await?;
+            pdf::export(app, file, dest, &pdf::Options::default(), &job).await?;
             None
         }
         Format::Pptx => {
-            crate::pptx::export(app, file, dest).await?;
+            crate::pptx::export(app, file, dest, &scope, &job).await?;
             None
         }
         Format::Video => {
             let options = request
                 .video
                 .unwrap_or(crate::narration::timeline::DEFAULTS);
-            video::export(app, file, dest, options, |_| {}).await?;
+            video::export(app, file, dest, options, &video::Output::default(), |_| {}).await?;
             None
         }
-        Format::Images => Some(images(app, file, dest).await?),
+        Format::Images => Some(images(app, file, dest, &job).await?),
     };
     Ok(report(request, made, dest))
 }
@@ -307,40 +312,15 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// Saves every slide of the deck `file`, hidden ones too as the Export menu does, as
-/// `slide-NN.png` in `dir`, the slides' canvas width, every animation finished. Images of an
-/// earlier export there are replaced. How many it saved.
-async fn images(app: &AppHandle, file: &Path, dir: &Path) -> Result<usize> {
-    let deck = deck::load(file)?;
-    let ids: Vec<String> = deck.slides.iter().map(|s| s.id.clone()).collect();
-    if ids.is_empty() {
-        return Err(Error::msg("this deck has no slides to export"));
-    }
+/// Saves each slide the show shows of the deck `file` as `slide-NN.png` in `dir`, the slides'
+/// canvas width, every animation finished. Images of an earlier export there are replaced.
+/// How many it saved.
+async fn images(app: &AppHandle, file: &Path, dir: &Path, job: &Job) -> Result<usize> {
     std::fs::create_dir_all(dir)?;
     remove_old_images(dir);
-    let (canvas, _) = html::slide_size(&deck::read_html(file)?).pixels();
-    let width = capture::slide_image_width(Some(canvas));
-    let (window, signals) = render::open(app, file, false)?;
-    let mut helper = export_window::Helper {
-        window: &window,
-        signals,
-        task: TASK,
-    };
-    let saved = async {
-        helper.answer("ready").await?;
-        for (i, id) in ids.iter().enumerate() {
-            let shown = render::show(&mut helper, id, None)
-                .await?
-                .ok_or_else(|| Error::msg(format!("the deck has no slide `{id}`")))?;
-            let (rect, viewport) = export_window::geometry(&shown)?;
-            let png = export_window::capture(helper.window, rect, viewport, width).await?;
-            std::fs::write(dir.join(crate::files::slide_image_name(i, ids.len())), png)?;
-        }
-        Ok(ids.len())
-    }
-    .await;
-    let _ = window.destroy();
-    saved
+    let options = slide_images::Options::default();
+    let saved = slide_images::save(app, file, Target::Folder(dir), &options, job).await?;
+    Ok(saved.len())
 }
 
 /// Removes the `slide-NN.png` images an earlier export left in `dir`, so a deck with fewer

@@ -5,7 +5,11 @@ import { api, type Screen } from "../../lib/api";
 import { isTextField } from "../../lib/keys";
 import { hasOpenLayer } from "../../lib/layers";
 import { type Placement, type ScreenChoice, type ShowStart, saveChoice } from "../../lib/screens";
+import { loadFlag, saveFlag } from "../../lib/storage";
 import { useApp } from "../../store";
+
+/** Where the choice to present in windows is kept on this computer. */
+const WINDOWED_KEY = "slopslide.presentInWindows";
 
 /** The longest the screen picker waits for the screens to be captured before opening anyway. */
 export const PICKER_MAX_WAIT_MS = 150;
@@ -15,9 +19,14 @@ export const PRESENT_KEYS: Record<ShowStart, string> = { current: "mod+enter", s
 
 /**
  * Starting a show: with one screen it starts at once, with several it first asks where the slides
- * and the presenter view go (see ../ScreenPicker.tsx, which shows while `screens` is set).
+ * and the presenter view go (see ../ScreenPicker.tsx, which shows while `screens` is set). With
+ * `windowed` on (a choice remembered on this computer), every start presents in windows instead,
+ * from wherever it was asked to start.
  */
 interface PresentState {
+  /** Whether shows start in windows: the slides in this window, the presenter view in its own. */
+  windowed: boolean;
+  setWindowed: (windowed: boolean) => void;
   /** The attached screens while the picker is open. */
   screens: Screen[] | null;
   /** Their screenshots, by screen; null while they are being taken. */
@@ -46,8 +55,15 @@ export const usePresent = create<PresentState>((set, get) => ({
   previews: null,
   from: "current",
 
+  windowed: loadFlag(WINDOWED_KEY, false),
+  setWindowed: (windowed) => {
+    saveFlag(WINDOWED_KEY, windowed);
+    set({ windowed });
+  },
+
   present: async (from = "current") => {
     if (!canPresent() || get().screens) return;
+    if (get().windowed) return get().presentInWindows(from);
     const attached = await api.listScreens().catch(() => []);
     if (attached.length <= 1) return begin(null, from);
     // The picker opens as soon as the screens are captured, so that it isn't in the screenshots,

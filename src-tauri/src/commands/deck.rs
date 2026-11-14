@@ -37,14 +37,75 @@ pub fn create_deck(window: Window, title: String, template: Option<String>) -> R
     deck::create(&workspace_root(&window)?, &title, template)
 }
 
-/// Converts the PowerPoint file at `path` into a new deck in the open workspace.
+/// Creates the example deck (see [`templates::create_example`]) in the open workspace.
+#[tauri::command(async)]
+pub fn create_example_deck(window: Window) -> Result<Deck> {
+    let file = templates::create_example(&workspace_root(&window)?)?;
+    deck::open(&file, None, true)
+}
+
+/// Makes a copy of deck `id` beside it (see [`workspace::duplicate`]), which is not opened;
+/// returns the copy's id. Off the main thread: the deck's folder is copied.
+#[tauri::command(async)]
+pub fn duplicate_deck(id: String) -> Result<String> {
+    let copy = reading(&id, workspace::duplicate)?;
+    Ok(copy.to_string_lossy().into_owned())
+}
+
+/// Moves deck `id` to the system's trash, with its folder when it has one of its own (see
+/// [`workspace::trash_target`]), and forgets it: its place among the recent decks and its undo
+/// history. Refused while the deck is open in a window, while a window has the folder that would
+/// go open, and while the agent works on the deck.
+#[tauri::command(async)]
+pub fn trash_deck(
+    agent: State<AgentManager>,
+    open: State<OpenWorkspace>,
+    id: String,
+) -> Result<()> {
+    let file = deck::deck_file(&id)?;
+    let target = workspace::trash_target(&file);
+    let name = workspace::display_name(&target);
+    if agent.works_on(&file) {
+        return Err(error::Error::msg(
+            "The agent is still working on the deck; stop it or wait for it to finish first.",
+        ));
+    }
+    // No window is called "": the deck open in any of them counts.
+    if open.window_with_deck(&file, "").is_some() {
+        return Err(error::Error::msg(format!(
+            "{name} is open in a window. Close the deck first."
+        )));
+    }
+    if target.is_dir() && open.window_inside(&target).is_some() {
+        return Err(error::Error::msg(format!(
+            "The folder {name} is open in a window. Close that folder first."
+        )));
+    }
+    let home = files::app_home()?;
+    let kept = history::place(&home, &file);
+    {
+        // Not while a change to the deck is being written.
+        let _held = crate::deck_lock::hold(&file);
+        workspace::move_to_trash(&target)?;
+    }
+    history::forget(&kept);
+    workspace::forget_deck(&home, &id)
+}
+
+/// Converts the PowerPoint file at `path` into a new deck in the open workspace, with
+/// `pptx-import-progress` events to the window saying which slide it is reading.
 #[tauri::command]
 pub async fn import_pptx(window: Window, path: String) -> Result<pptx::Imported> {
+    use tauri::Emitter;
     let root = workspace_root(&window)?;
     // Not on the main thread: a big file takes a moment, and the window must stay alive.
-    tauri::async_runtime::spawn_blocking(move || pptx::import(Path::new(&path), &root))
-        .await
-        .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        pptx::import(Path::new(&path), &root, |progress: pptx::ImportProgress| {
+            let _ = window.emit("pptx-import-progress", progress);
+        })
+    })
+    .await
+    .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
 }
 
 /// Opens deck `id` in the window, whose chat becomes the deck's. A deck open in another window
@@ -259,6 +320,16 @@ pub fn delete_section(id: String, index: usize) -> Result<Deck> {
     changing(&id, Change::new(Source::Rail, "Delete section"), |file| {
         deck::delete_section(file, index)
     })
+}
+
+/// Takes section `index` out of deck `id` along with `slides`, the slides it holds, as one change.
+#[tauri::command(async)]
+pub fn delete_section_slides(id: String, index: usize, slides: Vec<String>) -> Result<RailEdit> {
+    changing(
+        &id,
+        Change::new(Source::Rail, "Delete section and slides"),
+        |file| deck::delete_section_slides(file, index, &slides),
+    )
 }
 
 #[tauri::command(async)]

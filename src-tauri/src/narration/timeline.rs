@@ -24,6 +24,15 @@ pub const DEFAULTS: video::Options = video::Options {
     pause_after: 1.0,
 };
 
+/// The settings the deck `file` plays with where nobody says otherwise: [`DEFAULTS`], with the
+/// times the deck keeps for itself (see [`super::Timing`]) when it has set them.
+pub fn defaults_for(file: &Path) -> video::Options {
+    match super::deck_settings(file).timing {
+        Some(timing) => timing.into(),
+        None => DEFAULTS,
+    }
+}
+
 /// A shown slide on the timeline. Times are seconds from the start of the show.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shown {
@@ -262,17 +271,20 @@ pub enum Words {
 /// How a deck plays out with its narration, as the agent's narration_timeline tells it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Timeline {
-    /// The deck's shown slides, laid out with [`DEFAULTS`].
+    /// The deck's shown slides, laid out with [`defaults_for`] it.
     pub slides: Vec<Shown>,
+    /// What they were laid out with.
+    pub assumed: video::Options,
     /// The words of each shown slide's narration that plays, by its slide id, in slide
     /// order; None when not asked for.
     pub words: Option<Vec<(String, Words)>>,
 }
 
-/// How the deck `file` plays out with its narration, laid out with [`DEFAULTS`], with when
-/// the words of each narration are said if `with_words`.
+/// How the deck `file` plays out with its narration, laid out with [`defaults_for`] it, with
+/// when the words of each narration are said if `with_words`.
 pub fn timeline(file: &Path, deck: &Deck, with_words: bool) -> Timeline {
-    let slides = layout(file, deck, &DEFAULTS);
+    let assumed = defaults_for(file);
+    let slides = layout(file, deck, &assumed);
     let words = with_words.then(|| {
         slides
             .iter()
@@ -301,7 +313,11 @@ pub fn timeline(file: &Path, deck: &Deck, with_words: bool) -> Timeline {
             })
             .collect()
     });
-    Timeline { slides, words }
+    Timeline {
+        slides,
+        assumed,
+        words,
+    }
 }
 
 impl Timeline {
@@ -313,7 +329,7 @@ impl Timeline {
     /// The timeline as JSON for the agent's scripts, of the deck `deck` (as the agent named
     /// it), times to the millisecond.
     pub fn data(&self, deck: &str) -> Value {
-        let d = DEFAULTS;
+        let d = self.assumed;
         let slides: Vec<Value> = self
             .slides
             .iter()

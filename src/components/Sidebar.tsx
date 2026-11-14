@@ -1,29 +1,10 @@
-import {
-  AudioLines,
-  ChevronLeft,
-  ChevronRight,
-  Code2,
-  Files,
-  Keyboard,
-  Maximize2,
-  MessageSquare,
-  Minimize2,
-  Plus,
-  Settings,
-  Shapes,
-  StickyNote,
-  X,
-} from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { AudioLines, Code2, Files, Maximize2, MessageSquare, Minimize2, Shapes, X } from "lucide-react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 
-import { useDropdown } from "../hooks/useDropdown";
-import { useMenuKeys } from "../hooks/useMenuKeys";
 import { useRovingTabs } from "../hooks/useRovingTabs";
-import { formatKeys } from "../lib/keys";
-import { scrollBehavior } from "../lib/motion";
-import { SHELL_SHORTCUTS } from "../lib/shellKeys";
+import { type TabLabels, tabLabels } from "../lib/sidebarTabs";
 import { cn, isMac } from "../lib/utils";
-import { openShortcutHelp, SIDEBAR_TABS, type SidebarTab, settleUnsavedEdits, useApp } from "../store";
+import { type SidebarTab, useApp } from "../store";
 import { hiddenChatAttention } from "../store/attention";
 import { selectedSlideNarrated } from "../store/chrome";
 import { useSvgEditor } from "../svgStore";
@@ -33,9 +14,10 @@ import { ChatPanel } from "./ChatPanel";
 import { FileTree } from "./FileTree";
 import { CodePanel, SvgEditor } from "./lazy";
 import { NarrationPanel } from "./NarrationPanel";
-import { NotesPanel } from "./NotesPanel";
-import { SettingsPanel } from "./SettingsPanel";
+import { ShellButtons } from "./ShellButtons";
 import { SidebarToggle } from "./TopBar";
+
+export { ShellButtons } from "./ShellButtons";
 
 interface TabKind {
   label: string;
@@ -44,11 +26,14 @@ interface TabKind {
   /** The tab's contents; `active` while it is the tab shown. */
   render: (active: boolean) => ReactNode;
   /**
-   * Once shown, stays mounted (hidden) behind the other tabs while open, to keep what it holds,
-   * such as unsaved edits. Until it first shows it is not mounted, nor its code loaded.
+   * Once shown, stays mounted (hidden) behind the other tabs, to keep what it holds, such as
+   * unsaved edits. Until it first shows it is not mounted, nor its code loaded.
    */
   keepMounted?: boolean;
-  /** Closes the tab, when that takes more than closing it (such as asking about unsaved changes). */
+  /**
+   * Closes the tab, for one that is only there while what it holds is open (see `ON_DEMAND_TABS`
+   * in the store): it gets a close button, and a middle click closes it too.
+   */
   close?: () => void;
 }
 
@@ -61,55 +46,34 @@ const TABS: Record<SidebarTab, TabKind> = {
     render: (active) => <ChatPanel active={active} />,
     keepMounted: true,
   },
-  files: { label: "Files", hint: "The workspace's folders and files", icon: Files, render: () => <FileTree /> },
+  files: { label: "Files", hint: "The folders and files of the open folder", icon: Files, render: () => <FileTree /> },
   narration: {
     label: "Narration",
     hint: "What is said over the selected slide, and the voice that says it",
     icon: AudioLines,
     render: () => <NarrationPanel />,
   },
-  notes: {
-    label: "Notes",
-    hint: "Speaker notes for the selected slide; only the presenter sees them",
-    icon: StickyNote,
-    render: () => <NotesPanel />,
-  },
   code: {
-    label: "HTML",
-    hint: "The deck file's source, scrolled to the selected slide",
+    label: "Code",
+    hint: "The deck's HTML and CSS, at the selected slide",
     icon: Code2,
     render: (active) => <CodePanel active={active} />,
     keepMounted: true,
-    close: () => void closeCodeTab(),
   },
   svg: {
-    label: "SVG",
-    hint: "Edit a drawing from a slide",
+    label: "Drawing",
+    hint: "The drawing being edited, from a slide",
     icon: Shapes,
     render: () => <SvgEditor />,
     close: () => void useSvgEditor.getState().close(),
   },
-  settings: {
-    label: "App settings",
-    hint: "How the app looks and behaves, for every deck",
-    icon: Settings,
-    render: () => <SettingsPanel />,
-  },
 };
 
 /**
- * Closes the HTML tab. With edits not saved to the deck file, the user first saves them, gives
- * them up, or keeps the tab open.
- */
-async function closeCodeTab() {
-  if (useApp.getState().codeDirty && !(await settleUnsavedEdits())) return;
-  useApp.getState().closeSidebarTab("code");
-}
-
-/**
- * The right sidebar, from the top of the window to the bottom: a tab for each surface open in it
- * (the chat, the workspace's files, the slide's narration and notes, the deck's HTML, the app's settings, …), each closable, and a `+` to open another;
- * the maximize and hide buttons at its top right; the app's settings and the keyboard shortcuts at its bottom left. Maximized, it covers the whole window.
+ * The right sidebar, from the top of the window to the bottom: a tab for each of its panels (the
+ * chat and the files always, the deck's narration and code while a deck is open, a drawing while
+ * it is being edited), the maximize and hide buttons at its top right, and the app's settings and
+ * the keyboard shortcuts at its bottom left. Maximized, it covers the whole window.
  */
 export function Sidebar() {
   const tabs = useApp((s) => s.sidebarTabs);
@@ -121,13 +85,12 @@ export function Sidebar() {
       <div
         data-tauri-drag-region
         className={cn(
-          "relative z-30 flex h-14 shrink-0 items-center gap-1 border-b px-2",
+          "relative z-dropdown flex h-14 shrink-0 items-center gap-1 border-b px-2",
           // Over the whole window, it starts where the top bar does, clear of the window's buttons.
           maximized && isMac && "pl-[84px]",
         )}
       >
         <TabStrip tabs={tabs} active={active} />
-        <div data-tauri-drag-region className="flex-1" />
         <ToolButton
           variant="panel"
           size="md"
@@ -139,44 +102,25 @@ export function Sidebar() {
         </ToolButton>
         <SidebarToggle />
       </div>
-      <div role="tabpanel" className="min-h-0 flex-1">
+      <div role="tabpanel" aria-label={TABS[active].label} className="min-h-0 flex-1">
         {mounted.map((id) => (
           <div key={id} className={cn("h-full", id !== active && "hidden")}>
             {TABS[id].render(id === active)}
           </div>
         ))}
-        {!active && <NoTabs />}
       </div>
-      <div className="flex h-10 shrink-0 items-center gap-1 border-t px-2">
-        <ToolButton
-          variant="panel"
-          size="md"
-          label="App settings"
-          shortcut={SHELL_SHORTCUTS.appSettings}
-          active={active === "settings"}
-          onClick={() => useApp.getState().setSidebarTab("settings")}
-        >
-          <Settings className="size-4" />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          size="md"
-          label="Keyboard shortcuts"
-          title={`Keyboard shortcuts (?, ${formatKeys("mod+/")})`}
-          onClick={openShortcutHelp}
-        >
-          <Keyboard className="size-4" />
-        </ToolButton>
+      <div className="flex h-9 shrink-0 items-center gap-1 border-t px-2">
+        <ShellButtons />
       </div>
     </div>
   );
 }
 
 /**
- * The open tabs to render, in their order: the one showing, and those that stay mounted behind
- * it once they have shown (see `TabKind.keepMounted`).
+ * The tabs to render, in their order: the one showing, and those that stay mounted behind it
+ * once they have shown (see `TabKind.keepMounted`).
  */
-function useMountedTabs(tabs: SidebarTab[], active: SidebarTab | null): SidebarTab[] {
+function useMountedTabs(tabs: SidebarTab[], active: SidebarTab): SidebarTab[] {
   const [kept, setKept] = useState<SidebarTab[]>([]);
   const mounted = tabs.filter((id) => id === active || kept.includes(id));
   const keep = mounted.filter((id) => TABS[id].keepMounted);
@@ -185,114 +129,113 @@ function useMountedTabs(tabs: SidebarTab[], active: SidebarTab | null): SidebarT
   return mounted;
 }
 
-/** How far a tab strip can scroll each way, in pixels. */
-interface Overflow {
-  left: number;
-  right: number;
+/** The room between two tabs, in pixels (`gap-1`). */
+const TAB_GAP = 4;
+/** The room kept for the marks on the tabs, in pixels. */
+const MARK_ROOM = 16;
+
+/**
+ * Which tabs show their name, for the room the strip has: a copy of the tabs, out of sight and
+ * with every name, says how wide they would be (see `tabLabels`). Measured again whenever the
+ * strip or a tab changes size: the sidebar is dragged, a tab comes or goes, a mark shows.
+ */
+function useTabLabels(tabs: SidebarTab[], active: SidebarTab) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const [labels, setLabels] = useState<TabLabels>("all");
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    const measure = measureRef.current;
+    if (!strip || !measure) return;
+    const measureTabs = () => {
+      const copies = Array.from(measure.children) as HTMLElement[];
+      // The last copy is a tab without its name.
+      const icon = copies.pop()?.offsetWidth ?? 0;
+      const full = copies.map((copy) => copy.offsetWidth);
+      // The marks a tab may show (unsaved edits, the agent at work) are not in the copies.
+      const available = strip.clientWidth > 0 ? Math.max(1, strip.clientWidth - MARK_ROOM) : 0;
+      setLabels(tabLabels(full, icon, TAB_GAP, tabs.indexOf(active), available));
+    };
+    measureTabs();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureTabs);
+    observer.observe(strip);
+    for (const copy of measure.children) observer.observe(copy);
+    return () => observer.disconnect();
+  }, [tabs, active]);
+
+  return { stripRef, measureRef, labels };
 }
 
 /**
- * The open tabs, then `+`. When they don't fit, the strip scrolls without a scrollbar: its cut-off
- * ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls into view.
+ * The sidebar's tabs, in the room left of the sidebar's buttons. They never scroll or clip: when
+ * their names do not all fit, only the tab showing keeps its name and the others show their
+ * icon, with the name in a tooltip; in a very narrow sidebar all of them do.
  */
-function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | null }) {
+function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab }) {
   const roving = useRovingTabs();
-  const ref = roving.ref;
-  const [overflow, setOverflow] = useState<Overflow>({ left: 0, right: 0 });
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures, and watches the new tabs, when tabs open or close
-  useEffect(() => {
-    const strip = ref.current;
-    if (!strip) return;
-    const measure = () => {
-      const left = Math.max(0, Math.round(strip.scrollLeft));
-      const right = Math.max(0, Math.round(strip.scrollWidth - strip.clientWidth - strip.scrollLeft));
-      setOverflow((o) => (o.left === left && o.right === right ? o : { left, right }));
-    };
-    measure();
-    strip.addEventListener("scroll", measure, { passive: true });
-    const observer = new ResizeObserver(measure);
-    observer.observe(strip);
-    for (const child of strip.children) observer.observe(child);
-    return () => {
-      strip.removeEventListener("scroll", measure);
-      observer.disconnect();
-    };
-  }, [tabs]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: brings the active tab into view whenever it or the tabs change
-  useEffect(() => {
-    ref.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [active, tabs]);
-
-  const scroll = (direction: -1 | 1) => {
-    const strip = ref.current;
-    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.75, behavior: scrollBehavior() });
-  };
-  const fade = 24;
-  const mask = `linear-gradient(to right, ${overflow.left ? "transparent" : "black"}, black ${overflow.left ? fade : 0}px, black calc(100% - ${overflow.right ? fade : 0}px), ${overflow.right ? "transparent" : "black"})`;
-  const overflowing = overflow.left > 0 || overflow.right > 0;
-
+  const { stripRef, measureRef, labels } = useTabLabels(tabs, active);
+  const named = (id: SidebarTab) => labels === "all" || (labels === "active" && id === active);
   return (
-    <>
+    <div ref={stripRef} data-tauri-drag-region data-labels={labels} className="relative flex min-w-0 flex-1">
       <div
-        ref={ref}
+        ref={roving.ref}
         role="tablist"
         aria-label="Sidebar"
         onKeyDown={roving.onKeyDown}
-        className="no-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto"
-        data-fade={[overflow.left && "left", overflow.right && "right"].filter(Boolean).join(" ") || undefined}
-        style={overflowing ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
+        className="flex min-w-0 items-center gap-1"
       >
         {tabs.map((id) => (
-          <Tab key={id} id={id} active={id === active} />
+          <Tab key={id} id={id} active={id === active} named={named(id)} />
         ))}
       </div>
-      <OpenTabMenu open={tabs} />
-      {overflowing && (
-        <div className="flex shrink-0 items-center">
-          <ToolButton
-            variant="panel"
-            size="sm"
-            label="Scroll tabs left"
-            disabled={!overflow.left}
-            onClick={() => scroll(-1)}
-          >
-            <ChevronLeft className="size-4" />
-          </ToolButton>
-          <ToolButton
-            variant="panel"
-            size="sm"
-            label="Scroll tabs right"
-            disabled={!overflow.right}
-            onClick={() => scroll(1)}
-          >
-            <ChevronRight className="size-4" />
-          </ToolButton>
-        </div>
-      )}
-    </>
+      {/* The tabs with every name, and one without, only to be measured. */}
+      <div
+        ref={measureRef}
+        data-testid="tab-sizes"
+        aria-hidden
+        inert
+        className="pointer-events-none invisible absolute top-0 left-0 flex text-xs font-medium"
+      >
+        {tabs.map((id) => (
+          <TabFace key={id} id={id} named />
+        ))}
+        <TabFace id="chat" named={false} />
+      </div>
+    </div>
+  );
+}
+
+/** What a tab shows: its icon, its name when there is room for it, and its close button if it has one. */
+function TabFace({ id, named, children }: { id: SidebarTab; named: boolean; children?: ReactNode }) {
+  const { label, icon: Icon, close } = TABS[id];
+  return (
+    <span className={cn("flex shrink-0 items-center gap-1.5 py-1.5", named ? "px-2" : "px-1.5", close && "pr-6")}>
+      <Icon className="size-4 shrink-0" />
+      {named && label}
+      {children}
+    </span>
   );
 }
 
 /**
- * One open tab: its icon and name, then its close button on the trailing edge, which shows on
- * the active tab and while the tab is hovered or holds the focus. A middle click closes it too.
+ * One tab: its icon and, with room for it, its name. A tab that is only there while what it
+ * holds is open has a close button on its trailing edge, and a middle click closes it too.
  */
-function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
-  const { label, icon: Icon, close } = TABS[id];
-  // A dot on the tab: the HTML has unsaved edits, or the selected slide has narration.
+function Tab({ id, active, named }: { id: SidebarTab; active: boolean; named: boolean }) {
+  const { label, hint, close } = TABS[id];
+  // A dot on the tab: the code has unsaved edits, or the selected slide has narration.
   const mark = useApp((s) => {
     if (id === "code") return s.codeDirty ? "Unsaved changes" : null;
     return id === "narration" && selectedSlideNarrated(s) ? "This slide has narration" : null;
   });
   // On the chat's tab while another one shows: the agent works, or waits for an approval.
   const attention = useApp((s) => (id === "chat" ? hiddenChatAttention(s) : null));
-  const closeTab = () => (close ? close() : useApp.getState().closeSidebarTab(id));
   return (
     <div
       className={cn(
-        "group flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
+        "relative flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
         active && "bg-accent text-foreground",
       )}
     >
@@ -300,111 +243,37 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         type="button"
         role="tab"
         aria-selected={active}
+        aria-label={label}
+        title={named ? hint : `${label}: ${hint}`}
         // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
-        // (The middle button would start scrolling otherwise; here it closes the tab.)
+        // (The middle button would start scrolling otherwise; here it closes an on-demand tab.)
         onMouseDown={keepFocus}
         onClick={() => useApp.getState().setSidebarTab(id)}
         onAuxClick={(event) => {
-          if (event.button !== 1) return;
+          if (event.button !== 1 || !close) return;
           event.preventDefault();
-          closeTab();
+          close();
         }}
-        className="flex items-center gap-1.5 py-1 pl-2 pr-1"
+        className="rounded-md"
       >
-        <Icon className="size-3.5" />
-        {label}
-        {mark && (
-          <span data-testid={`${id}-mark`} title={mark} aria-hidden className="size-1.5 rounded-full bg-primary" />
-        )}
-        {attention && <AttentionMark attention={attention} />}
+        <TabFace id={id} named={named}>
+          {mark && (
+            <span data-testid={`${id}-mark`} title={mark} aria-hidden className="size-1.5 rounded-full bg-primary" />
+          )}
+          {attention && <AttentionMark attention={attention} />}
+        </TabFace>
       </button>
-      <button
-        type="button"
-        aria-label={`Close ${label}`}
-        title={`Close ${label}`}
-        onClick={closeTab}
-        className={cn(
-          "mr-1 flex size-4.5 items-center justify-center rounded-sm opacity-0 hover:bg-foreground/10 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100",
-          active && "opacity-100",
-        )}
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
-  );
-}
-
-/** `+`: a menu of the surfaces not open in a tab yet. */
-function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
-  const { open, setOpen, ref: menuRef } = useDropdown();
-  const menu = useMenuKeys();
-  const closed = SIDEBAR_TABS.filter((id) => !openTabs.includes(id));
-  return (
-    <div ref={menuRef} className="relative shrink-0">
-      <ToolButton
-        variant="panel"
-        size="md"
-        label="Open a tab"
-        title={closed.length ? "Open a tab" : "Every tab is open"}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={!closed.length}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Plus className="size-4" />
-      </ToolButton>
-      {open && closed.length > 0 && (
-        <div
-          role="menu"
-          {...menu}
-          className="enter-below absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg outline-none"
+      {close && (
+        <button
+          type="button"
+          aria-label={`Close ${label}`}
+          title={`Close ${label}`}
+          onClick={close}
+          className="absolute right-1 flex size-4.5 items-center justify-center rounded-sm hover:bg-foreground/10"
         >
-          {closed.map((id) => {
-            const { label, hint, icon: Icon } = TABS[id];
-            return (
-              <button
-                key={id}
-                type="button"
-                role="menuitem"
-                title={hint}
-                onClick={() => {
-                  setOpen(false);
-                  useApp.getState().setSidebarTab(id);
-                }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-              >
-                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                {label}
-              </button>
-            );
-          })}
-        </div>
+          <X className="size-3.5" />
+        </button>
       )}
-    </div>
-  );
-}
-
-/** Every tab is closed: what can open in one. */
-function NoTabs() {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-      <h2 className="text-sm font-medium">Open a tab</h2>
-      <div className="flex w-full max-w-56 flex-col gap-0.5">
-        {SIDEBAR_TABS.map((id) => {
-          const { label, icon: Icon } = TABS[id];
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => useApp.getState().setSidebarTab(id)}
-              className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
-            >
-              <Icon className="size-4 text-muted-foreground" />
-              {label}
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

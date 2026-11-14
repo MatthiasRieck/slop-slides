@@ -1,80 +1,97 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useApp } from "../store";
+import { toastTexts, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { LintStatus } from "./LintStatus";
 
 beforeEach(() => {
   invoke.mockReset();
-  useApp.setState({ deck: deckFor(DECK_HTML), lintError: null });
+  useApp.setState({ deck: deckFor(DECK_HTML), lintError: null, toasts: [], codeReveal: null });
 });
 
-describe("lint status", () => {
+/** A check that finds `found` when asked again. */
+const checking = (found: unknown[]) =>
+  vi.fn(async () => {
+    useApp.setState({ lint: found as never });
+    return true;
+  });
+
+describe("the deck check", () => {
   const issues = [
     { rule: "unclosed-tag", severity: "error" as const, message: "<div> is never closed.", line: 12, slide: "intro" },
     { rule: "title", severity: "warning" as const, message: "Needs a title.", line: 1, slide: null },
   ];
+  const open = () => fireEvent.click(screen.getByRole("button", { name: /^2 problems in the deck/ }));
 
-  it("shows a pending state until the first check finishes", () => {
+  it("says it is checking until the first check finishes", () => {
     useApp.setState({ lint: null });
     render(<LintStatus />);
-    expect(screen.getByTitle(/Checking deck\.html/).textContent).toBe("");
+    expect(screen.getByRole("status", { name: "Checking the deck for problems" }).textContent).toBe("Checking…");
   });
 
-  it("shows only a checkmark when the deck passes, and re-checks on click", () => {
-    const refreshLint = vi.fn(async () => {});
+  it("says No problems when the deck passes, checks again on a click and says what came of it", async () => {
+    const refreshLint = checking([]);
     useApp.setState({ lint: [], refreshLint });
     render(<LintStatus />);
-    const button = screen.getByRole("button", { name: "Lint OK" });
-    expect(button.textContent).toBe("");
-    expect(button.querySelector("svg")).toBeTruthy();
-    fireEvent.click(button);
+    const button = screen.getByRole("button", { name: "No problems" });
+    expect(button.textContent).toBe("No problems");
+    expect(button.title).not.toMatch(/lint/i);
+    await act(async () => fireEvent.click(button));
     expect(refreshLint).toHaveBeenCalled();
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["No problems found in the deck"]);
     expect(useApp.getState().composerFill).toBeNull();
   });
 
-  it("says that the check failed, and tries again on a click", () => {
-    const refreshLint = vi.fn(async () => {});
+  it("hides its words where the row under the slide is narrow, and keeps its name", () => {
+    useApp.setState({ lint: [] });
+    render(<LintStatus nameClass="narrow" />);
+    expect(screen.getByText("No problems").className).toBe("narrow");
+  });
+
+  it("says that the check failed, and tries again on a click", async () => {
+    const refreshLint = vi.fn(async () => false);
     useApp.setState({ lint: null, lintError: "deck not found", refreshLint });
     render(<LintStatus />);
-    const button = screen.getByRole("button", { name: /Lint: the check failed/ });
+    const button = screen.getByRole("button", { name: /could not be checked/ });
     expect(button.textContent).toBe("Check failed");
     expect(button.title).toContain("deck not found");
-    expect(screen.queryByTitle(/Checking/)).toBeNull();
-    fireEvent.click(button);
+    await act(async () => fireEvent.click(button));
     expect(refreshLint).toHaveBeenCalledOnce();
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
     useApp.setState({ lintError: null });
   });
 
   it("says how many problems there are, in words, colored by the worst of them", () => {
     useApp.setState({ lint: issues });
     const { unmount } = render(<LintStatus />);
-    const button = screen.getByRole("button", { name: "Lint: 1 error, 1 warning" });
-    expect(button.textContent).toBe("2 problems");
+    const button = screen.getByRole("button", { name: "2 problems in the deck: 1 error, 1 warning" });
+    expect(button.textContent).toBe("2problems");
     expect(button.className).toContain("text-destructive");
     unmount();
     useApp.setState({ lint: [issues[1]!] });
     render(<LintStatus />);
-    const warned = screen.getByRole("button", { name: "Lint: 1 warning" });
-    expect(warned.textContent).toBe("1 problem");
+    const warned = screen.getByRole("button", { name: "1 problem in the deck: 1 warning" });
+    expect(warned.textContent).toBe("1problem");
     expect(warned.className).toContain("text-warning");
   });
 
-  it("lists every problem on a click, errors first, and fills nothing in by itself", () => {
+  it("lists every problem on a click, errors first, by slide number, and fills nothing in by itself", () => {
     const many = [
       issues[1]!,
       ...Array.from({ length: 12 }, (_, i) => ({ ...issues[0]!, line: 20 + i, message: `Problem ${i}` })),
     ];
     useApp.setState({ lint: many, composerFill: null, running: false });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 12 errors, 1 warning/ }));
-    const list = within(screen.getByRole("dialog", { name: "Problems in the deck file" }));
+    fireEvent.click(screen.getByRole("button", { name: /^13 problems/ }));
+    const list = within(screen.getByRole("dialog", { name: "Problems in the deck" }));
     const rows = list.getAllByRole("listitem");
     expect(rows).toHaveLength(13);
-    expect(rows[0]!.textContent).toContain("Line 20");
+    expect(rows[0]!.textContent).toContain("Slide 1");
+    expect(rows[0]!.textContent).not.toContain("intro");
     expect(rows[0]!.textContent).toContain("Problem 0");
     expect(within(rows[0]!).getByLabelText("Error")).toBeTruthy();
+    expect(rows[12]!.textContent).toContain("Deck");
     expect(rows[12]!.textContent).toContain("Needs a title.");
     expect(within(rows[12]!).getByLabelText("Warning")).toBeTruthy();
     expect(useApp.getState().composerFill).toBeNull();
@@ -83,31 +100,43 @@ describe("lint status", () => {
   it("goes to the slide of a problem pressed in the list", () => {
     useApp.setState({ lint: issues, selected: "outro" });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
+    open();
     fireEvent.click(screen.getByRole("button", { name: /never closed/ }));
     expect(useApp.getState().selected).toBe("intro");
     // One that is on no slide is only said.
     expect(screen.queryByRole("button", { name: /Needs a title/ })).toBeNull();
   });
 
-  it("fills the chat composer with fix instructions from the list, and closes it", () => {
+  it("opens the line of a problem in the deck's code, on its slide", () => {
+    useApp.setState({ lint: issues, selected: "outro", sidebarTab: "chat" });
+    render(<LintStatus />);
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Show line 12 in the code" }));
+    expect(useApp.getState()).toMatchObject({ selected: "intro", sidebarTab: "code", codeReveal: 12 });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("fills the chat composer with fix instructions from the list, marked as asking the agent, and closes it", () => {
     useApp.setState({ lint: issues, composerFill: null, running: false });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Ask the agent to fix" }));
+    open();
+    const ask = screen.getByRole("button", { name: "Fix the problems…" });
+    expect(ask.title).toMatch(/· asks the agent$/);
+    fireEvent.click(ask);
     const fill = useApp.getState().composerFill!;
     expect(fill.text).toContain("[unclosed-tag] (slide `intro`)");
     expect(fill.text).toContain("lint_deck");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("checks again from the list", () => {
-    const refreshLint = vi.fn(async () => {});
+  it("checks again from the list, and says what it found", async () => {
+    const refreshLint = checking([issues[0]]);
     useApp.setState({ lint: issues, refreshLint });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    open();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Check again" })));
     expect(refreshLint).toHaveBeenCalledOnce();
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Checked again: 1 problem in the deck"]);
   });
 
   it("hands slide id style errors to the agent without editing the deck", () => {
@@ -121,9 +150,9 @@ describe("lint status", () => {
       running: false,
     });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: "Lint: 1 error" }));
+    fireEvent.click(screen.getByRole("button", { name: /^1 problem in the deck/ }));
     expect(screen.getByRole("dialog").textContent).toContain(message);
-    fireEvent.click(screen.getByRole("button", { name: "Ask the agent to fix" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix the problems…" }));
 
     const prompt = useApp.getState().composerFill!.text;
     expect(prompt).toContain(`- line 337 error [slide-id-style] (slide \`intro\`): ${message}`);
@@ -136,8 +165,8 @@ describe("lint status", () => {
   it("still lists the problems while the agent works, but cannot ask it then", () => {
     useApp.setState({ lint: issues, running: true });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    const ask = screen.getByRole("button", { name: "Ask the agent to fix" }) as HTMLButtonElement;
+    open();
+    const ask = screen.getByRole("button", { name: "Fix the problems…" }) as HTMLButtonElement;
     expect(ask.disabled).toBe(true);
     expect(ask.title).toContain("at work");
     useApp.setState({ running: false });

@@ -1,12 +1,14 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Check, FolderSearch, Loader2, MessageSquare, Plus, Save } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronDown, FolderSearch, Loader2, MessageSquare, Plus, Save, Sparkles } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { TemplateSummary } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { loadText, trySaveText } from "../lib/storage";
 import { cn, layoutLabel, templateSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
+import { Button } from "./Button";
+import { Popover } from "./Popover";
 import { SlideFrame } from "./SlideFrame";
 
 const LAST_TEMPLATE_KEY = "slopslide.layoutTemplate";
@@ -88,6 +90,8 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                 <button
                   type="button"
                   aria-label="Blank slide"
+                  // The first choice has the focus, so Enter adds a blank slide.
+                  data-autofocus
                   title="Add blank slide"
                   onClick={() => {
                     props.onBlank?.();
@@ -157,6 +161,58 @@ export function RequestStatus({ children }: { children: string }) {
 
 const STYLE_BUSY = "Wait for the agent to finish to restyle the deck";
 
+/**
+ * One style to pick, in a grid of them: its picture (`children`) over its name, with what marks
+ * it after the name (`badges`). `selected` rings the one that is in use or chosen; `requested`
+ * the one asked of the agent.
+ */
+function StyleTile(props: {
+  name: string;
+  label: string;
+  selected: boolean;
+  requested?: boolean;
+  disabledReason?: string;
+  badges?: ReactNode;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const disabled = props.disabledReason !== undefined;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={props.disabledReason}
+      aria-label={props.label}
+      aria-current={props.selected || undefined}
+      data-requested={props.requested || undefined}
+      onClick={props.onClick}
+      className="group flex w-full flex-col gap-1 text-left disabled:cursor-default disabled:opacity-40"
+    >
+      <div
+        className={cn(
+          "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-enabled:group-hover:ring-2 group-enabled:group-hover:ring-input",
+          props.selected && "ring-2 ring-primary group-enabled:group-hover:ring-primary",
+          props.requested && "ring-2 ring-primary/60 ring-offset-2 ring-offset-card",
+        )}
+      >
+        {props.children}
+      </div>
+      <span className="flex items-center gap-1 text-2xs">
+        <span className="truncate">{props.name}</span>
+        {props.badges}
+      </span>
+    </button>
+  );
+}
+
+/** What marks a template as the user's own, after its name. */
+const yours = <span className="rounded bg-muted px-1 text-muted-foreground">Yours</span>;
+
+/** The deck's own style first, then the others in their order. */
+function currentFirst(templates: TemplateSummary[], current: string | null): TemplateSummary[] {
+  return [...templates.filter((t) => t.id === current), ...templates.filter((t) => t.id !== current)];
+}
+
 function StylePanel(props: {
   templates: TemplateSummary[] | undefined;
   current: string | null;
@@ -190,36 +246,29 @@ function StylePanel(props: {
           <Loading />
         ) : (
           <ul className="grid grid-cols-3 gap-3">
-            {templates.map((t) => (
+            {currentFirst(templates, current).map((t) => (
               <li key={t.id}>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  title={disabled ? STYLE_BUSY : undefined}
-                  aria-label={`${t.title} style`}
-                  aria-current={t.id === current || undefined}
-                  data-requested={t.id === requested || undefined}
+                <StyleTile
+                  name={t.title}
+                  label={`${t.title} style`}
+                  selected={t.id === current}
+                  requested={t.id === requested}
+                  disabledReason={disabled ? STYLE_BUSY : undefined}
                   onClick={() => void pick(t.id)}
-                  className="group flex w-full flex-col gap-1 text-left disabled:cursor-default disabled:opacity-40"
+                  badges={
+                    <>
+                      {!t.builtin && yours}
+                      {t.id === current && (
+                        <span className="rounded bg-primary/10 px-1 font-medium text-primary">Current</span>
+                      )}
+                      {t.id === requested && (
+                        <span className="rounded bg-primary/10 px-1 font-medium text-primary">Requested</span>
+                      )}
+                    </>
+                  }
                 >
-                  <div
-                    className={cn(
-                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-enabled:group-hover:ring-2 group-enabled:group-hover:ring-input",
-                      t.id === current && "ring-2 ring-primary group-enabled:group-hover:ring-primary",
-                      t.id === requested && "ring-2 ring-primary/60 ring-offset-2 ring-offset-card",
-                    )}
-                  >
-                    {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} size={pixelsOf(t)} />}
-                  </div>
-                  <span className="flex items-center gap-1 text-2xs">
-                    <span className="truncate">{t.title}</span>
-                    {!t.builtin && <span className="rounded bg-muted px-1 text-muted-foreground">Yours</span>}
-                    {t.id === current && <Check className="size-3 text-primary" />}
-                    {t.id === requested && (
-                      <span className="rounded bg-primary/10 px-1 font-medium text-primary">Requested</span>
-                    )}
-                  </span>
-                </button>
+                  {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} size={pixelsOf(t)} />}
+                </StyleTile>
               </li>
             ))}
           </ul>
@@ -313,24 +362,94 @@ function SaveAsTemplate() {
   );
 }
 
-/** Style choice for a new deck. */
-export function TemplateSelect(props: { value: string | null; onChange: (template: string | null) => void }) {
+/** What the style choice says while no style is chosen: the agent picks one that suits the deck. */
+export const AGENT_STYLE = "Let the agent choose";
+
+/**
+ * The style of a new deck: a button showing the one chosen, which opens the styles as pictures
+ * to pick from. The first of them leaves the choice to the agent (`null`).
+ */
+export function StyleChoice(props: { value: string | null; onChange: (template: string | null) => void }) {
   const templates = useTemplates();
+  const [open, setOpen] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const chosen = templates?.find((t) => t.id === props.value) ?? null;
+
+  const pick = (template: string | null) => {
+    props.onChange(template);
+    setOpen(false);
+  };
+
   return (
-    <select
-      aria-label="Style"
-      value={props.value ?? ""}
-      onChange={(e) => props.onChange(e.target.value || null)}
-      className="h-10 rounded-lg border bg-card px-2 text-sm outline-none focus:border-input focus:ring-2 focus:ring-primary/20"
-    >
-      <option value="">Any style</option>
-      {(templates ?? []).map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.title}
-          {t.builtin ? "" : " (yours)"}
-        </option>
-      ))}
-    </select>
+    <>
+      <Button
+        ref={button}
+        size="3xl"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={`Style: ${chosen?.title ?? AGENT_STYLE}`}
+        onClick={() => setOpen((v) => !v)}
+        className="max-w-60 bg-card pl-1.5 pr-2.5 font-normal"
+      >
+        <span className="w-12 shrink-0 overflow-hidden rounded ring-1 ring-border">
+          {chosen?.slides[0] ? (
+            <TemplateSlide template={chosen.id} slide={chosen.slides[0]} size={pixelsOf(chosen)} />
+          ) : (
+            <AgentPick small />
+          )}
+        </span>
+        <span className="truncate">{chosen?.title ?? AGENT_STYLE}</span>
+        <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+      </Button>
+      {open && (
+        <Popover anchor={button} width={440} portal label="Style" onClose={() => setOpen(false)}>
+          <div className="min-h-0 overflow-y-auto p-3">
+            {templates === undefined ? (
+              <Loading />
+            ) : (
+              <ul className="grid grid-cols-3 gap-3">
+                <li>
+                  <StyleTile
+                    name={AGENT_STYLE}
+                    label={AGENT_STYLE}
+                    selected={chosen === null}
+                    onClick={() => pick(null)}
+                  >
+                    <AgentPick />
+                  </StyleTile>
+                </li>
+                {templates.map((t) => (
+                  <li key={t.id}>
+                    <StyleTile
+                      name={t.title}
+                      label={`${t.title} style`}
+                      selected={t.id === chosen?.id}
+                      onClick={() => pick(t.id)}
+                      badges={!t.builtin && yours}
+                    >
+                      {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} size={pixelsOf(t)} />}
+                    </StyleTile>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <p className="border-t px-3 py-2 text-2xs leading-relaxed text-muted-foreground">
+            A style sets the deck's fonts, colors and layouts. Left to the agent, it picks one that suits what the deck
+            is about.
+          </p>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/** The picture of leaving the style to the agent, in the place of a style's first slide. */
+function AgentPick({ small = false }: { small?: boolean }) {
+  return (
+    <span className="flex aspect-video w-full items-center justify-center bg-muted text-primary">
+      <Sparkles className={small ? "size-3.5" : "size-5"} />
+    </span>
   );
 }
 

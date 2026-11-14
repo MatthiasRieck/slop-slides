@@ -210,6 +210,54 @@ describe("SvgEditor", () => {
     expect(draft()).toBe(DRAWING);
   });
 
+  it("resizes an element with the handles around it, from the opposite corner, in its parent's units", async () => {
+    await open();
+    press(shown().querySelector("#box")!, 20, 20);
+    // Eight handles around its box, none for the drawing itself.
+    expect(document.querySelectorAll("[data-scale]")).toHaveLength(8);
+    const corner = document.querySelector('[data-scale="1 1"]')!;
+    press(corner, 20, 20);
+    // 2 screen pixels to the unit: 10 units further, twice its 10-unit size.
+    press(corner, 40, 40, "pointerMove");
+    press(corner, 40, 40, "pointerUp");
+    expect(draft()).toContain('transform="matrix(2 0 0 2 0 0)"');
+    // Shift keeps its proportions; Alt resizes it from its middle.
+    const side = document.querySelector('[data-scale="1 0"]')!;
+    fireEvent.pointerDown(side, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(side, { pointerId: 1, clientX: 30, clientY: 20, shiftKey: true });
+    fireEvent.pointerUp(side, { pointerId: 1, clientX: 30, clientY: 20 });
+    expect(draft()).toContain('transform="matrix(3 0 0 3 0 -2.5)"');
+    // A drag, one undo step.
+    act(() => useSvgEditor.getState().undo());
+    expect(draft()).toContain('transform="matrix(2 0 0 2 0 0)"');
+    press(shown().querySelector("svg")!, 0, 0);
+    expect(document.querySelectorAll("[data-scale]")).toHaveLength(0);
+  });
+
+  it("zooms with ⌘+, ⌘- and ⌘0, as its buttons say", async () => {
+    await open();
+    const canvas = screen.getByTestId("svg-canvas");
+    const level = () => screen.getByText(/^\d+%$/).textContent;
+    const fit = level();
+    fireEvent.keyDown(canvas, { key: "=", metaKey: true, ctrlKey: true });
+    expect(level()).not.toBe(fit);
+    fireEvent.keyDown(canvas, { key: "-", metaKey: true, ctrlKey: true });
+    expect(level()).toBe(fit);
+    fireEvent.keyDown(canvas, { key: "-", metaKey: true, ctrlKey: true });
+    fireEvent.keyDown(canvas, { key: "0", metaKey: true, ctrlKey: true });
+    expect(level()).toBe(fit);
+    expect(screen.getByRole("button", { name: "Zoom in" }).title).toMatch(/Zoom in \(.+\)/);
+  });
+
+  it("keeps Apply to slide whole in a narrow sidebar: Discard and the keys show only where there is room", async () => {
+    await open();
+    const apply = screen.getByRole("button", { name: /Apply to slide/ });
+    expect(apply.className).toContain("shrink-0");
+    expect(apply.className).toContain("whitespace-nowrap");
+    const discard = screen.getByRole("button", { name: "Discard" });
+    expect(discard.querySelector("span")!.className).toContain("hidden @md:inline");
+  });
+
   it("drags a shape's points, adds points between them and takes them out", async () => {
     await open();
     press(shown().querySelector("path")!, 10, 0);

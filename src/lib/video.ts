@@ -15,6 +15,53 @@ export interface VideoOptions {
   pauseAfter: number;
 }
 
+/** What the video is of and how it comes out, beyond its timing (src-tauri/src/video/mod.rs, `Output`). */
+export interface VideoOutput {
+  slides?: string[];
+  includeHidden: boolean;
+  /** How tall, in pixels (one of VIDEO_HEIGHTS in ./exportOptions.ts); the slides' own size when null. */
+  height: number | null;
+  /** Captions of the narration written beside the video, as SubRip or WebVTT. */
+  captions: "srt" | "vtt" | null;
+}
+
+/** The largest video the encoder writes: 4K. */
+const MAX_VIDEO: [number, number] = [3840, 2160];
+
+/**
+ * The video's size for slides `width` × `height`, as the backend makes it: theirs, or as tall as
+ * `tall` in the same shape, within 4K, in even pixels.
+ */
+export function videoSize(width: number, height: number, tall: number | null): [number, number] {
+  const [w, h] = [Math.max(1, width), Math.max(1, height)];
+  const asked = tall === null ? 1 : Math.max(2, tall) / h;
+  const scale = Math.min(MAX_VIDEO[0] / w, MAX_VIDEO[1] / h, asked);
+  const even = (v: number) => Math.max(2, Math.round((v * scale) / 2) * 2);
+  return [even(w), even(h)];
+}
+
+/** What the video file is, and where it plays: AV1 is royalty-free but not yet everywhere. */
+export const CODEC_NOTE =
+  "MP4 with AV1 video and Opus audio. Plays in current browsers, VLC and up-to-date Windows and macOS; older QuickTime, Keynote and PowerPoint may not open it.";
+
+/**
+ * About how long a video export still takes: its phase's pace so far (`elapsedMs` since the phase
+ * began) carried to its end. Null until there is enough to go on.
+ */
+export function videoTimeLeft(progress: VideoProgress, elapsedMs: number): number | null {
+  if (progress.phase !== "video" || progress.frame < 1 || progress.frames <= progress.frame || elapsedMs < 2000) {
+    return null;
+  }
+  return ((progress.frames - progress.frame) * elapsedMs) / progress.frame / 1000;
+}
+
+/** "about 2 min left", "less than a minute left". */
+export function timeLeftText(seconds: number): string {
+  if (seconds < 60) return "less than a minute left";
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `about ${minutes} min left` : `about ${Math.round(minutes / 6) / 10} h left`;
+}
+
 /** Payload of `video-export-progress` events. */
 export interface VideoProgress {
   /** Speaking narration first (`frame` counts slides), then recording frames. */

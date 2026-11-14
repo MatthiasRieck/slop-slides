@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { APPEARANCE_KEY, applyAppearance, followAppearance, loadAppearance, setAppearance, showsDark } from "./theme";
+import {
+  APPEARANCE_KEY,
+  applyAppearance,
+  followAppearance,
+  loadAppearance,
+  loadTextSize,
+  setAppearance,
+  setTextSize,
+  showsDark,
+  TEXT_SIZE_KEY,
+} from "./theme";
 
 /** The system's appearance, as `matchMedia` reports it, and what listens for it changing. */
 let systemIsDark = false;
@@ -119,5 +129,35 @@ describe("followAppearance", () => {
     localStorage.setItem(APPEARANCE_KEY, "dark");
     window.dispatchEvent(new StorageEvent("storage", { key: APPEARANCE_KEY }));
     expect(dark()).toBe(false);
+  });
+});
+
+describe("the interface's text size", () => {
+  const fontSize = () => document.documentElement.style.fontSize;
+  afterEach(() => {
+    document.documentElement.style.fontSize = "";
+  });
+
+  it("is the default until chosen, and scales the document's font size when chosen", () => {
+    expect(loadTextSize()).toBe("default");
+    setTextSize("large");
+    expect(fontSize()).toBe("112.5%");
+    expect(localStorage.getItem(TEXT_SIZE_KEY)).toBe("large");
+    expect(loadTextSize()).toBe("large");
+    setTextSize("small");
+    expect(fontSize()).toBe("93.75%");
+    setTextSize("default");
+    expect(fontSize()).toBe("");
+    expect(localStorage.getItem(TEXT_SIZE_KEY)).toBeNull();
+    localStorage.setItem(TEXT_SIZE_KEY, "huge");
+    expect(loadTextSize()).toBe("default");
+  });
+
+  it("follows a change made in another window", () => {
+    const stop = followAppearance();
+    localStorage.setItem(TEXT_SIZE_KEY, "large");
+    window.dispatchEvent(new StorageEvent("storage", { key: TEXT_SIZE_KEY }));
+    expect(fontSize()).toBe("112.5%");
+    stop();
   });
 });

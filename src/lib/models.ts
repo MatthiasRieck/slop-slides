@@ -55,6 +55,58 @@ export function effortLabel(effort: string): string {
   return EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
+/** Efforts in the few letters the composer's footer has room for at the sidebar's normal width. */
+const SHORT_EFFORT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Min",
+  low: "Low",
+  medium: "Med",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+};
+
+/** `effort` in a word of five letters at most, for where there is little room. */
+export function shortEffortLabel(effort: string): string {
+  return SHORT_EFFORT_LABELS[effort] ?? effortLabel(effort).slice(0, 5);
+}
+
+/** What each effort trades, in a line for someone who makes slides. */
+const EFFORT_HINTS: Record<string, string> = {
+  none: "Answers at once, without thinking it over",
+  minimal: "Fastest, for one-word fixes",
+  low: "Fast, for small edits",
+  medium: "Balanced, for most requests",
+  high: "Slower, thinks longer, for whole-deck work",
+  xhigh: "Much slower, for the hardest requests",
+  max: "Slowest, thinks as long as it can",
+};
+
+/** What choosing `effort` means for the answer; empty for an effort this does not know. */
+export function effortHint(effort: string): string {
+  return EFFORT_HINTS[effort] ?? "";
+}
+
+const CONTEXT_WINDOW_HINTS: Record<string, string> = {
+  "200k": "Enough for most chats",
+  "1m": "Holds very long chats, can cost more",
+};
+
+/** What choosing the context window `contextWindow` means; empty for one this does not know. */
+export function contextWindowHint(contextWindow: string): string {
+  return CONTEXT_WINDOW_HINTS[contextWindow] ?? "";
+}
+
+/**
+ * A model's name without its provider's, for beside the provider's icon, which says it already:
+ * "Claude Opus 5.5" of Claude is "Opus 5.5". A name that is nothing else stays whole.
+ */
+export function shortModelLabel(provider: Provider, label: string): string {
+  const prefix = `${PROVIDERS[provider].label} `;
+  const short = label.startsWith(prefix) ? label.slice(prefix.length).trim() : label;
+  return short || label;
+}
+
 const CONTEXT_WINDOW_LABELS: Record<string, string> = { "200k": "200k", "1m": "1M" };
 
 export function contextWindowLabel(contextWindow: string): string {

@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APPEARANCE_KEY, APPEARANCES, showsDark } from "../lib/theme";
+import { APPEARANCE_KEY, APPEARANCES, showsDark, TEXT_SIZE_KEY, TEXT_SIZE_SCALE, TEXT_SIZES } from "../lib/theme";
 
 const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
 const html = read("index.html");
@@ -28,11 +28,11 @@ describe("the window before the app's code has loaded", () => {
     const light = blockOf(css, ":root").match(/--background: ([^;]+);/)?.[1];
     expect(light).toBe("oklch(0.992 0 0)");
     expect(blockOf(inlineStyle, "html")).toContain(`background: ${light};`);
-    // Dark, the token is Tailwind's neutral-950.
-    expect(blockOf(css, ".dark")).toContain("--background: var(--color-neutral-950);");
-    const neutral950 = read("node_modules/tailwindcss/theme.css").match(/--color-neutral-950: oklch\(([^)]+)\)/)?.[1];
-    expect(neutral950).toBe("14.5% 0 none");
-    expect(blockOf(inlineStyle, "html.dark")).toContain("background: oklch(0.145 0 0);");
+    // Dark, the token is Tailwind's neutral-900.
+    expect(blockOf(css, ".dark")).toContain("--background: var(--color-neutral-900);");
+    const neutral900 = read("node_modules/tailwindcss/theme.css").match(/--color-neutral-900: oklch\(([^)]+)\)/)?.[1];
+    expect(neutral900).toBe("20.5% 0 none");
+    expect(blockOf(inlineStyle, "html.dark")).toContain("background: oklch(0.205 0 0);");
     expect(blockOf(inlineStyle, "html.dark")).toContain("color-scheme: dark;");
   });
 
@@ -62,6 +62,20 @@ describe("the window before the app's code has loaded", () => {
     globalThis.eval(inlineScript);
     expect(document.documentElement.classList.contains("dark")).toBe(true);
   });
+
+  it.each([null, ...TEXT_SIZES, "bogus"])(
+    "sets the stored text size %s before the app's code loads, as the app then does",
+    (stored) => {
+      vi.stubGlobal("matchMedia", () => ({ matches: false }));
+      if (stored) localStorage.setItem(TEXT_SIZE_KEY, stored);
+      expect(inlineScript).toContain(`"${TEXT_SIZE_KEY}"`);
+      // biome-ignore lint/security/noGlobalEval: runs index.html's own inline script, as the window does
+      globalThis.eval(inlineScript);
+      const size = TEXT_SIZES.find((s) => s === stored) ?? "default";
+      expect(document.documentElement.style.fontSize).toBe(TEXT_SIZE_SCALE[size]);
+      document.documentElement.style.fontSize = "";
+    },
+  );
 
   it("gives the window itself the light background, and lets inline code run", () => {
     const conf = JSON.parse(read("src-tauri/tauri.conf.json"));

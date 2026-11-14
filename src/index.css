@@ -21,13 +21,16 @@
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
   --muted: var(--color-neutral-50);
-  --muted-foreground: var(--color-neutral-500);
-  --accent: var(--color-neutral-100);
+  /* Readable (4.5:1 and more) on every surface here, the canvas and the hover fill included. */
+  --muted-foreground: oklch(0.5 0 0);
+  /* The fill under the pointer and of the focused row of a menu. */
+  --accent: oklch(0.955 0 0);
   --accent-foreground: var(--color-neutral-900);
   --primary: oklch(0.488 0.217 264);
   --primary-foreground: var(--color-white);
   --border: var(--color-neutral-200);
-  --input: var(--color-neutral-300);
+  /* The edge of a field: darker than a hairline, so the field can be found. */
+  --input: var(--color-neutral-400);
   /* The outline of what has the keyboard's focus, and the edge of a field being typed in. */
   --ring: --alpha(var(--primary) / 70%);
   --sidebar: var(--color-neutral-50);
@@ -71,23 +74,34 @@
   /* What lifts a slide's thumbnail off the surface under it: a hairline edge and a soft shadow. */
   --thumbnail-edge: --alpha(var(--color-black) / 6%);
   --thumbnail-shade: --alpha(var(--color-black) / 14%);
+
+  /* What lifts what floats over the app (a popover, a dialog, a toast) off it: the same two. */
+  --lift-edge: --alpha(var(--color-black) / 5%);
+  --lift-shade: --alpha(var(--color-black) / 16%);
+  --scrollbar: --alpha(var(--color-black) / 22%);
 }
 
+/*
+ * Dark has depth too: the stage is the darkest, the app's chrome a step up, and what floats over
+ * it (cards, popovers, dialogs) another clear step, with edges that show.
+ */
 .dark {
   color-scheme: dark;
-  --background: var(--color-neutral-950);
+  --background: var(--color-neutral-900);
   --foreground: var(--color-neutral-100);
-  --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-  --muted: --alpha(var(--color-white) / 3%);
-  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
-  --accent: --alpha(var(--color-white) / 5%);
+  --card: color-mix(in srgb, var(--color-neutral-900) 92%, var(--color-white));
+  --muted: --alpha(var(--color-white) / 4%);
+  --muted-foreground: var(--color-neutral-400);
+  --accent: --alpha(var(--color-white) / 9%);
   --accent-foreground: var(--color-neutral-100);
-  --primary: oklch(0.571 0.21 264);
-  --border: --alpha(var(--color-white) / 7%);
-  --input: --alpha(var(--color-white) / 9%);
+  /* Lighter than in light, to read as text on the dark surfaces; what lies on it is dark. */
+  --primary: oklch(0.7 0.16 264);
+  --primary-foreground: var(--color-neutral-950);
+  --border: --alpha(var(--color-white) / 12%);
+  --input: --alpha(var(--color-white) / 22%);
   --ring: --alpha(var(--primary) / 80%);
-  --sidebar: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
-  --canvas: color-mix(in srgb, var(--color-neutral-950) 99%, var(--color-white));
+  --sidebar: color-mix(in srgb, var(--color-neutral-900) 97%, var(--color-white));
+  --canvas: var(--color-neutral-950);
 
   --success: var(--color-emerald-400);
   --success-foreground: var(--color-neutral-950);
@@ -106,6 +120,9 @@
   /* A shadow barely shows on a near-black surface, so the edge turns light and does the lifting. */
   --thumbnail-edge: --alpha(var(--color-white) / 14%);
   --thumbnail-shade: --alpha(var(--color-black) / 70%);
+  --lift-edge: --alpha(var(--color-white) / 10%);
+  --lift-shade: --alpha(var(--color-black) / 65%);
+  --scrollbar: --alpha(var(--color-white) / 24%);
 }
 
 @theme {
@@ -151,6 +168,27 @@
   --radius-xl: calc(var(--radius) + 4px);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --shadow-composer: 0 12px 28px -18px var(--scrim);
+  /*
+   * The two shadows of what floats: `shadow-popover` under menus, popovers, toasts and tooltips,
+   * `shadow-dialog` under dialogs. Components use these, not Tailwind's shadow sizes.
+   */
+  --shadow-popover: 0 0 0 1px var(--lift-edge), 0 4px 8px -2px var(--lift-shade), 0 12px 28px -8px var(--lift-shade);
+  --shadow-dialog: 0 0 0 1px var(--lift-edge), 0 8px 16px -4px var(--lift-shade), 0 28px 64px -12px var(--lift-shade);
+  /*
+   * What lies over what, by name (`z-raised`, `z-popover`, …): components use these, never a
+   * number. From the bottom: `raised` over its neighbours (a handle, a badge), `sticky` over what
+   * scrolls under it (a header, a floating bar), `dropdown` for a panel hanging off a toolbar
+   * button, `cover` for what covers the workbench (the maximized sidebar), `overlay` for what
+   * opens over the whole window (dialogs, popovers, menus, the slide show; among themselves the
+   * one opened last is on top), `toast` over those, and `tooltip` over everything.
+   */
+  --z-index-raised: 10;
+  --z-index-sticky: 20;
+  --z-index-dropdown: 30;
+  --z-index-cover: 40;
+  --z-index-overlay: 50;
+  --z-index-toast: 70;
+  --z-index-tooltip: 80;
   --shadow-thumbnail:
     0 0 0 1px var(--thumbnail-edge), 0 1px 2px var(--thumbnail-shade), 0 4px 10px -3px var(--thumbnail-shade);
 }
@@ -203,7 +241,7 @@
     height: 6px;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--input);
+    background: var(--scrollbar);
     border-radius: 999px;
   }
   ::-webkit-scrollbar-track {
@@ -253,7 +291,7 @@
 /*
  * How what opens over the app comes in: a short fade with a small move from where it opens
  * (`enter-below` under its button, `enter-above` over it), a dialog's box growing a little
- * (`enter-pop`) on its fading scrim (`enter-fade`), a toast rising (`toast-enter`) and sinking
+ * (`enter-pop`) on its fading scrim (`enter-fade`, a tooltip's too), a toast rising (`toast-enter`) and sinking
  * as it goes (`toast-exit`). Only opacity and transform animate, which the compositor does
  * without layout or paint; an element's own `translate` (Tailwind's) is left alone.
  */

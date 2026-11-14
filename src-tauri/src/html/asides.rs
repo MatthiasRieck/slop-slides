@@ -22,6 +22,11 @@ pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
     aside_spans(slide, NARRATION_CLASS)
 }
 
+/// Every speaker notes element in `slide` (the markup of one slide), in document order.
+pub fn notes_spans(slide: &str) -> Vec<NarrationSpan> {
+    aside_spans(slide, NOTES_CLASS)
+}
+
 /// Every `<aside>` of `class` in `slide`, in document order.
 fn aside_spans(slide: &str, class: &str) -> Vec<NarrationSpan> {
     let limit = aside_limit(slide);

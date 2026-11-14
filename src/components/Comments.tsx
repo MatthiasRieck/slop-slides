@@ -1,4 +1,4 @@
-import { MessageSquare, Send, Trash2, X } from "lucide-react";
+import { Check, MessageSquare, RotateCw, Trash2, X } from "lucide-react";
 import { Fragment, type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -9,22 +9,53 @@ import {
   type CommentScope,
   type CommentSpot,
   commentTime,
+  type PlacedComment,
+  type SlideComment,
 } from "../lib/comments";
 import { toFraction } from "../lib/ink";
 import { formatKeys } from "../lib/keys";
 import { cn, plural } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
-import { commentsInScope, commentsToSend, deckComments, hasComments, heldComment, useApp } from "../store";
-import { Button } from "./Button";
+import {
+  commentGoing,
+  commentsInScope,
+  commentsToSend,
+  deckComments,
+  hasUnsentComments,
+  heldComment,
+  showSuccess,
+  unsentComments,
+  useApp,
+} from "../store";
+import { Button, ToolButton } from "./Button";
 import { Popover } from "./Popover";
+import { AgentMark } from "./stage/SlideLayoutTools";
 import { type OpenComment, type SlideComments, useSlideComments } from "./stage/useSlideComments";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 export { type SlideComments, useSlideComments };
 
 /**
+ * Takes the comment `id` off `slide` (deleting one not sent yet, resolving one that was) and
+ * says so, with the way to put it back.
+ */
+function takeCommentOff(slide: string, id: string) {
+  const app = useApp.getState();
+  const found = app.comments[slide]?.find((c) => c.id === id);
+  if (!found) return;
+  // Just the comment as the deck file keeps it, without where a list placed it.
+  const { slide: _, slideNumber: __, ...comment } = found as SlideComment & Partial<PlacedComment>;
+  app.removeComment(slide, id);
+  showSuccess(comment.sent ? "Comment resolved" : "Comment deleted", {
+    label: "Undo",
+    run: () => useApp.getState().addComment(slide, comment),
+  });
+}
+
+/**
  * The numbered pins over the slide; they take the clicks unless `inking` needs the slide. A pin
  * pointed at (or focused) shows what its comment says next to it, and all do when `texts` is on.
+ * The pin of a comment that went to the agent is hollow, until the comment is resolved.
  */
 export function CommentPins(props: {
   pins: SlideComments;
@@ -62,8 +93,9 @@ export function CommentPins(props: {
             <Pin
               ref={open?.id === comment.id ? anchor : undefined}
               mark={String(i + 1)}
-              label={`Comment ${i + 1}`}
+              label={comment.sent ? `Comment ${i + 1}, sent to the agent` : `Comment ${i + 1}`}
               title={spot.found ? undefined : "The element it was on is gone."}
+              sent={!!comment.sent}
               spot={spot}
               inking={inking}
               onClick={() => pins.openComment(comment)}
@@ -186,6 +218,8 @@ function Pin(props: {
   title?: string;
   spot: CommentSpot;
   inking: boolean;
+  /** The comment went to the agent: its pin is hollow. */
+  sent?: boolean;
   onClick?: () => void;
   /** The pointer or the focus came to the pin, or left it. */
   onPointed?: (on: boolean) => void;
@@ -205,7 +239,10 @@ function Pin(props: {
       onBlur={() => props.onPointed?.(false)}
       style={{ left: `${spot.x * 100}%`, top: `${spot.y * 100}%` }}
       className={cn(
-        "absolute z-10 flex size-6 -translate-y-full items-center justify-center rounded-full rounded-bl-none border-2 border-background bg-primary text-2xs font-semibold text-primary-foreground shadow-md",
+        "absolute z-10 flex size-6 -translate-y-full items-center justify-center rounded-full rounded-bl-none border-2 text-2xs font-semibold shadow-md",
+        props.sent
+          ? "border-primary bg-background text-primary"
+          : "border-background bg-primary text-primary-foreground",
         props.inking ? "pointer-events-none" : "pointer-events-auto",
         !spot.found && "opacity-60",
       )}
@@ -305,6 +342,12 @@ export function CommentEditor(props: {
             At {commentTime(comment.time)} after the slide shows
           </p>
         )}
+        {comment.sent && (
+          <p data-testid="comment-sent" className="flex items-center gap-1 px-1 text-2xs text-muted-foreground">
+            <Check className="size-3" />
+            Sent to the agent. Change what it says to send it again.
+          </p>
+        )}
         <textarea
           ref={inputRef}
           value={shown}
@@ -327,32 +370,26 @@ export function CommentEditor(props: {
         />
         <div className="flex items-center gap-1 text-xs">
           {comment.id && (
-            <button
-              type="button"
-              aria-label="Delete comment"
-              title="Delete comment"
+            <ToolButton
+              variant="panel"
+              destructive={!comment.sent}
+              label={comment.sent ? "Resolve: take this comment off the slide" : "Delete comment"}
               onClick={() => {
-                if (comment.id) useApp.getState().removeComment(comment.slide, comment.id);
+                if (comment.id) takeCommentOff(comment.slide, comment.id);
                 cancel();
               }}
-              className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive [&_svg]:size-3.5"
             >
-              <Trash2 />
-            </button>
+              {comment.sent ? <Check className="size-3.5" /> : <Trash2 className="size-3.5" />}
+            </ToolButton>
           )}
           <VoiceInput ref={voice} label="Dictate the comment" portal={false} {...dictationHandlers} />
           <div className="flex-1" />
-          <button type="button" onClick={cancel} className="rounded-md px-2 py-1 hover:bg-accent">
+          <Button variant="ghost" onClick={cancel}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!shown.trim() && !dictation}
-            className="rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-          >
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={!shown.trim() && !dictation}>
             Save
-          </button>
+          </Button>
         </div>
       </div>
     </Popover>
@@ -368,11 +405,12 @@ const SCOPES: { id: CommentScope; label: string; title: string }[] = [
 
 /**
  * The comments going out with the next message, in the composer: how many, whether they are this
- * slide's or the whole deck's, and a list to pick from. Hidden while the deck has none on show.
+ * slide's or the whole deck's, and a list to pick from. Hidden while the deck has none on show
+ * that is still to send.
  */
 export function ComposerComments() {
   const scope = useApp((s) => s.commentScope);
-  const visible = useApp((s) => s.reviewVisible && hasComments(s));
+  const visible = useApp((s) => s.reviewVisible && hasUnsentComments(s));
   const count = useApp(commentsToSend);
   const [listOpen, setListOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
@@ -418,7 +456,7 @@ export function ComposerComments() {
         <button
           type="button"
           aria-label="Don't send comments"
-          title="Don't send these comments; they stay on the slides until they are sent"
+          title="Don't send these comments now; they stay on the slides, to send later"
           onClick={() => useApp.getState().holdComments(commentsInScope(useApp.getState()))}
           className="hover:text-foreground"
         >
@@ -469,72 +507,182 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
 }
 
 /**
- * Every comment of the deck, grouped by slide, in a panel next to `anchor`: the overview that the
- * pins, one slide at a time, do not give. A comment pressed goes to its slide and opens there;
- * "Send to agent" has the next message take them all along and goes to the chat to write it.
+ * Every comment of the deck, grouped by slide, in a panel next to `anchor`: the one place to
+ * manage them, which the pins, one slide at a time, are not. A comment pressed goes to its slide
+ * and opens there. One still to send has a box for whether the next message takes it along, and
+ * can be deleted; one that was sent says so, and is resolved (taken off, the agent having dealt
+ * with it) or made one to send again. "Send to the agent" goes to the chat to write the message
+ * the ticked ones go out with.
  */
 export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLElement | null>; onClose: () => void }) {
   const comments = useApp(deckComments);
+  const unsent = useApp(unsentComments);
+  const going = useApp(
+    useShallow((s) =>
+      unsentComments(s)
+        .filter((c) => commentGoing(s, c))
+        .map((c) => c.id),
+    ),
+  );
   const selected = useApp((s) => s.selected);
   const numbers = [...new Set(comments.map((c) => c.slideNumber))];
+  const sent = comments.length - unsent.length;
+  const app = useApp.getState;
   const send = () => {
-    const app = useApp.getState();
-    app.takeAllComments();
-    app.focusComposer();
+    app().focusComposer();
     onClose();
   };
+  const all = unsent.length > 0 && going.length === unsent.length;
   return (
-    <Popover anchor={anchor} placement="below" width={340} label="Comments" onClose={onClose}>
-      <p className="shrink-0 border-b px-3 py-2 text-xs font-medium">
-        {comments.length === 0
-          ? "No comments yet"
-          : `${plural(comments.length, "comment")} on ${plural(numbers.length, "slide")}`}
-      </p>
+    <Popover anchor={anchor} placement="below" width={360} label="Comments" onClose={onClose}>
+      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2 text-xs">
+        <p className="min-w-0 flex-1 truncate font-medium">
+          {comments.length === 0
+            ? "No comments yet"
+            : `${plural(comments.length, "comment")} on ${plural(numbers.length, "slide")}`}
+        </p>
+        {unsent.length > 1 && (
+          <Button
+            variant="ghost"
+            size="xs"
+            title={
+              all ? "Leave every comment out of the next message" : "Take every comment along with the next message"
+            }
+            onClick={() => (all ? app().holdComments(unsent) : app().takeAllComments())}
+          >
+            {all ? "Select none" : "Select all"}
+          </Button>
+        )}
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-1 text-xs">
         {comments.length === 0 && (
           <p className="p-2 leading-relaxed text-muted-foreground">
-            Comment on an element or an area of a slide with the tools beside this button. Comments go to the agent with
-            your next message.
+            Comment on an element or an area of a slide with the tools beside this button, or from a right-click on the
+            slide in Edit. Comments go to the agent with your next message and stay on their slides, marked as sent,
+            until you resolve them.
           </p>
         )}
         {numbers.map((number) => (
-          // biome-ignore lint/a11y/useSemanticElements: a labelled group of rows, not a form's fieldset
-          <div key={number} role="group" aria-label={`Slide ${number}`}>
-            <p className="px-2 pb-0.5 pt-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          <ul key={number} aria-label={`Slide ${number}`}>
+            <li className="px-2 pb-0.5 pt-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
               Slide {number}
-            </p>
+            </li>
             {comments
               .filter((c) => c.slideNumber === number)
               .map((comment) => (
-                <button
+                <CommentRow
                   key={comment.id}
-                  type="button"
-                  aria-current={comment.slide === selected ? "true" : undefined}
-                  title="Go to this comment"
-                  onClick={() => {
-                    useApp.getState().showComment(comment.slide, comment.id);
+                  comment={comment}
+                  current={comment.slide === selected}
+                  going={going.includes(comment.id)}
+                  onShow={() => {
+                    app().showComment(comment.slide, comment.id);
                     onClose();
                   }}
-                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-                >
-                  <MessageSquare className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="line-clamp-3 min-w-0 whitespace-pre-wrap break-words">{comment.text}</span>
-                </button>
+                />
               ))}
-          </div>
+          </ul>
         ))}
       </div>
-      <div className="flex shrink-0 justify-end border-t p-2">
+      <div className="flex shrink-0 items-center gap-2 border-t p-2">
+        {sent > 0 && (
+          <Button
+            variant="ghost"
+            title="Takes every sent comment off its slide: the agent has dealt with them"
+            onClick={() => {
+              app().resolveSentComments();
+              showSuccess(`${plural(sent, "sent comment")} resolved`);
+            }}
+          >
+            <Check />
+            Resolve all sent
+          </Button>
+        )}
+        <div className="flex-1" />
         <Button
-          variant="primary"
-          disabled={comments.length === 0}
-          title="Takes every comment along with your next message, and goes to the chat to write it"
+          disabled={going.length === 0}
+          title={
+            going.length === 0
+              ? unsent.length === 0
+                ? "There is no comment left to send"
+                : "Tick the comments to send"
+              : "Goes to the chat: the ticked comments go out with the message you write there · asks the agent"
+          }
           onClick={send}
         >
-          <Send />
-          Send to agent
+          {going.length === 0 ? "Send to the agent…" : `Send ${going.length} to the agent…`}
+          <AgentMark />
         </Button>
       </div>
     </Popover>
+  );
+}
+
+/** One comment in the overview: whether it goes out or was sent, what it says, and what can be done with it. */
+function CommentRow(props: { comment: PlacedComment; current: boolean; going: boolean; onShow: () => void }) {
+  const { comment, going } = props;
+  const app = useApp.getState;
+  return (
+    <li className="flex items-start gap-1 rounded-md px-1 hover:bg-accent/60">
+      {comment.sent ? (
+        <span
+          title="Sent to the agent. It stays on the slide until you resolve it."
+          className="mt-1.5 flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 text-2xs font-medium text-muted-foreground"
+        >
+          <Check className="size-3" />
+          Sent
+        </span>
+      ) : (
+        <input
+          type="checkbox"
+          checked={going}
+          aria-label={`Send: ${comment.text}`}
+          title={going ? "Goes out with your next message" : "Stays out of your next message"}
+          onChange={() => app().setCommentGoing(comment, !going)}
+          className="mx-1 mt-2 shrink-0"
+        />
+      )}
+      <button
+        type="button"
+        aria-current={props.current ? "true" : undefined}
+        title="Go to this comment"
+        onClick={props.onShow}
+        className="min-w-0 flex-1 rounded-md px-1 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <span className={cn("line-clamp-3 whitespace-pre-wrap break-words", comment.sent && "text-muted-foreground")}>
+          {comment.text}
+        </span>
+      </button>
+      {comment.sent ? (
+        <>
+          <ToolButton
+            variant="panel"
+            label="Send again with the next message"
+            onClick={() => app().resendComment(comment.slide, comment.id)}
+            className="mt-0.5 shrink-0"
+          >
+            <RotateCw className="size-3.5" />
+          </ToolButton>
+          <ToolButton
+            variant="panel"
+            label="Resolve: take this comment off the slide"
+            onClick={() => takeCommentOff(comment.slide, comment.id)}
+            className="mt-0.5 shrink-0"
+          >
+            <Check className="size-3.5" />
+          </ToolButton>
+        </>
+      ) : (
+        <ToolButton
+          variant="panel"
+          destructive
+          label="Delete comment"
+          onClick={() => takeCommentOff(comment.slide, comment.id)}
+          className="mt-0.5 shrink-0"
+        >
+          <Trash2 className="size-3.5" />
+        </ToolButton>
+      )}
+    </li>
   );
 }

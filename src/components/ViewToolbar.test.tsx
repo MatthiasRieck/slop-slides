@@ -3,11 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { useFindShortcut } from "./FindReplace";
 import type { Annotations } from "./PresenterTools";
 import { ViewToolbar } from "./ViewToolbar";
 
-const SECTIONS = ["Mark up", "Review", "Animations", "Timeline", "Find"];
+const SECTIONS = ["Mark up", "Review", "Animations", "Slide", "Timeline"];
 const SECTION_WIDTH = 200;
 
 let resize: ResizeObserverCallback | null = null;
@@ -39,12 +38,6 @@ function toolbar(overrides: Partial<Parameters<typeof ViewToolbar>[0]> = {}) {
       {...overrides}
     />
   );
-}
-
-/** The ribbon with the stage's ⌘F around it, which is what brings its search up. */
-function WithFindKey(props: { children: React.ReactNode }) {
-  useFindShortcut();
-  return props.children;
 }
 
 /** Lays the ribbon out `width` pixels wide. */
@@ -93,9 +86,27 @@ describe("ViewToolbar ribbon", () => {
     expect(inGroup("Mark up", "Draw on the slide")).toBeTruthy();
     expect(inGroup("Mark up", "Color #3b82f6")).toBeTruthy();
     expect(inGroup("Review", "Comment on an area (rectangle)")).toBeTruthy();
-    expect(inGroup("Animations", /final state/)).toBeTruthy();
-    expect(inGroup("Find", "Replace…")).toBeTruthy();
     expect(inGroup("Review", "Comments (0)")).toBeTruthy();
+    // Find is the bar over the stage, the same in every mode: not a section here.
+    expect(screen.queryByRole("group", { name: "Find" })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("offers the requests to the agent about the slide's layout, marked as such", () => {
+    useApp.setState({ running: false });
+    render(toolbar());
+    const change = inGroup("Slide", "Change layout…");
+    const tidy = inGroup("Slide", "Tidy layout…");
+    for (const button of [change, tidy]) {
+      expect(button.title).toMatch(/· asks the agent$/);
+      expect(button.querySelector(".text-primary")).toBeTruthy();
+    }
+    fireEvent.click(change);
+    expect(screen.getByRole("dialog", { name: "Change layout" })).toBeTruthy();
+    act(() => useApp.setState({ running: true }));
+    expect(inGroup("Slide", "Tidy layout…").disabled).toBe(true);
+    expect(inGroup("Slide", "Tidy layout…").title).toContain("at work");
+    act(() => useApp.setState({ running: false }));
   });
 
   it("names the review toggle by what it shows, pressed while it does", () => {
@@ -112,22 +123,24 @@ describe("ViewToolbar ribbon", () => {
     act(() => useApp.setState({ sketches: {}, reviewVisible: true }));
   });
 
-  it("has one two-way choice for the animations, and plays them again on Replay", () => {
+  it("sets how slides show with a two-way choice, and replays the animations with a command", () => {
     useApp.setState({ finalState: false, replayRev: 0 });
     render(toolbar());
-    const choice = within(screen.getByRole("group", { name: "When a slide is shown" }));
-    const [play, final] = choice.getAllByRole("button") as [HTMLElement, HTMLElement];
-    expect([play.textContent, final.textContent]).toEqual(["Play", "Final"]);
-    expect([play.getAttribute("aria-pressed"), final.getAttribute("aria-pressed")]).toEqual(["true", "false"]);
+    const choice = within(screen.getByRole("radiogroup", { name: "How slides show here" }));
+    const animated = choice.getByRole("radio", { name: "Animated" }) as HTMLInputElement;
+    const final = choice.getByRole("radio", { name: "Final state" }) as HTMLInputElement;
+    expect([animated.checked, final.checked]).toEqual([true, false]);
     fireEvent.click(final);
     expect(useApp.getState().finalState).toBe(true);
-    expect(final.getAttribute("aria-pressed")).toBe("true");
+    expect(final.checked).toBe(true);
     // Replaying plays them, so it leaves the final state too.
-    fireEvent.click(inGroup("Animations", "Play this slide's animations again, from their start"));
+    const replay = inGroup("Animations", "Replay this slide's animations from their start");
+    expect(replay.textContent).toBe("Replay animations");
+    fireEvent.click(replay);
     expect(useApp.getState()).toMatchObject({ finalState: false, replayRev: 1 });
   });
 
-  it("lists the deck's comments by slide, goes to one pressed, and hands them all to the agent", () => {
+  it("lists the deck's comments by slide, goes to one pressed, and sends the ticked ones from the chat", () => {
     const comment = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5 });
     useApp.setState({
       deck: deckFor(DECK_HTML),
@@ -136,7 +149,7 @@ describe("ViewToolbar ribbon", () => {
         intro: [comment("a", "Bigger title")],
         outro: [comment("b", "Thank them"), comment("c", "Add a link")],
       },
-      commentsHeld: { b: "Thank them" },
+      commentsHeld: {},
       commentScope: "slide",
       commentAsked: null,
       sidebarTab: "files",
@@ -145,17 +158,72 @@ describe("ViewToolbar ribbon", () => {
     fireEvent.click(inGroup("Review", "Comments (3)"));
     const list = within(screen.getByRole("dialog", { name: "Comments" }));
     expect(list.getByText("3 comments on 2 slides")).toBeTruthy();
-    expect(within(list.getByRole("group", { name: "Slide 1" })).getAllByRole("button")).toHaveLength(1);
-    expect(within(list.getByRole("group", { name: "Slide 3" })).getAllByRole("button")).toHaveLength(2);
+    expect(within(list.getByRole("list", { name: "Slide 3" })).getAllByRole("checkbox")).toHaveLength(2);
+    // What goes out: this slide's, as the composer says.
+    const box = (text: string) => list.getByRole("checkbox", { name: `Send: ${text}` }) as HTMLInputElement;
+    expect([box("Bigger title").checked, box("Thank them").checked, box("Add a link").checked]).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    fireEvent.click(box("Add a link"));
+    expect(useApp.getState().commentScope).toBe("deck");
+    expect([box("Bigger title").checked, box("Thank them").checked, box("Add a link").checked]).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    const send = list.getByRole("button", { name: /^Send 2 to the agent/ });
+    expect(send.title).toMatch(/· asks the agent$/);
+
     fireEvent.click(list.getByRole("button", { name: "Add a link" }));
     expect(useApp.getState()).toMatchObject({ selected: "outro", commentAsked: { slide: "outro", id: "c" } });
     expect(screen.queryByRole("dialog", { name: "Comments" })).toBeNull();
 
     fireEvent.click(inGroup("Review", "Comments (3)"));
-    fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
-    expect(useApp.getState()).toMatchObject({ commentScope: "deck", commentsHeld: {}, sidebarTab: "chat" });
+    fireEvent.click(screen.getByRole("button", { name: /^Send 2 to the agent/ }));
+    expect(useApp.getState().sidebarTab).toBe("chat");
     expect(screen.queryByRole("dialog", { name: "Comments" })).toBeNull();
-    act(() => useApp.setState({ comments: {}, commentAsked: null }));
+    act(() => useApp.setState({ comments: {}, commentAsked: null, commentScope: "slide" }));
+  });
+
+  it("deletes a comment from the list, with Undo", () => {
+    const comment = { id: "a", text: "Bigger title", x: 0.5, y: 0.5 };
+    useApp.setState({ comments: { intro: [comment] }, toasts: [] });
+    render(toolbar());
+    fireEvent.click(inGroup("Review", "Comments (1)"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete comment" }));
+    expect(useApp.getState().comments.intro).toEqual([]);
+    const toast = useApp.getState().toasts.at(-1)!;
+    expect(toast.text).toBe("Comment deleted");
+    act(() => toast.action!.run());
+    expect(useApp.getState().comments.intro).toEqual([comment]);
+    act(() => useApp.setState({ comments: {} }));
+  });
+
+  it("marks sent comments, resolves them one by one or all, and sends one again", () => {
+    const sent = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5, sent: true });
+    useApp.setState({
+      comments: {
+        intro: [sent("a", "Bigger title"), { id: "b", text: "Not yet", x: 0, y: 0 }],
+        outro: [sent("c", "Done")],
+      },
+      toasts: [],
+    });
+    render(toolbar());
+    fireEvent.click(inGroup("Review", "Comments (3)"));
+    const list = within(screen.getByRole("dialog", { name: "Comments" }));
+    expect(list.getAllByText("Sent")).toHaveLength(2);
+    expect(list.getAllByRole("checkbox")).toHaveLength(1);
+    fireEvent.click(list.getAllByRole("button", { name: "Send again with the next message" })[0]!);
+    expect(useApp.getState().comments.intro![0]).toEqual({ id: "a", text: "Bigger title", x: 0.5, y: 0.5 });
+    fireEvent.click(list.getByRole("button", { name: "Resolve: take this comment off the slide" }));
+    expect(useApp.getState().comments.outro).toEqual([]);
+    expect(useApp.getState().toasts.at(-1)!.text).toBe("Comment resolved");
+    act(() => useApp.setState({ comments: { outro: [sent("c", "Done")] } }));
+    fireEvent.click(list.getByRole("button", { name: "Resolve all sent" }));
+    expect(useApp.getState().comments.outro).toEqual([]);
+    act(() => useApp.setState({ comments: {} }));
   });
 
   it("says so when there is no comment yet, with nothing to send", () => {
@@ -163,7 +231,7 @@ describe("ViewToolbar ribbon", () => {
     render(toolbar());
     fireEvent.click(inGroup("Review", "Comments (0)"));
     expect(screen.getByText("No comments yet")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /^Send to the agent/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows or folds the timeline away, leaving playing the deck to the timeline's own bar", () => {
@@ -217,14 +285,12 @@ describe("ViewToolbar ribbon", () => {
     render(toolbar());
     for (const name of SECTIONS) expect(collapsedButton(name)).toBeNull();
     widen(3 * SECTION_WIDTH);
-    expect(collapsedButton("Find")).toBeTruthy();
-    expect(collapsedButton("Animations")).toBeTruthy();
-    expect(collapsedButton("Review")).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
+    // Some sections give way to icons, the first ones keep their tools.
+    expect(SECTIONS.filter((name) => collapsedButton(name)).length).toBeGreaterThan(0);
+    expect(collapsedButton("Mark up")).toBeNull();
 
     widen(5000);
     for (const name of SECTIONS) expect(collapsedButton(name)).toBeNull();
-    expect(screen.getByRole("textbox", { name: "Search slides" })).toBeTruthy();
   });
 
   it("closes a section's flyout when its tool is picked, to get out of the way of the slide", () => {
@@ -236,44 +302,7 @@ describe("ViewToolbar ribbon", () => {
     expect(collapsedButton("Mark up")!.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(collapsedButton("Animations")!);
-    fireEvent.click(screen.getByRole("button", { name: /^Show the slide's final state/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Final state" }));
     expect(collapsedButton("Animations")!.getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("opens a collapsed Find section for ⌘F, in the app or in the slide, and focuses the search", () => {
-    render(<WithFindKey>{toolbar()}</WithFindKey>);
-    widen(100);
-    expect(collapsedButton("Find")!.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
-    expect(collapsedButton("Find")!.getAttribute("aria-expanded")).toBe("true");
-    const field = screen.getByRole("textbox", { name: "Search slides" });
-    expect(document.activeElement).toBe(field);
-
-    fireEvent.pointerDown(document.body);
-    expect(collapsedButton("Find")!.getAttribute("aria-expanded")).toBe("false");
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", key: "f", mod: true } }));
-    });
-    expect(collapsedButton("Find")!.getAttribute("aria-expanded")).toBe("true");
-  });
-
-  it("leaves the Replace panel where it places itself, against the window", async () => {
-    // Replacing is Edit mode's; the ribbon is View's, where the deck may be both for a moment.
-    useApp.setState({ editing: true });
-    render(<div>{toolbar()}</div>);
-    const rect = (left: number, right: number) => ({ left, right, top: 0, bottom: 0 }) as DOMRect;
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-      return this.matches("[role=dialog]") ? rect(400, 760) : rect(0, 500);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Replace…" }));
-    await act(async () => {});
-    expect(screen.getByRole("dialog", { name: "Replace" }).style.marginLeft).toBe("");
-  });
-
-  it("leaves the search field alone for ⌘F while its section is open in the ribbon", () => {
-    render(<WithFindKey>{toolbar()}</WithFindKey>);
-    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
-    expect(collapsedButton("Find")).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Search slides" }));
   });
 });

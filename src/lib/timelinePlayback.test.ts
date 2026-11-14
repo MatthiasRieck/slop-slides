@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vite
 
 import { playNarration } from "./narrationAudio";
 import type { Timeline } from "./timeline";
-import { playTimeline } from "./timelinePlayback";
+import { nextRate, PLAYBACK_RATES, playTimeline } from "./timelinePlayback";
 
 vi.mock("./narrationAudio", () => ({ playNarration: vi.fn() }));
 
@@ -51,6 +51,26 @@ describe("playTimeline", () => {
     expect(on.ended).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000);
     expect(on.ended).toHaveBeenCalledOnce();
+  });
+
+  it("plays faster at a rate: the slides, the voices and the time they are told", async () => {
+    const on = { ...events(), tick: vi.fn() };
+    playTimeline("deck", timeline, 0, on, 2);
+    await vi.advanceTimersByTimeAsync(500);
+    // A second in at twice the speed: the first narration is said, at that rate.
+    expect(say.mock.calls[0]?.[3]).toBe(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(on.slide.mock.calls).toEqual([[1]]);
+    expect(on.tick.mock.calls.at(-1)?.[0]).toBeCloseTo(2, 1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(on.ended).toHaveBeenCalledOnce();
+  });
+
+  it("goes up through the rates and round again", () => {
+    expect(PLAYBACK_RATES[0]).toBe(1);
+    expect(nextRate(1)).toBe(1.5);
+    expect(nextRate(1.5)).toBe(2);
+    expect(nextRate(2)).toBe(1);
   });
 
   it("picks up a clip already under way, from where it has got to", async () => {

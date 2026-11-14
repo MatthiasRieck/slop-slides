@@ -6,7 +6,8 @@
 //! is resolved through that chain here. The file is untrusted: text is escaped, links are limited
 //! to safe schemes, sizes are capped, and part names never reach the file system.
 
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ mod tables;
 mod text;
 
 use super::xml::{self, Node};
-use super::{CANVAS_LONG_SIDE, DEFAULT_SECTION, DEGREE, EMU_PER_POINT, WHOLE};
+use super::{Change, CANVAS_LONG_SIDE, DEFAULT_SECTION, DEGREE, EMU_PER_POINT, WHOLE};
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::html;
@@ -66,24 +67,44 @@ const SHELL_CSS: &str = r#"
 #[serde(rename_all = "camelCase")]
 pub struct Imported {
     pub deck: deck::Deck,
-    /// What could not come along, for the user, one short phrase per kind.
-    pub skipped: Vec<String>,
+    /// What could not come along as it was, for the user: one entry per kind, with the slides
+    /// it is about.
+    pub changes: Vec<Change>,
+    /// The fonts the presentation names, for the app to say which this computer does not have.
+    pub fonts: Vec<FontUse>,
 }
 
-/// Converts the PowerPoint file at `source` into `<root>/<slug>/deck.html` and opens it.
-pub fn import(source: &Path, root: &Path) -> Result<Imported> {
+/// A font the presentation is set in, and the slides that use it; none when it is the
+/// presentation's own, used wherever a slide names no other.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FontUse {
+    pub name: String,
+    pub slides: Vec<usize>,
+}
+
+/// How far an import has got: reading slide `slide` of `slides`, from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Progress {
+    pub slide: usize,
+    pub slides: usize,
+}
+
+/// Converts the PowerPoint file at `source` into `<root>/<slug>/deck.html` and opens it,
+/// telling `progress` which slide it is reading.
+pub fn import(source: &Path, root: &Path, progress: impl Fn(Progress)) -> Result<Imported> {
     let bytes = fs::read(source)?;
     let name = source
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let converted = convert(bytes, &name)?;
+    let converted = convert_with(bytes, &name, &progress)?;
     let dir = crate::files::unique_dir(root, &html::slugify(&converted.title));
     let written = write_deck(&dir, &converted);
     match written.and_then(|file| deck::open(&file, None, true)) {
         Ok(deck) => Ok(Imported {
             deck,
-            skipped: converted.skipped,
+            changes: converted.skipped,
+            fonts: converted.fonts,
         }),
         Err(error) => {
             let _ = fs::remove_dir_all(&dir);
@@ -108,7 +129,10 @@ pub(super) struct Converted {
     pub html: String,
     /// File name in `assets/`, and contents.
     pub assets: Vec<(String, Vec<u8>)>,
-    pub skipped: Vec<String>,
+    /// What could not come along as it was, with the slides it is about.
+    pub skipped: Vec<Change>,
+    /// The fonts the presentation names.
+    pub fonts: Vec<FontUse>,
 }
 
 /// The chain a slide inherits from, and everything gathered while converting.
@@ -118,7 +142,12 @@ struct Converter {
     assets: Vec<(String, Vec<u8>)>,
     /// Asset name of each media part already taken.
     media: HashMap<String, String>,
-    skipped: Vec<String>,
+    skipped: Vec<Change>,
+    /// The slide being converted, from 1; 0 before the first.
+    slide: usize,
+    /// The fonts named so far, with the slides naming them. Text is styled without changing
+    /// the converter, hence the cell.
+    fonts: RefCell<BTreeMap<String, BTreeSet<usize>>>,
     /// Canvas pixels per EMU.
     px: f64,
     default_text: Option<Node>,
@@ -266,10 +295,36 @@ impl Converter {
         round(points * EMU_PER_POINT * self.px, 2)
     }
 
+    /// Notes that `what` could not come along on the slide being converted.
     fn skip(&mut self, what: &str) {
-        if !self.skipped.iter().any(|s| s == what) {
-            self.skipped.push(what.to_string());
+        let at = match self.skipped.iter().position(|s| s.what == what) {
+            Some(at) => at,
+            None => {
+                self.skipped.push(Change {
+                    what: what.to_string(),
+                    slides: Vec::new(),
+                });
+                self.skipped.len() - 1
+            }
+        };
+        let slides = &mut self.skipped[at].slides;
+        if self.slide > 0 && slides.last() != Some(&self.slide) {
+            slides.push(self.slide);
         }
+    }
+
+    /// `font-family` for a font the slide being converted names (see [`font_family`]), which
+    /// is noted as used there.
+    fn font(&self, name: &str) -> String {
+        let name = name.trim();
+        if !name.is_empty() && !name.starts_with('+') {
+            let mut fonts = self.fonts.borrow_mut();
+            let slides = fonts.entry(name.to_string()).or_default();
+            if self.slide > 0 {
+                slides.insert(self.slide);
+            }
+        }
+        font_family(name)
     }
 
     /// Copies a media part into the deck; its file name in `assets/`, once per part.
@@ -599,8 +654,36 @@ fn section_starts(presentation: &Node) -> HashMap<String, String> {
         .collect()
 }
 
+/// Whether a slide has animations: its timing holds something that moves or shows an element.
+fn has_animations(slide: &Node) -> bool {
+    let Some(timing) = slide.child("timing") else {
+        return false;
+    };
+    [
+        "anim",
+        "animEffect",
+        "animMotion",
+        "animScale",
+        "animRot",
+        "animClr",
+        "set",
+    ]
+    .iter()
+    .any(|name| timing.find(name).is_some())
+}
+
 /// Reads the whole presentation and writes it as deck HTML. `fallback` titles a file with none.
+#[cfg(test)]
 pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
+    convert_with(bytes, fallback, &|_| {})
+}
+
+/// [`convert`], telling `progress` which slide it is reading.
+pub(super) fn convert_with(
+    bytes: Vec<u8>,
+    fallback: &str,
+    progress: &dyn Fn(Progress),
+) -> Result<Converted> {
     let mut package = Package::open(bytes)?;
     let not_powerpoint = || Error::msg("This file has no PowerPoint presentation in it.");
     let root_rels = package.rels("");
@@ -680,6 +763,8 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         assets: Vec::new(),
         media: HashMap::new(),
         skipped: Vec::new(),
+        slide: 0,
+        fonts: RefCell::new(BTreeMap::new()),
         px,
         gradients: 0,
         default_text: presentation.root.child("defaultTextStyle").cloned(),
@@ -695,6 +780,18 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
     let mut first_ink: Option<Color> = None;
     let mut first_bg: Option<Color> = None;
     for (index, ((sld_id, slide), id)) in slides.iter().zip(&ids).enumerate() {
+        converter.slide = index + 1;
+        progress(Progress {
+            slide: index + 1,
+            slides: slides.len(),
+        });
+        // A deck has its own entrances and transitions; PowerPoint's do not map onto them.
+        if has_animations(&slide.root) {
+            converter.skip("animations (each slide shows as it ends)");
+        }
+        if slide.root.find("transition").is_some() {
+            converter.skip("slide transitions");
+        }
         let layout_path = slide.rels.of_kind("slideLayout").map(str::to_string);
         let layout_path = load(&mut converter.package, layout_path, &mut parts);
         let master_path = layout_path
@@ -786,7 +883,13 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         body.push_str("    </section>\n");
     }
 
+    converter.slide = 0;
     let theme = first_theme.unwrap_or_else(|| Theme::parse(None));
+    // The presentation's own fonts are used wherever a slide names no other.
+    let (major, minor) = (
+        converter.font(&theme.major_font).replace("&quot;", "\""),
+        converter.font(&theme.minor_font).replace("&quot;", "\""),
+    );
     let black = Color {
         r: 0,
         g: 0,
@@ -812,14 +915,24 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         title = escape(&title),
         bg = first_bg.unwrap_or(white).css(),
         ink = first_ink.unwrap_or(black).css(),
-        major = font_family(&theme.major_font).replace("&quot;", "\""),
-        minor = font_family(&theme.minor_font).replace("&quot;", "\""),
+        major = major,
+        minor = minor,
         css = SHELL_CSS,
     );
+    let fonts = converter
+        .fonts
+        .into_inner()
+        .into_iter()
+        .map(|(name, slides)| FontUse {
+            name,
+            slides: slides.into_iter().collect(),
+        })
+        .collect();
     Ok(Converted {
         title,
         html,
         assets: converter.assets,
         skipped: converter.skipped,
+        fonts,
     })
 }

@@ -66,6 +66,18 @@ export function withRevertNotes(notes: { label: string }[], prompt: string): str
 export const rewindNote = (label: string) =>
   `[note]The user took the conversation back to before their message ${label}: your replies from there on are gone, and the changes you made to the files in those turns were undone. Disregard them, and read the files again before changing them.[/note]`;
 
+/**
+ * What the agent is told when the user changed their message `label` and sent it again: the
+ * conversation goes back to before it. `undone` says whether the deck changes of its turn were
+ * taken back as well (they are when they were the deck's newest change).
+ */
+export const editNote = (label: string, undone: boolean) =>
+  `[note]The user edited their message ${label} and sent it again: your replies from there on are gone. ${
+    undone
+      ? "The changes you made to the files in that turn were undone."
+      : "The files are as they are now, with whatever was changed since."
+  } Disregard those replies, and read the files again before changing them.[/note]`;
+
 /** Where a message is sent from: the open file (and deck), and a copy of the deck's template. */
 export interface PromptContext {
   workspace: WorkspaceInfo | null;
@@ -90,6 +102,14 @@ export function buildPrompt(message: UserMessage, { workspace, deck, openedFile,
     }
   } else if (deck && deck.slides.length === 0) {
     context.push("The deck has no slides yet.");
+  }
+  if (deck && message.slides?.length) {
+    // A slide deleted since it was referred to is left out.
+    const named = message.slides.flatMap((id) => {
+      const index = deck.slides.findIndex((s) => s.id === id);
+      return index < 0 || id === message.slide ? [] : [`<section id="${id}"> (slide ${index + 1})`];
+    });
+    if (named.length > 0) context.push(`The user also refers to: ${named.join(", ")}`);
   }
   if (message.attachments.length > 0) {
     context.push(`Attached files: ${message.attachments.join(", ")}`);

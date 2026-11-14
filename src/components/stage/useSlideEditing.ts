@@ -46,9 +46,11 @@ interface MenuPoint {
  * saves the markup it posts, keeps the selection across a reload of the slide, and
  * handles undo and leaving edit mode. Images dropped on the stage go onto the slide. The
  * editor copies elements through the system clipboard, and ⌘V pastes from it: an element
- * copied there, images (saved as assets) or text from anywhere. The shortcuts on the selection
- * work with the focus in the app as they do in the slide (see `editShortcut`), and the look copied
- * from an element is kept here, so it can be pasted on another slide.
+ * copied there, images (saved as assets) or text from anywhere, and ⇧⌘V the clipboard's text alone,
+ * as a text box. The shortcuts on the selection work with the focus in the app as they do in the
+ * slide (see `editShortcut`), and so do the arrows (nudging it) and Delete, while something is
+ * selected and the focus is not in the slide list or a field. ⌘Z while typing undoes the typing
+ * first. The look copied from an element is kept here, so it can be pasted on another slide.
  *
  * What the editor reports about itself (its selection, where that is, the layers, …) goes to
  * `useEditorState`, for the controls that show it to read: nothing of it is state of the stage,
@@ -65,33 +67,48 @@ export function useSlideEditing(
 
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
-  /** Pastes from the clipboard: where pastes go, or with `at` (a point in the preview), centered there. */
-  const paste = useCallback(async (at?: MenuPoint) => {
-    const { deck, selected } = useApp.getState();
-    if (!deck || !editingSlide(useApp.getState()) || !selected) return;
-    await reportingErrors(async () => {
-      const pasted = await api.pasteFromClipboard(deck.id);
-      const loaded = frame.current;
-      const now = useApp.getState();
-      if (!editingSlide(now) || now.selected !== selected || !loaded?.contentWindow) return;
-      if (pasted.kind === "element") {
-        // The editor puts it where it was copied from, unless the menu says where.
-        loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html, ...at }, "*");
-      } else if (pasted.kind === "text") {
-        loaded.contentWindow.postMessage(
-          { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text, ...at },
-          "*",
-        );
-      } else if (pasted.kind === "slide") {
-        await useApp.getState().pasteSlides();
-      } else if (pasted.kind === "images") {
-        // The backend saved them as assets: files the app wrote, which no preview need load again for.
-        const images = await measureImages(deck.id, noteAssetsWritten(deck.id, pasted.images));
-        // The editor puts them where the pointer is, or in the middle of the view.
-        loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images, ...at }, "*");
-      }
-    });
-  }, []);
+  /**
+   * Pastes from the clipboard: where pastes go, or with `at` (a point in the preview), centered
+   * there. With `plain`, only its text, as a text box; without any text there, what it holds.
+   */
+  const paste = useCallback(
+    async (at?: MenuPoint, plain = false) => {
+      const { deck, selected } = useApp.getState();
+      if (!deck || !editingSlide(useApp.getState()) || !selected) return;
+      await reportingErrors(async () => {
+        if (plain) {
+          const text = await api.readClipboardText();
+          const now = useApp.getState();
+          if (!editingSlide(now) || now.selected !== selected) return;
+          if (text.trim()) {
+            post({ type: "slop:edit-paste-text", text, style: now.editStyles.text, ...at });
+            return;
+          }
+        }
+        const pasted = await api.pasteFromClipboard(deck.id);
+        const loaded = frame.current;
+        const now = useApp.getState();
+        if (!editingSlide(now) || now.selected !== selected || !loaded?.contentWindow) return;
+        if (pasted.kind === "element") {
+          // The editor puts it where it was copied from, unless the menu says where.
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html, ...at }, "*");
+        } else if (pasted.kind === "text") {
+          loaded.contentWindow.postMessage(
+            { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text, ...at },
+            "*",
+          );
+        } else if (pasted.kind === "slide") {
+          await useApp.getState().pasteSlides();
+        } else if (pasted.kind === "images") {
+          // The backend saved them as assets: files the app wrote, which no preview need load again for.
+          const images = await measureImages(deck.id, noteAssetsWritten(deck.id, pasted.images));
+          // The editor puts them where the pointer is, or in the middle of the view.
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images, ...at }, "*");
+        }
+      });
+    },
+    [post],
+  );
 
   useEffect(() => {
     /** Gives the selection the look copied last, if any. */
@@ -110,6 +127,11 @@ export function useSlideEditing(
     /** ⌘C / ⌘X / ⌘V while editing; `fromApp` when pressed outside the slide. True when handled. */
     const runClipboardKey = (key: string, shift: boolean, fromApp: boolean, rail = false) => {
       const lower = key.toLowerCase();
+      // ⇧⌘V pastes the clipboard's text alone, as it does into text being typed.
+      if (shift && lower === "v") {
+        void paste(undefined, true);
+        return true;
+      }
       if (shift) return false;
       // Pressed on the slide rail, these mean the slides picked there (see useSlideKeyboard).
       if (fromApp && rail && ["a", "c", "d", "x"].includes(lower)) return false;
@@ -164,7 +186,13 @@ export function useSlideEditing(
       }),
       "slop:edit-fonts": aboutSlide((data) => reportDeckLook({ fonts: parseFonts(data.fonts) })),
       "slop:edit-colors": aboutSlide((data) => reportDeckLook({ colors: parseDeckColors(data.colors) })),
-      "slop:edit-background": aboutSlide((data) => reportDeckLook({ background: parseHexColor(data.color) })),
+      "slop:edit-background": aboutSlide((data) =>
+        reportDeckLook({
+          background: parseHexColor(data.color),
+          backgroundOther: data.other === true,
+          backgroundOwn: data.own === true,
+        }),
+      ),
       "slop:edit-menu": aboutSlide((data) => {
         // The preview is scaled down to fit; the editor gives the point in its own pixels.
         const at = { x: Number(data.x), y: Number(data.y) };
@@ -174,6 +202,8 @@ export function useSlideEditing(
       // What the editor's shortcuts need the app for: its Link popover, and the look it keeps.
       "slop:edit-request": aboutSlide((data) => {
         if (data.what === "link") useApp.getState().askForEditPanel("link");
+        // A double-click on an image: "Replace image…", as the toolbar and the menu have it.
+        else if (data.what === "replace-image") useApp.getState().askForEditPanel("replace-image");
         else if (data.what === "paste-style") pasteStyle();
       }),
       // ⌘⇧V while typing: the clipboard's text, without its formatting.
@@ -183,7 +213,7 @@ export function useSlideEditing(
           .then((text) => {
             if (editingSlide(useApp.getState()) && text) post({ type: "slop:edit-insert-text", text });
           })
-          .catch((error) => showError(error));
+          .catch((error) => showError(error, { doing: "Could not paste the text" }));
       }),
       "slop:edit-open-svg": aboutSlide((data) => {
         const drawing = parseSvgOpen(data, useApp.getState().deck?.id);
@@ -193,11 +223,11 @@ export function useSlideEditing(
         if (typeof data.html !== "string") return;
         api
           .copyToClipboard(data.html, String(data.text ?? ""), useApp.getState().deck?.id ?? null)
-          .catch((error) => showError(error));
+          .catch((error) => showError(error, { doing: "Could not copy" }));
       }),
       "slop:key": (data, event) => {
         if (!editingSlide(useApp.getState())) return;
-        // Escape closes what is open in the app before it puts a tool away or leaves edit mode.
+        // Escape closes what is open in the app before it puts a tool away.
         if (data.key === "Escape" && dismissTopLayer(event)) return;
         if (data.mod)
           runHistoryKey(String(data.key), Boolean(data.shift)) ||
@@ -210,19 +240,40 @@ export function useSlideEditing(
       if (!editingSlide(useApp.getState()) || keepsKey(event)) return;
       if (event.metaKey || event.ctrlKey) {
         const shortcut = editShortcut(event);
+        const history = !event.altKey && /^[zy]$/i.test(event.key);
         if (shortcut) {
           event.preventDefault();
           runShortcut(shortcut);
         } else if (event.altKey) {
           // Nothing else here goes with Alt.
+        } else if (history && slideReport().selection?.editing) {
+          // While typing (the toolbar may have the focus), the typing's own steps come first.
+          event.preventDefault();
+          post({ type: "slop:edit-undo", redo: event.shiftKey || event.key.toLowerCase() === "y" });
         } else if (
           runHistoryKey(event.key, event.shiftKey) ||
           runClipboardKey(event.key, event.shiftKey, true, keyForRail(target))
         )
           event.preventDefault();
-      } else if (!event.altKey && runEditKey(event.key, true)) {
+      } else if (!event.altKey && runEditKey(event.key)) {
         event.preventDefault();
       }
+    };
+    // With the focus in the app (after a button, a popover, the Layers panel), the arrows and
+    // Delete still go to what is selected on the slide, as in the slide itself; before the slides'
+    // keys (see useSlideKeyboard), which have them otherwise. Not in the slide list, a field or a
+    // widget that moves through its parts with them, and Delete not while slides are picked there.
+    const onSelectionKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      const app = useApp.getState();
+      if (!editingSlide(app) || app.presenting || keepsKey(event) || keyForRail(event.target)) return;
+      const { selection } = slideReport();
+      if (!selection || selection.editing) return;
+      const deletes = event.key === "Delete" || event.key === "Backspace";
+      if (!event.key.startsWith("Arrow") && !(deletes && app.railSelected.length === 0)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      post({ type: "slop:edit-key", key: event.key, shift: event.shiftKey });
     };
     // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
     // text; the toolbar restyles the text being typed (see assets/editor/), and a press in the
@@ -233,10 +284,12 @@ export function useSlideEditing(
       post({ type: "slop:edit-finish" });
     };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onSelectionKey, true);
     window.addEventListener("pointerdown", onPress, true);
     return () => {
       offMessages();
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onSelectionKey, true);
       window.removeEventListener("pointerdown", onPress, true);
     };
   }, [messages, paste, post]);
@@ -283,11 +336,23 @@ export function useSlideEditing(
         else if (action === "paste") void paste(opened?.at);
         else if (action === "edit-text") post({ type: "slop:edit-edit-text" });
         else if (action === "select-all") post({ type: "slop:edit-select-all" });
-        else if (action === "unlock-all") post({ type: "slop:edit-unlock-all" });
+        else if (action === "select-parent") {
+          if (opened?.parent) post({ type: "slop:edit-select", path: opened.parent.path });
+        } else if (action.startsWith("select-under-")) {
+          const pick = opened?.under[Number(action.slice("select-under-".length))];
+          if (pick) post({ type: "slop:edit-select", path: pick.path });
+        } else if (action === "unlock-all") post({ type: "slop:edit-unlock-all" });
         else if (action === "copy-style") post({ type: "slop:edit-copy-style" });
         else if (action === "paste-style")
           post({ type: "slop:edit-paste-style", style: useApp.getState().copiedStyle });
         else if (action === "background") useApp.getState().askForEditPanel("background");
+        else if (action === "link" || action === "position" || action === "replace-image")
+          useApp.getState().askForEditPanel(action);
+        else if (action === "rotate-right" || action === "rotate-left")
+          post({ type: "slop:edit-rotate", step: action === "rotate-right" ? 1 : -1 });
+        else if (action.startsWith("align-")) post({ type: "slop:edit-align", to: action.slice("align-".length) });
+        else if (action === "distribute-h" || action === "distribute-v")
+          post({ type: "slop:edit-distribute", axis: action === "distribute-h" ? "h" : "v" });
         else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
         else if (action === "delete") post({ type: "slop:edit-delete" });
         else if (action === "svg") post({ type: "slop:edit-open-svg" });
@@ -327,7 +392,6 @@ export function useSlideEditing(
       askForInsert: (kind: AgentInsert) => afterResetView(() => void useApp.getState().askForInsert(kind)),
       /** Gives focus back to the slide, as after typing a value into the toolbar. */
       focus: () => frame.current?.focus(),
-      deleteSelection: () => post({ type: "slop:edit-delete" }),
       onFrameReady: (loaded: HTMLIFrameElement) => {
         frame.current = loaded;
         // A fresh editor starts with the select tool and nothing selected; it reports a restored

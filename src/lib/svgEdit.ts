@@ -517,20 +517,64 @@ export function addHandle(el: Element, id: string): string | null {
 
 // ---- Moving and styling elements
 
-const LEADING_TRANSLATE = /^\s*translate\(\s*([-+.\deE]+)(?:[\s,]+([-+.\deE]+))?\s*\)\s*/;
+/** A `translate(…)` or `matrix(…)` that a transform starts with: what moving and scaling an element change. */
+const LEADING_AFFINE = /^\s*(translate|matrix)\(([^()]*)\)\s*/;
+
+/** An affine transform as SVG's `matrix(a b c d e f)` takes it. */
+type Affine = [a: number, b: number, c: number, d: number, e: number, f: number];
+
+/**
+ * Puts `outer` in front of `el`'s transform, in its parent's user units: folded into the
+ * `translate` or `matrix` it starts with, written as a `translate` while it only moves it.
+ */
+function prependAffine(el: Element, outer: Affine): void {
+  if (isSvgRoot(el) && !el.parentElement?.closest("svg")) return;
+  const transform = el.getAttribute("transform") ?? "";
+  const lead = LEADING_AFFINE.exec(transform);
+  const n = lead
+    ? (lead[2] ?? "")
+        .split(/[\s,]+/)
+        .filter(Boolean)
+        .map((v) => num(v))
+    : [];
+  const inner: Affine =
+    lead?.[1] === "matrix" && n.length === 6
+      ? (n as Affine)
+      : lead?.[1] === "translate"
+        ? [1, 0, 0, 1, n[0] ?? 0, n[1] ?? 0]
+        : [1, 0, 0, 1, 0, 0];
+  const rest = lead && (lead[1] === "translate" || n.length === 6) ? transform.slice(lead[0].length) : transform.trim();
+  const [a, b, c, d, e, f] = outer;
+  const m: Affine = [
+    a * inner[0] + c * inner[1],
+    b * inner[0] + d * inner[1],
+    a * inner[2] + c * inner[3],
+    b * inner[2] + d * inner[3],
+    a * inner[4] + c * inner[5] + e,
+    b * inner[4] + d * inner[5] + f,
+  ];
+  const moves = fmt(m[0]) === "1" && fmt(m[1]) === "0" && fmt(m[2]) === "0" && fmt(m[3]) === "1";
+  const head = !moves
+    ? `matrix(${m.map(fmt).join(" ")})`
+    : fmt(m[4]) === "0" && fmt(m[5]) === "0"
+      ? ""
+      : `translate(${fmt(m[4])} ${fmt(m[5])})`;
+  const next = [head, rest].filter(Boolean).join(" ");
+  if (next) el.setAttribute("transform", next);
+  else el.removeAttribute("transform");
+}
 
 /** Moves `el` by (dx, dy) in its parent's user units, with a `translate` before its transform. */
 export function translateBy(el: Element, dx: number, dy: number): void {
-  if (isSvgRoot(el) && !el.parentElement?.closest("svg")) return;
-  const transform = el.getAttribute("transform") ?? "";
-  const m = LEADING_TRANSLATE.exec(transform);
-  const x = (m ? num(m[1]) : 0) + dx;
-  const y = (m ? num(m[2]) : 0) + dy;
-  const rest = m ? transform.slice(m[0].length) : transform.trim();
-  const lead = x === 0 && y === 0 ? "" : `translate(${fmt(x)} ${fmt(y)})`;
-  const next = [lead, rest].filter(Boolean).join(" ");
-  if (next) el.setAttribute("transform", next);
-  else el.removeAttribute("transform");
+  prependAffine(el, [1, 0, 0, 1, dx, dy]);
+}
+
+/**
+ * Scales `el` by (sx, sy) around the point (ox, oy) of its parent's user units, which stays where
+ * it is: a `matrix` before its transform (folded into the one it starts with).
+ */
+export function scaleBy(el: Element, sx: number, sy: number, ox: number, oy: number): void {
+  prependAffine(el, [sx, 0, 0, sy, ox - sx * ox, oy - sy * oy]);
 }
 
 /**

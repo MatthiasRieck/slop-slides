@@ -77,6 +77,33 @@ describe("undo and redo", () => {
     expect(lastError(useApp.getState())).toContain("still working");
   });
 
+  it("goes back to an earlier version as one change, which undo then takes back", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editReload: 0 });
+    const made = entry("Go back to an earlier version", "deck");
+    backend({ restore_version: () => ({ deck: changed("intro"), entry: made, status: status(made) }) });
+    expect(await useApp.getState().restoreVersion("v3")).toBe(true);
+    expect(calls("restore_version")).toEqual([{ id, version: "v3" }]);
+    expect(useApp.getState().deck!.slides.find((s) => s.id === "intro")!.hash).toBe("new");
+    expect(useApp.getState().history!.undo!.label).toBe("Go back to an earlier version");
+    // The slide on show changed under the editor.
+    expect(useApp.getState().editReload).toBe(1);
+  });
+
+  it("says why it could not go back to a version, and leaves the deck", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck, selected: "intro" });
+    backend({
+      restore_version: () => {
+        throw "That version of the deck is no longer available.";
+      },
+    });
+    expect(await useApp.getState().restoreVersion("gone")).toBe(false);
+    expect(useApp.getState().deck).toBe(deck);
+    expect(lastError(useApp.getState())).toContain("no longer available");
+  });
+
   it("takes back review marks with the deck", async () => {
     const useApp = await freshStore();
     const stroke = { tool: "pen" as const, color: "#ef4444", points: [[0.1, 0.2]] as [number, number][] };

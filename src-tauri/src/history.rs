@@ -159,6 +159,16 @@ fn dir(home: &Path, file: &Path) -> PathBuf {
     home.join(HISTORY_DIR).join(&key[..20])
 }
 
+/// The file at `from` is at `to` now (renamed, or in a renamed folder): its history goes with
+/// it, unless `to` has one already. `from` is given as it was resolved before the move.
+pub fn moved(home: &Path, from: &Path, to: &Path) -> Result<()> {
+    let (old, new) = (dir(home, from), dir(home, to));
+    if old.is_dir() && !new.exists() {
+        fs::rename(old, new)?;
+    }
+    Ok(())
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -309,16 +319,20 @@ impl History {
         self.record(&change)
     }
 
-    /// Writes version `index` over the deck and moves the cursor there.
-    fn go_to(&mut self, index: usize) -> Result<()> {
-        let hash = self.journal.entries[index].hash.clone();
-        let bytes = fs::read(self.blob(&hash))
+    /// Writes the version kept as `hash` over the deck.
+    fn write_version(&self, hash: &str) -> Result<()> {
+        let bytes = fs::read(self.blob(hash))
             .map_err(|_| Error::msg("That version of the deck is no longer available."))?;
         match std::str::from_utf8(&bytes) {
             // Through the deck, so the cache holds what was written.
-            Ok(text) => crate::deck::write_html(&self.file, text)?,
-            Err(_) => crate::files::atomic_write(&self.file, &bytes)?,
+            Ok(text) => crate::deck::write_html(&self.file, text),
+            Err(_) => crate::files::atomic_write(&self.file, &bytes),
         }
+    }
+
+    /// Writes version `index` over the deck and moves the cursor there.
+    fn go_to(&mut self, index: usize) -> Result<()> {
+        self.write_version(&self.journal.entries[index].hash)?;
         self.journal.cursor = index;
         Ok(())
     }
@@ -482,6 +496,72 @@ fn step(
         entry,
         status: history.status(),
     })
+}
+
+/// A deck's versions, for going back to one of them.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Versions {
+    /// Every version kept, the newest first, each with the change that made it.
+    pub entries: Vec<Entry>,
+    /// The id of the version the deck is at: the ones before it in `entries` were undone.
+    pub current: Option<String>,
+}
+
+/// The versions kept of `file`. With `look`, an outside change is noticed first (see [`status`]).
+pub fn versions(home: &Path, file: &Path, look: bool) -> Result<Versions> {
+    let _held = deck_lock::hold(file);
+    let mut history = History::load(home, file)?;
+    if look && history.checkpoint()? {
+        history.save()?;
+    }
+    Ok(Versions {
+        entries: history.journal.entries.iter().rev().cloned().collect(),
+        current: history.head().map(|e| e.id.clone()),
+    })
+}
+
+/// What the history calls going back to an earlier version.
+pub const RESTORE_LABEL: &str = "Go back to an earlier version";
+
+/// Puts the deck back as it was at version `id`, as a change of its own: one undo takes the deck
+/// to where it was before, and no version made since is lost to it (but the ones that were
+/// undone, as with any change). The step's entry is that change; None when the deck is at that
+/// version already.
+pub fn restore(home: &Path, file: &Path, id: &str) -> Result<Step> {
+    let _held = deck_lock::hold(file);
+    let mut history = History::load(home, file)?;
+    let noticed = history.checkpoint()?;
+    let found = history.journal.entries.iter().find(|e| e.id == id);
+    let Some(hash) = found.map(|entry| entry.hash.clone()) else {
+        if noticed {
+            history.save()?;
+        }
+        return Err(Error::msg(
+            "That version of the deck is no longer in its history.",
+        ));
+    };
+    let wrote = history.write_version(&hash);
+    let recorded = wrote.is_ok() && history.record(&Change::new(Source::Deck, RESTORE_LABEL))?;
+    if noticed || recorded {
+        history.save()?;
+    }
+    wrote?;
+    Ok(Step {
+        entry: recorded.then(|| history.head().cloned()).flatten(),
+        status: history.status(),
+    })
+}
+
+/// Where the history of `file` is kept. It is found by the file's resolved path, which only a
+/// file that is there has: ask before the file goes, to [`forget`] its history after.
+pub fn place(home: &Path, file: &Path) -> PathBuf {
+    dir(home, file)
+}
+
+/// Removes the history kept at `place` (see [`place`]), of a deck that is gone.
+pub fn forget(place: &Path) {
+    let _ = fs::remove_dir_all(place);
 }
 
 /// The deck as it was at version `id`.
@@ -757,6 +837,85 @@ mod tests {
         let first = deck.journal().entries[0].id.clone();
         assert_eq!(version(&deck.home(), &deck.file(), &first).unwrap(), "v1");
         assert!(version(&deck.home(), &deck.file(), "gone").is_err());
+    }
+
+    #[test]
+    fn lists_the_versions_newest_first_with_the_one_the_deck_is_at() {
+        let deck = Deck::new("v0");
+        deck.change(edit("One"), "v1");
+        deck.change(edit("Two"), "v2");
+        deck.undo();
+        let versions = versions(&deck.home(), &deck.file(), true).unwrap();
+        let labels: Vec<_> = versions.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Two", "One", "Opened"]);
+        assert_eq!(versions.current, Some(versions.entries[1].id.clone()));
+
+        deck.write("outside");
+        let seen = super::versions(&deck.home(), &deck.file(), false).unwrap();
+        assert_eq!(seen.entries.len(), 3, "not looked at");
+        let seen = super::versions(&deck.home(), &deck.file(), true).unwrap();
+        assert_eq!(seen.entries[0].source, Source::External);
+    }
+
+    #[test]
+    fn going_back_to_a_version_is_one_change_that_undo_takes_back() {
+        let deck = Deck::new("v0");
+        deck.change(edit("One"), "v1");
+        deck.change(edit("Two"), "v2");
+        deck.change(edit("Three"), "v3");
+        let all = versions(&deck.home(), &deck.file(), true).unwrap();
+        let one = all.entries.iter().find(|e| e.label == "One").unwrap();
+
+        let step = restore(&deck.home(), &deck.file(), &one.id).unwrap();
+        assert_eq!(deck.read(), "v1");
+        let made = step.entry.expect("a change of its own");
+        assert_eq!(
+            (made.source, made.label.as_str()),
+            (Source::Deck, RESTORE_LABEL)
+        );
+        assert_eq!(step.status.undo, Some(made));
+        assert_eq!(step.status.redo, None);
+        let after = versions(&deck.home(), &deck.file(), true).unwrap();
+        assert_eq!(after.entries.len(), 5, "no version is lost");
+
+        assert_eq!(deck.undo().unwrap().label, RESTORE_LABEL);
+        assert_eq!(deck.read(), "v3", "one undo is back where it was");
+    }
+
+    #[test]
+    fn going_back_to_the_version_the_deck_is_at_changes_nothing() {
+        let deck = Deck::new("v0");
+        deck.change(edit("One"), "v1");
+        let current = deck.status().current.unwrap();
+        let step = restore(&deck.home(), &deck.file(), &current).unwrap();
+        assert_eq!(step.entry, None);
+        assert_eq!(deck.read(), "v1");
+        assert_eq!(deck.journal().entries.len(), 2);
+    }
+
+    #[test]
+    fn going_back_to_an_unknown_or_lost_version_keeps_the_deck() {
+        let deck = Deck::new("v0");
+        deck.change(edit("One"), "v1");
+        assert!(restore(&deck.home(), &deck.file(), "nope").is_err());
+        let first = deck.journal().entries[0].clone();
+        fs::remove_file(place(&deck.home(), &deck.file()).join(format!("{}.html", first.hash)))
+            .unwrap();
+        assert!(restore(&deck.home(), &deck.file(), &first.id).is_err());
+        assert_eq!(deck.read(), "v1");
+        assert_eq!(deck.journal().entries.len(), 2);
+    }
+
+    #[test]
+    fn a_forgotten_history_is_gone_and_starts_again() {
+        let deck = Deck::new("v0");
+        deck.change(edit("One"), "v1");
+        let place = place(&deck.home(), &deck.file());
+        assert!(place.join(JOURNAL_FILE).is_file());
+        forget(&place);
+        assert!(!place.exists());
+        forget(&place);
+        assert_eq!(deck.status().undo, None);
     }
 
     #[test]

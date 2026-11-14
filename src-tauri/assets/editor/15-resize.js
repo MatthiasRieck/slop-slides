@@ -1,30 +1,54 @@
-  // ---- Handle drags: resizing, rotating and tilting, the slots in-flow elements leave, stretching
-  // drawings and their paths, and the overflow wires.
+  // ---- Handle drags: resizing, rotating and tilting, one element or several together, the slots
+  // in-flow elements leave, stretching drawings and their paths, and the overflow wires.
+
+  // Several elements resized together get no smaller than this share of the box they started in.
+  var MIN_GROUP_SCALE = 0.02;
 
   ui.addEventListener("pointerdown", function (event) {
     var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
-    if (event.button !== 0 || !kind || !selected || isLocked(selected)) return;
+    if (event.target.hasAttribute && event.target.hasAttribute("data-lock-mark")) {
+      // Not a press on the slide: the click unlocks (see below), and nothing is picked or dragged.
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.button !== 0 || !kind || !selected || !movable().length) return;
     event.preventDefault();
     event.stopPropagation();
     saveNudges();
     var dir = (event.target.getAttribute("data-dir") || "0 0").split(" ").map(Number);
-    drag = {
-      mode: kind,
-      el: selected,
-      center: centerOf(selected),
-      start: { x: event.clientX, y: event.clientY },
-      angle: angleOf(selected),
-      tilt: tiltOf(selected),
-      scale: scaleOf(selected),
-      offset: offsetOf(selected),
-      size: sizeOf(selected),
-      spread: spreadOf(selected),
-      zoom: zoom(),
-      dir: { x: dir[0], y: dir[1] },
-      resize: sizeMode === "resize",
-      moved: false,
-    };
-    if (drag.resize) holdContents(drag);
+    if (extras.length) {
+      // Several elements: what each starts from is read on the first move (see holdMembers).
+      drag = {
+        mode: kind,
+        multi: true,
+        el: selected,
+        start: { x: event.clientX, y: event.clientY },
+        angle: 0,
+        zoom: zoom(),
+        dir: { x: dir[0], y: dir[1] },
+        resize: sizeMode === "resize",
+        moved: false,
+      };
+    } else {
+      drag = {
+        mode: kind,
+        el: selected,
+        center: centerOf(selected),
+        start: { x: event.clientX, y: event.clientY },
+        angle: angleOf(selected),
+        tilt: tiltOf(selected),
+        scale: scaleOf(selected),
+        offset: offsetOf(selected),
+        size: sizeOf(selected),
+        spread: spreadOf(selected),
+        zoom: zoom(),
+        dir: { x: dir[0], y: dir[1] },
+        resize: sizeMode === "resize",
+        moved: false,
+      };
+      if (drag.resize) holdContents(drag);
+    }
     if (event.target.setPointerCapture) {
       try {
         event.target.setPointerCapture(event.pointerId);
@@ -37,14 +61,24 @@
     var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
     event.stopPropagation();
     if (!kind || !selected) return;
-    if (kind === "rotate") rotateTo(selected, 0);
-    else if (kind === "tilt") tiltTo(selected, 0, 0);
+    if (kind === "tilt") tiltTo(selected, 0, 0);
     else if (kind === "adjust") {
       selected.removeAttribute(ADJUST_ATTR);
       paintFigure(selected, figurePaint(selected));
       scheduleHandles();
-    } else scaleTo(selected, 1, 1);
+    } else {
+      // Each of several selected elements goes back upright, or to its own size, where it is.
+      movable().forEach(function (el) {
+        if (kind === "rotate") rotateTo(el, 0);
+        else scaleTo(el, 1, 1);
+      });
+    }
     commit();
+  });
+  ui.addEventListener("click", function (event) {
+    if (!event.target.hasAttribute || !event.target.hasAttribute("data-lock-mark")) return;
+    event.stopPropagation();
+    lockElements(allSelected(), false);
   });
 
   /** Turns the screen vector (x, y) by `degrees`. */
@@ -58,8 +92,117 @@
     return !!event.shiftKey !== keepRatio;
   }
 
+  /**
+   * The first move of a handle drag: the lines stuck to what it changes, which go with it, and
+   * what to put back if it is called off; for several elements, what each starts from.
+   */
+  function startTransform() {
+    var els = drag.multi ? movable() : [drag.el];
+    drag.followers = linesFollowing(els, els);
+    var lines = drag.followers.map(function (follower) {
+      return follower.el;
+    });
+    keepForCancel(drag, els.concat(lines), true);
+    if (drag.multi) holdMembers(els, lines);
+  }
+
+  /**
+   * What a resize or a turn of several elements together starts from, read once for all its
+   * pointer moves: the box around them (in slide pixels) and its middle on screen, each one's
+   * place, size and turn, and what the box's sides snap to.
+   */
+  function holdMembers(els, lines) {
+    var at = camera();
+    var box = boundsOf(els);
+    drag.box = box;
+    drag.center = { x: at.left + ((box.left + box.right) / 2) * at.k, y: at.top + ((box.top + box.bottom) / 2) * at.k };
+    drag.members = els.map(function (el) {
+      var frame = frameOf(el);
+      var member = {
+        el: el,
+        at: { x: (frame.left + frame.right) / 2, y: (frame.top + frame.bottom) / 2 },
+        angle: angleOf(el),
+        scale: scaleOf(el),
+        offset: offsetOf(el),
+        size: sizeOf(el),
+        zoom: drag.zoom,
+      };
+      if (drag.resize && drag.mode === "scale") holdContents(member);
+      return member;
+    });
+    drag.targets = snapTargets(els.concat(lines));
+  }
+
+  /**
+   * Resizes several elements together: the box around them follows the dragged handle while its
+   * opposite side stays put (or with `fromCenter`, its middle), and each element keeps its place
+   * and its share of the box. `keepRatio` scales both ways alike. A turned element takes on
+   * what the stretch makes of its own width and height.
+   */
+  function stretchGroup(dx, dy, keepRatio, fromCenter) {
+    var d = drag.dir;
+    var box = drag.box;
+    var w = box.right - box.left;
+    var h = box.bottom - box.top;
+    var reach = fromCenter ? 2 : 1;
+    var kx = d.x && w ? (w + (reach * d.x * dx) / drag.zoom) / w : 1;
+    var ky = d.y && h ? (h + (reach * d.y * dy) / drag.zoom) / h : 1;
+    if (keepRatio) kx = ky = !d.x ? ky : !d.y ? kx : Math.abs(kx - 1) > Math.abs(ky - 1) ? kx : ky;
+    kx = Math.max(MIN_GROUP_SCALE, kx);
+    ky = Math.max(MIN_GROUP_SCALE, ky);
+    // What stays put: the side opposite the handle, or the middle.
+    var ax = fromCenter || !d.x ? (box.left + box.right) / 2 : d.x > 0 ? box.left : box.right;
+    var ay = fromCenter || !d.y ? (box.top + box.bottom) / 2 : d.y > 0 ? box.top : box.bottom;
+    drag.members.forEach(function (m) {
+      var a = (m.angle * Math.PI) / 180;
+      var cos = Math.cos(a);
+      var sin = Math.sin(a);
+      var fw = Math.sqrt(kx * kx * cos * cos + ky * ky * sin * sin);
+      var fh = Math.sqrt(kx * kx * sin * sin + ky * ky * cos * cos);
+      var shift = { x: (m.at.x - ax) * (kx - 1), y: (m.at.y - ay) * (ky - 1) };
+      if (drag.resize) {
+        resizeTo(m, m.scale.x * fw, m.scale.y * fh, shift);
+        return;
+      }
+      scaleTo(m.el, m.scale.x * fw, m.scale.y * fh);
+      moveTo(m.el, m.offset.x + shift.x, m.offset.y + shift.y);
+    });
+    // The box they are in now, for the readout and the app (see movedGeometry).
+    drag.shown = {
+      left: ax + (box.left - ax) * kx,
+      top: ay + (box.top - ay) * ky,
+      right: ax + (box.right - ax) * kx,
+      bottom: ay + (box.bottom - ay) * ky,
+    };
+  }
+
+  /** Turns several elements together around the middle of the box around them, each by as much. */
+  function turnGroup(event) {
+    var c = drag.center;
+    var start = Math.atan2(drag.start.y - c.y, drag.start.x - c.x);
+    var degrees = ((Math.atan2(event.clientY - c.y, event.clientX - c.x) - start) * 180) / Math.PI;
+    var by = wrapAngle(event.shiftKey ? Math.round(degrees / ROTATE_SNAP) * ROTATE_SNAP : degrees);
+    var box = drag.box;
+    var mid = { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+    drag.members.forEach(function (m) {
+      var to = turn(m.at.x - mid.x, m.at.y - mid.y, by);
+      moveTo(m.el, m.offset.x + mid.x + to.x - m.at.x, m.offset.y + mid.y + to.y - m.at.y);
+      rotateTo(m.el, m.angle + by);
+    });
+    drag.turned = by;
+  }
+
   /** Applies a handle drag to the pointer at `event`. */
   function transformTo(event) {
+    if (drag.multi) {
+      if (drag.mode === "rotate") {
+        turnGroup(event);
+        return;
+      }
+      var grown = snapResize(event);
+      stretchGroup(grown.x, grown.y, keepsRatio(event), event.altKey);
+      return;
+    }
     if (drag.mode === "adjust") {
       adjustTo(event);
       return;
@@ -402,10 +545,14 @@
     });
     drawOverflow();
     var items = hits.map(overflow.describe);
-    var key = JSON.stringify(items);
+    // Where each one is, so the app's list of them can select it (see { type: "slop:edit-select" }).
+    var paths = hits.map(function (hit) {
+      return pathOf(hit.el);
+    });
+    var key = JSON.stringify([items, paths]);
     if (key === reportedOverflow) return;
     reportedOverflow = key;
-    window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items }, "*");
+    window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items, paths: paths }, "*");
   }
 
   /** Whether a drag, adding an element with a tool, or a marquee is under way: the pointer is down and has moved. */

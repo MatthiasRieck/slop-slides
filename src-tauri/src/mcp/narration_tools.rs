@@ -350,12 +350,12 @@ pub(super) fn narration_timeline(
     }
     let found = timeline::timeline(&file, &deck, with_words);
     let slides = &found.slides;
-    let d = timeline::DEFAULTS;
+    let d = found.assumed;
     let mut out = format!(
         "How {rel} plays in a video export and the self-running show, in seconds from its \
-         start. What a slide does not pin follows the app's default export settings: a slide \
+         start. What a slide does not pin follows the deck's timing settings: a slide \
          shows at least {} s, its narration starts {} s in and the slide stays {} s after it; \
-         the user may export with others, so pin `{}` and `{}` on slides you time to narration. \
+         the user may change them, so pin `{}` and `{}` on slides you time to narration. \
          A narration never talks over the one before it: it waits. An animation on a slide \
          starts as the slide shows, so its delay is the time into that slide.\n",
         d.seconds_per_slide,

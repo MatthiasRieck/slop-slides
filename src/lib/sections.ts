@@ -61,6 +61,17 @@ export function withoutSlides(deck: Deck, gone: ReadonlySet<string>): Deck {
   };
 }
 
+/** The deck as it will be once section `index` is taken out: the sections after it move one up. */
+export function withoutSection(deck: Deck, index: number): Deck {
+  if (!deck.sections.some((section) => section.index === index)) return deck;
+  return {
+    ...deck,
+    sections: deck.sections
+      .filter((section) => section.index !== index)
+      .map((section) => (section.index > index ? { ...section, index: section.index - 1 } : section)),
+  };
+}
+
 /** The deck as it will be once `slides` are hidden or shown, or locked or unlocked, as `marks` says. */
 export function withSlidesMarked(
   deck: Deck,
@@ -148,6 +159,17 @@ export function dropRows(keys: string[], moved: string[], active: string, over: 
   const at = rest.indexOf(over) + (keys.indexOf(active) < keys.indexOf(over) ? 1 : 0);
   rest.splice(at, 0, ...keys.filter((key) => moving.has(key)));
   return rest;
+}
+
+/**
+ * The rail's rows after the section `key` has changed places with the one before it (-1) or after
+ * it (1), each with its slides; null when there is no section that way.
+ */
+export function stepSection(items: RailItem[], key: string, delta: -1 | 1): string[] | null {
+  const blocks = sectionBlocks(items);
+  const other = blocks[blocks.findIndex((block) => block.key === key) + delta];
+  if (!other || !blocks.some((block) => block.key === key)) return null;
+  return dropSection(items, key, other.key);
 }
 
 /** The first slide of each section that has one, by the section's key; it names the section's fold. */

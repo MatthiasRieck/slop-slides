@@ -13,7 +13,9 @@
   var nameOf = overflow.nameOf;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
-  var EDITOR_ATTRS = ["contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
+  var EDITOR_ATTRS = [
+    "contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing", "data-slop-empty",
+  ];
   var MOVED = "data-moved";
   var PLACEHOLDER = overflow.PLACEHOLDER;
   var DELETED = overflow.DELETED;
@@ -25,6 +27,7 @@
     { attr: "data-to", at: "data-to-at", first: false },
   ];
   var STUCK_ATTRS = ["data-from", "data-from-at", "data-to", "data-to-at"];
+  // How far a press may move, in screen pixels (see onScreen), before it drags.
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
   var NUDGE_SAVE_MS = 500;
@@ -53,6 +56,9 @@
   var DRAW_STEP = 2;
   var BORDER_WIDTH = 4;
   var BORDER_COLOR = "#111111";
+  // The toolbar's default ink, and what it turns into on a dark ground (see readable()).
+  var DEFAULT_INK = /^#111(111)?$/i;
+  var INK_ON_DARK = "#ffffff";
   // What a new element gets for anything the app's style leaves out.
   var FALLBACK_STYLE = { color: "#111111", fontSize: 48, align: "left", valign: "top", stroke: "#111111", strokeWidth: 4 };
   var JUSTIFY = { top: "flex-start", middle: "center", bottom: "flex-end" };
@@ -423,79 +429,140 @@
   // ... and at most this many of the elements it sits in.
   var MAX_SVG_ANCESTORS = 64;
   // What the format painter takes from text.
-  var PAINTED_TEXT = ["color", "fontSize", "bold", "italic", "underline", "strike", "letterSpacing", "lineHeight", "align"];
+  var PAINTED_TEXT = ["color", "fontSize", "weight", "italic", "underline", "strike", "letterSpacing", "lineHeight", "align", "textCase"];
+
+  // The handles: a corner's side and an edge handle's length, the gap they keep to the frame, and
+  // how far the rotate handle stands off it, in screen pixels.
+  var HANDLE = 10;
+  var HANDLE_LONG = 16;
+  var HANDLE_GAP = 2;
+  var ROTATE_STEM = 24;
+  // An element narrower or flatter than this on screen has no room for edge handles between its corners.
+  var EDGE_HANDLE_ROOM = 40;
+
+  /**
+   * A CSS length of `n` screen pixels. The app shows the preview scaled to fit the stage, so what
+   * the editor draws over the slide is sized by `--slop-ui` (see pasteboard.js): this window's
+   * pixels per screen pixel.
+   */
+  function px(n) {
+    return "calc(" + n + "px * var(--slop-ui, 1))";
+  }
+
+  // The line around what is selected, hovered or being typed in: the accent between two light
+  // lines, so it shows on any slide, light, dark or the accent's own color.
+  var HALO = "color-mix(in srgb, var(--slop-handle) 85%, transparent)";
+  var FRAME_LINE =
+    " outline: " + px(1.5) + " solid var(--slop-accent); box-shadow: 0 0 0 " + px(2.5) + " " + HALO + ", inset 0 0 0 " + px(1) + " " + HALO + ";";
+  // Where each resize handle sits: just outside its corner or the middle of its side.
+  var HANDLE_DIRS = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
+  var handlePlaces = HANDLE_DIRS.map(function (d) {
+    var w = d[0] === 0 ? HANDLE_LONG : HANDLE;
+    var h = d[1] === 0 ? HANDLE_LONG : HANDLE;
+    var outside = function (dir, size) {
+      return px(dir < 0 ? -size - HANDLE_GAP : dir > 0 ? HANDLE_GAP : -size / 2);
+    };
+    return (
+      '[data-slop-ui] [data-dir="' + d[0] + " " + d[1] + '"] { left: ' + (d[0] + 1) * 50 + "%; top: " + (d[1] + 1) * 50 + "%; margin: " +
+      outside(d[1], h) + " 0 0 " + outside(d[0], w) + "; }"
+    );
+  }).join("");
+  var LOCK_ICON =
+    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5'" +
+    " stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='11' width='14' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E\")";
 
   var style = document.createElement("style");
   style.textContent =
     // The slide shows what runs past its edge.
     ".deck, .deck > .slide.active { overflow: visible !important; }" +
     ".deck > .slide.active, .deck > .slide.active * { -webkit-user-select: none; user-select: none; }" +
-    "[data-slop-hover] { outline: 3px dashed color-mix(in srgb, var(--slop-accent) 70%, transparent) !important; outline-offset: 4px; }" +
-    // A line has no box to outline: it glows along its stroke instead.
-    "[data-slop-hover=line] { outline: none !important; filter: drop-shadow(0 0 2px var(--slop-accent)) drop-shadow(0 0 2px var(--slop-accent)) !important; }" +
-    // The selection frame is drawn by the handle overlay, so it keeps its size on screen.
+    // A hovered line has no box to outline: it glows along its stroke instead. Anything else is
+    // outlined by an overlay (see hover), as the selection is, so the line keeps its size on screen.
+    "[data-slop-hover=line] { filter: drop-shadow(0 0 2px var(--slop-accent)) drop-shadow(0 0 2px var(--slop-accent)) !important; }" +
     "[data-slop-selected] { cursor: move !important; }" +
-    "[data-slop-editing] { outline: 3px solid var(--slop-accent) !important; outline-offset: 4px; }" +
-    "[data-slop-ui] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box;" +
-    " outline: 2px solid var(--slop-accent); }" +
+    // A locked element does not move.
+    "[data-lock][data-slop-selected], [data-lock] [data-slop-selected] { cursor: default !important; }" +
+    "[data-slop-ui], [data-slop-outline] { position: fixed; pointer-events: none; box-sizing: border-box;" + FRAME_LINE + " }" +
+    "[data-slop-ui] { z-index: 2147483647; }" +
+    // What is hovered, and the text being typed in: the same line, without handles.
+    "[data-slop-outline] { z-index: 2147483646; display: none; }" +
+    "[data-slop-outline=hover] { outline-color: color-mix(in srgb, var(--slop-accent) 75%, var(--slop-handle)); }" +
+    // The group gone into (with a double-click) stays marked while what it holds is worked on.
+    "[data-slop-outline=group] { z-index: 2147483645; outline-style: dashed; outline-width: " + px(1) + "; }" +
+    // An empty text box says what it is for, until something is typed in it.
+    "[data-slop-empty][data-slop-editing] { min-width: 5em; }" +
+    "[data-slop-empty][data-slop-editing] > [data-text-body]::before { content: 'Type text'; display: inline-block; width: 0; white-space: nowrap;" +
+    " opacity: 0.45; pointer-events: none; }" +
     "[data-slop-ui] * { position: absolute; box-sizing: border-box; }" +
     "[data-slop-ui] [data-handle] { pointer-events: auto; background: var(--slop-handle);" +
-    " border: 2px solid var(--slop-accent); box-shadow: 0 1px 3px var(--slop-scrim); touch-action: none;" +
-    " width: 16px; height: 16px; }" +
-    "[data-slop-ui] [data-handle=scale] { border-radius: 3px; }" +
-    "[data-slop-ui] [data-axis] { border-radius: 8px; }" +
-    "[data-slop-ui] [data-axis=x] { height: 24px; }" +
-    "[data-slop-ui] [data-axis=y] { width: 24px; }" +
+    " border: " + px(1.5) + " solid var(--slop-accent); box-shadow: 0 " + px(1) + " " + px(3) + " var(--slop-scrim); touch-action: none;" +
+    " width: " + px(HANDLE) + "; height: " + px(HANDLE) + "; }" +
+    // Small as a handle looks, it can be grabbed a little way off it.
+    "[data-slop-ui] [data-handle]::before { content: ''; position: absolute; inset: " + px(-5) + "; }" +
+    "[data-slop-ui] [data-handle=scale] { border-radius: " + px(2) + "; }" +
+    "[data-slop-ui] [data-axis] { border-radius: " + px(HANDLE / 2) + "; }" +
+    "[data-slop-ui] [data-axis=x] { height: " + px(HANDLE_LONG) + "; }" +
+    "[data-slop-ui] [data-axis=y] { width: " + px(HANDLE_LONG) + "; }" +
+    handlePlaces +
     "[data-slop-ui][data-narrow] [data-axis=y], [data-slop-ui][data-flat] [data-axis=x] { display: none; }" +
-    "[data-slop-ui] > [data-handle=rotate] { border-radius: 50%; width: 18px; height: 18px; margin: 0 0 0 -9px;" +
-    " left: 50%; top: -48px; cursor: grab; }" +
-    "[data-slop-ui] > [data-handle=tilt] { width: 14px; height: 14px; margin: 2px 0 0 18px; left: 50%; top: -48px;" +
-    " transform: rotate(45deg); cursor: move; }" +
+    "[data-slop-ui] > [data-handle=rotate] { border-radius: 50%; width: " + px(12) + "; height: " + px(12) + "; margin: 0 0 0 " + px(-6) + ";" +
+    " left: 50%; top: " + px(-ROTATE_STEM - 12) + "; cursor: grab; }" +
+    // The tilt is rarely wanted: its handle stands below the frame, well away from the one that turns.
+    "[data-slop-ui] > [data-handle=tilt] { width: " + px(HANDLE) + "; height: " + px(HANDLE) + "; margin: 0 0 0 " + px(-HANDLE / 2) + "; left: 50%;" +
+    " top: calc(100% + " + (ROTATE_STEM + 2) + "px * var(--slop-ui, 1)); transform: rotate(45deg); cursor: move; }" +
     // A figure's proportions (see FIGURES), on the spot they change.
-    "[data-slop-ui] > [data-handle=adjust] { width: 12px; height: 12px; margin: -6px 0 0 -6px; transform: rotate(45deg);" +
+    "[data-slop-ui] > [data-handle=adjust] { margin: " + px(-HANDLE / 2) + " 0 0 " + px(-HANDLE / 2) + "; transform: rotate(45deg);" +
     " background: var(--slop-search); border-color: var(--slop-accent); cursor: pointer; }" +
     "[data-slop-ui] > [data-handle=adjust][hidden], [data-slop-ui][data-locked] [data-handle]," +
-    " [data-slop-ui][data-locked] [data-stem] { display: none; }" +
+    " [data-slop-ui][data-locked] [data-stem], [data-slop-ui][data-multi] > [data-handle=tilt] { display: none; }" +
+    // A locked selection says so at its corner, where a click unlocks it.
+    "[data-slop-ui] > [data-lock-mark] { display: none; pointer-events: auto; cursor: pointer; left: 100%; top: 0; width: " + px(20) + ";" +
+    " height: " + px(20) + "; margin: " + px(-10) + " 0 0 " + px(-10) + "; padding: 0; border: 0; border-radius: 50%; background: var(--slop-overlay);" +
+    " box-shadow: 0 " + px(1) + " " + px(3) + " var(--slop-scrim); }" +
+    "[data-slop-ui] > [data-lock-mark]::before { content: ''; inset: 0; background: var(--slop-overlay-foreground);" +
+    " -webkit-mask: " + LOCK_ICON + " center / 60% no-repeat; mask: " + LOCK_ICON + " center / 60% no-repeat; }" +
+    "[data-slop-ui][data-locked] > [data-lock-mark] { display: block; }" +
     // A line's points, in place of the frame and handles.
     "[data-slop-points] { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }" +
     "[data-slop-points] > * { position: absolute; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move;" +
-    " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--slop-handle); border: 2px solid var(--slop-accent);" +
-    " box-shadow: 0 1px 3px var(--slop-scrim); }" +
+    " width: " + px(HANDLE) + "; height: " + px(HANDLE) + "; margin: " + px(-HANDLE / 2) + " 0 0 " + px(-HANDLE / 2) + "; border-radius: 50%;" +
+    " background: var(--slop-handle); border: " + px(1.5) + " solid var(--slop-accent); box-shadow: 0 " + px(1) + " " + px(3) + " var(--slop-scrim); }" +
     "[data-slop-points] > [data-bound] { background: var(--slop-accent); border-color: var(--slop-handle); }" +
     // Each point can be grabbed a little way off it, the bend handles too, small as they look.
-    "[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px; border-radius: 50%; }" +
-    "[data-slop-points] > [data-point=add] { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--slop-accent);" +
-    " border-color: var(--slop-handle); cursor: crosshair; }" +
+    "[data-slop-points] > *::before { content: ''; position: absolute; inset: " + px(-6) + "; border-radius: 50%; }" +
+    "[data-slop-points] > [data-point=add] { background: var(--slop-accent); border-color: var(--slop-handle); cursor: crosshair; }" +
     // A small + in each bend handle says dragging it adds a point.
     "[data-slop-points] > [data-point=add]::after { content: ''; position: absolute; inset: 0; pointer-events: none;" +
-    " background: linear-gradient(var(--slop-handle), var(--slop-handle)) center / 6px 2px no-repeat," +
-    " linear-gradient(var(--slop-handle), var(--slop-handle)) center / 2px 6px no-repeat; }" +
+    " background: linear-gradient(var(--slop-handle), var(--slop-handle)) center / " + px(5) + " " + px(1.5) + " no-repeat," +
+    " linear-gradient(var(--slop-handle), var(--slop-handle)) center / " + px(1.5) + " " + px(5) + " no-repeat; }" +
     // The button that opens the selected drawing in the app's SVG editor.
-    "[data-slop-svg-open] { position: fixed; z-index: 2147483647; display: flex; align-items: center; gap: 4px;" +
-    " margin: 0; padding: 4px 8px 4px 10px; border: 0; border-radius: 999px; background: var(--slop-accent);" +
-    " color: var(--slop-handle); font: 600 12px/16px system-ui, sans-serif; white-space: nowrap; cursor: pointer;" +
-    " box-shadow: 0 1px 4px var(--slop-scrim); }" +
+    "[data-slop-svg-open] { position: fixed; z-index: 2147483647; display: flex; align-items: center; gap: " + px(4) + ";" +
+    " margin: 0; padding: " + px(3) + " " + px(7) + " " + px(3) + " " + px(9) + "; border: 0; border-radius: " + px(999) + "; background: var(--slop-accent);" +
+    " color: var(--slop-handle); font: 600 " + px(11) + "/" + px(16) + " system-ui, sans-serif; white-space: nowrap; cursor: pointer;" +
+    " box-shadow: 0 " + px(1) + " " + px(4) + " var(--slop-scrim); }" +
+    "[data-slop-svg-open] svg { width: " + px(12) + "; height: " + px(12) + "; }" +
     "[data-slop-svg-open]:hover { filter: brightness(1.1); }" +
     "[data-slop-svg-open][hidden] { display: none; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     // The outline of the element a line's end would stick to the edge of, and the spot on it.
     "[data-slop-edge] { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; z-index: 2147483646; pointer-events: none; }" +
-    "[data-slop-edge] path { fill: none; stroke: var(--slop-accent); stroke-width: 3px; stroke-linejoin: round; }" +
-    "[data-slop-edge] circle { fill: var(--slop-accent); stroke: var(--slop-handle); stroke-width: 2px; }" +
-    "[data-slop-edge] circle[data-site] { fill: var(--slop-handle); stroke: var(--slop-accent); }" +
-    "[data-slop-edge] circle[data-site=on] { fill: var(--slop-accent); stroke: var(--slop-handle); r: 6px; }" +
+    "[data-slop-edge] path { fill: none; stroke: var(--slop-accent); stroke-width: " + px(2) + "; stroke-linejoin: round; }" +
+    "[data-slop-edge] circle { fill: var(--slop-accent); stroke: var(--slop-handle); stroke-width: " + px(1.5) + "; r: " + px(4) + "; }" +
+    "[data-slop-edge] circle[data-site] { fill: var(--slop-handle); stroke: var(--slop-accent); r: " + px(3.5) + "; }" +
+    "[data-slop-edge] circle[data-site=on] { fill: var(--slop-accent); stroke: var(--slop-handle); r: " + px(5) + "; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
-    "[data-slop-overflow] > [data-wire] { outline: 3px dashed var(--slop-danger); outline-offset: -1px; background: color-mix(in srgb, var(--slop-danger) 8%, transparent); }" +
+    "[data-slop-overflow] > [data-wire] { outline: " + px(1.5) + " dashed var(--slop-danger); outline-offset: " + px(-0.5) + ";" +
+    " background: color-mix(in srgb, var(--slop-danger) 8%, transparent); }" +
     // The slide's frame marks edit mode, and dims everything outside the slide.
-    "[data-slop-frame] { outline: 2px solid var(--slop-accent); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
+    "[data-slop-frame] { outline: " + px(1.5) + " solid var(--slop-accent); outline-offset: " + px(3) + "; box-shadow: 0 0 0 9999px" +
     " color-mix(in srgb, var(--slop-canvas) 55%, transparent); }" +
     // A drawing or shape tool draws wherever the pointer goes.
     "html[data-slop-tool], html[data-slop-tool] * { cursor: crosshair !important; }" +
     "html[data-slop-tool=text], html[data-slop-tool=text] * { cursor: text !important; }" +
     "html[data-slop-tool=paint], html[data-slop-tool=paint] * { cursor: copy !important; }" +
-    "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
-    " left: 50%; top: -32px; border: 0; box-shadow: none; background: var(--slop-accent); }" +
+    "[data-slop-ui] > [data-stem] { pointer-events: none; width: " + px(1.5) + "; height: " + px(ROTATE_STEM) + "; margin: 0 0 0 " + px(-0.75) + ";" +
+    " left: 50%; top: " + px(-ROTATE_STEM) + "; border: 0; box-shadow: none; background: var(--slop-accent); }" +
     // While typing, overlays (like invisible hover zones) let clicks through to the text.
     ".deck > .slide.active[data-slop-typing] * { pointer-events: none !important; }" +
     ".deck > .slide.active[data-slop-typing] [data-slop-editing]," +
@@ -508,7 +575,8 @@
   // sit just outside the frame, so even small text stays clickable (and double-clickable) inside
   // it. The frame turns with a rotation but stays flat under a 3D tilt, around the extent of the
   // perspective, so its handles can be grabbed and pull the way they point however far the
-  // element is tilted, even turned over.
+  // element is tilted, even turned over. Around several selected elements it is the box around
+  // them all, upright, and its handles resize and turn them together.
   var ui = document.createElement("div");
   ui.setAttribute("data-slop-ui", "");
   ui.style.display = "none";
@@ -516,24 +584,27 @@
     '<div data-stem></div><div data-handle="rotate" title="Rotate (Shift snaps to 15°, double-click resets)"></div>' +
     '<div data-handle="tilt" title="Tilt in 3D (Shift snaps to 15°, double-click resets)"></div>' +
     '<div data-handle="adjust" title="Drag to change the shape (double-click resets)"></div>' +
-    [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]
-      .map(function (d) {
-        var cursor = d[0] === 0 ? "ns" : d[1] === 0 ? "ew" : d[0] === d[1] ? "nwse" : "nesw";
-        var axis = d[0] === 0 ? ' data-axis="y"' : d[1] === 0 ? ' data-axis="x"' : "";
-        var w = d[0] === 0 ? 24 : 16;
-        var h = d[1] === 0 ? 24 : 16;
-        var outside = function (dir, size) {
-          return dir < 0 ? -size - 2 : dir > 0 ? 2 : -size / 2;
-        };
-        return (
-          '<div data-handle="scale" data-dir="' + d[0] + " " + d[1] + '"' + axis +
-          ' title="Resize (Shift keeps the aspect ratio, Alt resizes from the center)"' +
-          ' style="left: ' + (d[0] + 1) * 50 + "%; top: " + (d[1] + 1) * 50 + "%; margin: " + outside(d[1], h) + "px 0 0 " +
-          outside(d[0], w) + "px; cursor: " + cursor + '-resize"></div>'
-        );
-      })
-      .join("");
+    '<button type="button" data-lock-mark title="Locked: click to unlock" aria-label="Unlock"></button>' +
+    HANDLE_DIRS.map(function (d) {
+      var axis = d[0] === 0 ? ' data-axis="y"' : d[1] === 0 ? ' data-axis="x"' : "";
+      return (
+        '<div data-handle="scale" data-dir="' + d[0] + " " + d[1] + '"' + axis +
+        ' title="Resize (Shift keeps the aspect ratio, Alt resizes from the center)"></div>'
+      );
+    }).join("");
   document.body.appendChild(ui);
+  var scaleHandles = Array.prototype.slice.call(ui.querySelectorAll("[data-handle=scale]"));
+
+  // The line around what is hovered, and around the text being typed in (see FRAME_LINE).
+  function outlineBox(kind) {
+    var box = document.createElement("div");
+    box.setAttribute("data-slop-outline", kind);
+    document.body.appendChild(box);
+    return box;
+  }
+  var hoverBox = outlineBox("hover");
+  var editBox = outlineBox("edit");
+  var groupBox = outlineBox("group");
 
   var pointUi = document.createElement("div");
   pointUi.setAttribute("data-slop-points", "");
@@ -564,7 +635,7 @@
   // The one block that holds the text of a text box or shape (see 00-header.js).
   var BODY_ATTR = "data-text-body";
   // Styles that apply to the selected text while typing; the others apply to the whole element.
-  var TEXT_KEYS = ["color", "fontSize", "fontFamily", "bold", "italic", "underline", "strike", "script", "letterSpacing", "link"];
+  var TEXT_KEYS = ["color", "fontSize", "fontFamily", "bold", "weight", "italic", "underline", "strike", "script", "letterSpacing", "highlight", "textCase", "link"];
   var TOGGLES = { b: "bold", i: "italic", u: "underline" };
   var LIST_TYPES = { ul: ["disc", "circle", "square"], ol: ["decimal", "lower-alpha", "lower-roman"] };
   // Elements a paste never brings into text.
@@ -577,6 +648,8 @@
   var SETTINGS = /^slop:edit-(select|tool|snap|size-mode|keep-ratio)$/;
   var selected = null;
   var hovered = null;
+  // Where the hovered element is, in slide pixels, when whoever hovered it knew (see hover).
+  var hoveredFrame = null;
   var editing = null;
   var drag = null;
   var nudgeTimer = null;
@@ -603,6 +676,10 @@
   var refitDue = false;
   // What the pasteboard said of the view (see camera), kept until it pans, zooms or the window resizes.
   var keptCamera = null;
+  // How many of this window's pixels one screen pixel takes (see onScreen), as the pasteboard said last.
+  var uiScale = 1;
+  // How far the frame around the selection is turned, which its resize handles' cursors show.
+  var cursorAngle = null;
   // What overflows (see refreshOverflow), each with its box in slide pixels.
   var overflowBoxes = [];
   // The last caret or text selection in the element being edited, kept while focus is in the app.
@@ -614,6 +691,14 @@
   var toolStyle = {};
   // The group a double-click went into: clicks select what it holds.
   var enteredGroup = null;
+  // When the last double-click went into a group: the browser's dblclick that follows it edits nothing.
+  var enteredAt = 0;
+  // Where the group gone into shows (see shownFrame), kept while a drag in it goes on.
+  var groupFrame = null;
+  // The steps to undo and redo while typing (see "Undo while typing" in 50-keys.js).
+  var textSteps = null;
+  // Whether what a tool adds lands on a dark ground, where the default ink would not show (see readable).
+  var darkGround = false;
   // The text box, shape or drawing being dragged out with a tool.
   var create = null;
   // The look the format painter took, until it is clicked onto an element.
@@ -622,11 +707,11 @@
   var snapping = true;
   // What a restyle being previewed changed, as it was before ({ el, attrs }), until it is applied or cancelled.
   var preview = null;
-  // The font sizes ⌘⇧. and ⌘⇧, step through, as the toolbar's buttons do (see FONT_SIZES in src/lib/editTools.ts).
+  // The font sizes ⌘⇧. and ⌘⇧, (and the toolbar's Larger and Smaller text) step each text through.
   var FONT_STEPS = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 200, 240];
   // What "Clear formatting" takes off text: everything inline but its links.
-  var CLEARED = { color: null, fontSize: null, fontFamily: null, bold: null, italic: null, underline: null, strike: null, script: null, letterSpacing: null };
-  var CLEARED_PROPS = ["color", "font-size", "font-family", "font-weight", "font-style", "text-decoration-line", "text-decoration", "letter-spacing"];
+  var CLEARED = { color: null, fontSize: null, fontFamily: null, bold: null, weight: null, italic: null, underline: null, strike: null, script: null, letterSpacing: null, highlight: null, textCase: null };
+  var CLEARED_PROPS = ["color", "font-size", "font-family", "font-weight", "font-style", "text-decoration-line", "text-decoration", "letter-spacing", "text-transform"];
   // The handles and the overflow wires keep to the slide as the view pans and zooms.
   pasteboard.onChange(cameraMoved);
   // Whatever may change the slide comes after its markup was kept: what the user does, and the

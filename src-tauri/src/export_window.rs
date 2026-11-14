@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::capture::{Rect, Size};
 use crate::error::{Error, Result};
+use crate::export_scope::{self, Scope, Served};
 use crate::protocol;
 
 /// Longest wait for the deck to load, or for a step of the helper.
@@ -40,18 +41,31 @@ pub(crate) struct Page {
     pub out_of_sight: bool,
 }
 
+/// A hidden window and what comes with it: the channel its helper's answers come in on, and,
+/// for a window shown only some of the deck's slides, what keeps it shown them. Keep the last
+/// for as long as the window is open.
+pub(crate) type Opened = (WebviewWindow, mpsc::UnboundedReceiver<Url>, Option<Served>);
+
 /// A hidden window showing the deck `file` (in the open workspace), its slides `canvas` pixels,
-/// as `page` says, with the helper's answers coming in on the returned channel.
+/// as `page` says, with the helper's answers coming in on the returned channel. With a `scope`
+/// the window is shown only its slides, every one of them shown (see export_scope.rs);
+/// without, the deck as it is.
 pub(crate) fn open(
     app: &AppHandle,
     file: &Path,
     canvas: (u32, u32),
     page: Page,
-) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
+    scope: Option<&Scope>,
+) -> Result<Opened> {
     let cannot_open = |e: &dyn std::fmt::Display| {
         Error::msg(format!("cannot open the deck for {}: {e}", page.purpose))
     };
-    let url = protocol::file_url(file, page.query)
+    let served = scope.map(export_scope::serve);
+    let query = match &served {
+        Some(served) => format!("{}&{}", page.query, served.query()),
+        None => page.query.to_string(),
+    };
+    let url = protocol::file_url(file, &query)
         .parse()
         .map_err(|e| cannot_open(&e))?;
     let (window_width, window_height) = window_size(canvas, screen_area(app));
@@ -83,7 +97,7 @@ pub(crate) fn open(
         })
         .build()
         .map_err(|e| cannot_open(&e))?;
-    Ok((window, signals))
+    Ok((window, signals, served))
 }
 
 /// The room on screen for a window, in logical pixels: the main screen's work area.

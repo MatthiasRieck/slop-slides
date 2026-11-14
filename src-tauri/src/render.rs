@@ -11,8 +11,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Url, WebviewWindow};
-use tokio::sync::mpsc;
+use tauri::AppHandle;
 
 use crate::error::{Error, Result};
 use crate::export_window::{self, Helper, Page};
@@ -180,7 +179,7 @@ pub(crate) async fn render(
     at: Option<f64>,
 ) -> Result<Vec<Rendered>> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let (window, signals) = open(app, file, at.is_some())?;
+    let (window, signals, _) = open(app, file, at.is_some())?;
     let mut helper = Helper {
         window: &window,
         signals,
@@ -194,11 +193,7 @@ pub(crate) async fn render(
 /// A window out of sight showing the deck `file` (in the open workspace), with its helper
 /// (`assets/render.js`) answering on the returned channel: first `ready`, with how many
 /// slides there are, then where each slide it is asked to [`show`] is.
-pub(crate) fn open(
-    app: &AppHandle,
-    file: &Path,
-    moving: bool,
-) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
+pub(crate) fn open(app: &AppHandle, file: &Path, moving: bool) -> Result<export_window::Opened> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
     export_window::open(
         app,
@@ -215,6 +210,8 @@ pub(crate) fn open(
             purpose: "rendering",
             out_of_sight: true,
         },
+        // Every slide as the deck has it, the hidden ones too.
+        None,
     )
 }
 

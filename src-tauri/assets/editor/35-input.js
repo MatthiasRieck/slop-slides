@@ -13,14 +13,20 @@
     hoverPick = null;
     if (tool !== "select") {
       event.preventDefault();
+      // What is added takes an ink that shows on what lies under it (see readable).
+      darkGround = darkAt(event.clientX, event.clientY);
       startCreating(event);
       return;
     }
     var el = pickable(event.target, event.clientX, event.clientY);
-    if (addsToSelection(event)) {
+    if (reachesUnder(event) || event.shiftKey) {
       event.preventDefault();
       lastDown = { el: null, at: 0 };
-      if (el) toggleSelected(el);
+      // ⌘ / Ctrl-click goes down through what lies at the pointer; Shift-click adds or takes out.
+      // From an empty spot, either draws a marquee that adds to the selection.
+      if (reachesUnder(event) && !event.shiftKey) {
+        if (!selectUnder(event.target, event.clientX, event.clientY)) startMarquee(event, null, true);
+      } else if (el) toggleSelected(el);
       else startMarquee(event, null, true);
       return;
     }
@@ -30,34 +36,30 @@
     var double = el && el === lastDown.el && now - lastDown.at < DOUBLE_CLICK_MS;
     lastDown = { el: el, at: double ? 0 : now };
     if (!isSelected(el) && (!el || isBackdrop(el))) {
-      // Nothing to pick here but a locked element: a click selects it, with its frame and no
-      // handles, so that it can be unlocked; a drag draws the marquee all the same.
-      var held = lockedAt(event.target, event.clientX, event.clientY);
-      if (startMarquee(event, held || el, false)) return;
-      if (held) {
-        event.preventDefault();
-        select(held);
-        return;
-      }
-    }
-    if (!isSelected(el)) select(el);
-    if (!el) {
-      pasteboard.startPan(event);
+      // An empty spot, on the slide or on the pasteboard around it: a drag draws the marquee and
+      // a click selects nothing, or the see-through wrapper there. Where there is nothing to pick
+      // but a locked element, a click selects that, with its frame and no handles, so that it
+      // can be unlocked.
+      startMarquee(event, lockedAt(event.target, event.clientX, event.clientY) || el, false);
       return;
     }
+    if (!isSelected(el)) select(el);
     if (double && isGroup(el)) {
       // Into the group: what it holds is picked now.
       event.preventDefault();
       enteredGroup = el;
+      // The browser's dblclick that follows selects, it does not start typing in what was picked.
+      enteredAt = Date.now();
       var inner = pickable(event.target, event.clientX, event.clientY);
       if (inner && inner !== el) select(inner);
+      else placeHandles();
       lastDown = { el: inner, at: 0 };
       return;
     }
     if (double) {
       // Otherwise the browser moves focus to what was clicked, which may be an overlay.
       event.preventDefault();
-      startEditing(el, event.clientX, event.clientY);
+      editAt(el, event.clientX, event.clientY);
       return;
     }
     event.preventDefault();
@@ -71,6 +73,60 @@
       }
     }
   });
+
+  /**
+   * A double-click on `el` at (x, y): an image asks the app to pick another one for it; text
+   * starts typing at the pointer, and on a card or layout around several texts, typing goes into
+   * the one under the pointer, if any, never into all of them as one.
+   */
+  function editAt(el, x, y) {
+    if (isImage(el)) {
+      if (!isLocked(el)) askApp("replace-image");
+      return;
+    }
+    var text = textLeafAt(el, x, y);
+    if (text) startEditing(text, x, y);
+  }
+
+  /**
+   * Whether the spot (x, y) of the slide shows dark: the first color painted under it, of the
+   * elements there or the slide behind them. What the editor adds in the default ink (see
+   * readable) would not show there.
+   */
+  function darkAt(x, y) {
+    var stack = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];
+    var layers = stack.filter(function (el) {
+      return slide.contains(el) && !el.closest("[" + ADDED + "]");
+    });
+    if (layers.indexOf(slide) < 0) layers.push(slide);
+    for (var el = slide.parentElement; el; el = el.parentElement) layers.push(el);
+    for (var i = 0; i < layers.length; i++) {
+      var computed = getComputedStyle(layers[i]);
+      var color = parseColor(computed.backgroundColor) || parseColor((/rgba?\([^)]*\)/.exec(computed.backgroundImage || "") || [""])[0]);
+      if (color && color.a > 0.5) return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b < 110;
+    }
+    return false;
+  }
+
+  /**
+   * The style `value` a new element gets for `key`, as it shows: on a dark ground (see darkAt),
+   * the default ink (the toolbar's, DEFAULT_INK) of a text box without a fill, and of lines and
+   * drawings, is white instead. A shape's text and border sit on its own fill, and a color picked
+   * on purpose, black among them, stays.
+   */
+  function readable(key, value) {
+    if (!darkGround || RADIUS[tool] || FIGURES[tool] || !DEFAULT_INK.test(String(value || ""))) return value;
+    if (key === "stroke" || (key === "color" && !toolStyle.fill)) return INK_ON_DARK;
+    return value;
+  }
+
+  /** A computed rgb or rgba color as its channels; null for anything else. */
+  function parseColor(value) {
+    var m = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?/.exec(String(value || ""));
+    if (!m) return null;
+    var a = m[4] === undefined ? 1 : /%$/.test(m[4]) ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+    return { r: +m[1], g: +m[2], b: +m[3], a: a };
+  }
 
   /** A CSS selector for `el` that also finds it in the saved slide. */
   function selectorOf(el) {
@@ -124,6 +180,7 @@
     event.preventDefault();
     if (tool !== "select") {
       cancelCreating();
+      clearDragMarks();
       useTool("select", true);
     }
     // On macOS, Control-click starts out as a primary press.
@@ -132,9 +189,10 @@
     saveNudges();
     var el = pickable(event.target, event.clientX, event.clientY) || lockedAt(event.target, event.clientX, event.clientY);
     // A member of a multi-selection, or what is inside the selection (it may be a parent, picked
-    // with Escape), leaves it selected.
+    // with ⇧Enter), leaves it selected.
     if (!isSelected(el) && (!selected || !el || !selected.contains(el))) select(el);
     var group = selected ? inDocumentOrder(allSelected()) : [];
+    var parent = group.length === 1 && selected.parentElement !== slide ? selected.parentElement : null;
     window.parent.postMessage(
       {
         type: "slop:edit-menu",
@@ -148,6 +206,12 @@
         editable: group.length === 1 && canEditText(selected),
         // Something on the slide is locked, so the menu can unlock it all.
         locked: !!slide.querySelector("[" + LOCK_ATTR + "]"),
+        // What lies at the pointer, the top-most first, for the menu to select any of, and what
+        // holds the one selected element.
+        under: stackAt(event.target, event.clientX, event.clientY).map(function (item) {
+          return { path: pathOf(item), name: layerName(item), selected: isSelected(item) };
+        }),
+        parent: parent ? { path: pathOf(parent), name: layerName(parent) } : null,
       },
       "*",
     );
@@ -172,8 +236,7 @@
       return;
     }
     if (drag.mode !== "move") {
-      // The lines stuck to what the handle changes go with it.
-      if (!drag.followers) drag.followers = linesFollowing([drag.el], [drag.el]);
+      if (!drag.moved) startTransform();
       drag.moved = true;
       transformTo(event);
       followStuck(drag.followers);
@@ -182,16 +245,88 @@
     }
     var dx = event.clientX - drag.x;
     var dy = event.clientY - drag.y;
-    if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+    if (!drag.moved && Math.abs(dx) < onScreen(DRAG_THRESHOLD) && Math.abs(dy) < onScreen(DRAG_THRESHOLD)) return;
     drag.moved = true;
     lastDown = { el: null, at: 0 };
     dropHover();
     moveDrag(event, dx, dy);
   });
 
+  /**
+   * Keeps `els` as they are for `state` (a drag), to put back should the drag be called off:
+   * their attributes, and with `deep`, what they hold (a line's path, a group's members, a
+   * drawing's shapes), and whether each had left a slot in the layout already.
+   */
+  function keepForCancel(state, els, deep) {
+    state.kept = state.kept || [];
+    els.forEach(function (el) {
+      var known = state.kept.some(function (item) {
+        return item.el === el;
+      });
+      if (!known) state.kept.push({ el: el, attrs: attributesOf(el), html: deep ? el.innerHTML : null, slot: !!placeholderOf(el) });
+    });
+  }
+
+  /** Puts everything `state` kept (see keepForCancel) back as it was. */
+  function restoreKept(state) {
+    (state.kept || []).forEach(function (item) {
+      var el = item.el;
+      attributesOf(el).forEach(function (attr) {
+        el.removeAttribute(attr[0]);
+      });
+      item.attrs.forEach(function (attr) {
+        el.setAttribute(attr[0], attr[1]);
+      });
+      if (item.html !== null && el.innerHTML !== item.html) el.innerHTML = item.html;
+      // The slot a resize had the element leave in the layout goes with the resize.
+      var slot = item.slot ? null : placeholderOf(el);
+      if (slot) slot.parentNode.removeChild(slot);
+    });
+  }
+
+  /**
+   * Escape in the middle of a drag or a marquee calls it off: what was moved, resized or turned
+   * is back as it was before the press, a copy dragged out with Alt is gone, and the selection
+   * is what it was before the marquee. Nothing is saved. False when nothing was under way: a
+   * press that has not moved yet is no gesture, and Escape then does what it always does.
+   */
+  function cancelGesture() {
+    if (!(drag && drag.moved) && !(marquee && marquee.moved)) return false;
+    lastDown = { el: null, at: 0 };
+    if (marquee) {
+      var before = marquee.before;
+      marquee = null;
+      marqueeBox.style.display = "none";
+      selectMany(before);
+    }
+    if (drag) {
+      var was = drag;
+      drag = null;
+      if (was.copies) {
+        was.copies.forEach(function (copy) {
+          if (copy.parentNode) copy.parentNode.removeChild(copy);
+        });
+        selectMany(was.originals);
+      }
+      restoreKept(was);
+      if (was.mode === "point") previewStick(null);
+      clearDragMarks();
+      (was.kept || []).forEach(function (item) {
+        refit(item.el);
+      });
+      placeHandles();
+      report();
+    }
+    resumeSlideChecks();
+    return true;
+  }
+
   /** The pointer let go (or was taken away): whatever it was in the middle of ends. */
   function endDrag() {
-    if (create) finishCreating();
+    if (create) {
+      finishCreating();
+      clearDragMarks();
+    }
     if (marquee) finishMarquee();
     if (drag) finishDrag();
     resumeSlideChecks();
@@ -209,12 +344,17 @@
       else unstick(el, end);
       previewStick(null);
     }
+    var changed = drag.members
+      ? drag.members.map(function (member) {
+          return member.el;
+        })
+      : [el];
     drag = null;
     clearDragMarks();
     // The handles to add points, away during a drag, are back.
     if (moved || point) placeHandles();
     if (moved) {
-      refit(el);
+      changed.forEach(refit);
       commit();
     }
     if (click) select(el);
@@ -260,9 +400,13 @@
     true,
   );
   document.addEventListener("dblclick", function (event) {
-    if (tool !== "select") return;
+    if (tool !== "select" || editing || Date.now() - enteredAt < DOUBLE_CLICK_MS) return;
     var el = pickable(event.target, event.clientX, event.clientY);
-    if (el && !editing) startEditing(el, event.clientX, event.clientY);
+    // An image's double-click was the press's to take (see editAt).
+    if (el && !isImage(el)) {
+      var text = textLeafAt(el, event.clientX, event.clientY);
+      if (text) startEditing(text, event.clientX, event.clientY);
+    }
   });
 
   // Pasted text keeps its formatting (cleaned, see pastedFragment), or with ⌘⇧V comes as plain text.
@@ -275,7 +419,9 @@
     plainPaste = false;
     var content = html ? pastedFragment(html) : textFragment(text);
     if (!content.childNodes.length && text) content = textFragment(text);
+    var before = textState();
     insertAtCaret(content);
+    textStepDone(before);
   });
   document.addEventListener("drop", function (event) {
     if (editing) event.preventDefault();
@@ -512,8 +658,11 @@
     saveNudges();
     var toolStyleBefore = toolStyle;
     toolStyle = style && typeof style === "object" ? style : {};
+    var point = at || pastePoint();
+    darkGround = darkAt(point.x, point.y);
     var el = newText(0, 0);
     toolStyle = toolStyleBefore;
+    el.removeAttribute("data-slop-empty");
     var body = textRoot(el);
     body.textContent = "";
     text.split("\n").forEach(function (line, i) {
@@ -522,7 +671,6 @@
     });
     var maxW = Math.round((slide.offsetWidth || 1920) * PASTE_TEXT_WIDTH);
     if (sizeOf(el).w > maxW) el.style.width = maxW + "px";
-    var point = at || pastePoint();
     var center = slidePoint(point.x, point.y);
     var size = sizeOf(el);
     place(el, Math.round(center.x - size.w / 2), Math.round(center.y - size.h / 2), null, null);

@@ -87,9 +87,10 @@ describe("what the window loads before it shows anything", () => {
     "PresenterWindow",
     "NarrationTimeline",
     "VideoExport",
-    "SlideImageExport",
+    "ExportDialog",
     "RewindDialog",
     "DeckSettings",
+    "CommandPalette",
   ])("leaves out %s, loaded on first use", (name) => {
     expect(graph.files).not.toContain(`src/components/${name}.tsx`);
   });

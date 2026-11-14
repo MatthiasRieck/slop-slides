@@ -63,6 +63,15 @@ function player({ at = "", html = DECK, parent, size = [1920, 1080], stage, setu
 
 const hashOf = (window: DOMWindow) => window.location.hash;
 
+/** A touch event: the fingers still down (`touches`, as [x, y]) and, for one lifted, where it was (`changed`). */
+function touch(p: ReturnType<typeof player>, type: string, touches: [number, number][], changed?: [number, number]) {
+  const event = new p.window.Event(type, { bubbles: true }) as Event & Record<string, unknown>;
+  const at = ([clientX, clientY]: [number, number]) => ({ clientX, clientY });
+  event.touches = touches.map(at);
+  event.changedTouches = changed ? [at(changed)] : touches.map(at);
+  p.doc.dispatchEvent(event);
+}
+
 describe("player: standalone", () => {
   it("shows the first slide and records it in the URL", () => {
     const p = player();
@@ -206,7 +215,7 @@ describe("player: standalone", () => {
       expect(css).toMatch(/html\[data-slop-blank\] \.deck\s*\{[^}]*opacity:\s*0\s*!important/);
       expect(css).toMatch(/html\[data-slop-blank="white"\] body\s*\{[^}]*background:\s*#fff\s*!important/);
       const print = css.slice(css.indexOf("@media print"));
-      expect(print).toMatch(/html\[data-slop-blank\] \.deck\s*\{[^}]*opacity:\s*1\s*!important/);
+      expect(print).toMatch(/html\[data-slop-blank\] \.deck,[^{]*\{[^}]*opacity:\s*1\s*!important/);
     });
   });
 
@@ -287,6 +296,11 @@ describe("player: standalone", () => {
       "W",
       "F",
       "R",
+      "O for all slides",
+      "K to play",
+      "? for the list of keys",
+      "?autoplay",
+      "?loop",
     ]) {
       expect(head).toContain(key);
     }
@@ -312,40 +326,107 @@ describe("player: standalone", () => {
     expect(p.active()).toBe(2);
   });
 
-  it("clicking the right of the slide advances, the left quarter goes back", () => {
+  it("a mouse click advances wherever it lands, the left quarter too", () => {
     const p = player();
     const slide = p.doc.querySelector("#intro p, #intro") as Element;
     p.click(slide, 1500);
     expect(p.active()).toBe(1);
     p.click(p.doc.body, 100);
+    expect(p.active()).toBe(2);
+  });
+
+  it("a tap in the left quarter of a touch screen goes back", () => {
+    const p = player({ at: "#end" });
+    // Told by the click itself, where the browser says what made it.
+    const tap = new p.window.MouseEvent("click", { clientX: 100, bubbles: true });
+    Object.defineProperty(tap, "pointerType", { value: "touch" });
+    p.doc.body.dispatchEvent(tap);
+    expect(p.active()).toBe(1);
+    // Or by the touch that ended just before it.
+    touch(p, "touchstart", [[100, 300]]);
+    touch(p, "touchend", [], [100, 300]);
+    p.click(p.doc.body, 100);
     expect(p.active()).toBe(0);
+    touch(p, "touchstart", [[1500, 300]]);
+    touch(p, "touchend", [], [1500, 300]);
+    p.click(p.doc.body, 1500);
+    expect(p.active()).toBe(1);
   });
 
   it("clicks on interactive elements do not navigate", () => {
-    const p = player();
-    p.click(p.doc.querySelector("button")!, 1500);
-    expect(p.active()).toBe(0);
+    const html = DECK.replace(
+      "<button>Click me</button>",
+      `<button>Click me</button><details><summary>More</summary></details><label>Name <input></label>
+       <audio controls></audio><span role="button">Vote</span><span onclick="void 0">Count</span>`,
+    );
+    const p = player({ html });
+    for (const control of ["button", "summary", "label", "input", "audio", "[role=button]", "[onclick]"]) {
+      p.click(p.doc.querySelector(control)!, 1500);
+      expect(p.active(), control).toBe(0);
+    }
     p.key("End");
     p.click(p.doc.querySelector("a")!, 100);
     expect(p.active()).toBe(2);
   });
 
+  it("a click that ends a selection of text does not navigate", () => {
+    const p = player({ at: "#2" });
+    const text = p.doc.querySelector("p")!.firstChild!;
+    const range = p.doc.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 2);
+    p.window.getSelection()!.addRange(range);
+    p.click(p.doc.querySelector("p")!, 1500);
+    expect(p.active()).toBe(1);
+    p.window.getSelection()!.removeAllRanges();
+    p.click(p.doc.querySelector("p")!, 1500);
+    expect(p.active()).toBe(2);
+  });
+
   it("swipes navigate", () => {
     const p = player();
-    const touch = (type: string, clientX: number) => {
-      const event = new p.window.Event(type, { bubbles: true }) as Event & Record<string, unknown>;
-      event[type === "touchstart" ? "touches" : "changedTouches"] = [{ clientX }];
-      p.doc.dispatchEvent(event);
-    };
-    touch("touchstart", 500);
-    touch("touchend", 400);
+    touch(p, "touchstart", [[500, 300]]);
+    touch(p, "touchend", [], [400, 300]);
     expect(p.active()).toBe(1);
-    touch("touchstart", 400);
-    touch("touchend", 480);
+    touch(p, "touchstart", [[400, 300]]);
+    touch(p, "touchend", [], [480, 310]);
     expect(p.active()).toBe(0);
-    touch("touchstart", 400);
-    touch("touchend", 420);
+    touch(p, "touchstart", [[400, 300]]);
+    touch(p, "touchend", [], [420, 300]);
     expect(p.active()).toBe(0); // short drags are not swipes
+  });
+
+  it("a pinch, a second finger, a diagonal drag and a zoomed page change no slide", () => {
+    const p = player({ at: "#2" });
+    // Two fingers down at once.
+    touch(p, "touchstart", [
+      [500, 300],
+      [700, 300],
+    ]);
+    touch(p, "touchend", [[700, 300]], [300, 300]);
+    touch(p, "touchend", [], [900, 300]);
+    expect(p.active()).toBe(1);
+    // A second finger joining a touch.
+    touch(p, "touchstart", [[500, 300]]);
+    touch(p, "touchstart", [
+      [500, 300],
+      [700, 300],
+    ]);
+    touch(p, "touchend", [], [300, 300]);
+    expect(p.active()).toBe(1);
+    // As far down as across.
+    touch(p, "touchstart", [[500, 300]]);
+    touch(p, "touchend", [], [400, 400]);
+    expect(p.active()).toBe(1);
+    // A swipe over a zoomed page pans it.
+    Object.defineProperty(p.window, "visualViewport", { value: { scale: 2 }, configurable: true });
+    touch(p, "touchstart", [[500, 300]]);
+    touch(p, "touchend", [], [300, 300]);
+    expect(p.active()).toBe(1);
+    Object.defineProperty(p.window, "visualViewport", { value: { scale: 1 }, configurable: true });
+    touch(p, "touchstart", [[500, 300]]);
+    touch(p, "touchend", [], [300, 300]);
+    expect(p.active()).toBe(2);
   });
 
   it("scales the 1920×1080 stage to fit and centers it", () => {
@@ -724,19 +805,35 @@ describe("player: control strip", () => {
     window.document.documentElement.requestFullscreen = vi.fn();
   };
 
-  it("has previous, the slide count, next and full screen", () => {
+  const names = (p: ReturnType<typeof player>) =>
+    [...strip(p)!.children].map((el) => el.getAttribute("aria-label") ?? el.textContent);
+
+  it("has previous, the slide count, next, all slides, full screen and the keys", () => {
     const p = player({ setup: fullscreen });
     expect(strip(p)!.getAttribute("role")).toBe("toolbar");
-    expect([...strip(p)!.children].map((el) => el.getAttribute("aria-label") ?? el.textContent)).toEqual([
+    expect(names(p)).toEqual([
       "Previous slide (←)",
       "1 / 3",
       "Next slide (→)",
+      "All slides (O)",
       "Full screen (F)",
+      "Keys (?)",
     ]);
   });
 
   it("leaves full screen out where the browser has none", () => {
-    expect(strip(player())!.querySelectorAll("button")).toHaveLength(2);
+    expect(names(player())).not.toContain("Full screen (F)");
+  });
+
+  it("gives a finger room on its buttons", () => {
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/@media \(pointer: coarse\) \{\s*\.slop-controls button \{\s*width: 44px;\s*height: 44px;/);
+  });
+
+  it("comes into sight for Tab, so the keyboard can reach it", () => {
+    const p = player();
+    expect(p.key("Tab").defaultPrevented).toBe(false);
+    expect(shown(p)).toBe(true);
   });
 
   it("navigates, keeps count and goes full screen", () => {
@@ -836,7 +933,7 @@ describe("player: control strip", () => {
     const reduced = css.slice(css.indexOf("prefers-reduced-motion"), css.indexOf("@media print"));
     expect(reduced).toMatch(/\.slop-controls[^{]*\{[^}]*transition:\s*none\s*!important/);
     const print = css.slice(css.indexOf("@media print"));
-    expect(print).toMatch(/\.slop-controls\s*\{[^}]*display:\s*none\s*!important/);
+    expect(print).toMatch(/\.slop-controls,[^{]*\{[^}]*display:\s*none\s*!important/);
   });
 });
 
@@ -950,6 +1047,14 @@ describe("player: review marks", () => {
     expect(shown(p)).toBe(false);
     p.key("r");
     expect(p.doc.querySelectorAll(".slop-review")).toHaveLength(1);
+  });
+
+  it("never shows them in the app's show, which the audience sees", () => {
+    const p = player({ html: REVIEWED, at: "?show&review" });
+    expect(shown(p)).toBe(false);
+    expect(p.key("r").defaultPrevented).toBe(false);
+    expect(shown(p)).toBe(false);
+    expect(p.doc.querySelector(".slop-review")).toBeNull();
   });
 
   it("draws each slide's strokes over that slide, in slide pixels", () => {
@@ -1318,7 +1423,8 @@ describe("player: without JavaScript", () => {
     // narrow windows) for the deck's slide size; see src-tauri/src/size.rs.
     expect(CSS).toMatch(/\.deck \{[^}]*width: var\(--slop-w, 1920px\)/);
     expect(CSS).toMatch(/\.deck > \.slide \{[^}]*height: var\(--slop-h, 1080px\) !important/);
-    expect(CSS).not.toContain("zoom:");
+    // The one zoom here is the overview's, which the player sets for the window.
+    expect(CSS.match(/zoom:[^;]*;/g)).toEqual(["zoom: var(--slop-overview-zoom, 0.2);"]);
     expect(CSS).not.toContain("@page");
   });
 });
@@ -1430,5 +1536,575 @@ describe("player: a preview's deck cut down to one slide", () => {
     const slides = [...p.doc.querySelectorAll<HTMLElement>(".deck > .slide")];
     const styled = slides.map((slide) => slide.getAttribute("style"));
     expect(styled).toEqual([null, null, "color: red", null]);
+  });
+});
+
+describe("player: the number being typed", () => {
+  const count = (p: ReturnType<typeof player>) => p.doc.querySelector(".slop-controls-count")!.textContent;
+  const shown = (p: ReturnType<typeof player>) => p.doc.documentElement.hasAttribute("data-slop-controls");
+
+  it("shows in the strip, which comes into sight for it, until it is used or forgotten", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const p = player();
+    p.key("1");
+    p.key("2");
+    expect(count(p)).toBe("→ 12");
+    expect(shown(p)).toBe(true);
+    p.key("Enter");
+    expect(count(p)).toBe("3 / 3");
+    p.key("2");
+    expect(count(p)).toBe("→ 2");
+    vi.advanceTimersByTime(3000);
+    expect(count(p)).toBe("3 / 3");
+  });
+
+  it("is corrected with Backspace and given up with Escape, moving nowhere", () => {
+    const p = player({ at: "#2" });
+    p.key("3");
+    p.key("1");
+    expect(p.key("Backspace").defaultPrevented).toBe(true);
+    expect(count(p)).toBe("→ 3");
+    p.key("Backspace");
+    expect(count(p)).toBe("2 / 3");
+    expect(p.active()).toBe(1);
+    // Nothing typed: Backspace is the previous slide again.
+    p.key("Backspace");
+    expect(p.active()).toBe(0);
+    p.key("3");
+    expect(p.key("Escape").defaultPrevented).toBe(true);
+    p.key("Enter");
+    expect(p.active()).toBe(1);
+  });
+
+  it("is told to the app's show, and says whether a 0 would be one of its digits", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    const typing = () => (p.window as unknown as { slopPlayer: { typing: () => boolean } }).slopPlayer.typing();
+    expect(typing()).toBe(false);
+    p.key("1");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:typed", typed: "1" }, "*");
+    expect(typing()).toBe(true);
+    p.key("0");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:typed", typed: "10" }, "*");
+    p.key("Escape");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:typed", typed: "" }, "*");
+    expect(typing()).toBe(false);
+  });
+
+  it("counts every slide in the app's show, as its slide list does, a hidden one standing for the next shown", () => {
+    const html = `<main class="deck">
+      <section class="slide" id="a"></section>
+      <section class="slide" id="b" data-hidden></section>
+      <section class="slide" id="c"></section>
+      <section class="slide" id="d"></section>
+    </main>`;
+    const id = (p: ReturnType<typeof player>) => p.doc.querySelector(".slide.active")?.id;
+    const jump = (p: ReturnType<typeof player>, digits: string) => {
+      for (const digit of digits) p.key(digit);
+      p.key("Enter");
+      return id(p);
+    };
+    const show = player({ html, parent: { postMessage: vi.fn() } });
+    expect(jump(show, "4")).toBe("d");
+    expect(jump(show, "2")).toBe("c");
+    expect(jump(show, "1")).toBe("a");
+    expect(jump(show, "99")).toBe("d");
+    expect(jump(show, "0")).toBe("a");
+    // A file of its own knows only the slides it shows.
+    expect(jump(player({ html }), "2")).toBe("c");
+  });
+});
+
+describe("player: what the app's show is told and asks for", () => {
+  const messages = (parent: { postMessage: ReturnType<typeof vi.fn> }, type: string) =>
+    parent.postMessage.mock.calls.map(([data]) => data as Record<string, unknown>).filter((d) => d.type === type);
+  const send = (p: ReturnType<typeof player>, data: unknown) =>
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data }));
+
+  it("says when the screen is blanked and when the slide is back", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    p.key("b");
+    p.key("w");
+    p.key("ArrowRight");
+    expect(messages(parent, "slop:blank").map((d) => d.color)).toEqual(["black", "white", null]);
+    expect(p.active()).toBe(0);
+  });
+
+  it("blanks the screen and brings the slide back when asked", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    const blank = () => p.doc.documentElement.getAttribute("data-slop-blank");
+    send(p, { type: "slop:blank", color: "black" });
+    expect(blank()).toBe("black");
+    send(p, { type: "slop:blank", color: "white" });
+    expect(blank()).toBe("white");
+    send(p, { type: "slop:blank", color: null });
+    expect(blank()).toBeNull();
+    send(p, { type: "slop:blank", color: "url(x)" });
+    expect(blank()).toBeNull();
+    // Not a file of its own.
+    const alone = player();
+    send(alone, { type: "slop:blank", color: "black" });
+    expect(alone.doc.documentElement.hasAttribute("data-slop-blank")).toBe(false);
+  });
+
+  it("goes to the slide picked in the app's overview, bringing a blanked slide back", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    p.key("b");
+    send(p, { type: "slop:goto", id: "end" });
+    expect(p.active()).toBe(2);
+    expect(p.doc.documentElement.hasAttribute("data-slop-blank")).toBe(false);
+    send(p, { type: "slop:goto", id: "#2" });
+    expect(p.active()).toBe(1);
+  });
+
+  it("ends on a dark screen after the last slide, and asks to end the show from there", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ at: "#end", parent });
+    const ended = () => p.doc.documentElement.hasAttribute("data-slop-end");
+    p.key("ArrowRight");
+    expect(ended()).toBe(true);
+    expect(p.active()).toBe(2);
+    expect(messages(parent, "slop:end")).toEqual([{ type: "slop:end", ended: true }]);
+    expect(messages(parent, "slop:exit")).toEqual([]);
+    // Back shows the last slide again.
+    p.key("ArrowLeft");
+    expect(ended()).toBe(false);
+    expect(p.active()).toBe(2);
+    expect(messages(parent, "slop:end")).toHaveLength(2);
+    // A click goes on like a key; going on from the end asks to end the show.
+    p.click(p.doc.body, 1500);
+    expect(ended()).toBe(true);
+    p.key(" ");
+    expect(messages(parent, "slop:exit")).toEqual([{ type: "slop:exit" }]);
+    // Any slide asked for leaves the end.
+    p.key("Home");
+    expect(ended()).toBe(false);
+    expect(p.active()).toBe(0);
+    p.key("End");
+    p.key("Enter");
+    expect(ended()).toBe(true);
+    send(p, { type: "slop:goto", id: "intro" });
+    expect(ended()).toBe(false);
+    expect(p.active()).toBe(0);
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/html\[data-slop-end\] \.deck\s*\{[^}]*opacity:\s*0\s*!important/);
+  });
+
+  it("a file of its own has no end screen: it stays on its last slide", () => {
+    const p = player({ at: "#end" });
+    p.key("ArrowRight");
+    p.click(p.doc.body, 1500);
+    expect(p.doc.documentElement.hasAttribute("data-slop-end")).toBe(false);
+    expect(p.active()).toBe(2);
+  });
+
+  it("hands a link out of the deck to the app instead of following it, and follows one within", () => {
+    const html = DECK.replace(
+      '<a href="#x">link</a>',
+      '<a href="#x">link</a><a id="web" href="https://example.com/demo" target="_blank"><b>demo</b></a><a id="mail" href="mailto:a@example.com">mail</a>',
+    );
+    const parent = { postMessage: vi.fn() };
+    const p = player({ html, at: "#end", parent });
+    const press = (el: Element) => {
+      const event = new p.window.MouseEvent("click", { bubbles: true, cancelable: true });
+      el.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(press(p.doc.querySelector("#web b")!)).toBe(true);
+    expect(press(p.doc.querySelector("#mail")!)).toBe(true);
+    expect(messages(parent, "slop:link").map((d) => d.href)).toEqual([
+      "https://example.com/demo",
+      "mailto:a@example.com",
+    ]);
+    expect(press(p.doc.querySelector('a[href="#x"]')!)).toBe(false);
+    expect(messages(parent, "slop:link")).toHaveLength(2);
+    expect(p.active()).toBe(2);
+    // In a browser the link is the browser's.
+    const alone = player({ html, at: "#end" });
+    const event = new alone.window.MouseEvent("click", { bubbles: true, cancelable: true });
+    alone.doc.querySelector("#web")!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("player: playing by itself", () => {
+  const TIMED = `<main class="deck">
+    <section class="slide" id="a" data-duration="2"></section>
+    <section class="slide" id="b"></section>
+    <section class="slide" id="c" data-duration="1.5"></section>
+  </main>`;
+  const timed = (at: string) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    return player({ html: TIMED, at });
+  };
+  const button = (p: ReturnType<typeof player>, name: string) =>
+    [...p.doc.querySelectorAll(".slop-controls button")].find((b) => b.getAttribute("aria-label")!.startsWith(name));
+
+  it("?autoplay shows each slide for its own time, or five seconds, and stops after the last", () => {
+    const p = timed("?autoplay");
+    vi.advanceTimersByTime(1999);
+    expect(p.active()).toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(p.active()).toBe(1);
+    vi.advanceTimersByTime(5000);
+    expect(p.active()).toBe(2);
+    expect(button(p, "Pause")).toBeTruthy();
+    vi.advanceTimersByTime(60_000);
+    expect(p.active()).toBe(2);
+    expect(button(p, "Play")).toBeTruthy();
+  });
+
+  it("?autoplay=8 names the seconds of a slide without a time of its own", () => {
+    const p = timed("?autoplay=8#b");
+    vi.advanceTimersByTime(7999);
+    expect(p.active()).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(p.active()).toBe(2);
+  });
+
+  it("?loop starts over after the last slide, by itself or by hand", () => {
+    const p = timed("?autoplay&loop#c");
+    vi.advanceTimersByTime(1500);
+    expect(p.active()).toBe(0);
+    vi.advanceTimersByTime(2000);
+    expect(p.active()).toBe(1);
+    const byHand = player({ at: "?loop#end" });
+    byHand.key("ArrowRight");
+    expect(byHand.active()).toBe(0);
+    byHand.key("End");
+    byHand.click(byHand.doc.body, 1500);
+    expect(byHand.active()).toBe(0);
+  });
+
+  it("gives a slide gone to by hand its whole time", () => {
+    const p = timed("?autoplay");
+    vi.advanceTimersByTime(1500);
+    p.key("End");
+    vi.advanceTimersByTime(1000);
+    p.key("Home");
+    vi.advanceTimersByTime(1999);
+    expect(p.active()).toBe(0);
+    vi.advanceTimersByTime(1);
+    expect(p.active()).toBe(1);
+  });
+
+  it("K and the strip's button pause and play; without ?autoplay there is no button until K", () => {
+    const p = timed("");
+    expect(button(p, "Play")).toBeUndefined();
+    vi.advanceTimersByTime(60_000);
+    expect(p.active()).toBe(0);
+    expect(p.key("k").defaultPrevented).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(p.active()).toBe(1);
+    (button(p, "Pause") as HTMLElement).click();
+    vi.advanceTimersByTime(60_000);
+    expect(p.active()).toBe(1);
+    p.key("K");
+    vi.advanceTimersByTime(5000);
+    expect(p.active()).toBe(2);
+  });
+
+  it("holds the slide while the screen is blank", () => {
+    const p = timed("?autoplay");
+    p.key("b");
+    vi.advanceTimersByTime(10_000);
+    expect(p.active()).toBe(0);
+    p.key("b");
+    vi.advanceTimersByTime(2000);
+    expect(p.active()).toBe(1);
+  });
+
+  it("is not for the app's show or a capture", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const framed = player({ html: TIMED, at: "?autoplay", parent: { postMessage: vi.fn() } });
+    const still = player({ html: TIMED, at: "?autoplay&print" });
+    vi.advanceTimersByTime(60_000);
+    expect(framed.active()).toBe(0);
+    expect(still.active()).toBe(0);
+    expect(framed.key("k").defaultPrevented).toBe(false);
+  });
+});
+
+describe("player: keeping the display awake", () => {
+  function awake(at = "") {
+    const release = vi.fn(async () => {});
+    const request = vi.fn(async () => ({ release, addEventListener: vi.fn() }));
+    let full: Element | null = null;
+    const p = player({
+      at,
+      setup: (window) => {
+        Object.defineProperty(window.navigator, "wakeLock", { value: { request }, configurable: true });
+        Object.defineProperty(window.document, "fullscreenElement", { get: () => full, configurable: true });
+      },
+    });
+    const fullscreen = (on: boolean) => {
+      full = on ? p.doc.documentElement : null;
+      p.doc.dispatchEvent(new p.window.Event("fullscreenchange"));
+    };
+    return { p, request, release, fullscreen };
+  }
+
+  it("asks for it in full screen and lets go of it after", async () => {
+    const { request, release, fullscreen } = awake();
+    expect(request).not.toHaveBeenCalled();
+    fullscreen(true);
+    expect(request).toHaveBeenCalledExactlyOnceWith("screen");
+    fullscreen(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("asks for it while playing by itself", () => {
+    const { p, request } = awake("?autoplay");
+    expect(request).toHaveBeenCalledOnce();
+    p.key("k");
+    p.key("k");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does without where the browser has none, or refuses", () => {
+    const p = player({ at: "?autoplay" });
+    expect(p.active()).toBe(0);
+    const refused = vi.fn(() => Promise.reject(new Error("no")));
+    const q = player({
+      at: "?autoplay",
+      setup: (window) => Object.defineProperty(window.navigator, "wakeLock", { value: { request: refused } }),
+    });
+    expect(refused).toHaveBeenCalledOnce();
+    expect(q.active()).toBe(0);
+  });
+});
+
+describe("player: all slides at once", () => {
+  const HIDDEN = DECK.replace('<section class="slide"><p>', '<section class="slide" data-hidden><p>');
+  const open = (p: ReturnType<typeof player>) => p.doc.documentElement.hasAttribute("data-slop-overview");
+  const picked = (p: ReturnType<typeof player>) => p.doc.querySelector("[data-slop-picked]")?.id;
+
+  it("O opens it on the slide on screen and closes it again, as Escape does", () => {
+    const p = player({ at: "#end" });
+    expect(p.key("o").defaultPrevented).toBe(true);
+    expect(open(p)).toBe(true);
+    expect(picked(p)).toBe("end");
+    expect(Number(p.doc.documentElement.style.getPropertyValue("--slop-overview-zoom"))).toBeGreaterThan(0);
+    p.key("O");
+    expect(open(p)).toBe(false);
+    expect(picked(p)).toBeUndefined();
+    p.key("o");
+    p.key("Escape");
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(2);
+  });
+
+  it("the arrows pick a slide and Enter goes to it; the keys move no slide meanwhile", () => {
+    const p = player({ at: "#end" });
+    p.key("o");
+    p.key("ArrowLeft");
+    p.key("ArrowLeft");
+    p.key("ArrowLeft");
+    expect(picked(p)).toBe("intro");
+    expect(p.active()).toBe(2);
+    p.key("End");
+    expect(picked(p)).toBe("end");
+    p.key("Home");
+    p.key("b");
+    expect(p.doc.documentElement.hasAttribute("data-slop-blank")).toBe(false);
+    p.key("Enter");
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(0);
+  });
+
+  it("a press on a slide goes to it, on whatever it lands; a press beside them closes it", () => {
+    const p = player();
+    p.key("o");
+    const event = new p.window.MouseEvent("click", { bubbles: true, cancelable: true });
+    p.doc.querySelector("#end a")!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(2);
+    p.key("o");
+    p.click(p.doc.body, 10);
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(2);
+  });
+
+  it("has a button in the strip, and lays the slides out by the stylesheet, the hidden ones left out", () => {
+    const p = player({ html: HIDDEN });
+    const button = [...p.doc.querySelectorAll<HTMLElement>(".slop-controls button")].find(
+      (b) => b.getAttribute("aria-label") === "All slides (O)",
+    )!;
+    button.click();
+    expect(open(p)).toBe(true);
+    button.click();
+    expect(open(p)).toBe(false);
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/html\[data-slop-overview\] \.deck\s*\{[^}]*transform:\s*none\s*!important/);
+    expect(css).toMatch(/html\[data-slop-overview\] \.deck > \.slide\s*\{[^}]*visibility:\s*visible\s*!important/);
+    expect(css).toMatch(/html\[data-slop-overview\] \.deck > \.slide\[data-hidden\]\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/html\[data-slop-overview\] \.slide \.reveal\s*\{[^}]*animation:\s*none\s*!important/);
+  });
+
+  it("is closed for printing, and is not there in the app's show", () => {
+    const p = player();
+    p.key("o");
+    p.window.dispatchEvent(new p.window.Event("beforeprint"));
+    expect(open(p)).toBe(false);
+    const framed = player({ parent: { postMessage: vi.fn() } });
+    expect(framed.key("o").defaultPrevented).toBe(false);
+    expect(open(framed)).toBe(false);
+  });
+});
+
+describe("player: the list of keys", () => {
+  const open = (p: ReturnType<typeof player>) => p.doc.documentElement.hasAttribute("data-slop-help");
+  const panel = (p: ReturnType<typeof player>) => p.doc.querySelector<HTMLElement>(".slop-help");
+
+  it("? lists the keys in a dialog, and ? or Escape closes it", () => {
+    const p = player();
+    expect(panel(p)).toBeNull();
+    expect(p.key("?").defaultPrevented).toBe(true);
+    expect(open(p)).toBe(true);
+    expect(panel(p)!.getAttribute("role")).toBe("dialog");
+    const text = panel(p)!.textContent!;
+    for (const said of ["Next slide", "Previous slide", "Go to that slide", "All slides", "Black / white screen"]) {
+      expect(text).toContain(said);
+    }
+    expect(text).toContain("?autoplay");
+    expect(text).toContain("?loop");
+    expect(p.doc.activeElement).toBe(panel(p));
+    p.key("?");
+    expect(open(p)).toBe(false);
+    p.key("?");
+    p.key("Escape");
+    expect(open(p)).toBe(false);
+    expect(p.doc.querySelectorAll(".slop-help")).toHaveLength(1);
+  });
+
+  it("lists full screen only where the browser has it", () => {
+    const without = player();
+    without.key("?");
+    expect([...panel(without)!.querySelectorAll("dt")].map((dt) => dt.textContent)).not.toContain("F");
+    const withIt = player({
+      setup: (window) => {
+        window.document.documentElement.requestFullscreen = vi.fn();
+      },
+    });
+    withIt.key("?");
+    expect([...panel(withIt)!.querySelectorAll("dt")].map((dt) => dt.textContent)).toContain("F");
+  });
+
+  it("any other key closes it and does what it does; a press beside it only closes it", () => {
+    const p = player();
+    p.key("?");
+    p.key("ArrowRight");
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(1);
+    p.key("?");
+    p.click(p.doc.body, 1500);
+    expect(open(p)).toBe(false);
+    expect(p.active()).toBe(1);
+  });
+
+  it("has a button in the strip, and offers to print", () => {
+    const p = player();
+    const print = vi.fn();
+    p.window.print = print;
+    [...p.doc.querySelectorAll<HTMLElement>(".slop-controls button")]
+      .find((b) => b.getAttribute("aria-label") === "Keys (?)")!
+      .click();
+    expect(open(p)).toBe(true);
+    const buttons = [...panel(p)!.querySelectorAll("button")];
+    expect(buttons.map((b) => b.textContent)).toEqual(["Print or save as PDF", "Close"]);
+    buttons[0]!.click();
+    expect(print).toHaveBeenCalledOnce();
+    expect(open(p)).toBe(false);
+  });
+
+  it("is the app's own in its show", () => {
+    const p = player({ parent: { postMessage: vi.fn() } });
+    expect(p.key("?").defaultPrevented).toBe(false);
+    expect(panel(p)).toBeNull();
+  });
+});
+
+describe("player: for a screen reader", () => {
+  const TITLED = `<!DOCTYPE html><html><head><title>Roadmap</title></head><body><main class="deck">
+    <section class="slide" id="a"><h1>Where we  are</h1></section>
+    <section class="slide" id="b" aria-label="Numbers"><p>No heading</p></section>
+    <section class="slide" id="c"><h2>Next steps</h2></section>
+  </main></body></html>`;
+
+  it("says each slide as it shows, politely", () => {
+    const p = player({ html: TITLED });
+    const live = p.doc.querySelector(".slop-live")!;
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.textContent).toBe("Slide 1 of 3: Where we are");
+    p.key("ArrowRight");
+    expect(live.textContent).toBe("Slide 2 of 3");
+    p.key("ArrowRight");
+    expect(live.textContent).toBe("Slide 3 of 3: Next steps");
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/\.slop-live\s*\{[^}]*clip-path:\s*inset\(50%\)/);
+  });
+
+  it("names the slide in the page's title, before the deck's", () => {
+    const p = player({ html: TITLED });
+    expect(p.doc.title).toBe("Where we are · Roadmap");
+    p.key("ArrowRight");
+    expect(p.doc.title).toBe("Slide 2 · Roadmap");
+    const untitled = player();
+    expect(untitled.doc.title).toBe("Slide 1 of 3");
+  });
+
+  it("marks each slide as one, under its number and heading, keeping a label the deck gave it", () => {
+    const p = player({ html: TITLED });
+    const slides = [...p.doc.querySelectorAll(".slide")];
+    expect(slides.map((s) => s.getAttribute("role"))).toEqual(["group", "group", "group"]);
+    expect(slides.map((s) => s.getAttribute("aria-roledescription"))).toEqual(["slide", "slide", "slide"]);
+    expect(slides.map((s) => s.getAttribute("aria-label"))).toEqual([
+      "Slide 1 of 3: Where we are",
+      "Numbers",
+      "Slide 3 of 3: Next steps",
+    ]);
+  });
+
+  it("marks nothing where the page may be saved or is only captured", () => {
+    for (const at of ["?embed&slide=a", "?static&print"]) {
+      const p = player({ html: TITLED, at, parent: at.includes("embed") ? { postMessage: vi.fn() } : undefined });
+      expect(p.doc.querySelector(".slide[role]"), at).toBeNull();
+      expect(p.doc.querySelector(".slop-live"), at).toBeNull();
+      expect(p.doc.title).toBe("Roadmap");
+    }
+  });
+});
+
+describe("player: on a phone held upright", () => {
+  const upright = (matches: boolean) => (window: DOMWindow) => {
+    window.matchMedia = ((query: string) => ({
+      matches: matches && query.includes("orientation: portrait"),
+    })) as unknown as typeof window.matchMedia;
+  };
+  const hint = (p: ReturnType<typeof player>) => p.doc.querySelector(".slop-hint");
+
+  it("says for a moment that sideways shows more", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const p = player({ setup: upright(true), size: [390, 844] });
+    expect(hint(p)!.textContent).toBe("Turn your phone sideways for a larger view");
+    vi.advanceTimersByTime(6000);
+    expect(hint(p)).toBeNull();
+  });
+
+  it("stops saying so once the phone is turned", () => {
+    const p = player({ setup: upright(true), size: [390, 844] });
+    p.window.dispatchEvent(new p.window.Event("resize"));
+    expect(hint(p)).toBeNull();
+  });
+
+  it("says nothing on a desk, nor for a deck that is upright itself", () => {
+    expect(hint(player({ setup: upright(false) }))).toBeNull();
+    expect(hint(player({ setup: upright(true), stage: [1080, 1920] }))).toBeNull();
   });
 });

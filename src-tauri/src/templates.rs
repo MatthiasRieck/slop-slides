@@ -232,6 +232,27 @@ pub fn deck_shell(source: &str, id: &str, title: &str) -> String {
     html::ensure_runtime(&html::set_template(&shell, Some(id)))
 }
 
+/// The built-in template the example deck is made from.
+const EXAMPLE_TEMPLATE: &str = "editorial";
+/// What the example deck is called.
+pub const EXAMPLE_TITLE: &str = "Example deck";
+
+/// Creates an example deck in `root` for a first look at the app, as `example-deck/deck.html`
+/// (or `example-deck-2`, … when that is taken): every layout of a built-in template, with its
+/// placeholder text, so there are slides to edit, restyle and present. Returns its deck file.
+pub fn create_example(root: &Path) -> Result<PathBuf> {
+    let source = builtin(EXAMPLE_TEMPLATE).expect("a built-in template");
+    let source = html::set_template(
+        &html::set_title(source, EXAMPLE_TITLE),
+        Some(EXAMPLE_TEMPLATE),
+    );
+    let dir = crate::files::unique_dir(root, &html::slugify(EXAMPLE_TITLE));
+    fs::create_dir_all(&dir)?;
+    let file = dir.join(DECK_FILE);
+    deck::write_html(&file, &html::ensure_runtime(&source))?;
+    Ok(file)
+}
+
 /// Saves the deck file `deck_file` as the user template `name`: a copy of it with
 /// placeholder text in place of its content, and its assets. Returns the new template.
 pub fn create_from_deck(deck_file: &Path, root: &Path, name: &str) -> Result<TemplateSummary> {
@@ -592,6 +613,26 @@ mod tests {
         assert!(stage(&session.0, &root.0, "bento-grid").is_ok());
         assert!(stage(&session.0, &root.0, "../x").is_err());
         assert!(stage(&session.0, &root.0, "nope").is_err());
+    }
+
+    #[test]
+    fn the_example_deck_is_a_deck_with_slides_that_never_replaces_one() {
+        let root = TempDir::new("templates-example");
+        let first = create_example(&root).unwrap();
+        assert_eq!(first, root.join("example-deck").join(DECK_FILE));
+        let source = fs::read_to_string(&first).unwrap();
+        assert_eq!(html::title(&source).as_deref(), Some(EXAMPLE_TITLE));
+        assert!(html::find_slides(&source).len() > 3);
+        assert_eq!(
+            html::app_meta_content(&source, html::TEMPLATE_META).as_deref(),
+            Some(EXAMPLE_TEMPLATE)
+        );
+        assert_eq!(
+            crate::workspace::classify(&source),
+            crate::workspace::FileKind::Deck
+        );
+        let second = create_example(&root).unwrap();
+        assert_eq!(second, root.join("example-deck-2").join(DECK_FILE));
     }
 
     #[test]

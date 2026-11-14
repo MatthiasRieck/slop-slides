@@ -107,7 +107,9 @@ describe("the list of comments", () => {
     // Another part of the store changing leaves the lists as they are: the very same ones.
     useApp.getState().setCommentTexts(true);
     expect(deckComments(useApp.getState())).toBe(all);
-    expect(commentsInScope(useApp.getState())).toBe(all);
+    const inScope = commentsInScope(useApp.getState());
+    expect(inScope).toEqual(all);
+    expect(commentsInScope(useApp.getState())).toBe(inScope);
     expect(commentsToSend(useApp.getState())).toBe(1);
 
     useApp.setState({ commentScope: "slide" });
@@ -159,5 +161,80 @@ describe("the list of comments", () => {
     });
     useApp.getState().takeAllComments();
     expect(useApp.getState()).toMatchObject({ commentScope: "deck", commentsHeld: {}, reviewVisible: true });
+  });
+
+  describe("sent comments", () => {
+    const comments = () => ({ intro: [comment("a", "One")], outro: [comment("b", "Two")] });
+
+    it("stay on their slides marked as sent, and do not go out again", async () => {
+      const { useApp, commentsInScope, unsentComments, hasUnsentComments } = await freshModule();
+      useApp.setState({
+        deck: DECK,
+        selected: "intro",
+        comments: comments(),
+        commentScope: "deck",
+        reviewVisible: true,
+      });
+      useApp.getState().markCommentsSent([comment("a", "One")]);
+      expect(useApp.getState().comments.intro).toEqual([{ ...comment("a", "One"), sent: true }]);
+      expect(commentsInScope(useApp.getState()).map((c) => c.id)).toEqual(["b"]);
+      expect(unsentComments(useApp.getState()).map((c) => c.id)).toEqual(["b"]);
+      useApp.getState().markCommentsSent([comment("b", "Two")]);
+      expect(hasUnsentComments(useApp.getState())).toBe(false);
+    });
+
+    it("go out again once changed, or when asked to", async () => {
+      const { useApp, commentsInScope } = await freshModule();
+      const sent = { intro: [{ ...comment("a", "One"), sent: true }], outro: [{ ...comment("b", "Two"), sent: true }] };
+      useApp.setState({ deck: DECK, selected: "intro", comments: sent, commentScope: "deck", reviewVisible: true });
+      useApp.getState().updateComment("intro", "a", "One, again");
+      expect(useApp.getState().comments.intro).toEqual([comment("a", "One, again")]);
+      useApp.setState({ commentsHeld: { b: "Two" } });
+      useApp.getState().resendComment("outro", "b");
+      expect(useApp.getState().comments.outro).toEqual([comment("b", "Two")]);
+      expect(useApp.getState().commentsHeld).toEqual({});
+      expect(commentsInScope(useApp.getState()).map((c) => c.id)).toEqual(["a", "b"]);
+    });
+
+    it("are resolved together, leaving those still to send", async () => {
+      const { useApp } = await freshModule();
+      useApp.setState({
+        deck: DECK,
+        comments: { intro: [{ ...comment("a", "One"), sent: true }, comment("c", "Three")], outro: [] },
+      });
+      useApp.getState().resolveSentComments();
+      expect(useApp.getState().comments).toEqual({ intro: [comment("c", "Three")], outro: [] });
+    });
+
+    it("are saved as sent in the deck file", async () => {
+      vi.useFakeTimers();
+      const { useApp, flushReviewSave } = await freshModule();
+      useApp.setState({ deck: DECK, comments: comments() });
+      useApp.getState().markCommentsSent([comment("a", "One")]);
+      await flushReviewSave();
+      expect(calls("save_comments").at(-1)).toMatchObject({ comments: { intro: [{ id: "a", sent: true }] } });
+      vi.useRealTimers();
+    });
+  });
+
+  describe("choosing in the list which go out", () => {
+    it("takes one of another slide along by widening to the deck, keeping the rest out", async () => {
+      const { useApp, commentGoing, deckComments } = await freshModule();
+      useApp.setState({
+        deck: DECK,
+        selected: "intro",
+        comments: { intro: [comment("a", "One")], outro: [comment("b", "Two"), comment("c", "Three")] },
+        commentScope: "slide",
+        commentsHeld: {},
+        reviewVisible: true,
+      });
+      const [a, b, c] = deckComments(useApp.getState());
+      expect([a, b, c].map((x) => commentGoing(useApp.getState(), x!))).toEqual([true, false, false]);
+      useApp.getState().setCommentGoing(b!, true);
+      expect(useApp.getState().commentScope).toBe("deck");
+      expect([a, b, c].map((x) => commentGoing(useApp.getState(), x!))).toEqual([true, true, false]);
+      useApp.getState().setCommentGoing(a!, false);
+      expect(commentGoing(useApp.getState(), a!)).toBe(false);
+    });
   });
 });

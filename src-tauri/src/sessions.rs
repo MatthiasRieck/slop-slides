@@ -32,6 +32,10 @@ const SKETCHES_KEPT: usize = 30;
 const TOOL_IMAGES_KEPT: usize = 200;
 /// In a subject's newest session: the name of the session selected as its current one.
 const ACTIVE_FILE: &str = "active-session";
+/// The name the user gave a conversation; without the file it is called by its first message.
+const TITLE_FILE: &str = "title";
+/// How long a conversation's name gets, in characters.
+const TITLE_LENGTH: usize = 100;
 
 /// The session's chat; Null without one yet.
 pub fn load_chat(session: Option<&Path>) -> Result<Value> {
@@ -324,13 +328,15 @@ impl Sessions {
                 let chat = load_chat(Some(&path))?;
                 let messages = chat.as_array();
                 let first = messages.and_then(|items| items.iter().find(|m| m["role"] == "user"));
-                let title = first
-                    .and_then(|m| m["text"].as_str())
+                let given = title(&path);
+                let title = given
+                    .as_deref()
+                    .or_else(|| first.and_then(|m| m["text"].as_str()))
                     .unwrap_or("New conversation");
                 let about = subject_of(&path);
                 Ok(Thread {
                     id: path.file_name().unwrap().to_string_lossy().into_owned(),
-                    title: title.chars().take(100).collect(),
+                    title: title.chars().take(TITLE_LENGTH).collect(),
                     created_at: first.and_then(|m| m["createdAt"].as_u64()),
                     current: current.as_ref() == Some(&path),
                     message_count: messages.map_or(0, Vec::len),
@@ -358,7 +364,41 @@ impl Sessions {
         let chat = load_chat(Some(&path))?;
         let provider = provider(&path)?;
         self.adopt(&path, subject)?;
-        Ok(OpenedThread { chat, provider })
+        Ok(OpenedThread {
+            chat,
+            provider,
+            title: title(&path),
+        })
+    }
+
+    /// Names conversation `thread` of workspace `root`; a blank `name` gives it back the name
+    /// its first message gives it.
+    pub fn rename_thread(&self, root: &Path, thread: &str, name: &str) -> Result<()> {
+        set_title(&self.thread(root, thread)?, name)
+    }
+
+    /// Deletes conversation `thread` of workspace `root` with everything its session holds.
+    /// The current conversation of `subject`, the one on show, is refused. Its own subject
+    /// keeps the conversation it had selected.
+    pub fn delete_thread(&self, root: &Path, subject: &Path, thread: &str) -> Result<()> {
+        let path = self.thread(root, thread)?;
+        if self.current(subject).as_ref() == Some(&path) {
+            return Err(Error::msg(
+                "This is the chat on show. Start a new chat before deleting it.",
+            ));
+        }
+        // The selection is kept in the subject's newest session, which may be the one going.
+        let about = subject_of(&path);
+        let selected = about
+            .as_ref()
+            .and_then(|about| self.current(about))
+            .filter(|current| *current != path);
+        fs::remove_dir_all(&path)?;
+        self.with_index(|index| index.subjects.remove(&path));
+        if let (Some(about), Some(selected)) = (about, selected) {
+            self.select(&about, &selected.file_name().unwrap().to_string_lossy())?;
+        }
+        Ok(())
     }
 
     /// Moves the current conversation of `from` to `to`, where it becomes the current one.
@@ -417,6 +457,29 @@ impl Sessions {
         Ok(dir)
     }
 
+    /// The file or folder `from` is at `to` now (renamed): the conversations about it, or about
+    /// anything inside it, are about what is there from here on. Both paths are given resolved,
+    /// `from` as it was before the move.
+    pub fn rehome(&self, from: &Path, to: &Path) -> Result<()> {
+        let moved: Vec<(PathBuf, PathBuf)> = self.with_index(|index| {
+            let inside = index.subjects.iter().filter_map(|(session, subject)| {
+                let rest = subject.strip_prefix(from).ok()?;
+                let subject = if rest.as_os_str().is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(rest)
+                };
+                Some((session.clone(), subject))
+            });
+            inside.collect()
+        });
+        for (session, subject) in moved {
+            fs::write(session.join(META_FILE), meta(&subject).to_string())?;
+            self.index_subject(&session, &subject);
+        }
+        Ok(())
+    }
+
     /// Whether `path` lies inside a session folder (for serving session files to the UI).
     pub fn contains(&self, path: &Path) -> bool {
         match (path.canonicalize(), self.root.canonicalize()) {
@@ -432,7 +495,7 @@ impl Sessions {
 pub struct Thread {
     /// The session folder's name.
     pub id: String,
-    /// The start of its first message, or "New conversation".
+    /// The name the user gave it, else the start of its first message, or "New conversation".
     pub title: String,
     /// When its first message was written, in ms since the epoch.
     pub created_at: Option<u64>,
@@ -450,6 +513,37 @@ pub struct Thread {
 pub struct OpenedThread {
     pub chat: Value,
     pub provider: Option<Provider>,
+    /// The name the user gave it, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// The name the user gave the conversation of `session`; None while it has none.
+pub fn title(session: &Path) -> Option<String> {
+    let name = fs::read_to_string(session.join(TITLE_FILE)).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Names the conversation of `session`: one line, cut to [`TITLE_LENGTH`]. A blank `name`
+/// takes the name away.
+fn set_title(session: &Path, name: &str) -> Result<()> {
+    let name: String = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(TITLE_LENGTH)
+        .collect();
+    let file = session.join(TITLE_FILE);
+    if name.is_empty() {
+        match fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    } else {
+        atomic_write(&file, name.as_bytes())
+    }
 }
 
 /// What a conversation is about: a deck file, or the folder of a workspace's own chat.
@@ -709,6 +803,74 @@ mod tests {
                 },
             ])
         );
+    }
+
+    #[test]
+    fn a_conversation_can_be_named_and_goes_back_to_its_first_message() {
+        let t = Temp::new();
+        let root = t.deck("talk").canonicalize().unwrap();
+        let sessions = t.sessions();
+        let session = sessions.start(&root).unwrap();
+        save_chat(&session, &json!([{"role": "user", "text": "Tighten it"}])).unwrap();
+        let id = session.file_name().unwrap().to_str().unwrap().to_string();
+        let titles = || -> Vec<String> {
+            let threads = sessions.threads(&root, &root).unwrap();
+            threads.into_iter().map(|thread| thread.title).collect()
+        };
+        assert_eq!(titles(), ["Tighten it"]);
+
+        sessions
+            .rename_thread(&root, &id, "  Pricing\n slide  ")
+            .unwrap();
+        assert_eq!(titles(), ["Pricing slide"]);
+        assert_eq!(title(&session), Some("Pricing slide".into()));
+        let opened = sessions.open_thread(&root, &root, &id).unwrap();
+        assert_eq!(opened.title, Some("Pricing slide".into()));
+
+        sessions
+            .rename_thread(&root, &id, &"y".repeat(150))
+            .unwrap();
+        assert_eq!(titles(), ["y".repeat(100)]);
+
+        // A blank name is no name; taking it away twice is fine.
+        sessions.rename_thread(&root, &id, "   ").unwrap();
+        sessions.rename_thread(&root, &id, "").unwrap();
+        assert_eq!(titles(), ["Tighten it"]);
+        assert_eq!(title(&session), None);
+        assert!(sessions.rename_thread(&root, "../escape", "x").is_err());
+    }
+
+    #[test]
+    fn deleting_a_conversation_removes_its_session_but_never_the_one_on_show() {
+        let t = Temp::new();
+        let root = t.deck("talk").canonicalize().unwrap();
+        let sessions = t.sessions();
+        let name = |path: &Path| path.file_name().unwrap().to_str().unwrap().to_string();
+        let old = sessions.start(&root).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let middle = sessions.start(&root).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let new = sessions.start(&root).unwrap();
+        fs::write(old.join("sketch.png"), "png").unwrap();
+
+        // The one on show stays, and says why.
+        let refused = sessions.delete_thread(&root, &root, &name(&new));
+        assert!(refused.unwrap_err().to_string().contains("on show"));
+        assert!(new.is_dir());
+
+        sessions.delete_thread(&root, &root, &name(&old)).unwrap();
+        assert!(!old.exists());
+        assert_eq!(sessions.list(&root), [middle.clone(), new.clone()]);
+        assert_eq!(sessions.current(&root), Some(new.clone()));
+        assert!(sessions.delete_thread(&root, &root, &name(&old)).is_err());
+        assert!(sessions.delete_thread(&root, &root, "../escape").is_err());
+
+        // The newest session holds which one is selected: deleting it keeps the selection.
+        sessions.select(&root, &name(&middle)).unwrap();
+        let other = t.deck("other").canonicalize().unwrap();
+        sessions.delete_thread(&root, &other, &name(&new)).unwrap();
+        assert_eq!(sessions.list(&root), std::slice::from_ref(&middle));
+        assert_eq!(sessions.current(&root), Some(middle));
     }
 
     #[test]

@@ -44,6 +44,8 @@ export type VerticalAlign = "top" | "middle" | "bottom";
 export type StackOrder = "front" | "forward" | "backward" | "back";
 export type ListKind = "ul" | "ol";
 export type Script = "sup" | "sub";
+/** How text is written out whatever was typed: all capitals, all small letters, or each word's first letter a capital. */
+export type TextCase = "upper" | "lower" | "capitalize";
 /** How a text box handles text that does not fit: shrink the text, or grow the box. */
 export type Autofit = "shrink" | "grow";
 /** How an image fills its box. */
@@ -78,11 +80,23 @@ export const LINE_ROUTES: LineRoute[] = ["straight", "elbow", "curved"];
 
 /** A style for new elements, or the changes to apply to the selection. Null colors mean none. */
 export interface EditStyle {
+  /** The text color; null for the deck's own. */
   color?: string | null;
-  fontSize?: number;
+  /** Pixels; null for the deck's own size. */
+  fontSize?: number | null;
   /** A CSS font-family stack; null for the deck's own font. */
   fontFamily?: string | null;
   bold?: boolean;
+  /** The font's weight, 100 to 900; null for the deck's own. `bold` switches between 400 and 700. */
+  weight?: number | null;
+  textCase?: TextCase | null;
+  /** The color behind the text, like a marker's; null for none. */
+  highlight?: string | null;
+  /** Pixels above and below each paragraph (each item, in a list). */
+  spaceBefore?: number;
+  spaceAfter?: number;
+  /** A list's bullets or numbering: a CSS `list-style-type`. */
+  listStyle?: string;
   italic?: boolean;
   underline?: boolean;
   strike?: boolean;
@@ -139,12 +153,21 @@ export interface EditSelection {
   /** The first family of its font. */
   fontFamily: string | null;
   bold: boolean;
+  /** The font's weight, 100 to 900. */
+  weight: number;
   italic: boolean;
   underline: boolean;
   strike: boolean;
   script: Script | null;
+  textCase: TextCase | null;
+  /** The color behind its text (or the text at the caret); null for none. */
+  highlight: string | null;
   letterSpacing: number;
   lineHeight: number | null;
+  spaceBefore: number;
+  spaceAfter: number;
+  /** The bullets or numbering of its list (a CSS `list-style-type`); null without a list. */
+  listStyle: string | null;
   align: TextAlign;
   /** Null when its text cannot align vertically (it is not a flex box). */
   valign: VerticalAlign | null;
@@ -183,6 +206,17 @@ export interface EditSelection {
   group: boolean;
   /** Locked, or in something locked: it cannot be moved or deleted. */
   locked: boolean;
+  /**
+   * The values several selected elements do not share, by their names here (`fontSize`, `align`,
+   * `opacity`, …): the value reported is then just the primary element's. Colors say so
+   * themselves (`colorOther` …).
+   */
+  mixed: string[];
+}
+
+/** Whether several selected elements differ in `key`, so no one value stands for all of them. */
+export function isMixed(selection: EditSelection | null, key: keyof EditSelection): boolean {
+  return !!selection && selection.mixed.includes(key);
 }
 
 /** The element a right-click selected, as the slide editor reports it (see `slop:edit-menu` in assets/editor/). */
@@ -207,6 +241,27 @@ export interface EditMenuTarget {
   editable: boolean;
   /** Something on the slide is locked. */
   unlockable: boolean;
+  /** What lies at the pointer, the top-most first, for the menu to select any of. */
+  under: EditLayerPick[];
+  /** What holds the one selected element, to select instead; null at the slide's top level. */
+  parent: EditLayerPick | null;
+}
+
+/** An element the context menu can select: where it is (child indexes from the slide down) and what it is called. */
+export interface EditLayerPick {
+  path: number[];
+  name: string;
+  /** It is selected already. */
+  selected: boolean;
+}
+
+/** One element the editor offers to select; null when malformed. */
+function parsePick(value: unknown): EditLayerPick | null {
+  const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const path =
+    Array.isArray(v.path) && v.path.every((i) => Number.isInteger(i) && i >= 0) ? (v.path as number[]) : null;
+  if (!path || path.length === 0 || typeof v.name !== "string") return null;
+  return { path, name: v.name, selected: v.selected === true };
 }
 
 /** A context menu report from the slide editor; what is malformed in it is left out. */
@@ -219,6 +274,8 @@ export function parseMenuTarget(data: unknown): EditMenuTarget {
     elements: listed.length > 0 ? listed : element ? [element] : [],
     editable: v.editable === true,
     unlockable: v.locked === true,
+    under: Array.isArray(v.under) ? v.under.flatMap((pick) => parsePick(pick) ?? []) : [],
+    parent: parsePick(v.parent),
   };
 }
 
@@ -280,15 +337,6 @@ export const EDIT_COLORS = Object.values(SWATCHES);
 
 export const BORDER_WIDTHS = [0, 1, 2, 4, 6, 8, 12, 16] as const;
 
-/**
- * The widths the border (or line) width list offers: the usual ones and the current one. A line
- * has no "none": at zero it would be gone, with nothing left to select.
- */
-export function strokeWidths(current: number, vector: boolean): number[] {
-  const widths = [...new Set<number>([...BORDER_WIDTHS, current])].sort((a, b) => a - b);
-  return vector ? widths.filter((w) => w > 0) : widths;
-}
-
 /** How the toolbar names each way of handling text that does not fit; "" is no autofit. */
 export const AUTOFIT_LABELS: { value: Autofit | ""; label: string }[] = [
   { value: "", label: "Don't autofit" },
@@ -302,14 +350,6 @@ export const FIT_LABELS: { value: ImageFit; label: string }[] = [
   { value: "cover", label: "Fill and crop" },
   { value: "fill", label: "Stretch" },
 ];
-
-const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 200, 240];
-
-/** The next font size up (`step` 1) or down (-1) from `size`. */
-export function stepFontSize(size: number, step: 1 | -1): number {
-  if (step > 0) return FONT_SIZES.find((s) => s > size) ?? FONT_SIZES[FONT_SIZES.length - 1]!;
-  return [...FONT_SIZES].reverse().find((s) => s < size) ?? FONT_SIZES[0]!;
-}
 
 export function familyOf(tool: EditTool): ToolFamily | null {
   if (tool === "text" || tool === "draw") return tool;
@@ -378,12 +418,18 @@ export function parseSelection(value: unknown): EditSelection | null {
     fontSize: num(v.fontSize),
     fontFamily: typeof v.fontFamily === "string" && v.fontFamily ? v.fontFamily : null,
     bold: v.bold === true,
+    weight: num(v.weight) ?? (v.bold === true ? 700 : 400),
     italic: v.italic === true,
     underline: v.underline === true,
     strike: v.strike === true,
     script: v.script === "sup" || v.script === "sub" ? v.script : null,
+    textCase: v.textCase === "upper" || v.textCase === "lower" || v.textCase === "capitalize" ? v.textCase : null,
+    highlight: color(v.highlight),
     letterSpacing: num(v.letterSpacing) ?? 0,
     lineHeight: num(v.lineHeight),
+    spaceBefore: num(v.spaceBefore) ?? 0,
+    spaceAfter: num(v.spaceAfter) ?? 0,
+    listStyle: typeof v.listStyle === "string" && v.listStyle ? v.listStyle : null,
     align: v.align === "center" || v.align === "right" || v.align === "justify" ? v.align : "left",
     valign: v.valign === "top" || v.valign === "middle" || v.valign === "bottom" ? v.valign : null,
     list: v.list === "ul" || v.list === "ol" ? v.list : null,
@@ -410,6 +456,7 @@ export function parseSelection(value: unknown): EditSelection | null {
     flipY: v.flipY === true,
     group: v.group === true,
     locked: v.locked === true,
+    mixed: Array.isArray(v.mixed) ? v.mixed.filter((key): key is string => typeof key === "string") : [],
   };
 }
 
@@ -436,7 +483,8 @@ function parseLine(value: unknown): LineLook | null {
 
 /**
  * What a restyle also makes the default for the next element of its kind: its look, not its
- * links, fit, or a line's heads and route (which its tool picks).
+ * links, fit, highlight, paragraph spacing, list style, or a line's heads and route (which its
+ * tool picks).
  */
 export function defaultsFrom(changes: EditStyle): EditStyle {
   const {
@@ -454,22 +502,75 @@ export function defaultsFrom(changes: EditStyle): EditStyle {
     alt: _alt,
     flipX: _flipX,
     flipY: _flipY,
+    highlight: _highlight,
+    spaceBefore: _spaceBefore,
+    spaceAfter: _spaceAfter,
+    listStyle: _listStyle,
     ...look
   } = changes;
   return look;
 }
 
-/** The font size typed into the toolbar, or null when it is not one. */
-export function parseFontSize(text: string): number | null {
-  const size = Math.round(Number(text.trim()));
-  return Number.isFinite(size) && size >= 1 && size <= 999 ? size : null;
-}
-
-/** A font the toolbar offers: its name, and the CSS stack that uses it. */
+/** A font the toolbar offers: its name, the CSS stack that uses it, and the weights the deck has files for (if it says). */
 export interface FontChoice {
   name: string;
   stack: string;
+  weights?: number[];
 }
+
+/** What each font weight is called. */
+export const WEIGHT_NAMES: Record<number, string> = {
+  100: "Thin",
+  200: "Extra light",
+  300: "Light",
+  400: "Regular",
+  500: "Medium",
+  600: "Semibold",
+  700: "Bold",
+  800: "Extra bold",
+  900: "Black",
+};
+
+/** The weights offered for a font that does not say which it comes in. */
+const USUAL_WEIGHTS = [300, 400, 500, 600, 700];
+
+/**
+ * The weights the weight list offers for the font called `family`: those the deck has files for
+ * (when there are several to choose from), else the usual ones; `current` is always among them.
+ */
+export function fontWeights(fonts: FontChoice[], family: string | null, current: number | null): number[] {
+  const name = firstFamily(family).toLowerCase();
+  const known = fonts.find((f) => f.name.toLowerCase() === name)?.weights ?? [];
+  const weights = known.length > 1 ? known : USUAL_WEIGHTS;
+  return [...new Set(current ? [...weights, current] : weights)].sort((a, b) => a - b);
+}
+
+/** How the toolbar names each case; "" is the text as it was typed. */
+export const CASE_LABELS: { value: TextCase | ""; label: string }[] = [
+  { value: "", label: "As typed" },
+  { value: "upper", label: "UPPERCASE" },
+  { value: "lower", label: "lowercase" },
+  { value: "capitalize", label: "Capitalize Each Word" },
+];
+
+/** The bullets and numberings the toolbar offers, as CSS `list-style-type` values, for each kind of list. */
+export const LIST_STYLES: Record<ListKind, { value: string; label: string }[]> = {
+  ul: [
+    { value: "disc", label: "● Dot" },
+    { value: "circle", label: "○ Circle" },
+    { value: "square", label: "■ Square" },
+    { value: '"– "', label: "– Dash" },
+    { value: '"✓ "', label: "✓ Check" },
+    { value: "none", label: "No bullet" },
+  ],
+  ol: [
+    { value: "decimal", label: "1. 2. 3." },
+    { value: "lower-alpha", label: "a. b. c." },
+    { value: "upper-alpha", label: "A. B. C." },
+    { value: "lower-roman", label: "i. ii. iii." },
+    { value: "upper-roman", label: "I. II. III." },
+  ],
+};
 
 /** Fonts every Mac or PC has, for when the deck's own fonts are not enough. */
 export const SYSTEM_FONTS: FontChoice[] = [
@@ -493,11 +594,13 @@ export const SYSTEM_FONTS: FontChoice[] = [
 /** The deck fonts the slide editor reported (see `deckFonts` in assets/editor/). */
 export function parseFonts(value: unknown): FontChoice[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((f) =>
-    f && typeof f.name === "string" && typeof f.stack === "string" && f.name.trim() && f.stack.trim()
-      ? [{ name: f.name.trim(), stack: f.stack.trim() }]
-      : [],
-  );
+  return value.flatMap((f) => {
+    if (!f || typeof f.name !== "string" || typeof f.stack !== "string" || !f.name.trim() || !f.stack.trim()) return [];
+    const weights = Array.isArray(f.weights)
+      ? (f.weights as unknown[]).filter((w): w is number => typeof w === "number" && w >= 100 && w <= 900)
+      : [];
+    return [{ name: f.name.trim(), stack: f.stack.trim(), ...(weights.length > 0 && { weights }) }];
+  });
 }
 
 /** The toolbar's font list: the deck's fonts, then system fonts it does not already have. */
@@ -552,6 +655,17 @@ export const IMAGE_FILE_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "svg", "av
 
 export const LINE_HEIGHTS = [0.9, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2] as const;
 export const LETTER_SPACINGS = [-2, -1, 0, 1, 2, 4, 8, 12] as const;
+/** The space before or after a paragraph the toolbar offers, in pixels. */
+export const PARAGRAPH_SPACES = [0, 8, 16, 24, 32, 48] as const;
+
+/** A number typed for a field that takes `min` to `max`, rounded to `decimals` places; null when it is not one. */
+export function parseNumber(text: string, min: number, max: number, decimals = 0): number | null {
+  const trimmed = text.trim().replace(",", ".");
+  const value = Number(trimmed);
+  if (!trimmed || !Number.isFinite(value) || value < min || value > max) return null;
+  const scale = 10 ** decimals;
+  return Math.round(value * scale) / scale;
+}
 
 /**
  * What a link the user typed points at: a slide (`#id`), a web or mail address. A bare

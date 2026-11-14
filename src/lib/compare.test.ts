@@ -31,34 +31,29 @@ function parse(mask: string) {
 
 describe("revealMask", () => {
   it("cuts straight down the middle by default", () => {
-    expect(parse(revealMask(DEFAULT_DIVIDER, box, 0.5))).toEqual({ angle: 90, from: 480, to: 480 });
+    expect(parse(revealMask(DEFAULT_DIVIDER, box))).toEqual({ angle: 90, from: 480, to: 480 });
   });
 
   it("follows the divider across the slide", () => {
-    expect(parse(revealMask(divider({ x: 0.25 }), box, 0.5)).from).toBe(240);
-    expect(parse(revealMask(divider({ x: 1 }), box, 0.5)).from).toBe(960);
+    expect(parse(revealMask(divider({ x: 0.25 }), box)).from).toBe(240);
+    expect(parse(revealMask(divider({ x: 1 }), box)).from).toBe(960);
   });
 
   it("turns with the divider", () => {
     // Upside down, the old version is on the right: the gradient runs the other way.
-    const flipped = parse(revealMask(divider({ x: 0.25, angle: 180 }), box, 0.5));
+    const flipped = parse(revealMask(divider({ x: 0.25, angle: 180 }), box));
     expect(flipped.angle).toBe(-90);
     expect(flipped.from).toBe(720);
     // Lying flat, the old version is on top.
-    const flat = parse(revealMask(divider({ y: 0.25, angle: 90 }), box, 0.5));
+    const flat = parse(revealMask(divider({ y: 0.25, angle: 90 }), box));
     expect(flat.angle).toBe(180);
     expect(flat.from).toBe(135);
   });
 
   it("measures a slanted cut from the corner the gradient starts at", () => {
-    const { from } = parse(revealMask(divider({ angle: 45 }), box, 0.5));
+    const { from } = parse(revealMask(divider({ angle: 45 }), box));
     // A gradient at any angle starts past one corner, and its middle is the box's center.
     expect(from).toBeCloseTo(((960 + 540) * Math.SQRT1_2) / 2, 1);
-  });
-
-  it("feathers evenly around the line, in slide pixels", () => {
-    expect(parse(revealMask(divider({ feather: 50 }), box, 0.5))).toEqual({ angle: 90, from: 467.5, to: 492.5 });
-    expect(parse(revealMask(divider({ feather: 50 }), box, 1))).toEqual({ angle: 90, from: 455, to: 505 });
   });
 });
 
@@ -91,9 +86,8 @@ describe("moving the divider", () => {
     expect(movedTo(DEFAULT_DIVIDER, { x: -5, y: 900 }, box)).toMatchObject({ x: 0, y: 1 });
   });
 
-  it("keeps its angle and feather", () => {
-    const moved = movedTo(divider({ angle: 30, feather: 50 }), { x: 0, y: 0 }, box);
-    expect(moved).toMatchObject({ angle: 30, feather: 50 });
+  it("keeps its angle", () => {
+    expect(movedTo(divider({ angle: 30 }), { x: 0, y: 0 }, box).angle).toBe(30);
   });
 
   it("steps across itself, whichever way it faces", () => {
@@ -146,12 +140,12 @@ describe("rotating the divider", () => {
 });
 
 describe("sideLabelAt", () => {
-  it("puts old on the left and new on the right of an upright divider", () => {
+  it("puts before on the left and after on the right of an upright divider", () => {
     near(sideLabelAt(DEFAULT_DIVIDER, box, -1, 50), 430, 270);
     near(sideLabelAt(DEFAULT_DIVIDER, box, 1, 50), 530, 270);
   });
 
-  it("puts old above and new below a flat divider", () => {
+  it("puts before above and after below a flat divider", () => {
     near(sideLabelAt(divider({ angle: 90 }), box, -1, 50), 480, 220);
     near(sideLabelAt(divider({ angle: 90 }), box, 1, 50), 480, 320);
   });

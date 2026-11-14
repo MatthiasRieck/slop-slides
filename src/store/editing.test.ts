@@ -16,8 +16,6 @@ describe("deck mode", () => {
     expect(mode()).toBe("edit");
     useApp.getState().setMode("git");
     expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
-    useApp.getState().setMode("settings");
-    expect(mode()).toBe("settings");
     useApp.getState().setMode("edit");
     expect(useApp.getState()).toMatchObject({ editing: true, slideMode: "view" });
     useApp.getState().setMode("view");
@@ -38,16 +36,16 @@ describe("deck mode", () => {
     expect(editingSlide(useApp.getState())).toBe(false);
   });
 
-  it("narration, notes and the HTML are sidebar tabs, opened beside whatever mode the deck is in", async () => {
+  it("narration and the code are sidebar tabs, opened beside whatever mode the deck is in", async () => {
     const { useApp, deckMode } = await freshModule();
     useApp.setState({ deck: DECK, selected: "intro", sidebarOpen: false });
     useApp.getState().setMode("edit");
-    for (const tab of ["narration", "notes", "code"] as const) {
+    for (const tab of ["narration", "code"] as const) {
       useApp.getState().setSidebarTab(tab);
       expect(useApp.getState()).toMatchObject({ sidebarTab: tab, sidebarOpen: true });
       expect(deckMode(useApp.getState())).toBe("edit");
     }
-    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "narration", "notes", "code"]);
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "narration", "code"]);
   });
 });
 
@@ -133,6 +131,25 @@ describe("editing slides on the stage", () => {
     expect(calls("update_slide").map((c) => c.base)).toEqual(["intro-1", "intro-2"]);
     expect(disk.markup()).toContain("Hi");
     expect(lastError(useApp.getState())).toBeNull();
+  });
+
+  it("gives every slide that is not locked a background, as one step to undo", async () => {
+    const useApp = await freshStore();
+    backend({
+      slide_source: ({ slide }) => ({ markup: `<section class="slide" id="${String(slide)}">x</section>`, hash: "h" }),
+      update_slide: () => deckFor(DECK_HTML, "2"),
+    });
+    const deck = deckFor(DECK_HTML);
+    deck.slides = deck.slides.map((slide, i) => (i === 1 ? { ...slide, locked: true } : slide));
+    useApp.setState({ deck, selected: "intro", editedSlides: [] });
+    const changed = await useApp.getState().applyBackgroundToAll("#ff0000");
+    const saves = calls("update_slide") as { slide: string; markup: string; group: string }[];
+    expect(saves.map((save) => save.slide)).toEqual(deck.slides.filter((s) => !s.locked).map((s) => s.id));
+    expect(changed).toBe(saves.length);
+    expect(saves[0]!.markup).toContain('style="background-color: #ff0000; background-image: none"');
+    // One group for all of them: the history keeps them as one step.
+    expect(new Set(saves.map((save) => save.group)).size).toBe(1);
+    expect(saves[0]!.group).toMatch(/^background:/);
   });
 
   it("changes a slide's markup as it is in the file, saving it against the hash it was read at", async () => {
@@ -348,9 +365,10 @@ describe("editing slides on the stage", () => {
       expect(calls("capture_sketch")).toHaveLength(1);
       expect(calls("send_message")).toHaveLength(0);
       expect(useApp.getState().messages).toEqual([]);
+      // Asking does not put the slide away: the deck stays in the mode it was asked from.
       expect(useApp.getState()).toMatchObject({
         sidebarOpen: true,
-        editing: false,
+        editing: true,
         composerFill: { text: TIDY_PROMPT, screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" },
       });
     });
@@ -536,10 +554,22 @@ describe("the edit toolbar's own state", () => {
     expect((await freshModule()).useApp.getState().editSnap).toBe(true);
   });
 
-  it("keeps the colors picked last, the latest first", async () => {
+  it("keeps the colors picked last, the latest first, between launches", async () => {
+    localStorage.clear();
     const { useApp } = await freshModule();
     for (const color of ["#111111", "#222222", "#111111"]) useApp.getState().noteColor(color);
     expect(useApp.getState().recentColors).toEqual(["#111111", "#222222"]);
+    expect((await freshModule()).useApp.getState().recentColors).toEqual(["#111111", "#222222"]);
+  });
+
+  it("keeps a tool in hand when asked to, until Select or another tool is picked", async () => {
+    const { useApp } = await freshModule();
+    useApp.getState().setEditTool("rect", true);
+    expect(useApp.getState()).toMatchObject({ editTool: "rect", editToolKept: true });
+    useApp.getState().setEditTool("ellipse");
+    expect(useApp.getState().editToolKept).toBe(false);
+    useApp.getState().setEditTool("select", true);
+    expect(useApp.getState().editToolKept).toBe(false);
   });
 
   it("asks for a toolbar popover, again each time", async () => {

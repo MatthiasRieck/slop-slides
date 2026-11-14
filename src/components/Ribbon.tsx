@@ -13,35 +13,48 @@ import {
 import { flushSync } from "react-dom";
 
 import { useDropdown } from "../hooks/useDropdown";
-import { popupShift, sectionsToCollapse } from "../lib/ribbon";
+import { collapsedSections, collapsedWidth, popupShift } from "../lib/ribbon";
 import { cn } from "../lib/utils";
 import { keepFocus, toolButtonClass } from "./Button";
 
 /** What pops up from a ribbon and is placed by it: a collapsed section's flyout, and the tools' own panels. */
 const FLYOUTS = "[data-flyout]";
-// A `Popover` places itself, against the window.
-const PANELS = "[role=dialog]:not([data-popover])";
+// A `Popover` places itself, against the window. A tool's menu is marked as the ribbon's to place.
+const PANELS = "[role=dialog]:not([data-popover]), [data-ribbon-panel]";
+/** How far a tool's panel opens below a flyout. */
+const POPUP_GAP = 4;
+
+const NONE_COLLAPSED: boolean[] = [];
 
 /**
- * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
- * collapsed section. Collapsed sections stay in the page, hidden, so they can still be measured.
- * Also keeps what pops up from the ribbon inside the bar around it, as the panel clips the rest.
+ * Fits a ribbon's sections to its width. Returns the ref for the ribbon and which of its sections
+ * are collapsed: `collapsed`, one flag per section, and `collapsedFrom`, the index of the first
+ * collapsed one, for a ribbon whose sections collapse from the right. `order` is the order they
+ * collapse in instead (indexes of the sections, the first to go first; see `collapsedSections`);
+ * the ribbon is fit again when it changes. Collapsed sections stay in the page, hidden, so they
+ * can still be measured. Also keeps what pops up from the ribbon inside the bar around it, as the
+ * panel clips the rest, and a tool's panel in a collapsed section's flyout below the flyout, so
+ * it never covers the tools it came from.
  *
  * A ribbon resizes with every tick of a panel's separator being dragged, so a resize reads as
  * little of the layout as it can: the sections' widths are measured once and again only after
  * what is in the ribbon changed, and what pops up is put back and measured together, not one by
  * one with a layout of the page for each.
  */
-export function useRibbonFit() {
+export function useRibbonFit(order?: readonly number[]) {
   const ref = useRef<HTMLDivElement>(null);
-  const [collapsedFrom, setCollapsedFrom] = useState(Number.POSITIVE_INFINITY);
+  const [collapsed, setCollapsed] = useState(NONE_COLLAPSED);
+  const orderNow = useRef(order);
+  orderNow.current = order;
+  /** Fits the sections again although the width is the same: the order they collapse in changed. */
+  const refit = useRef<() => void>(() => {});
 
   useLayoutEffect(() => {
     const ribbon = ref.current;
     if (!ribbon) return;
-    // Each section's width, with one more pixel for the line between sections; null until
-    // measured, and once the ribbon's content changed.
-    let widths: number[] | null = null;
+    // Each section's width, with one more pixel for the line between sections, and the width it
+    // has collapsed; null until measured, and once the ribbon's content changed.
+    let widths: { open: number[]; shut: number[] } | null = null;
     // The width the sections were last fit to.
     let room = -1;
     const shifted = new Set<HTMLElement>();
@@ -54,8 +67,25 @@ export function useRibbonFit() {
         shifted.add(el);
       });
     };
+    /** Moves each of `panels` that opened from a flyout's tool down below the flyout. */
+    const drop = (panels: HTMLElement[]) => {
+      const gaps = panels.map((panel) => {
+        const flyout = panel.closest<HTMLElement>(FLYOUTS);
+        // The panel hangs from the box around its button.
+        const anchor = panel.parentElement;
+        return flyout && anchor ? flyout.getBoundingClientRect().bottom - anchor.getBoundingClientRect().bottom : 0;
+      });
+      panels.forEach((panel, i) => {
+        if (gaps[i]! <= 0) return;
+        panel.style.marginTop = `${Math.round(gaps[i]!) + POPUP_GAP}px`;
+        shifted.add(panel);
+      });
+    };
     const place = () => {
-      for (const el of shifted) el.style.marginLeft = "";
+      for (const el of shifted) {
+        el.style.marginLeft = "";
+        el.style.marginTop = "";
+      }
       shifted.clear();
       const flyouts = [...ribbon.querySelectorAll<HTMLElement>(FLYOUTS)];
       const panels = [...ribbon.querySelectorAll<HTMLElement>(PANELS)];
@@ -63,18 +93,27 @@ export function useRibbonFit() {
       const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
       // The flyouts first: a panel in one moves with it.
       shift(flyouts, bounds);
+      if (flyouts.length > 0) drop(panels);
       shift(panels, bounds);
     };
-    const fitSections = () => {
+    const fitSections = (again = false) => {
       const width = ribbon.clientWidth;
-      if (widths && width === room) return;
-      widths ??= [...ribbon.querySelectorAll<HTMLElement>("[data-ribbon-body]")].map((body) => body.offsetWidth + 1);
+      if (widths && width === room && !again) return;
+      if (!widths) {
+        const bodies = [...ribbon.querySelectorAll<HTMLElement>("[data-ribbon-body]")];
+        widths = {
+          open: bodies.map((body) => body.offsetWidth + 1),
+          shut: bodies.map((body) => Number(body.dataset.collapsedWidth) || collapsedWidth("")),
+        };
+      }
       room = width;
-      setCollapsedFrom(widths.length - sectionsToCollapse(widths, width));
+      const next = collapsedSections(widths.open, width, { order: orderNow.current, collapsed: widths.shut });
+      setCollapsed((was) => (was.length === next.length && was.every((flag, i) => flag === next[i]) ? was : next));
       place();
     };
+    refit.current = () => fitSections(true);
     fitSections();
-    const resize = new ResizeObserver(fitSections);
+    const resize = new ResizeObserver(() => fitSections());
     resize.observe(ribbon);
     // Popups come and go as their buttons are pressed, and a section's button with its collapsing.
     const changes = new MutationObserver(() => {
@@ -88,7 +127,12 @@ export function useRibbonFit() {
     };
   }, []);
 
-  return { ref, collapsedFrom };
+  const orderKey = order?.join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the order's indexes are what to watch
+  useLayoutEffect(() => refit.current(), [orderKey]);
+
+  const first = collapsed.indexOf(true);
+  return { ref, collapsed, collapsedFrom: first < 0 ? Number.POSITIVE_INFINITY : first };
 }
 
 const RevealContext = createContext<() => void>(() => {});
@@ -103,18 +147,25 @@ export function useRibbonReveal() {
 }
 
 /**
- * A captioned group of tools in a ribbon. Collapsed, it is just `icon`, which opens its tools in a
- * flyout. `closeOn` closes the flyout when it changes, for tools that go on to work on the slide.
+ * A captioned group of tools in a ribbon. Collapsed, it is `icon` over its caption, which opens
+ * its tools in a flyout; or, for a section of one tool, `collapsedAs`: that tool in a smaller
+ * form, with no flyout. `closeOn` closes the flyout when it changes, for tools that go on to work
+ * on the slide.
  */
 export function RibbonSection(props: {
   title: string;
   icon: ReactNode;
   collapsed: boolean;
   closeOn?: unknown;
+  collapsedAs?: ReactNode;
+  /** It never collapses: it is as narrow as a collapsed section would be. */
+  fixed?: boolean;
   children: ReactNode;
 }) {
   const { collapsed } = props;
-  const { open, setOpen, ref } = useDropdown<HTMLFieldSetElement>({ disabled: !collapsed });
+  const flyout = collapsed && props.collapsedAs === undefined;
+  const width = collapsedWidth(props.title);
+  const { open, setOpen, ref } = useDropdown<HTMLFieldSetElement>({ disabled: !flyout });
   // biome-ignore lint/correctness/useExhaustiveDependencies: `closeOn` is only what to watch
   useEffect(() => setOpen(false), [props.closeOn]);
   const collapsedNow = useRef(collapsed);
@@ -127,32 +178,35 @@ export function RibbonSection(props: {
     <fieldset
       ref={ref}
       aria-label={props.title}
-      className={cn("relative flex h-16 min-w-0 shrink-0 border-r last:border-r-0", collapsed && "w-10")}
+      style={collapsed ? { width } : undefined}
+      className="relative flex h-16 min-w-0 shrink-0 border-r last:border-r-0"
     >
-      {collapsed && (
+      {collapsed && props.collapsedAs}
+      {flyout && (
         <button
           type="button"
           aria-label={`${props.title} tools`}
-          title={props.title}
+          title={`${props.title} tools`}
           aria-expanded={open}
           onMouseDown={keepFocus}
           onClick={() => setOpen(!open)}
-          className={cn(
-            "mr-1 flex flex-1 flex-col items-center justify-center gap-1 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4",
-            open && "bg-accent text-foreground",
-          )}
+          className={cn(collapsedSectionClass, open && "bg-accent text-foreground")}
         >
-          {props.icon}
-          <ChevronDown className="!size-3" />
+          <span className="flex items-center gap-px">
+            {props.icon}
+            <ChevronDown className="!size-2.5" />
+          </span>
+          <span className="text-[10px] leading-3">{props.title}</span>
         </button>
       )}
       <div
         data-ribbon-body=""
-        data-flyout={collapsed || undefined}
+        data-collapsed-width={props.fixed ? "Infinity" : width}
+        data-flyout={flyout || undefined}
         style={collapsed && !open ? { visibility: "hidden" } : undefined}
         className={cn(
           "flex w-max flex-col items-center justify-between px-1.5",
-          collapsed && "absolute top-full left-0 z-30 mt-1 gap-1 rounded-md border bg-card py-1.5 shadow-md",
+          collapsed && "absolute top-full left-0 z-dropdown mt-1 gap-1 rounded-lg border bg-card py-1.5 shadow-popover",
         )}
       >
         <div className="flex flex-col gap-0.5">
@@ -163,6 +217,10 @@ export function RibbonSection(props: {
     </fieldset>
   );
 }
+
+/** How a collapsed section looks: its icon over its caption, filling the section. */
+export const collapsedSectionClass =
+  "mx-0.5 flex min-w-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-md text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-default disabled:opacity-40 [&_svg]:size-4";
 
 /** One line of tools in a ribbon section. */
 export function RibbonRow({ children }: { children: ReactNode }) {

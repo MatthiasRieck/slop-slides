@@ -3,7 +3,7 @@ import { type ReactNode, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { hasOpenLayer } from "../lib/layers";
-import { Dialog } from "./Dialog";
+import { Dialog, DialogActions } from "./Dialog";
 import { Popover } from "./Popover";
 
 const BACKDROP = "dialog-backdrop";
@@ -87,7 +87,7 @@ describe("Dialog", () => {
     expect(screen.getByRole("heading", { level: 2, name: "The things" })).toBeTruthy();
     expect(dialog().textContent).toBe("The thingsBody");
     const scrim = screen.getByTestId(BACKDROP);
-    expect(scrim.className).toBe("enter-fade fixed inset-0 z-50 flex items-center justify-center bg-scrim");
+    expect(scrim.className).toBe("enter-fade fixed inset-0 z-overlay flex items-center justify-center bg-scrim");
     // Rendered into the body: nothing it is used in clips it, and the app under it can go inert.
     expect(scrim.parentElement).toBe(document.body);
     expect(container.contains(scrim)).toBe(false);
@@ -307,5 +307,87 @@ describe("Dialog", () => {
     expect(onClose).not.toHaveBeenCalled();
     pressEscape();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the one look", () => {
+    const box = () => screen.getByRole("dialog");
+
+    it("gives a dialog with a size the standard box, heading and text", () => {
+      render(
+        <Dialog
+          label="Delete the recording"
+          size="sm"
+          title="Delete your recording?"
+          description="It cannot be brought back."
+          onClose={() => {}}
+        >
+          <DialogActions>
+            <button type="button">Cancel</button>
+            <button type="button">Delete</button>
+          </DialogActions>
+        </Dialog>,
+      );
+      for (const name of ["enter-pop", "w-96", "rounded-xl", "border", "bg-card", "p-5", "shadow-dialog"]) {
+        expect(box().classList.contains(name)).toBe(true);
+      }
+      // Never past the window, however small.
+      expect(box().className).toContain("max-w-[calc(100vw-2rem)]");
+      expect(box().className).toContain("max-h-[calc(100vh-2rem)]");
+      const heading = screen.getByRole("heading", { level: 2, name: "Delete your recording?" });
+      expect(heading.className).toBe("text-sm font-semibold");
+      const text = screen.getByText("It cannot be brought back.");
+      expect(text.tagName).toBe("P");
+      expect(text.classList.contains("text-muted-foreground")).toBe(true);
+      // Heading, then what it says, then the buttons.
+      expect([...box().children].map((child) => child.tagName)).toEqual(["H2", "P", "DIV"]);
+    });
+
+    it("comes in three widths, and lets the caller add to the box", () => {
+      const { rerender } = render(
+        <Dialog label="Things" size="md" onClose={() => {}}>
+          Body
+        </Dialog>,
+      );
+      expect(box().classList.contains("w-[32rem]")).toBe(true);
+      rerender(
+        <Dialog label="Things" size="lg" className="gap-0 p-0" onClose={() => {}}>
+          Body
+        </Dialog>,
+      );
+      expect(box().classList.contains("w-[44rem]")).toBe(true);
+      // What the caller adds wins over the standard box's.
+      expect(box().classList.contains("p-0")).toBe(true);
+      expect(box().classList.contains("p-5")).toBe(false);
+    });
+
+    it("puts the Close button beside the title, the text under both", () => {
+      render(
+        <Dialog label="Things" size="md" title="The things" description="All of them." closeButton onClose={() => {}}>
+          Body
+        </Dialog>,
+      );
+      const row = screen.getByRole("heading", { name: "The things" }).parentElement!;
+      expect(row.contains(screen.getByRole("button", { name: "Close" }))).toBe(true);
+      expect(row.nextElementSibling).toBe(screen.getByText("All of them."));
+    });
+
+    it("lines its buttons up at the right, with a third way out apart at the left", () => {
+      render(
+        <DialogActions aside={<button type="button">Don’t save</button>}>
+          <button type="button">Cancel</button>
+          <button type="button">Save</button>
+        </DialogActions>,
+      );
+      const row = screen.getByRole("button", { name: "Save" }).parentElement!;
+      expect(row.classList.contains("justify-end")).toBe(true);
+      const aside = screen.getByRole("button", { name: "Don’t save" }).parentElement!;
+      expect(aside.parentElement).toBe(row);
+      expect(aside.classList.contains("mr-auto")).toBe(true);
+      expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+        "Don’t save",
+        "Cancel",
+        "Save",
+      ]);
+    });
   });
 });

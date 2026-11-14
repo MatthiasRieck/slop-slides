@@ -72,6 +72,8 @@
     nudgeLines = null;
     // What was waiting for the next frame is part of what is saved, and shows with it.
     flushHandles();
+    // The typing's own steps to undo end with it: from here on, undo is the app's.
+    if (!editing) textSteps = null;
     var markup = serialize();
     if (markup === saved) return;
     saved = markup;
@@ -127,6 +129,41 @@
     return alone ? parent : list;
   }
 
+  /**
+   * Whether `el` is one text to type in: a text box or shape, an element with text of its own
+   * (a label beside a badge), or one whose children are all runs of its text (inline elements,
+   * line breaks, lists). A card or a layout that only holds headings and paragraphs is not:
+   * typing in it as one would merge what it holds.
+   */
+  function holdsOwnText(el) {
+    if (!el || el.nodeType !== 1 || el.namespaceURI === SVG_NS) return false;
+    if (/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return true;
+    if (!el.textContent.trim()) return false;
+    var own = Array.prototype.some.call(el.childNodes, function (node) {
+      return node.nodeType === 3 && node.data.trim();
+    });
+    return own || Array.prototype.every.call(el.children, function (child) {
+      return INLINE.test(child.tagName) || /^(br|ul|ol|li|wbr)$/i.test(child.tagName) || child.hasAttribute(BODY_ATTR);
+    });
+  }
+
+  /**
+   * The text to edit for a double-click at (x, y) on `el`: `el` itself when it is one text (see
+   * holdsOwnText), else the one text under the pointer inside it, the outermost that still is one
+   * (a heading, not the word in it made bold). Null where no text of it is under the pointer.
+   */
+  function textLeafAt(el, x, y) {
+    if (holdsOwnText(el)) return el;
+    var stack = document.elementsFromPoint && x !== undefined ? document.elementsFromPoint(x, y) : [];
+    for (var i = 0; i < stack.length; i++) {
+      var node = stack[i];
+      if (node === el || !el.contains(node) || !holdsOwnText(node)) continue;
+      while (node.parentElement !== el && holdsOwnText(node.parentElement)) node = node.parentElement;
+      return isLocked(node) ? null : node;
+    }
+    return null;
+  }
+
   /** The element to select for `el`: not inline text runs, whole SVG drawings, whole lists. */
   function selectable(el) {
     if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest(SLOTS)) return null;
@@ -179,10 +216,42 @@
       if (stack[i] === slide) return null;
       var el = selectable(stack[i]);
       // A locked element is out of the way: what is under it is picked. So is the empty part of
-      // a line's box.
-      if (el && paints(el) && !isLocked(el) && (!spot || !lineOf(el) || onLine(el, lineOf(el), x, y))) return el;
+      // a line's box, and the slide's background layer (see isBackground) unless it is selected.
+      if (!el || !paints(el) || isLocked(el) || (isBackground(el) && !isSelected(el))) continue;
+      if (!spot || !lineOf(el) || onLine(el, lineOf(el), x, y)) return el;
     }
     return null;
+  }
+
+  /**
+   * Everything a pointer at (x, y) is over that shows and can be selected, the top-most first:
+   * what a click picks, then what lies under it and what holds it, down to the slide's background
+   * layer. See-through wrappers are left out: there is nothing of them to see at the pointer.
+   */
+  function stackAt(target, x, y) {
+    var stack = document.elementsFromPoint && x !== undefined ? document.elementsFromPoint(x, y) : [];
+    var spot = stack.length > 0;
+    if (!spot) {
+      for (var node = target && target.nodeType === 1 ? target : target && target.parentElement; node; node = node.parentElement) {
+        stack.push(node);
+      }
+    }
+    var found = [];
+    for (var i = 0; i < stack.length && stack[i] !== slide; i++) {
+      var el = selectable(stack[i]);
+      if (!el || found.indexOf(el) >= 0 || !paints(el) || isLocked(el) || isBackdrop(el)) continue;
+      if (!spot || !lineOf(el) || onLine(el, lineOf(el), x, y)) found.push(el);
+    }
+    return found;
+  }
+
+  /** ⌘ / Ctrl-click: selects what lies under the selection at the pointer, and after the last, the top-most again. */
+  function selectUnder(target, x, y) {
+    var stack = stackAt(target, x, y);
+    if (!stack.length) return false;
+    var at = extras.length ? -1 : stack.indexOf(selected);
+    select(stack[(at + 1) % stack.length]);
+    return true;
   }
 
   function mark(el, name, on) {
@@ -216,6 +285,12 @@
     return true;
   }
 
+  /** ⇧Enter: selects what holds the one selected element, unless that is the slide itself. */
+  function selectParent() {
+    var parent = selected && !extras.length ? selected.parentElement : null;
+    if (parent && parent !== slide && slide.contains(parent)) select(parent);
+  }
+
   /** Tells the app what its toolbar shows for the selection. */
   function report() {
     if (reportFrame) window.cancelAnimationFrame(reportFrame);
@@ -240,6 +315,12 @@
       if (same) return;
       now[keys[0]] = null;
       now[keys[1]] = true;
+    });
+    // Every other value the toolbar shows that they do not share, by its name (see MIXABLE in 47-commands.js).
+    now.mixed = MIXABLE.filter(function (key) {
+      return others.some(function (other) {
+        return other[key] !== now[key];
+      });
     });
     return now;
   }
@@ -380,7 +461,7 @@
     // A fill or line the color wells cannot show as one color: a gradient or image, or a paint that is not plain.
     var fillOther = figure ? false : first ? otherPaint(first.getAttribute("fill")) : (style.backgroundImage || "none") !== "none" || otherPaint(style.backgroundColor);
     var strokeOther = figure ? false : first ? otherPaint(first.getAttribute("stroke")) : borderWidth > 0 && otherPaint(style.borderTopColor);
-    return {
+    return Object.assign(textExtras(el, node, text), {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
       vector: kind === "drawing",
@@ -425,16 +506,45 @@
       flipY: look.flipY,
       group: false,
       locked: isLocked(el),
-    };
+    });
   }
 
-  /** Marks `el` as under the pointer: outlined, or a line glowing along its stroke rather than boxed in. */
-  function hover(el) {
+  /**
+   * Marks `el` as under the pointer: outlined, or a line glowing along its stroke rather than
+   * boxed in. A drag that knows where `el` is already passes its `frame` (in slide pixels, see
+   * anchorFrame), so outlining it measures nothing.
+   */
+  function hover(el, frame) {
     hoverPick = null;
     if (el === hovered) return;
     mark(hovered, "data-slop-hover", false);
     hovered = el;
+    hoveredFrame = el && frame ? frame : null;
     if (hovered) hovered.setAttribute("data-slop-hover", lineOf(hovered) ? "line" : "");
+    placeHover();
+  }
+
+  /** Puts `box` (an outline over the slide) around `frame` (see shownFrame), or with none, away. */
+  function layBox(box, frame) {
+    if (!frame) {
+      if (box.style.display) box.style.display = "";
+      return;
+    }
+    box.style.cssText =
+      "display:block;left:" + (frame.x - frame.w / 2) + "px;top:" + (frame.y - frame.h / 2) + "px;width:" + frame.w + "px;height:" + frame.h +
+      "px;transform:rotate(" + frame.angle + "deg)";
+  }
+
+  /** Outlines what is hovered; a line glows instead, and what is selected has its frame already. */
+  function placeHover() {
+    var show = !!hovered && slide.contains(hovered) && !lineOf(hovered) && !isSelected(hovered);
+    if (!show || !hoveredFrame) {
+      layBox(hoverBox, show ? shownFrame(hovered) : null);
+      return;
+    }
+    var at = camera();
+    var f = hoveredFrame;
+    layBox(hoverBox, { x: at.left + f.x * at.k, y: at.top + f.y * at.k, w: f.w * at.k, h: f.h * at.k, angle: f.angle });
   }
 
   // Where the pointer last moved to with nothing held, until the next frame picks what is there,
@@ -608,14 +718,28 @@
     return { k: overflow.zoom(slide, rect), left: rect.left, top: rect.top };
   }
 
-  /** Screen pixels per slide pixel. */
+  /** This window's pixels per slide pixel. */
   function zoom() {
     return camera().k;
   }
 
-  /** The view panned or zoomed, or the window changed size: what is laid over the slide goes with it. */
+  /**
+   * `n` screen pixels in this window's pixels. The app shows the preview scaled to fit the stage
+   * (the pasteboard knows by how much), and what is meant on screen (how far a press may move
+   * before it drags, how close an edge comes before it snaps) is that much larger in here.
+   */
+  function onScreen(n) {
+    return n * uiScale;
+  }
+
+  /**
+   * The view panned or zoomed, the window changed size or the preview shows at another size:
+   * what is laid over the slide goes with it.
+   */
   function cameraMoved() {
     keptCamera = null;
+    var ui = typeof pasteboard.ui === "function" ? pasteboard.ui() : 1;
+    uiScale = isFinite(ui) && ui > 0 ? ui : 1;
     layHandles();
     drawOverflow();
   }
@@ -671,6 +795,7 @@
    */
   function noteChange() {
     hoverPick = null;
+    backgroundLayers = null;
     scheduleSlideChecks();
     scheduleGeometry();
   }
@@ -709,19 +834,27 @@
     return document.createElement("div");
   }
 
-  /** Lays the handles over the selection's frame, turned with it; they keep their size on screen. */
+  /**
+   * Lays the handles over the selection's frame, turned with it, or around several selected
+   * elements, over the upright box around their frames; they keep their size on screen.
+   */
   function layHandles() {
     if (handlesFrame) window.cancelAnimationFrame(handlesFrame);
     handlesFrame = 0;
-    // A locked element shows its frame, but no handles to change it.
-    mark(ui, "data-locked", !!selected && isLocked(selected));
-    placeFrames();
+    // A locked selection shows its frame, but no handles to change it.
+    mark(ui, "data-locked", !!selected && !movable().length);
+    mark(ui, "data-multi", extras.length > 0);
+    var shown = placeFrames();
     placeSvgButton();
-    if (placePoints() || !selected || editing || extras.length || !slide.contains(selected)) {
+    placeHover();
+    markEmpty();
+    layBox(editBox, editing && slide.contains(editing) ? shownFrame(editing) : null);
+    placeGroupBox();
+    if (placePoints() || !selected || editing || !slide.contains(selected)) {
       ui.style.display = "none";
       return;
     }
-    var frame = shownFrame(selected);
+    var frame = extras.length ? boundsOfFrames(shown) : shownFrame(selected);
     ui.style.display = "";
     ui.style.left = frame.x - frame.w / 2 + "px";
     ui.style.top = frame.y - frame.h / 2 + "px";
@@ -729,15 +862,69 @@
     ui.style.height = frame.h + "px";
     ui.style.transform = "rotate(" + frame.angle + "deg)";
     // Edge handles only where there is room for them between the corners.
-    mark(ui, "data-narrow", frame.w < 40);
-    mark(ui, "data-flat", frame.h < 40);
+    mark(ui, "data-narrow", frame.w < onScreen(EDGE_HANDLE_ROOM));
+    mark(ui, "data-flat", frame.h < onScreen(EDGE_HANDLE_ROOM));
+    turnCursors(frame.angle);
     placeAdjust();
+  }
+
+  /** A text box being typed in shows its hint (see newText) while it holds no text, and only then. */
+  function markEmpty() {
+    if (!editing || editing.getAttribute(ADDED) !== "text") return;
+    var empty = !editing.textContent.trim();
+    if (empty !== editing.hasAttribute("data-slop-empty")) mark(editing, "data-slop-empty", empty);
+  }
+
+  /**
+   * Marks the group gone into with a dashed line, measured again only when no drag is under way:
+   * what a drag in it moves leaves the group's own box where it is.
+   */
+  function placeGroupBox() {
+    var open = enteredGroup && slide.contains(enteredGroup) ? enteredGroup : null;
+    if (open && !(groupFrame && gesturing())) groupFrame = shownFrame(open);
+    if (!open) groupFrame = null;
+    layBox(groupBox, groupFrame);
+  }
+
+  /** The upright box around `frames` (see shownFrame) as one of them, without measuring anything again. */
+  function boundsOfFrames(frames) {
+    var left = Infinity;
+    var top = Infinity;
+    var right = -Infinity;
+    var bottom = -Infinity;
+    frames.forEach(function (f) {
+      var a = (f.angle * Math.PI) / 180;
+      var cos = Math.abs(Math.cos(a));
+      var sin = Math.abs(Math.sin(a));
+      var w = (f.w * cos + f.h * sin) / 2;
+      var h = (f.w * sin + f.h * cos) / 2;
+      left = Math.min(left, f.x - w);
+      top = Math.min(top, f.y - h);
+      right = Math.max(right, f.x + w);
+      bottom = Math.max(bottom, f.y + h);
+    });
+    return { x: (left + right) / 2, y: (top + bottom) / 2, w: right - left, h: bottom - top, angle: 0 };
+  }
+
+  // The resize cursor for a handle that pulls right, down and right, down, or down and left
+  // (and the opposite ways, which look the same).
+  var RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
+
+  /** Gives each resize handle the cursor for the way it pulls with the frame turned by `angle` degrees. */
+  function turnCursors(angle) {
+    if (angle === cursorAngle) return;
+    cursorAngle = angle;
+    scaleHandles.forEach(function (handle, i) {
+      var d = HANDLE_DIRS[i];
+      var eighths = Math.round(((Math.atan2(d[1], d[0]) * 180) / Math.PI + angle) / 45);
+      handle.style.cursor = RESIZE_CURSORS[((eighths % 4) + 4) % 4];
+    });
   }
 
   /** Puts the handle that changes a figure's proportions on its spot, turned and flipped with the figure. */
   function placeAdjust() {
     var handle = ui.querySelector("[data-handle=adjust]");
-    var kind = figureOf(selected);
+    var kind = extras.length ? null : figureOf(selected);
     var spec = kind && FIGURES[kind];
     var tilt = kind ? tiltOf(selected) : null;
     handle.hidden = !spec || !spec.handle || !!tilt.x || !!tilt.y;
@@ -781,8 +968,8 @@
     svgButton.hidden = !show;
     if (!show) return;
     var rect = selected.getBoundingClientRect();
-    svgButton.style.left = Math.round(rect.right + 12) + "px";
-    svgButton.style.top = Math.round(rect.top - 4) + "px";
+    svgButton.style.left = Math.round(rect.right + onScreen(HANDLE + 2 * HANDLE_GAP + 4)) + "px";
+    svgButton.style.top = Math.round(rect.top - onScreen(HANDLE / 2)) + "px";
   }
 
   /** Hands the drawing `el` to the app's SVG editor. */

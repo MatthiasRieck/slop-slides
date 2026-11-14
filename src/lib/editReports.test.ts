@@ -22,6 +22,8 @@ const layer = (more: Partial<EditLayer> = {}): EditLayer => ({
   held: false,
   selected: false,
   depth: 1,
+  canUp: true,
+  canDown: false,
   ...more,
 });
 
@@ -68,6 +70,9 @@ describe("reports from the slide editor", () => {
     expect(sameLayers([layer()], [layer({ path: [0] })])).toBe(false);
     expect(sameLayers([layer()], [layer(), layer()])).toBe(false);
     expect(sameLayers([], [])).toBe(true);
+    // Whether it can move up or down is part of what a row shows.
+    expect(sameLayers([layer()], [layer({ canUp: false })])).toBe(false);
+    expect(sameLayers([layer()], [layer({ canDown: true })])).toBe(false);
   });
 
   it("compares lists of texts, fonts and colors in their order", () => {
@@ -76,6 +81,10 @@ describe("reports from the slide editor", () => {
     const inter = { name: "Inter", stack: "Inter, sans-serif" };
     expect(sameFonts([inter], [{ ...inter }])).toBe(true);
     expect(sameFonts([inter], [{ ...inter, stack: "Inter" }])).toBe(false);
+    // The weights a font comes in are part of it.
+    expect(sameFonts([{ ...inter, weights: [400, 700] }], [{ ...inter, weights: [400, 700] }])).toBe(true);
+    expect(sameFonts([{ ...inter, weights: [400, 700] }], [{ ...inter, weights: [300, 400, 700] }])).toBe(false);
+    expect(sameFonts([inter], [{ ...inter, weights: [400] }])).toBe(false);
     expect(sameColors([{ name: "--accent", value: "#ff0000" }], [{ name: "--accent", value: "#ff0000" }])).toBe(true);
     expect(sameColors([{ name: "--accent", value: "#ff0000" }], [{ name: "--ink", value: "#ff0000" }])).toBe(false);
   });

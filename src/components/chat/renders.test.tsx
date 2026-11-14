@@ -61,6 +61,7 @@ vi.mock("./UserBubble", async (importOriginal) => {
 
 import { type AssistantMessage, type ChatMessage, type ChatPart, useApp } from "../../store";
 import { applyAgentEvent } from "../../store/chat";
+import { forgetDrafts } from "../../store/composer";
 import { DECK_HTML, deckFor } from "../../test/fixtures";
 import { invoke } from "../../test/tauri";
 import { ChatPanel } from "../ChatPanel";
@@ -114,6 +115,7 @@ function startCounting() {
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue([]);
+  forgetDrafts();
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
     chatKey: "/decks/talk/deck.html",
@@ -233,22 +235,34 @@ describe("the deck changing under the conversation", () => {
     expect(commits).not.toHaveBeenCalled();
   });
 
+  it("renders nothing when the deck is saved under replies that say what they changed and steps that sum up", () => {
+    const changes = { message: "u0", changed: ["intro"], added: ["outro"], removed: 0 };
+    const steps = [edit("s1", "intro"), edit("s2", "outro"), edit("s3", "intro")];
+    const commits = shown([...transcript(5), said("u9", "More"), reply("a9", steps, { changes })]);
+    expect(screen.getByTestId("turn-changes")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edited 2 slides" })).toBeTruthy();
+    const deck = useApp.getState().deck!;
+    act(() => useApp.setState({ deck: { ...deck, shellHash: "another", slides: deck.slides.map((s) => ({ ...s })) } }));
+    expect(commits).not.toHaveBeenCalled();
+  });
+
   it("still follows the slides: a slide moved is named by its new number, one gone not at all", () => {
     shown([said("u", "Change it", "outro"), reply("a", [edit("t", "outro")])]);
     const deck = useApp.getState().deck!;
     const number = deck.slides.findIndex((slide) => slide.id === "outro") + 1;
     expect(number).toBeGreaterThan(1);
     expect(screen.getByText(`on slide ${number}`)).toBeTruthy();
-    expect(screen.getByText("· #outro")).toBeTruthy();
+    expect(screen.getByText(`· slide ${number}`)).toBeTruthy();
 
     const first = deck.slides.find((slide) => slide.id === "outro")!;
     const rest = deck.slides.filter((slide) => slide !== first);
     act(() => useApp.setState({ deck: { ...deck, slides: [first, ...rest] } }));
     expect(screen.getByText("on slide 1")).toBeTruthy();
+    expect(screen.getByText("· slide 1")).toBeTruthy();
 
     act(() => useApp.setState({ deck: { ...deck, slides: rest } }));
     expect(screen.queryByText(/on slide/)).toBeNull();
-    expect(screen.queryByText("· #outro")).toBeNull();
+    expect(screen.queryByText(/· slide/)).toBeNull();
   });
 });
 
@@ -299,13 +313,13 @@ describe("the chat out of view", () => {
     useApp.setState({ messages: transcript(1) });
     const { rerender } = render(<ChatPanel active />);
     fireEvent.change(textarea(), { target: { value: "Half a thought" } });
-    fireEvent.click(screen.getByRole("button", { name: /^Show arguments and output/ }));
-    expect(screen.getByText("Arguments · Edit")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Show details of/ }));
+    expect(screen.getByText("Asked for")).toBeTruthy();
 
     rerender(<ChatPanel active={false} />);
     rerender(<ChatPanel active />);
     expect(textarea().value).toBe("Half a thought");
-    expect(screen.getByText("Arguments · Edit")).toBeTruthy();
+    expect(screen.getByText("Asked for")).toBeTruthy();
   });
 
   it("is hidden, not gone, and takes the keyboard focus when the app asks for the composer", () => {

@@ -58,7 +58,7 @@ export function ContextMenu(props: { label: string; x: number; y: number; entrie
     // biome-ignore lint/a11y/noStaticElementInteractions: the cover only catches a press outside the menu.
     <div
       data-testid="context-menu-cover"
-      className="fixed inset-0 z-50"
+      className="fixed inset-0 z-overlay"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -77,7 +77,7 @@ export function ContextMenu(props: { label: string; x: number; y: number; entrie
         tabIndex={-1}
         onKeyDown={onKeyDown}
         style={{ ...position, width: WIDTH }}
-        className="fixed rounded-lg border bg-card p-1 text-xs text-foreground shadow-lg outline-none"
+        className="fixed rounded-lg border bg-card p-1 text-xs text-foreground shadow-popover outline-none"
       >
         {entries.map((entry, i) =>
           entry === "divider" ? (

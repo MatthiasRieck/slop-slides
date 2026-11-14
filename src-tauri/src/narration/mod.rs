@@ -17,6 +17,7 @@ pub mod beats;
 pub mod cloud;
 mod generate;
 mod manifest;
+mod preview;
 mod recordings;
 mod settings;
 pub mod timeline;
@@ -35,12 +36,21 @@ use crate::deck::{self, Deck};
 use crate::error::{Error, Result};
 pub use cloud::{Provider, DEFAULT_PROVIDER};
 pub use generate::Outcome;
-pub use manifest::{audio_dir, audio_file, file_stem, fingerprint};
+#[cfg(test)]
+use manifest::fingerprint;
+use manifest::fingerprint_with;
+pub use manifest::{audio_dir, audio_file, file_stem};
 use manifest::{Entry, Manifest};
-pub use recordings::{append_recording, delete_recording, refusal, set_audio, Refusal};
+pub use preview::preview_voice;
+pub use recordings::{
+    append_recording, delete_recording, refusal, replace_recording, set_audio, Refusal,
+};
 use settings::settings;
-pub use settings::{language, provider_of, Language, Settings, DEFAULT_LANGUAGE, LANGUAGES};
-pub use words::{time_words, words, TimingProgress, TIMING_EVENT};
+pub use settings::{
+    deck_settings, language, provider_of, set_delivery, set_timing, DeckSettings, Delivery,
+    Language, Pace, Settings, Timing, DEFAULT_LANGUAGE, LANGUAGES,
+};
+pub use words::{cancel_timing, time_words, words, TimingProgress, TIMING_EVENT};
 
 /// Emitted as a deck's narration is said: `{ deck, slide, done, total }`.
 pub const RENDER_EVENT: &str = "narration-render";
@@ -68,6 +78,8 @@ pub struct ProviderStatus {
     pub key: Option<cloud::KeySource>,
     /// Its voices, the default first.
     pub voices: Vec<cloud::VoiceOption>,
+    /// Whether it takes a note on the manner narration is said in (see [`Delivery`]).
+    pub takes_style: bool,
 }
 
 impl ProviderStatus {
@@ -77,6 +89,7 @@ impl ProviderStatus {
             name: provider.name(),
             key: cloud::key(home, provider).map(|(_, source)| source),
             voices: provider.voices().iter().map(Into::into).collect(),
+            takes_style: provider.takes_style(),
         }
     }
 }
@@ -198,12 +211,19 @@ async fn say_all(
         });
         let dest = audio_file(file, &job.slide);
         let part = dest.with_extension("wav.part");
-        let said = cloud::say(job.provider, key, &job.text, &job.voice, job.language.name)
-            .await
-            .and_then(|said| {
-                audio::write_wav(&part, &said.samples, audio::RATE)?;
-                Ok((said.samples.len(), said.words))
-            });
+        let said = cloud::say(
+            job.provider,
+            key,
+            &job.text,
+            &job.voice,
+            job.language.name,
+            &job.delivery,
+        )
+        .await
+        .and_then(|said| {
+            audio::write_wav(&part, &said.samples, audio::RATE)?;
+            Ok((said.samples.len(), said.words))
+        });
         let (samples, words) = match said {
             Ok(said) => said,
             Err(e) => {
@@ -257,6 +277,7 @@ struct Job {
     provider: Provider,
     voice: String,
     language: &'static Language,
+    delivery: Delivery,
     fingerprint: String,
 }
 
@@ -302,18 +323,23 @@ pub fn spoken(narration: &str) -> String {
 /// The slides whose narration has no up-to-date audio.
 fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
     let (provider, voice, language) = settings(file);
+    let delivery = deck_settings(file).delivery;
     let audio = statuses(file, deck);
     deck.slides
         .iter()
         .zip(audio)
         .filter(|(_, a)| matches!(a.state, AudioState::Missing | AudioState::Stale))
-        .map(|(slide, _)| Job {
-            slide: slide.id.clone(),
-            text: spoken(&slide.narration),
-            provider,
-            voice: voice.clone(),
-            language,
-            fingerprint: fingerprint(provider, &spoken(&slide.narration), &voice, language.id),
+        .map(|(slide, _)| {
+            let text = spoken(&slide.narration);
+            Job {
+                fingerprint: fingerprint_with(provider, &text, &voice, language.id, &delivery),
+                slide: slide.id.clone(),
+                text,
+                provider,
+                voice: voice.clone(),
+                language,
+                delivery: delivery.clone(),
+            }
         })
         .collect()
 }
@@ -323,6 +349,7 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
     // The deck names who says it: the file is not read for that again.
     let (provider, voice, language) = deck.narration.resolved();
     let manifest = Manifest::read(&audio_dir(file));
+    let delivery = &manifest.settings.delivery;
     deck.slides
         .iter()
         .map(|slide| {
@@ -337,7 +364,10 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
                 _ if recorded => AudioState::Ready,
                 _ if text.is_empty() => AudioState::None,
                 None => AudioState::Missing,
-                Some(e) if e.fingerprint == fingerprint(provider, &text, voice, language.id) => {
+                Some(e)
+                    if e.fingerprint
+                        == fingerprint_with(provider, &text, voice, language.id, delivery) =>
+                {
                     AudioState::Ready
                 }
                 Some(_) => AudioState::Stale,
@@ -433,6 +463,7 @@ mod tests {
                     None,
                 ),
             )]),
+            ..Default::default()
         }
         .write(&audio)
         .unwrap();
@@ -441,6 +472,50 @@ mod tests {
             .map(|a| a.state)
             .collect();
         assert_eq!(states, [AudioState::Ready, AudioState::None]);
+    }
+
+    #[test]
+    fn another_pace_or_style_makes_the_audio_stale_and_the_plain_one_brings_it_back() {
+        let dir = temp_dir();
+        let file = deck_with(
+            &dir,
+            "deck.html",
+            "",
+            r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section>"#,
+        );
+        fs::create_dir_all(audio_dir(&file)).unwrap();
+        fs::write(audio_file(&file, "a"), "").unwrap();
+        // Audio made before a deck could set how it is said.
+        Manifest::update(&audio_dir(&file), |m| {
+            let made = fingerprint(Provider::OpenAi, "Say A.", "marin", "en");
+            m.slides.insert("a".into(), Entry::made(made, 1.0, None));
+        })
+        .unwrap();
+        let state = || statuses(&file, &deck::load(&file).unwrap())[0].state;
+        assert_eq!(state(), AudioState::Ready);
+        set_delivery(&file, Pace::Slower, "").unwrap();
+        assert_eq!(state(), AudioState::Stale);
+        let job = &jobs(&file, &deck::load(&file).unwrap())[0];
+        assert_eq!(job.delivery.pace, Pace::Slower);
+        assert_ne!(
+            job.fingerprint,
+            fingerprint(Provider::OpenAi, "Say A.", "marin", "en")
+        );
+        set_delivery(&file, Pace::Normal, "calm").unwrap();
+        assert_eq!(state(), AudioState::Stale);
+        set_delivery(&file, Pace::Normal, "").unwrap();
+        assert_eq!(state(), AudioState::Ready);
+        // The times the deck plays with say nothing about its audio.
+        let timing = Timing {
+            seconds_per_slide: 9.0,
+            pause_before: 1.0,
+            pause_after: 1.0,
+        };
+        set_timing(&file, timing).unwrap();
+        assert_eq!(state(), AudioState::Ready);
+        assert_eq!(timeline::defaults_for(&file).seconds_per_slide, 9.0);
+        assert_eq!(timeline::defaults_for(&file).fps, timeline::DEFAULTS.fps);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -463,6 +538,7 @@ mod tests {
                     None,
                 ),
             )]),
+            ..Default::default()
         }
         .write(&audio_dir(&file))
         .unwrap();

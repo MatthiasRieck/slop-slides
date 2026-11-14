@@ -7,36 +7,23 @@ import { memoizeLast } from "../lib/memo";
 import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
-import { EDIT_ONLY } from "./editOnly";
 import { Popover } from "./Popover";
-import { RibbonRow, useRibbonReveal } from "./Ribbon";
 
 /** How long typing settles before it searches. */
 const SEARCH_DELAY_MS = 150;
 
 /**
- * The search as View mode's ribbon has it, the two rows of its Find section: the field, and under
- * it the steps through the matches and the replacing (which is Edit mode's, so it is off here).
+ * Find, the one way to search the deck: a bar over the top of the stage, the same in View and in
+ * Edit, once it is asked for (⌘F, or the Find button under the slide). It holds the field, the
+ * steps through the matches and the replacing. Closing it ends the search.
  *
  * The search itself is the store's (see ../store/search.ts): it finds the text on the deck's
- * slides and in their notes (src-tauri/src/find.rs), and while it holds a query the slide rail
- * lists only the slides with a match and the slide shown highlights them (see `searchHighlight`).
- * It stays as the mode changes between View and Edit, where `FindBar` shows it.
- */
-export function SlideSearch() {
-  return (
-    <search className="flex min-w-0 flex-col gap-0.5">
-      <SearchField />
-      <RibbonRow>
-        <SearchSteps />
-      </RibbonRow>
-    </search>
-  );
-}
-
-/**
- * The search in Edit mode, floating over the top right of the stage once it is asked for (⌘F, or
- * the Find button under the slide) or holds a query from View. Closing it ends the search.
+ * slides and in their notes (src-tauri/src/find.rs). While it holds a query the slide shown
+ * highlights its matches (see `searchHighlight`) and the slide list marks the slides that have
+ * some; every slide stays listed, and the arrow keys outside the bar go through them all.
+ *
+ * The stage places the bar (see `StageOverlay` in ./Stage.tsx), beside what else floats there;
+ * it gives way in width before it would cover it.
  */
 export function FindBar() {
   const shown = useApp((s) => s.search.open || s.search.query !== "");
@@ -44,11 +31,11 @@ export function FindBar() {
   return (
     <search
       aria-label="Find in the slides"
-      className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-lg border bg-background p-1 shadow-md"
+      className="pointer-events-auto ml-auto flex min-w-0 max-w-full items-center gap-1 rounded-lg border bg-background p-1 shadow-md"
     >
       <SearchField />
       <SearchSteps />
-      <ToolButton label="Close the search" shortcut="escape" onClick={() => useApp.getState().clearSearch()}>
+      <ToolButton label="Close Find" shortcut="escape" onClick={() => useApp.getState().clearSearch()}>
         <X />
       </ToolButton>
     </search>
@@ -67,28 +54,26 @@ function SearchField() {
   const focusAsked = useApp((s) => s.search.focusAsked);
   const active = useApp(activeMatch);
   const input = useRef<HTMLInputElement>(null);
-  const reveal = useRibbonReveal();
 
   useEffect(() => {
     if (!focusAsked) return;
-    reveal();
     input.current?.focus();
     input.current?.select();
     useApp.getState().findFocused();
-  }, [focusAsked, reveal]);
+  }, [focusAsked]);
 
   const { setSearch, stepSearch, clearSearch } = useApp.getState();
   const found = matches?.length ?? 0;
   const slideCount = new Set(matches?.map((m) => m.slide)).size;
 
   return (
-    <div className="flex h-6 w-64 min-w-0 items-center gap-1 rounded-md border pl-2 pr-0.5 focus-within:ring-1 focus-within:ring-ring">
+    <div className="flex h-6 w-64 min-w-20 shrink items-center gap-1 rounded-md border pl-2 pr-0.5 focus-within:ring-1 focus-within:ring-ring">
       <Search className="size-3.5 shrink-0 text-muted-foreground" />
       <input
         ref={input}
-        aria-label="Search slides"
-        placeholder="Search slides"
-        title={`Search the text on the slides and in their notes (${formatKeys("mod+f")})`}
+        aria-label="Text to find"
+        placeholder="Find in slides and notes"
+        title={`Find text on the slides and in their notes (${formatKeys("mod+f")})`}
         value={query}
         onChange={(event) => setSearch({ query: event.target.value })}
         onKeyDown={(event) => {
@@ -103,7 +88,7 @@ function SearchField() {
       />
       {failed !== null ? (
         <span role="alert" title={failed} className="shrink-0 text-2xs text-destructive">
-          Search failed
+          Could not search
         </span>
       ) : (
         matches && (
@@ -120,7 +105,7 @@ function SearchField() {
       {query && (
         <ToolButton
           size="xs"
-          label="Clear search"
+          label="Clear the text"
           shortcut="escape"
           onClick={() => {
             setSearch({ query: "" });
@@ -150,7 +135,10 @@ function SearchField() {
   );
 }
 
-/** The steps to the match before and after the one in focus, and the way to replace them. */
+/**
+ * The steps to the match before and after the one in focus, and the way to replace them. Past
+ * the last match the next one is the first again, and the other way round.
+ */
 function SearchSteps() {
   const found = useApp((s) => s.search.matches?.length ?? 0);
   const { stepSearch } = useApp.getState();
@@ -171,8 +159,8 @@ const isFind = (key: string, mod: boolean, shift: boolean, alt = false) =>
   mod && !shift && !alt && key.toLowerCase() === "f";
 
 /**
- * ⌘F, in the app or in the slide (whose preview forwards the keys pressed in it), brings the
- * search up, in View and in Edit. Pressed in the HTML tab's editor it is that editor's own search.
+ * ⌘F, in the app or in the slide (whose preview forwards the keys pressed in it), brings Find
+ * up, in View and in Edit. Pressed in the Code tab's editor it is that editor's own search.
  */
 export function useFindShortcut() {
   useEffect(() => {
@@ -218,20 +206,16 @@ export function useDeckSearch() {
   useEffect(() => () => useApp.getState().clearSearch(), []);
 }
 
-/** Opens the replacing of what the search finds. It changes the slides, so it is Edit mode's. */
+/** Opens the replacing of what Find found, in View and in Edit alike: each replace is one step to undo. */
 function ReplaceButton() {
-  const editable = useApp((s) => s.editing);
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
-  if (!editable && open) setOpen(false);
   return (
     <>
       <ToolButton
         ref={anchor}
         label="Replace…"
-        title="Replace what the search finds"
-        disabled={!editable}
-        disabledReason={EDIT_ONLY}
+        title="Replace what Find found"
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((v) => !v)}
@@ -349,15 +333,10 @@ function ReplacePanel() {
               ` ${plural(done.skipped.length, "locked slide was", "locked slides were")} left as ${done.skipped.length === 1 ? "it was" : "they were"}.`}
           </span>
           {done.count > 0 && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void undo()}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-background disabled:opacity-40 [&_svg]:size-3.5"
-            >
+            <Button variant="ghost" size="xs" disabled={busy} onClick={() => void undo()}>
               <Undo2 />
               Undo
-            </button>
+            </Button>
           )}
         </div>
       )}

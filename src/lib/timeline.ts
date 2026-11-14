@@ -209,3 +209,77 @@ export function scrollForZoom(at: number, before: number, after: number, scrolle
   const offset = was >= 0 && was <= view ? was : view / 2;
   return Math.max(0, Math.min(at * after - offset, Math.max(0, after - view)));
 }
+
+/** How far the timeline zooms in: the track up to this many times the width of the panel. */
+export const MAX_ZOOM = 32;
+
+/** `zoom` kept between the whole timeline in sight (1) and {@link MAX_ZOOM}. */
+export function clampZoom(zoom: number): number {
+  return Number.isFinite(zoom) ? Math.min(MAX_ZOOM, Math.max(1, zoom)) : 1;
+}
+
+/** Where a wheel turned by `deltaY` pixels with ⌘/Ctrl (a trackpad's pinch is that too) takes `zoom`: smoothly, up for a turn towards the user. */
+export function wheelZoom(zoom: number, deltaY: number): number {
+  return clampZoom(zoom * Math.exp(-deltaY / 200));
+}
+
+/** A zoom for its readout: `1×`, `2.5×`, `12×`. */
+export function formatZoom(zoom: number): string {
+  const shown = zoom < 10 ? Math.round(zoom * 10) / 10 : Math.round(zoom);
+  return `${shown}×`;
+}
+
+/** What a dragged time snaps to, if anything: `at` in seconds, where `target` (one of the targets) is. */
+export interface Snap {
+  at: number;
+  target: number | null;
+}
+
+/**
+ * Where a drag to `at` seconds lands with snapping: on the nearest of `targets` within
+ * `tolerance` seconds of it, or where it is.
+ */
+export function snapTime(at: number, targets: number[], tolerance: number): Snap {
+  let best: number | null = null;
+  for (const target of targets) {
+    if (Math.abs(target - at) <= tolerance && (best === null || Math.abs(target - at) < Math.abs(best - at))) {
+      best = target;
+    }
+  }
+  return best === null ? { at, target: null } : { at: best, target: best };
+}
+
+/**
+ * What the end of slide `index` snaps to while it is dragged: where its own narration ends, and
+ * that with the pause after it (the slide's length following its narration), where any other
+ * narration ends, and the playhead at `playhead`.
+ */
+export function edgeTargets(timeline: Timeline, index: number, pauseAfter: number, playhead: number): number[] {
+  const slide = timeline.slides[index];
+  if (!slide) return [];
+  const own = timeline.clips.find((c) => c.slide === slide.id);
+  const ends = timeline.clips.map((c) => c.end);
+  const targets = [...ends, ...(own ? [own.end + pauseAfter] : []), playhead];
+  return targets.filter((t) => t > slide.start);
+}
+
+/**
+ * What the start of slide `id`'s narration snaps to while it is dragged: where any slide starts,
+ * that with the pause before narration, where the narration before it ends, and the playhead.
+ */
+export function clipTargets(timeline: Timeline, id: string, pauseBefore: number, playhead: number): number[] {
+  const starts = timeline.slides.map((s) => s.start);
+  const index = timeline.clips.findIndex((c) => c.slide === id);
+  const before = timeline.clips[index - 1];
+  return [...starts, ...starts.map((s) => s + pauseBefore), ...(before ? [before.end] : []), playhead];
+}
+
+/** The timeline's height, in pixels: as low and as tall as it may be dragged, and as it opens first. */
+export const TIMELINE_HEIGHTS = { min: 120, max: 400, initial: 176 } as const;
+
+/** `height` kept between the lowest and tallest timeline, and no taller than `room` leaves for it. */
+export function clampTimelineHeight(height: number, room = Number.POSITIVE_INFINITY): number {
+  const { min, max } = TIMELINE_HEIGHTS;
+  if (!Number.isFinite(height)) return TIMELINE_HEIGHTS.initial;
+  return Math.round(Math.max(min, Math.min(max, room, height)));
+}

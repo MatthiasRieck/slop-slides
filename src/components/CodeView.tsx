@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { onDiskRead } from "../lib/codeSync";
 import { formatKeys } from "../lib/keys";
+import { slideTitle } from "../lib/slideTitle";
 import { basename, cn } from "../lib/utils";
 import { provideCodeSave, showError, useApp } from "../store";
 import { Button } from "./Button";
@@ -18,7 +19,7 @@ import {
   sourceExtensions,
 } from "./code/sourceEditor";
 import { useDeckFile } from "./code/useDeckFile";
-import { Dialog } from "./Dialog";
+import { Dialog, DialogActions } from "./Dialog";
 
 /** The sidebar's HTML tab: the open deck's source, or a line saying there is no deck to show. */
 export function CodePanel({ active }: { active: boolean }) {
@@ -31,9 +32,11 @@ export function CodePanel({ active }: { active: boolean }) {
 export const DIRTY_CHECK_DELAY = 200;
 
 /**
- * The deck file's source with the selected slide highlighted and kept in view. Edits are saved
- * with ⌘S; if the file changes on disk meanwhile (the agent), the user picks which wins. Revert
- * gives the unsaved edits up, once the user has said so.
+ * The deck file's source with the selected slide highlighted and kept in view, named in the
+ * header by its number and what it is called. Edits are saved with ⌘S; if the file changes on
+ * disk meanwhile (the agent), the user picks which wins. Revert gives the unsaved edits up, once
+ * the user has said so. A line asked for from elsewhere (a problem the deck check found, see
+ * `codeReveal`) is scrolled to and gets the caret.
  *
  * It stays mounted behind the other sidebar tabs, to keep its unsaved edits, and does nothing
  * the size of the file there: the file is read, and the selected slide followed, only while the
@@ -43,6 +46,7 @@ export function CodeView({ active }: { active: boolean }) {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const revealRev = useApp((s) => s.revealRev);
+  const codeReveal = useApp((s) => s.codeReveal);
   const dirty = useApp((s) => s.codeDirty);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -206,6 +210,21 @@ export function CodeView({ active }: { active: boolean }) {
     if (view.state.field(slideMarks).active !== selected) view.dispatch({ effects });
   }, [selected, revealRev, source, active]);
 
+  // Show the line asked for, after the slide it is on: the caret goes to its start. It waits for
+  // the tab to show and the file to be read, like the slide does.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || source === null || !active || codeReveal === null) return;
+    useApp.getState().codeLineShown();
+    const { doc } = view.state;
+    const at = doc.line(Math.min(doc.lines, Math.max(1, Math.round(codeReveal)))).from;
+    view.dispatch({
+      effects: EditorView.scrollIntoView(at, { y: "center" }),
+      selection: { anchor: at },
+    });
+    view.focus();
+  }, [codeReveal, source, active]);
+
   if (!deck) return null;
   const index = marks.spans.findIndex((s) => s.id === marks.active);
   const span = marks.spans[index];
@@ -222,8 +241,8 @@ export function CodeView({ active }: { active: boolean }) {
         {span && (
           <>
             <span className="hidden text-muted-foreground/40 @md:inline">·</span>
-            <span className="hidden min-w-0 truncate @md:inline">
-              Slide {index + 1} <span className="font-mono text-2xs">#{span.id.replace(/^#/, "")}</span>
+            <span className="hidden min-w-0 truncate @md:inline" title={`id="${span.id.replace(/^#/, "")}"`}>
+              Slide {index + 1} · {slideTitle(span.id)}
             </span>
             {lines && (
               <span className="hidden tabular-nums @xl:inline">
@@ -283,22 +302,17 @@ export function CodeView({ active }: { active: boolean }) {
           label="Discard unsaved changes"
           closeOnBackdrop
           onClose={() => setReverting(false)}
-          className="flex w-96 max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-          heading={
-            <>
-              <h2 className="text-base font-semibold">Discard your unsaved changes?</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                What you typed into {fileName} since it was last saved is lost; the file itself stays as it is.
-              </p>
-            </>
-          }
+          size="sm"
+          title="Discard your unsaved changes?"
+          description={`What you typed into ${fileName} since it was last saved is lost; the file itself stays as it is.`}
         >
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" data-autofocus onClick={() => setReverting(false)}>
+          <DialogActions>
+            <Button size="lg" data-autofocus onClick={() => setReverting(false)}>
               Keep editing
             </Button>
             <Button
               variant="destructive"
+              size="lg"
               onClick={() => {
                 setReverting(false);
                 if (source !== null) loadText(source);
@@ -306,7 +320,7 @@ export function CodeView({ active }: { active: boolean }) {
             >
               Discard changes
             </Button>
-          </div>
+          </DialogActions>
         </Dialog>
       )}
       {error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}

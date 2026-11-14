@@ -110,6 +110,11 @@ fn notes() -> Vec<u8> {
 
 /// A presentation of two slides, the second hidden and starting a section.
 fn sample() -> Vec<u8> {
+    sample_with("")
+}
+
+/// [`sample`], with `after` after the second slide's content: its transition and timing.
+fn sample_with(after: &str) -> Vec<u8> {
     let presentation = format!(
         r#"<p:presentation {NS}><p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/>
 <p:defaultTextStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:defaultTextStyle>
@@ -126,7 +131,7 @@ fn sample() -> Vec<u8> {
         ("rIdChart", "chart", "../charts/chart1.xml"),
     ]);
     let second = format!(
-        r#"<p:sld {NS} show="0" showMasterSp="0"><p:cSld><p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="000000"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>Q3 &amp; beyond</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#
+        r#"<p:sld {NS} show="0" showMasterSp="0"><p:cSld><p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="000000"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="T"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>Q3 &amp; beyond</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>{after}</p:sld>"#
     );
     zip_of(&[
         (
@@ -285,7 +290,7 @@ fn images_come_along_cropped_once_each_and_unsupported_ones_are_reported() {
     assert!(converted
         .html
         .contains("width: 200%; height: 100%; left: -50%; top: 0%"));
-    assert!(converted.skipped.iter().any(|s| s.contains("EMF")));
+    assert!(converted.skipped.iter().any(|s| s.what.contains("EMF")));
 }
 
 #[test]
@@ -312,7 +317,7 @@ fn tables_are_tables_and_charts_keep_their_numbers() {
             "{text}"
         );
     }
-    assert!(converted.skipped.iter().any(|s| s.contains("charts")));
+    assert!(converted.skipped.iter().any(|s| s.what.contains("charts")));
 }
 
 #[test]
@@ -375,7 +380,10 @@ fn styled_tables_come_along_plain_with_their_grid_and_header() {
     assert_eq!(converted.html.matches("border: 1px solid").count(), 2);
     assert!(converted.html.contains(r#"font-weight: 700">Head"#));
     assert!(!converted.html.contains(r#"font-weight: 700">Cell"#));
-    assert!(converted.skipped.iter().any(|s| s.contains("table styles")));
+    assert!(converted
+        .skipped
+        .iter()
+        .any(|s| s.what.contains("table styles")));
 }
 
 #[test]
@@ -469,12 +477,69 @@ fn a_hostile_file_cannot_reach_outside_assets_or_break_out_of_styles() {
 }
 
 #[test]
+fn what_could_not_come_along_is_told_by_slide() {
+    let timing = r#"<p:transition spd="med"><p:fade/></p:transition><p:timing><p:tnLst><p:par><p:cTn id="1"><p:childTnLst><p:anim calcmode="lin"/></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#;
+    let converted = import::convert_with(sample_with(timing), "x", &|_| {}).unwrap();
+    let slides_of = |what: &str| {
+        converted
+            .skipped
+            .iter()
+            .find(|c| c.what.contains(what))
+            .unwrap_or_else(|| panic!("no {what} in {:?}", converted.skipped))
+            .slides
+            .clone()
+    };
+    assert_eq!(slides_of("EMF"), [1]);
+    assert_eq!(slides_of("charts"), [1]);
+    assert_eq!(slides_of("animations"), [2]);
+    assert_eq!(slides_of("transitions"), [2]);
+    let kinds: Vec<&str> = converted.skipped.iter().map(|c| c.what.as_str()).collect();
+    let mut unique = kinds.clone();
+    unique.dedup();
+    assert_eq!(kinds, unique, "one entry per kind");
+    let plain = convert(sample(), "x").unwrap();
+    assert!(!plain.skipped.iter().any(|c| c.what.contains("animations")));
+}
+
+#[test]
+fn the_fonts_named_come_back_with_the_slides_using_them() {
+    let converted = convert(sample(), "x").unwrap();
+    let names: Vec<&str> = converted.fonts.iter().map(|f| f.name.as_str()).collect();
+    assert!(
+        names.contains(&"Georgia") && names.contains(&"Verdana"),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().all(|n| !n.starts_with('+')),
+        "theme references are no fonts"
+    );
+    let json = serde_json::to_value(&converted.fonts[0]).unwrap();
+    assert!(json["name"].is_string() && json["slides"].is_array());
+}
+
+#[test]
+fn an_import_says_which_slide_it_is_reading() {
+    let seen = std::cell::RefCell::new(Vec::new());
+    import::convert_with(sample(), "x", &|p| {
+        seen.borrow_mut().push((p.slide, p.slides))
+    })
+    .unwrap();
+    assert_eq!(seen.into_inner(), [(1, 2), (2, 2)]);
+    let json = serde_json::to_string(&import::Progress {
+        slide: 4,
+        slides: 20,
+    })
+    .unwrap();
+    assert_eq!(json, r#"{"slide":4,"slides":20}"#);
+}
+
+#[test]
 fn import_writes_the_deck_and_its_assets_and_leaves_the_file_alone() {
     let dir = crate::test_support::TempDir::new("pptx");
     let source = dir.join("My talk.pptx");
     let bytes = sample();
     std::fs::write(&source, &bytes).unwrap();
-    let imported = super::import(&source, &dir).unwrap();
+    let imported = super::import(&source, &dir, |_| {}).unwrap();
     assert_eq!(imported.deck.title, "Board update");
     assert_eq!(imported.deck.slides.len(), 2);
     assert!(imported.deck.slides[1].hidden);
@@ -489,7 +554,7 @@ fn import_writes_the_deck_and_its_assets_and_leaves_the_file_alone() {
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
     assert_eq!(deck::lint(&file, None).unwrap(), []);
     // A second import does not touch the first.
-    let again = super::import(&source, &dir).unwrap();
+    let again = super::import(&source, &dir, |_| {}).unwrap();
     assert_ne!(again.deck.path, imported.deck.path);
 }
 

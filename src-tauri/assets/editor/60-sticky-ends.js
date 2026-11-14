@@ -512,7 +512,7 @@
    * comes with the element's `frame`, outline (`rings`) and connection `sites`.
    */
   function stickTarget(p, line, candidates) {
-    var tolerance = EDGE_PX / zoom();
+    var tolerance = onScreen(EDGE_PX) / zoom();
     var best = null;
     var area = Infinity;
     (candidates || stickCandidates(line)).forEach(function (candidate) {
@@ -579,7 +579,7 @@
    * moves over the same one, only the spot and the site it is on follow.
    */
   function previewStick(hit) {
-    hover(hit && !hit.edge ? hit.el : null);
+    hover(hit && !hit.edge ? hit.el : null, hit && hit.frame);
     if (!hit) {
       if (shownStick) edgeUi.textContent = "";
       shownStick = null;
@@ -882,8 +882,9 @@
   /** Moves the dragged point of a line to the pointer; a new point goes in on the first move. */
   function pointTo(event) {
     if (!drag.moved) {
-      if (Math.abs(event.clientX - drag.x) < DRAG_THRESHOLD && Math.abs(event.clientY - drag.y) < DRAG_THRESHOLD) return;
+      if (Math.abs(event.clientX - drag.x) < onScreen(DRAG_THRESHOLD) && Math.abs(event.clientY - drag.y) < onScreen(DRAG_THRESHOLD)) return;
       drag.moved = true;
+      keepForCancel(drag, [drag.el], true);
       lastPoint = { index: -1, at: 0 };
       dropHover();
       drag.targets = snapTargets([drag.el]);
@@ -898,7 +899,7 @@
       at = snapLine({ x: other[0], y: other[1] }, at);
       clearGuides();
     } else if (snaps(event)) {
-      var tolerance = SNAP_PX / drag.zoom;
+      var tolerance = onScreen(SNAP_PX) / drag.zoom;
       var sx = snapAxis([at.x], drag.targets.x, tolerance);
       var sy = snapAxis([at.y], drag.targets.y, tolerance);
       at = { x: at.x + sx.by, y: at.y + sy.by };

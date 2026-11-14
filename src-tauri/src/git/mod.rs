@@ -16,6 +16,7 @@
 mod diff;
 mod merge;
 mod process;
+mod text;
 
 #[cfg(test)]
 mod fixtures;
@@ -38,6 +39,7 @@ use process::{
     paths, read_index, split, staged_files, unstaged_files, untracked, write_index,
 };
 pub use process::{existing_folder, head_oid, read_at_head};
+pub use text::TextChange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +74,8 @@ pub struct SlideChange {
     pub old_id: Option<String>,
     /// What changed that the slide's picture may not show, such as its speaker notes.
     pub details: Vec<String>,
+    /// The texts of a modified slide that changed: on the slide, in its notes, in its narration.
+    pub text_changes: Vec<TextChange>,
     /// It is elsewhere in the deck than at the commit, whatever else changed.
     pub moved: bool,
     /// Its number in the deck at the commit; None for an added slide.
@@ -88,6 +92,8 @@ pub struct Commit {
     /// Abbreviated hash; a new commit reloads the slides shown from it.
     pub hash: String,
     pub subject: String,
+    /// When it was made, in seconds since 1970.
+    pub time: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -203,8 +209,9 @@ fn stage_assets(file: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Puts the changed files around the deck that `text` refers to back as they were committed.
-fn restore_assets(file: &Path, text: &str) -> Result<()> {
+/// Puts the changed files around the deck that `text` refers to back as they were committed, and
+/// says how many: the deck's undo history does not have them, so undoing does not bring them back.
+fn restore_assets(file: &Path, text: &str) -> Result<usize> {
     let (dir, name) = split(file)?;
     let files = changed_files(dir);
     let used: Vec<&str> = files
@@ -213,11 +220,11 @@ fn restore_assets(file: &Path, text: &str) -> Result<()> {
         .filter(|path| *path != name && text.contains(path))
         .collect();
     if used.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let args = ["restore", "--source=HEAD", "--staged", "--worktree", "--"];
     git_write(dir, &[args.as_slice(), used.as_slice()].concat(), b"")?;
-    Ok(())
+    Ok(used.len())
 }
 
 /// Stages `change`: the index takes it from the deck.
@@ -280,8 +287,9 @@ pub fn restored(file: &Path, change: &Change) -> Result<String> {
     })
 }
 
-/// Takes `change` out of the index and puts the files it used back; the deck is already written.
-pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<()> {
+/// Takes `change` out of the index and puts the files it used back, saying how many files; the
+/// deck is already written.
+pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<usize> {
     let v = Versions {
         work: before.to_string(),
         ..versions(file)?
@@ -292,7 +300,7 @@ pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<()> 
             old_id: Some(id), ..
         } => restore_assets(file, slide_of(&v.head, id)),
         Change::Styles => restore_assets(file, &strip_slides(&v.head)),
-        _ => Ok(()),
+        _ => Ok(0),
     }
 }
 
@@ -303,7 +311,7 @@ pub fn restored_all(file: &Path) -> Result<String> {
     let v = versions(file)?;
     if !v.in_head {
         return Err(Error::msg(
-            "This deck was never committed, so there is nothing to go back to.",
+            "This deck has no saved version yet, so there is nothing to go back to.",
         ));
     }
     Ok(comments::write(
@@ -313,8 +321,9 @@ pub fn restored_all(file: &Path) -> Result<String> {
 }
 
 /// Takes the deck out of the index's changes and puts the files it used back, those of the
-/// commit and those of `before`, the deck as it was; the deck is already written.
-pub fn finish_restore_all(file: &Path, before: &str) -> Result<()> {
+/// commit and those of `before`, the deck as it was, saying how many files; the deck is already
+/// written.
+pub fn finish_restore_all(file: &Path, before: &str) -> Result<usize> {
     let v = versions(file)?;
     let (dir, name) = split(file)?;
     git_write(dir, &["reset", "-q", "--", name], b"")?;
@@ -340,7 +349,7 @@ pub fn commit(file: &Path, message: &str) -> Result<()> {
     let (dir, _) = split(file)?;
     let message = message.trim();
     if message.is_empty() {
-        return Err(Error::msg("Write a commit message first."));
+        return Err(Error::msg("Say what changed to save a version."));
     }
     git_write(dir, &["commit", "-q", "-m", message], b"")?;
     Ok(())
@@ -523,6 +532,12 @@ mod tests {
         let clean = changes(&repo.deck()).unwrap();
         assert_eq!(clean.tracking, Tracking::Committed);
         assert_eq!(clean.commit.as_ref().unwrap().subject, "First draft");
+        let made = clean.commit.as_ref().unwrap().time;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!((now - made).abs() < 3600, "the commit was made just now");
         assert!(!clean.styles_changed);
         assert!(clean.slides.iter().all(|s| s.status == Unchanged));
         assert_eq!(clean.old_size.unwrap().pixel_width, 1920);
@@ -538,6 +553,12 @@ mod tests {
         assert_eq!(
             list,
             [(Modified, "a"), (Removed, "removed:1"), (Added, "c")]
+        );
+        let words = &found.slides[0].text_changes;
+        assert_eq!(words.len(), 1, "the modified slide says which text changed");
+        assert_eq!(
+            (words[0].before.as_str(), words[0].after.as_str()),
+            ("A", "Hi")
         );
 
         repo.commit("Second draft");
@@ -640,12 +661,12 @@ mod tests {
         repo
     }
 
-    /// Applies the deck `restored` wrote, as the app does.
-    fn restore(repo: &Repo, change: &Change) {
+    /// Applies the deck `restored` wrote, as the app does; how many files went back with it.
+    fn restore(repo: &Repo, change: &Change) -> usize {
         let before = work_of(repo);
         let after = restored(&repo.deck(), change).unwrap();
         fs::write(repo.deck(), after).unwrap();
-        finish_restore(&repo.deck(), change, &before).unwrap();
+        finish_restore(&repo.deck(), change, &before).unwrap()
     }
 
     #[test]
@@ -820,7 +841,11 @@ mod tests {
         repo.write("talk/assets/a.png", "old");
         repo.commit("First");
         repo.write("talk/assets/a.png", "new");
-        restore(&repo, &slide("a"));
+        assert_eq!(
+            restore(&repo, &slide("a")),
+            1,
+            "it says that a file went back, which undo does not cover"
+        );
         assert_eq!(
             fs::read_to_string(repo.0.join("talk/assets/a.png")).unwrap(),
             "old"
@@ -866,11 +891,11 @@ mod tests {
     }
 
     /// Discards every change, as the command does: writes the deck, then tidies the index.
-    fn restore_all(repo: &Repo) {
+    fn restore_all(repo: &Repo) -> usize {
         let before = work_of(repo);
         let text = restored_all(&repo.deck()).unwrap();
         fs::write(repo.deck(), text).unwrap();
-        finish_restore_all(&repo.deck(), &before).unwrap();
+        finish_restore_all(&repo.deck(), &before).unwrap()
     }
 
     #[test]
@@ -889,7 +914,7 @@ mod tests {
         );
         stage(&repo.deck(), &slide("c")).unwrap();
 
-        restore_all(&repo);
+        assert_eq!(restore_all(&repo), 1, "one image went back with the deck");
         let found = changes(&repo.deck()).unwrap();
         assert!(!found.styles_changed);
         assert!(found
@@ -918,7 +943,7 @@ mod tests {
         let repo = Repo::new();
         repo.write("talk/deck.html", &deck(&["a=A"]));
         let error = restored_all(&repo.deck()).unwrap_err().to_string();
-        assert!(error.contains("never committed"), "{error}");
+        assert!(error.contains("no saved version"), "{error}");
     }
 
     #[test]

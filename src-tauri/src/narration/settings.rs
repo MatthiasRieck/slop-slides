@@ -1,13 +1,166 @@
 //! Who says a deck's narration, in which voice and language, as its `<meta>` tags name them,
-//! and the languages narration can be said in.
+//! and the languages narration can be said in. And what the deck keeps next to its audio, in
+//! `narration/manifest.json` (see [`DeckSettings`]): how it is said (pace and style), and the
+//! times it is laid out with wherever it plays by itself.
 
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::cloud::{Provider, DEFAULT_PROVIDER};
+use super::manifest::{audio_dir, Manifest};
 use crate::deck;
+use crate::error::{Error, Result};
 use crate::html::AppMetas;
+use crate::video;
+
+/// How fast narration is said.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Pace {
+    Slower,
+    #[default]
+    Normal,
+    Faster,
+}
+
+impl Pace {
+    fn is_normal(&self) -> bool {
+        *self == Pace::Normal
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Pace::Slower => "slower",
+            Pace::Normal => "normal",
+            Pace::Faster => "faster",
+        }
+    }
+}
+
+/// The longest a style note may be, in characters: a line, not a script.
+pub const MAX_STYLE_CHARS: usize = 200;
+
+/// How a deck's narration is said, beyond who says it: how fast, and in what manner. The
+/// pace goes to every service; the style only to one that takes a note on delivery (see
+/// [`Provider::takes_style`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Delivery {
+    #[serde(default, skip_serializing_if = "Pace::is_normal")]
+    pub pace: Pace,
+    /// A note on the manner, like "warm and calm"; empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub style: String,
+}
+
+impl Delivery {
+    /// The delivery with its style tidied: one line, no space around it. Fails for a style
+    /// too long to be a note.
+    pub fn checked(pace: Pace, style: &str) -> Result<Self> {
+        let style = style.split_whitespace().collect::<Vec<_>>().join(" ");
+        if style.chars().count() > MAX_STYLE_CHARS {
+            return Err(Error::msg(format!(
+                "Keep the style note to {MAX_STYLE_CHARS} characters."
+            )));
+        }
+        Ok(Delivery { pace, style })
+    }
+
+    /// What of it `provider` is told, for the audio's fingerprint: empty for the plain
+    /// delivery, so audio made before there was any stays up to date. A style the provider
+    /// does not take changes nothing of its audio.
+    pub fn mark(&self, provider: Provider) -> String {
+        let style = match provider.takes_style() {
+            true => self.style.as_str(),
+            false => "",
+        };
+        match (self.pace, style) {
+            (Pace::Normal, "") => String::new(),
+            (pace, style) => format!("{}\n{style}", pace.id()),
+        }
+    }
+}
+
+/// The times a deck is laid out with wherever it plays by itself (the timeline, the show's
+/// Play, a video): how long a slide without narration shows, and the pauses around narration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timing {
+    pub seconds_per_slide: f64,
+    pub pause_before: f64,
+    pub pause_after: f64,
+}
+
+impl Timing {
+    /// Fails for times a video could not be made with (see [`video::Options::check`]).
+    pub fn check(&self) -> Result<()> {
+        video::Options::from(*self).check()
+    }
+}
+
+impl From<Timing> for video::Options {
+    /// The app's export settings (see [`super::timeline::DEFAULTS`]) with these times.
+    fn from(timing: Timing) -> Self {
+        video::Options {
+            seconds_per_slide: timing.seconds_per_slide,
+            pause_before: timing.pause_before,
+            pause_after: timing.pause_after,
+            ..super::timeline::DEFAULTS
+        }
+    }
+}
+
+/// What a deck keeps next to its audio that is no audio: how its narration is said, and the
+/// times it plays with. A deck that never set them has none, and plays with the app's.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckSettings {
+    /// None until the deck sets its own: the app's defaults then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<Timing>,
+    #[serde(flatten)]
+    pub delivery: Delivery,
+}
+
+impl DeckSettings {
+    pub(super) fn is_default(&self) -> bool {
+        *self == DeckSettings::default()
+    }
+}
+
+/// What the deck `file` keeps of how its narration is said and timed.
+pub fn deck_settings(file: &Path) -> DeckSettings {
+    Manifest::read(&audio_dir(file)).settings
+}
+
+/// Changes what the deck `file` keeps of how its narration is said and timed; returns it.
+fn change_deck_settings(
+    file: &Path,
+    change: impl FnOnce(&mut DeckSettings),
+) -> Result<DeckSettings> {
+    let dir = audio_dir(file);
+    std::fs::create_dir_all(&dir)?;
+    let mut kept = DeckSettings::default();
+    Manifest::update(&dir, |manifest| {
+        change(&mut manifest.settings);
+        kept = manifest.settings.clone();
+    })?;
+    Ok(kept)
+}
+
+/// Sets the times the deck `file` plays with; returns all it keeps.
+pub fn set_timing(file: &Path, timing: Timing) -> Result<DeckSettings> {
+    timing.check()?;
+    change_deck_settings(file, |settings| settings.timing = Some(timing))
+}
+
+/// Sets how the deck `file`'s narration is said; returns all it keeps. Audio made with
+/// another delivery is out of date from then on.
+pub fn set_delivery(file: &Path, pace: Pace, style: &str) -> Result<DeckSettings> {
+    let delivery = Delivery::checked(pace, style)?;
+    change_deck_settings(file, |settings| settings.delivery = delivery)
+}
 
 /// A language narration can be said in.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -138,7 +291,75 @@ pub(super) fn settings(file: &Path) -> (Provider, String, &'static Language) {
 #[cfg(test)]
 mod tests {
     use super::super::cloud;
+    use super::super::testing::{deck_with, temp_dir};
     use super::*;
+
+    #[test]
+    fn a_deck_keeps_its_times_and_delivery_next_to_its_audio() {
+        let dir = temp_dir();
+        let file = deck_with(&dir, "deck.html", "", "");
+        // Nothing set, nothing kept: the app's times, the plain delivery.
+        assert_eq!(deck_settings(&file), DeckSettings::default());
+        let timing = Timing {
+            seconds_per_slide: 8.0,
+            pause_before: 0.0,
+            pause_after: 2.0,
+        };
+        assert_eq!(set_timing(&file, timing).unwrap().timing, Some(timing));
+        let kept = set_delivery(&file, Pace::Slower, "  warm\nand   calm ").unwrap();
+        assert_eq!(kept.delivery.style, "warm and calm");
+        assert_eq!(kept.timing, Some(timing), "the times stay");
+        assert_eq!(deck_settings(&file), kept);
+        let json = std::fs::read_to_string(audio_dir(&file).join("manifest.json")).unwrap();
+        assert!(json.contains(r#""secondsPerSlide": 8.0"#), "{json}");
+        assert!(json.contains(r#""pace": "slower""#), "{json}");
+        // Times no video could be made with are refused, and a style that is a script.
+        let bad = Timing {
+            pause_after: 99.0,
+            ..timing
+        };
+        assert!(set_timing(&file, bad).is_err());
+        assert!(set_delivery(&file, Pace::Normal, &"x".repeat(MAX_STYLE_CHARS + 1)).is_err());
+        assert_eq!(deck_settings(&file), kept);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_from_before_decks_kept_settings_still_reads() {
+        let dir = temp_dir();
+        let file = deck_with(&dir, "deck.html", "", "");
+        let audio = audio_dir(&file);
+        std::fs::create_dir_all(&audio).unwrap();
+        std::fs::write(
+            audio.join("manifest.json"),
+            r#"{"slides":{"a":{"fingerprint":"f","seconds":1.5,"recorded":true}}}"#,
+        )
+        .unwrap();
+        assert_eq!(deck_settings(&file), DeckSettings::default());
+        // Setting something keeps what was there, and writes no settings that are the plain ones.
+        set_delivery(&file, Pace::Faster, "").unwrap();
+        set_delivery(&file, Pace::Normal, "").unwrap();
+        let json = std::fs::read_to_string(audio.join("manifest.json")).unwrap();
+        assert!(json.contains(r#""recorded": true"#), "{json}");
+        assert!(!json.contains("settings"), "{json}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_plain_delivery_leaves_no_mark_and_a_style_only_where_it_is_taken() {
+        let plain = Delivery::default();
+        assert_eq!(plain.mark(Provider::OpenAi), "");
+        let styled = Delivery::checked(Pace::Normal, "warm").unwrap();
+        assert_ne!(styled.mark(Provider::OpenAi), "");
+        assert_eq!(
+            styled.mark(Provider::ElevenLabs),
+            "",
+            "ElevenLabs takes no style"
+        );
+        let slow = Delivery::checked(Pace::Slower, "warm").unwrap();
+        assert_ne!(slow.mark(Provider::ElevenLabs), "");
+        assert_ne!(slow.mark(Provider::OpenAi), styled.mark(Provider::OpenAi));
+    }
 
     #[test]
     fn languages_have_a_known_default_and_openai_says_decks_naming_nobody() {

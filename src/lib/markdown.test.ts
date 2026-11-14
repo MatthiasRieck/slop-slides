@@ -115,7 +115,7 @@ describe("linkTarget", () => {
     undefined,
     "",
     "  ",
-    "#top",
+    "#",
     "javascript:alert(1)",
     "data:text/html,x",
     "ftp://example.com/x",
@@ -126,6 +126,12 @@ describe("linkTarget", () => {
     "/decks/talk",
   ])("goes nowhere for %s", (href) => {
     expect(linkTarget(href, WORKSPACE)).toBeNull();
+  });
+
+  it("reads #id as a slide, decoded, with or without a workspace", () => {
+    expect(linkTarget("#market-size", WORKSPACE)).toEqual({ kind: "slide", id: "market-size" });
+    expect(linkTarget("#caf%C3%A9", null)).toEqual({ kind: "slide", id: "café" });
+    expect(linkTarget("#100%", WORKSPACE)).toEqual({ kind: "slide", id: "100%" });
   });
 
   it("opens no file without a workspace", () => {

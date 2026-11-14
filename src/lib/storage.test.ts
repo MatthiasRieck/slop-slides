@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadFlag, loadJson, loadText, saveFlag, saveJson, saveText, trySaveText } from "./storage";
+import {
+  loadFlag,
+  loadJson,
+  loadSize,
+  loadText,
+  saveFlag,
+  saveJson,
+  saveText,
+  trySaveSize,
+  trySaveText,
+} from "./storage";
 
 const asNumbers = (saved: unknown) => {
   if (!Array.isArray(saved) || !saved.every((n) => typeof n === "number")) throw new Error("not numbers");
@@ -87,5 +97,36 @@ describe("texts", () => {
     expect(() => saveText("choice", null)).toThrow("SecurityError");
     expect(() => saveJson("numbers", [1])).toThrow("SecurityError");
     expect(() => saveFlag("f", true)).toThrow("SecurityError");
+  });
+});
+
+describe("loadSize", () => {
+  it("reads the size trySaveSize stored, rounded to a pixel", () => {
+    trySaveSize("width", 412.6);
+    expect(localStorage.getItem("width")).toBe("413");
+    expect(loadSize("width", 380, 260, 900)).toBe(413);
+  });
+
+  it("falls back when nothing is stored, or what is stored is no number", () => {
+    expect(loadSize("width", 380, 260, 900)).toBe(380);
+    for (const junk of ["", " ", "wide", "NaN", "Infinity", "12px"]) {
+      localStorage.setItem("width", junk);
+      expect(loadSize("width", 380, 260, 900)).toBe(380);
+    }
+  });
+
+  it("falls back for a size that does not fit: one from a larger window, or too small to use", () => {
+    localStorage.setItem("width", "1200");
+    expect(loadSize("width", 380, 260, 900)).toBe(380);
+    localStorage.setItem("width", "40");
+    expect(loadSize("width", 380, 260, 900)).toBe(380);
+    localStorage.setItem("width", "900");
+    expect(loadSize("width", 380, 260, 900)).toBe(900);
+  });
+
+  it("remembers nothing, and does not throw, when storage is unavailable", () => {
+    blockStorage();
+    expect(() => trySaveSize("width", 500)).not.toThrow();
+    expect(loadSize("width", 380, 260, 900)).toBe(380);
   });
 });

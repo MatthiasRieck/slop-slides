@@ -12,7 +12,7 @@
     -->
     <style>
       html { background: oklch(0.992 0 0); color-scheme: light; }
-      html.dark { background: oklch(0.145 0 0); color-scheme: dark; }
+      html.dark { background: oklch(0.205 0 0); color-scheme: dark; }
     </style>
     <script>
       (function () {
@@ -24,6 +24,14 @@
         }
         var dark = choice === "dark" || (choice !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.toggle("dark", dark);
+        // The interface's text size, as `applyTextSize` in src/lib/theme.ts sets it.
+        var size = null;
+        try {
+          size = localStorage.getItem("slopslide.textSize");
+        } catch (error) {
+          // Storage is unavailable: the default size.
+        }
+        document.documentElement.style.fontSize = size === "small" ? "93.75%" : size === "large" ? "112.5%" : "";
       })();
     </script>
   </head>

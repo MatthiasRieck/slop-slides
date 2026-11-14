@@ -31,6 +31,7 @@ import {
   TIDY_PROMPT,
   useApp,
 } from "../store";
+import { forgetDrafts } from "../store/composer";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
@@ -109,7 +110,12 @@ beforeEach(() => {
   takeQueued.mockReset().mockReturnValue(null);
   retryLast.mockClear();
   forgetModes();
+  forgetDrafts();
   useApp.setState({
+    stopping: false,
+    chatTitle: null,
+    history: null,
+    railSelected: [],
     retryLast,
     refreshProviders: realRefreshProviders,
     workspace: { path: "/decks/talk", name: "talk" },
@@ -147,10 +153,10 @@ beforeEach(() => {
   });
 });
 
-const textarea = () => screen.getByRole("textbox") as HTMLTextAreaElement;
+const textarea = () => screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
 const sendButton = () => screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
 /** Unfolds the tool calls of a finished reply, which show as one line of steps. */
-const openSteps = () => fireEvent.click(screen.getByRole("button", { name: /^\d+ steps/ }));
+const openSteps = () => fireEvent.click(screen.getByTitle(/^Show each of the \d+ steps/));
 const type = (text: string) => fireEvent.change(textarea(), { target: { value: text } });
 
 const reply = (patch: Partial<AssistantMessage>): AssistantMessage => ({
@@ -233,8 +239,11 @@ describe("past chats", () => {
     });
     expect(screen.queryByRole("button", { name: /Current conversation/ })).toBeNull();
     await act(async () => fireEvent.click(past));
-    expect(screen.getByText("Earlier prompt")).toBeTruthy();
-    expect(textarea().value).toBe("");
+    expect(within(screen.getByRole("log")).getByText("Earlier prompt")).toBeTruthy();
+    // The chat on show is named in the header.
+    expect(screen.getByTitle("Earlier prompt")).toBeTruthy();
+    // What was being written stays: another chat about the same deck takes it along.
+    expect(textarea().value).toBe("Unsent draft");
     expect(screen.queryByRole("region", { name: "Past chats" })).toBeNull();
     expect(invoke).toHaveBeenCalledWith("select_chat_thread", { id: "/decks/talk", thread: "past" });
   });
@@ -319,84 +328,14 @@ describe("ChatPanel: empty chat", () => {
 });
 
 describe("ChatPanel: composing", () => {
-  const resizeHandle = () => screen.getByRole("separator", { name: "Resize message input" });
-  const dragInput = (from: number, to: number, finish = "pointerup") => {
-    const handle = resizeHandle();
-    handle.setPointerCapture = vi.fn();
-    handle.hasPointerCapture = () => true;
-    handle.releasePointerCapture = vi.fn();
-    for (const [event, y] of [
-      ["pointerdown", from],
-      ["pointermove", to],
-      [finish, to],
-    ] as const) {
-      fireEvent(handle, new MouseEvent(event, { bubbles: true, button: 0, clientY: y }));
-    }
-  };
-
-  it("allows vertical resizing and keeps the chosen height when editing or sending", () => {
+  it("has no grip to resize the message input: it grows with its text up to a point, then scrolls", () => {
     render(<ChatPanel />);
+    expect(screen.queryByRole("separator")).toBeNull();
     const input = textarea();
-    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
-    dragInput(400, 300);
-    expect(input.style.height).toBe("180px");
-    type("Make it blue");
-    expect(input.style.height).toBe("180px");
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(input.style.height).toBe("180px");
-    expect(input.value).toBe("");
-  });
-
-  it("shrinks by dragging down and stops resizing after release or cancellation", () => {
-    render(<ChatPanel />);
-    const input = textarea();
-    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 180 } as DOMRect);
-    dragInput(300, 360);
-    expect(input.style.height).toBe("120px");
-    fireEvent(resizeHandle(), new MouseEvent("pointermove", { bubbles: true, clientY: 100 }));
-    expect(input.style.height).toBe("120px");
-    dragInput(300, 380, "pointercancel");
-    fireEvent(resizeHandle(), new MouseEvent("pointermove", { bubbles: true, clientY: 100 }));
-    expect(input.style.height).toBe("100px");
-  });
-
-  it("limits resizing and supports the keyboard", () => {
-    render(<ChatPanel />);
-    const input = textarea();
-    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
-    // By hand it goes well past what it grows to by itself: up to 60% of the window's height.
-    const tallest = `${Math.round(window.innerHeight * 0.6)}px`;
-    expect(Number.parseInt(tallest, 10)).toBeGreaterThan(240);
-    dragInput(400, -1000);
-    expect(input.style.height).toBe(tallest);
-    dragInput(400, 1000);
-    expect(input.style.height).toBe("64px");
-    fireEvent.keyDown(resizeHandle(), { key: "ArrowUp" });
-    expect(input.style.height).toBe("96px");
-    fireEvent.keyDown(resizeHandle(), { key: "End" });
-    expect(input.style.height).toBe(tallest);
-    fireEvent.keyDown(resizeHandle(), { key: "Home" });
-    expect(input.style.height).toBe("64px");
-  });
-
-  it("follows the window as it is resized: the tallest is its share of the height now", () => {
-    const height = window.innerHeight;
-    render(<ChatPanel />);
-    const input = textarea();
-    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
-    try {
-      window.innerHeight = 500;
-      act(() => void window.dispatchEvent(new Event("resize")));
-      expect(resizeHandle().getAttribute("aria-valuemax")).toBe("300");
-      dragInput(400, -1000);
-      expect(input.style.height).toBe("300px");
-      window.innerHeight = 1000;
-      act(() => void window.dispatchEvent(new Event("resize")));
-      fireEvent.keyDown(resizeHandle(), { key: "End" });
-      expect(input.style.height).toBe("600px");
-    } finally {
-      window.innerHeight = height;
-    }
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 900 });
+    type("A very long draft");
+    expect(input.style.height).toBe("240px");
+    expect(input.className).toContain("resize-none");
   });
 
   it("is an opaque card: nothing behind it has to be blurred for each frame", () => {
@@ -408,28 +347,6 @@ describe("ChatPanel: composing", () => {
       expect(surface.className).toMatch(/\bbg-card\b(?!\/)/);
       expect(surface.className).not.toContain("backdrop-blur");
     }
-  });
-
-  it("fits the text again on a double click of the grip, or Escape on it", () => {
-    render(<ChatPanel />);
-    const input = textarea();
-    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 120 });
-    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
-    type("A longer draft");
-    dragInput(400, 200);
-    expect(input.style.height).toBe("280px");
-    fireEvent.doubleClick(resizeHandle());
-    expect(input.style.height).toBe("120px");
-    fireEvent.keyDown(resizeHandle(), { key: "End" });
-    fireEvent.keyDown(resizeHandle(), { key: "Escape" });
-    expect(input.style.height).toBe("120px");
-  });
-
-  it("puts the grip after the message input for the keyboard, though it is drawn above it", () => {
-    render(<ChatPanel />);
-    const order = textarea().compareDocumentPosition(resizeHandle());
-    expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(resizeHandle().className).toContain("order-first");
   });
 
   it("opens at the smallest height even when the placeholder would wrap", () => {
@@ -448,7 +365,7 @@ describe("ChatPanel: composing", () => {
     expect(input.style.height).toBe("64px");
   });
 
-  it("still grows automatically with the draft until manually resized", () => {
+  it("grows automatically with the draft", () => {
     render(<ChatPanel />);
     const input = textarea();
     Object.defineProperty(input, "scrollHeight", { configurable: true, value: 120 });
@@ -466,17 +383,25 @@ describe("ChatPanel: composing", () => {
     expect(toolbar.className).toContain("flex-nowrap");
     expect(toolbar.className).not.toContain("flex-wrap");
     expect(toolbar.parentElement!.className).toContain("@container");
-    // The model's name always shows, cut short; effort and permissions give way to icons first.
-    const label = screen.getByText(useApp.getState().selection.label);
+    // The model's name always shows, without the provider's name its icon gives: "Opus 5.5".
+    const label = screen.getByText("Opus 5.5");
     expect(label.className).not.toContain("hidden");
     expect(label.className).toContain("truncate");
+    // At the sidebar's normal width the effort is a short word and the usual permission mode an icon.
+    expect(screen.getByText("Med").className).toContain("@[26rem]:hidden");
     for (const text of ["Medium · 1M", "Ask for approval"]) {
       expect(screen.getByText(text).className).toContain("hidden");
       expect(screen.getByText(text).className).toContain("@[26rem]:inline");
     }
-    for (const chevron of toolbar.querySelectorAll(".lucide-chevron-down")) {
-      expect(chevron.getAttribute("class")).toContain("@[17rem]:block");
-    }
+    // No chevrons: the room goes to the names.
+    expect(toolbar.querySelectorAll(".lucide-chevron-down")).toHaveLength(0);
+  });
+
+  it("names a permission mode other than the usual one, also where room is short", () => {
+    useApp.setState({ permissionModes: { claude: "fullAccess", codex: "ask", copilot: "ask" } });
+    render(<ChatPanel />);
+    expect(screen.getByText("Full").className).toContain("@[26rem]:hidden");
+    expect(screen.getByText("Full access").className).toContain("@[26rem]:inline");
   });
 
   it("keeps the toolbar's round buttons from being squeezed", () => {
@@ -775,7 +700,7 @@ describe("ChatPanel: composing", () => {
         .getAllByRole("button")
         .filter((button) => button.hasAttribute("aria-pressed") && button.closest("[data-index]")),
     ).toHaveLength(2);
-    fireEvent.pointerDown(screen.getByPlaceholderText("Ask for slides or changes…"));
+    fireEvent.pointerDown(textarea());
     expect(document.querySelector("[data-index]")).toBeNull();
   });
 
@@ -813,23 +738,25 @@ describe("ChatPanel: composing", () => {
     expect(refreshProviders).toHaveBeenCalledOnce();
   });
 
-  it("offers the selected model's effort levels", () => {
+  it("offers the selected model's effort levels, each with what it trades", () => {
     render(<ChatPanel />);
-    fireEvent.click(screen.getByTitle("Reasoning effort and context window"));
-    expect(screen.getByRole("button", { name: "Max" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "High" }));
+    fireEvent.click(screen.getByRole("button", { name: "Medium · 1M" }));
+    expect(screen.getByText("How long the agent thinks before it answers.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Max/ }).textContent).toContain("thinks as long as it can");
+    fireEvent.click(screen.getByRole("button", { name: /^High/ }));
     expect(useApp.getState().selection.effort).toBe("high");
   });
 
-  it("offers a Claude model's context windows", () => {
+  it("offers a Claude model's context windows, saying what each holds", () => {
     render(<ChatPanel />);
-    const trigger = screen.getByTitle("Reasoning effort and context window");
-    expect(trigger.textContent).toBe("Medium · 1M");
+    const trigger = screen.getByRole("button", { name: "Medium · 1M" });
+    expect(trigger.getAttribute("title")).toBe("Effort and context window: Medium · 1M");
     fireEvent.click(trigger);
-    expect(screen.getByText("Context Window")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "200k" }));
+    expect(screen.getByText("Context window")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^1M/ }).textContent).toContain("can cost more");
+    fireEvent.click(screen.getByRole("button", { name: /^200k/ }));
     expect(useApp.getState().selection.contextWindow).toBe("200k");
-    expect(screen.getByTitle("Reasoning effort and context window").textContent).toBe("Medium · 200k");
+    expect(screen.getByRole("button", { name: "Medium · 200k" })).toBeTruthy();
   });
 
   it("shows only effort for models without context window options", () => {
@@ -837,8 +764,21 @@ describe("ChatPanel: composing", () => {
       selection: { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high", contextWindow: null },
     });
     render(<ChatPanel />);
-    fireEvent.click(screen.getByTitle("Reasoning effort"));
-    expect(screen.queryByText("Context Window")).toBeNull();
+    fireEvent.click(screen.getByTitle("Effort: High"));
+    expect(screen.queryByText("Context window")).toBeNull();
+  });
+
+  it("tells in the effort menu how full the chat is and what it cost at API prices", () => {
+    showMessages(
+      { id: "u", role: "user", text: "hi", slide: null, attachments: [], createdAt: 0 },
+      reply({ costUsd: 0.25, context: { provider: "claude", tokens: 100_000, window: 1_000_000 } }),
+      { id: "u2", role: "user", text: "more", slide: null, attachments: [], createdAt: 0 },
+      reply({ id: "a2", costUsd: 0.5 }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Medium · 1M" }));
+    const usage = screen.getByTestId("chat-usage");
+    expect(usage.textContent).toContain("10% full (100k of 1M tokens)");
+    expect(usage.textContent).toContain("About $0.75 at API prices");
   });
 
   it("starts a new chat", () => {
@@ -1200,7 +1140,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockRejectedValue("disk full");
     render(<ChatPanel />);
     await act(async () => paste([new File(["hi"], "image.png", { type: "image/png" })]));
-    await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Could not attach the file: disk full"));
   });
 
   it("shows image previews in a fan that opens a grid to review and remove them", async () => {
@@ -1265,7 +1205,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockRejectedValue("permission denied");
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(lastError(useApp.getState())).toBe("permission denied");
+    expect(lastError(useApp.getState())).toBe("Could not attach the file: permission denied");
   });
 });
 
@@ -1279,10 +1219,45 @@ describe("ChatPanel: transcript", () => {
       attachments: ["assets/logo.svg"],
       createdAt: 0,
     });
-    expect(screen.getByText("Bigger title")).toBeTruthy();
-    expect(screen.getByText("on slide 3")).toBeTruthy();
+    expect(within(screen.getByRole("log")).getByText("Bigger title")).toBeTruthy();
     const picture = screen.getByAltText("logo.svg") as HTMLImageElement;
     expect(picture.getAttribute("src")).toBe(workspaceChatFileUrl("/decks/talk", "assets/logo.svg"));
+    // The slide it was about is a way to it.
+    fireEvent.click(screen.getByRole("button", { name: "on slide 3" }));
+    expect(useApp.getState().selected).toBe("outro");
+  });
+
+  it("opens a sent picture larger, and closes it again", () => {
+    showMessages({
+      id: "u",
+      role: "user",
+      text: "Use this",
+      slide: null,
+      attachments: ["assets/logo.png"],
+      createdAt: 0,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "View logo.png larger" }));
+    const dialog = screen.getByRole("dialog", { name: "logo.png" });
+    expect(within(dialog).getByAltText("logo.png").getAttribute("src")).toBe(
+      workspaceChatFileUrl("/decks/talk", "assets/logo.png"),
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says what went with a message in one line, with no separator left over", () => {
+    showMessages({
+      id: "u",
+      role: "user",
+      text: "Fix",
+      slide: "deleted",
+      slides: ["intro", "outro"],
+      attachments: [],
+      reverted: true,
+      createdAt: 0,
+    });
+    const line = screen.getByText("changes undone").closest("div")!;
+    expect(line.textContent).toBe("changes undone·about slides 1, 3");
   });
 
   it("shows what was sent along: images, the screenshot and the sketch as pictures, other files as chips", () => {
@@ -1316,7 +1291,7 @@ describe("ChatPanel: transcript", () => {
       attachments: [],
       createdAt: 0,
     });
-    const text = screen.getByText(/Not a heading/);
+    const text = within(screen.getByRole("log")).getByText(/Not a heading/);
     expect(text.textContent).toBe("# Not a heading\n* not a list <b>x</b>");
     expect(text.className).toContain("whitespace-pre-wrap");
     expect(screen.queryByRole("heading", { name: "Not a heading" })).toBeNull();
@@ -1333,7 +1308,7 @@ describe("ChatPanel: transcript", () => {
       sketch: { image: null, bounds },
       createdAt: 0,
     });
-    expect(screen.getByText("· with sketch")).toBeTruthy();
+    expect(screen.getByText("on slide 3").closest("div")!.textContent).toBe("on slide 3·with sketch");
   });
 
   it("omits the slide when it no longer exists", () => {
@@ -1356,7 +1331,7 @@ describe("ChatPanel: transcript", () => {
       new_string: `<section class="slide" id='outro'><h1>New</h1>`,
     });
     showMessages(reply({ parts: [edit] }));
-    const row = toolRow("Edited deck.html · #outro");
+    const row = toolRow("Edited deck.html · slide 3");
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
     expect(useApp.getState().selected).toBe("outro");
@@ -1371,7 +1346,7 @@ describe("ChatPanel: transcript", () => {
       }),
     );
     openSteps();
-    expect(toolRow("Edited q3.html · #outro").disabled).toBe(false);
+    expect(toolRow("Edited q3.html · slide 3").disabled).toBe(false);
     expect(toolRow("Edited deck.html").disabled).toBe(true);
   });
 
@@ -1385,7 +1360,7 @@ describe("ChatPanel: transcript", () => {
       }),
     );
     openSteps();
-    const rows = screen.getAllByRole("button", { name: /^Edited/ }) as HTMLButtonElement[];
+    const rows = screen.getAllByRole("button", { name: /^Edited ?(deck|notes)\.html$/ }) as HTMLButtonElement[];
     expect(rows.map((r) => r.disabled)).toEqual([true, true]);
     expect(rows.map((r) => r.textContent)).toEqual(["Edited deck.html", "Edited notes.html"]);
   });
@@ -1396,23 +1371,22 @@ describe("ChatPanel: transcript", () => {
         parts: [tool("Bash", { command: "ls assets", timeout: 5000 }, "done", "logo.png\nphoto.jpg")],
       }),
     );
-    expect(screen.queryByText("Output")).toBeNull();
-    const toggle = screen.getByRole("button", { name: "Show arguments and output of Ran ls assets" });
+    expect(screen.queryByText("Result")).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Show details of Ran ls assets" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Arguments · Bash")).toBeTruthy();
+    expect(screen.getByText("Asked for")).toBeTruthy();
     expect(screen.getByText("command").nextElementSibling!.textContent).toBe("ls assets");
     expect(screen.getByText("timeout").nextElementSibling!.textContent).toBe("5000");
-    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("logo.png\nphoto.jpg");
-    fireEvent.click(screen.getByRole("button", { name: "Hide arguments and output of Ran ls assets" }));
-    expect(screen.queryByText("Output")).toBeNull();
+    expect(screen.getByText("Result").nextElementSibling!.textContent).toBe("logo.png\nphoto.jpg");
+    fireEvent.click(screen.getByRole("button", { name: "Hide details of Ran ls assets" }));
+    expect(screen.queryByText("Result")).toBeNull();
   });
 
   it("shows a failed tool's output as its error, and says when a tool has none yet or at all", () => {
     showMessages(
       reply({
-        status: "streaming",
         parts: [
           tool("Read", { file_path: "/decks/talk/gone.html" }, "error", "No such file"),
           tool("lint_deck", {}, "done", null),
@@ -1421,10 +1395,11 @@ describe("ChatPanel: transcript", () => {
         ],
       }),
     );
-    for (const toggle of screen.getAllByRole("button", { name: /^Show arguments and output/ })) fireEvent.click(toggle);
+    openSteps();
+    for (const toggle of screen.getAllByRole("button", { name: /^Show details of/ })) fireEvent.click(toggle);
     expect(screen.getByText("Error").nextElementSibling!.textContent).toBe("No such file");
-    expect(screen.getByText("None")).toBeTruthy();
-    expect(screen.getAllByText("No output")).toHaveLength(2);
+    expect(screen.getByText("Nothing in particular")).toBeTruthy();
+    expect(screen.getAllByText("Nothing to show")).toHaveLength(2);
     expect(screen.getByText("Running…")).toBeTruthy();
   });
 
@@ -1443,16 +1418,16 @@ describe("ChatPanel: transcript", () => {
     );
     expect(screen.queryByRole("img")).toBeNull();
     openSteps();
-    const [render, read] = screen.getAllByRole("button", { name: /^Show arguments and output/ });
+    const [render, read] = screen.getAllByRole("button", { name: /^Show details of/ });
     fireEvent.click(render!);
     const images = screen.getAllByRole("img") as HTMLImageElement[];
     expect(images.map((i) => i.getAttribute("src"))).toEqual(shots.map((s) => workspaceChatFileUrl("", s)));
     expect(images.map((i) => i.alt)).toEqual(["Image 1 of 2 the agent received", "Image 2 of 2 the agent received"]);
-    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("intro\n[image]\noutro\n[image]");
+    expect(screen.getByText("Result").nextElementSibling!.textContent).toBe("intro\n[image]\noutro\n[image]");
 
     fireEvent.click(read!);
     expect(screen.getAllByRole("img")).toHaveLength(3);
-    expect(screen.queryByText("No output")).toBeNull();
+    expect(screen.queryByText("Nothing to show")).toBeNull();
   });
 
   it("says so when an image of a tool's output is no longer kept", () => {
@@ -1463,7 +1438,7 @@ describe("ChatPanel: transcript", () => {
         ],
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: /^Show arguments and output/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show details of/ }));
     fireEvent.error(screen.getByRole("img"));
     expect(screen.queryByRole("img")).toBeNull();
     expect(screen.getByText("This image is no longer kept.")).toBeTruthy();
@@ -1472,11 +1447,11 @@ describe("ChatPanel: transcript", () => {
   it("still selects the slide an edit touched while its details are open", () => {
     const edit = tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="outro">` }, "done", "ok");
     showMessages(reply({ parts: [edit] }));
-    fireEvent.click(screen.getByRole("button", { name: /^Show arguments and output/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show details of/ }));
     expect(useApp.getState().selected).not.toBe("outro");
-    fireEvent.click(toolRow("Edited deck.html · #outro"));
+    fireEvent.click(toolRow("Edited deck.html · slide 3"));
     expect(useApp.getState().selected).toBe("outro");
-    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("ok");
+    expect(screen.getByText("Result").nextElementSibling!.textContent).toBe("ok");
   });
 
   it("shows thinking while the reply has nothing yet", () => {
@@ -1488,7 +1463,7 @@ describe("ChatPanel: transcript", () => {
     showMessages(
       reply({ status: "streaming", parts: [tool("Write", { file_path: "/decks/talk/deck.html" }, "running")] }),
     );
-    expect(screen.getByText("Working…")).toBeTruthy();
+    expect(screen.getByText("Writing deck.html…")).toBeTruthy();
     expect(screen.queryByText("Thinking…")).toBeNull();
   });
 
@@ -1548,10 +1523,11 @@ describe("ChatPanel: transcript", () => {
     expect(screen.getByText("Stopped")).toBeTruthy();
   });
 
-  it("shows how long a finished turn took and what it cost", () => {
-    showMessages(reply({ durationMs: 3420, costUsd: 0.1234 }), reply({ id: "a2", durationMs: 800, costUsd: 0 }));
-    expect(screen.getByText("3.4s · $0.123")).toBeTruthy();
-    expect(screen.getByText("0.8s")).toBeTruthy();
+  it("shows how long a finished turn took, and no cost on the reply", () => {
+    showMessages(reply({ durationMs: 3420, costUsd: 0.1234 }), reply({ id: "a2", durationMs: 65_000, costUsd: 0 }));
+    expect(screen.getByText("3s")).toBeTruthy();
+    expect(screen.getByText("1m 05s")).toBeTruthy();
+    expect(screen.queryByText(/\$/)).toBeNull();
   });
 
   it("hides blank text parts", () => {
@@ -1563,7 +1539,7 @@ describe("ChatPanel: transcript", () => {
 describe("ChatPanel: context meter", () => {
   const used = (tokens: number | null, window: number | null, provider: "claude" | "codex" | "copilot" = "claude") =>
     reply({ provider, context: { provider, tokens, window } });
-  const meter = () => screen.queryByRole("progressbar", { name: "Context used" });
+  const meter = () => screen.queryByRole("progressbar", { name: "How full the chat is" });
   const compactButton = () => screen.queryByRole("button", { name: "Compact" }) as HTMLButtonElement | null;
   const copilot = {
     provider: "copilot" as const,
@@ -1579,30 +1555,33 @@ describe("ChatPanel: context meter", () => {
     expect(compactButton()).toBeNull();
   });
 
-  it("shows the tokens held and the share of the window, without compacting at 70% or less", () => {
+  it("stays out of the way while the chat has room: below 60% it shows nothing", () => {
     useApp.setState({ selection: copilot });
-    showMessages(used(89_600, 128_000, "copilot"));
-    expect(meter()!.getAttribute("aria-valuenow")).toBe("70");
-    expect(screen.getByText("90k tokens")).toBeTruthy();
-    expect(screen.getByText("70% of 128k context used")).toBeTruthy();
+    showMessages(used(75_000, 128_000, "copilot"));
+    expect(meter()).toBeNull();
     expect(compactButton()).toBeNull();
+  });
+
+  it("says how full the chat is in words from 60% on, with Compact, the count in its tooltip", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(89_600, 128_000, "copilot"), reply({ id: "a2", costUsd: 0.4 }));
+    expect(meter()!.getAttribute("aria-valuenow")).toBe("70");
+    expect(screen.getByText("This chat is 70% full.")).toBeTruthy();
+    expect(screen.getByText("Compact summarizes it to make room.")).toBeTruthy();
+    const tab = meter()!.parentElement!;
+    expect(tab.title).toContain("90k tokens of the 128k-token context window");
+    expect(tab.title).toContain("About $0.40 at the provider's API prices");
+    fireEvent.click(compactButton()!);
+    expect(compact).toHaveBeenCalledOnce();
   });
 
   it("fills its bar by moving it, which takes no layout", () => {
     useApp.setState({ selection: copilot });
-    showMessages(used(57_600, 128_000, "copilot"));
+    showMessages(used(83_200, 128_000, "copilot"));
     const bar = meter()!.firstElementChild as HTMLElement;
-    expect(bar.style.transform).toBe("translateX(-55%)");
+    expect(bar.style.transform).toBe("translateX(-35%)");
     expect(bar.style.width).toBe("");
     expect(bar.className).toContain("transition-transform");
-  });
-
-  it("offers /compact above 70%", () => {
-    useApp.setState({ selection: copilot });
-    showMessages(used(91_000, 128_000, "copilot"));
-    expect(screen.getByText("71% of 128k context used")).toBeTruthy();
-    fireEvent.click(compactButton()!);
-    expect(compact).toHaveBeenCalledOnce();
   });
 
   it("cannot compact while the agent works", () => {
@@ -1613,42 +1592,35 @@ describe("ChatPanel: context meter", () => {
 
   it("measures Claude against the chosen context window", () => {
     showMessages(used(160_000, 1_000_000));
-    expect(screen.getByText("16% of 1M context used")).toBeTruthy();
-    expect(compactButton()).toBeNull();
+    expect(meter()).toBeNull();
     cleanup();
     useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: "200k" } });
     showMessages(used(160_000, 1_000_000));
-    expect(screen.getByText("80% of 200k context used")).toBeTruthy();
+    expect(screen.getByText("This chat is 80% full.")).toBeTruthy();
     expect(compactButton()).toBeTruthy();
   });
 
-  it("shows the count alone while the window is unknown", () => {
+  it("shows nothing while the window is unknown, or the new size after compacting is", () => {
     useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: null } });
     showMessages(used(12_300, null));
-    expect(screen.getByText("12k tokens")).toBeTruthy();
-    expect(screen.getByText("in context")).toBeTruthy();
-    expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
-    expect(compactButton()).toBeNull();
+    expect(meter()).toBeNull();
+    cleanup();
+    showMessages(used(null, 200_000));
+    expect(meter()).toBeNull();
   });
 
   it("follows the selected provider's own conversation", () => {
     useApp.setState({ selection: copilot });
-    showMessages(used(100_000, 200_000));
+    showMessages(used(190_000, 200_000));
     expect(meter()).toBeNull();
   });
 
-  it("says the conversation was compacted until its new size is known", () => {
-    showMessages(used(null, 200_000));
-    expect(screen.getByText("Compacted")).toBeTruthy();
-    expect(screen.getByText("New size shows after the next message")).toBeTruthy();
-    expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
-    expect(compactButton()).toBeNull();
-  });
-
-  it("warns as the context fills up", () => {
+  it("says what to do when the chat is nearly full", () => {
     useApp.setState({ selection: copilot });
     showMessages(used(120_000, 128_000, "copilot"));
     expect(meter()!.firstElementChild!.className).toContain("bg-destructive");
+    expect(screen.getByText("This chat is almost full (94%).")).toBeTruthy();
+    expect(screen.getByText(/Compact it or start a new chat/)).toBeTruthy();
   });
 });
 
@@ -1796,7 +1768,7 @@ describe("composer fill", () => {
         messages: [{ id: "u", role: "user", text: "Hi", slide: null, attachments: [], element: ELEMENT, createdAt: 1 }],
       });
       render(<ChatPanel />);
-      expect(screen.getByText(`· about ${ELEMENT.name}`)).toBeTruthy();
+      expect(screen.getByText(`about ${ELEMENT.name}`)).toBeTruthy();
       useApp.setState({ messages: [] });
     });
   });
@@ -1853,7 +1825,7 @@ describe("undone agent turns", () => {
       reverted: true,
       createdAt: 0,
     });
-    expect(screen.getByText("changes undone ·")).toBeTruthy();
+    expect(screen.getByText("changes undone").parentElement!.parentElement!.textContent).toBe("changes undone");
   });
 
   it("shows what the next message tells the agent, and can leave it out", () => {
@@ -1978,7 +1950,7 @@ describe("ChatPanel: the draft belongs to the conversation", () => {
     act(() => useApp.setState({ chatKey: "/decks/talk/deck.html", chatFollowsDeck: false }));
     expect(textarea()).toBe(input);
     expect(textarea().value).toBe("Next, add a chart");
-    expect(screen.getByText("notes.md")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove notes.md" })).toBeTruthy();
   });
 
   it("starts empty in another conversation", () => {
@@ -2016,15 +1988,53 @@ describe("ChatPanel: retrying and reusing messages", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("puts a sent message back into the composer to edit, without sending it", () => {
-    showMessages(said("u", "Make it blue"), reply({ parts: [{ kind: "text", text: "Done" }] }));
+  it("puts a sent message back into the composer to edit, with what went along, without sending it", () => {
+    const editMessage = vi.fn(async () => {});
+    useApp.setState({ editMessage, selected: "intro" });
+    showMessages(
+      said("u", "Make it blue", { slide: "outro", attachments: ["assets/notes.md"], slides: ["intro"] }),
+      reply({ parts: [{ kind: "text", text: "Done" }] }),
+    );
     type("And bigger");
     fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
-    expect(textarea().value).toBe("And bigger\n\nMake it blue");
+    expect(textarea().value).toBe("Make it blue");
     expect(document.activeElement).toBe(textarea());
+    expect(screen.getByText("Editing your message")).toBeTruthy();
+    // Its slide is the one on show again, and its file and the slide it referred to go along.
+    expect(useApp.getState().selected).toBe("outro");
+    expect(screen.getByRole("button", { name: "Remove notes.md" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Don't refer to slide 1" })).toBeTruthy();
     expect(send).not.toHaveBeenCalled();
     // Copy stays beside it.
     expect(screen.getAllByRole("button", { name: "Copy message" }).length).toBe(2);
+
+    type("Make it green");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(editMessage).toHaveBeenCalledWith("u", "Make it green", {
+      includeSlide: true,
+      attachments: ["assets/notes.md"],
+      slides: ["intro"],
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.queryByText("Editing your message")).toBeNull();
+  });
+
+  it("gives up an edit with Cancel or Escape, bringing back what was being written", () => {
+    showMessages(said("u", "Make it blue"), reply({ parts: [{ kind: "text", text: "Done" }] }));
+    type("And bigger");
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(textarea().value).toBe("And bigger");
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    fireEvent.keyDown(textarea(), { key: "Escape" });
+    expect(textarea().value).toBe("And bigger");
+    expect(screen.queryByText("Editing your message")).toBeNull();
+  });
+
+  it("does not offer to edit while the agent works", () => {
+    useApp.setState({ running: true });
+    showMessages(said("u", "Make it blue"), reply({ status: "streaming" }));
+    expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull();
   });
 
   it("does not offer to edit a command", () => {
@@ -2130,7 +2140,7 @@ describe("ChatPanel: links in replies", () => {
     openUrl.mockRejectedValueOnce(new Error("No browser"));
     withLinks();
     fireEvent.click(screen.getByRole("link", { name: "the docs" }));
-    await waitFor(() => expect(lastError(useApp.getState())).toBe("No browser"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Could not open the link: No browser"));
   });
 });
 
@@ -2287,22 +2297,36 @@ describe("ChatPanel: steps of a reply", () => {
   const edits = (count: number) =>
     Array.from({ length: count }, (_, i) => tool("Edit", { file_path: `/decks/talk/assets/${i}.css` }));
 
-  it("folds the tool calls of a finished reply into one line, which unfolds", () => {
+  it("folds the tool calls of a finished reply into one line that says what they did, which unfolds", () => {
     showMessages(reply({ parts: [{ kind: "text", text: "On it." }, ...edits(12), { kind: "text", text: "Done." }] }));
-    const steps = screen.getByRole("button", { name: "12 steps" });
+    const steps = screen.getByRole("button", { name: "Edited 12 files" });
     expect(steps.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: /^Edited/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edited ?assets/ })).toBeNull();
     fireEvent.click(steps);
-    expect(screen.getAllByRole("button", { name: /^Edited/ })).toHaveLength(12);
+    expect(screen.getAllByRole("button", { name: /^Edited ?assets/ })).toHaveLength(12);
     fireEvent.click(steps);
-    expect(screen.queryByRole("button", { name: /^Edited/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edited ?assets/ })).toBeNull();
   });
 
-  it("shows each step as it happens while the reply comes in", () => {
+  it("sums steps up by the slides they edited, by number", () => {
+    const slide = (id: string) =>
+      tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="${id}">` });
+    showMessages(
+      reply({ parts: [slide("intro"), slide("outro"), tool("Read", { file_path: "/decks/talk/deck.html" })] }),
+    );
+    expect(screen.getByRole("button", { name: "Edited 2 slides, read 1 file" })).toBeTruthy();
+  });
+
+  it("folds the steps done while the reply comes in, the step running shown after them", () => {
     useApp.setState({ running: true });
-    showMessages(reply({ status: "streaming", parts: edits(3) }));
-    expect(screen.queryByRole("button", { name: /steps/ })).toBeNull();
-    expect(screen.getAllByRole("button", { name: /^Edited/ })).toHaveLength(3);
+    showMessages(
+      reply({ status: "streaming", parts: [...edits(3), tool("Read", { file_path: "/decks/talk/a.md" }, "running")] }),
+    );
+    expect(screen.getByRole("button", { name: "Edited 3 files" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Edited ?assets/ })).toBeNull();
+    expect(toolRow("Read a.md")).toBeTruthy();
+    // The status line names what runs.
+    expect(screen.getByTestId("reply-status").textContent).toContain("Reading a.md…");
   });
 
   it("says when steps failed, and leaves a single tool call as it is", () => {
@@ -2310,8 +2334,36 @@ describe("ChatPanel: steps of a reply", () => {
     showMessages(
       reply({ parts: [...edits(2), failed, { kind: "text", text: "Hm." }, tool("Read", { file_path: "/x" })] }),
     );
-    expect(screen.getByRole("button", { name: "3 steps · 1 failed" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edited 2 files, ran 1 command · 1 failed" })).toBeTruthy();
     expect(toolRow("Read /x")).toBeTruthy();
+  });
+
+  it("shows an edit as a before and after", () => {
+    showMessages(
+      reply({
+        parts: [
+          tool("Edit", {
+            file_path: "/decks/talk/deck.html",
+            old_string: "<h1>Old</h1>\n<p>Same</p>",
+            new_string: "<h1>New</h1>\n<p>Same</p>",
+          }),
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Show details of/ }));
+    const diff = screen.getByRole("figure", { name: "Before and after" });
+    const lines = [...diff.querySelectorAll("[data-diff]")].map((line) => [
+      line.getAttribute("data-diff"),
+      line.textContent,
+    ]);
+    expect(lines).toEqual([
+      ["removed", "−<h1>Old</h1>"],
+      ["added", "+<h1>New</h1>"],
+      ["same", " <p>Same</p>"],
+    ]);
+    // The texts are not listed again as arguments.
+    expect(screen.queryByText("old_string")).toBeNull();
+    expect(screen.getByText("file_path")).toBeTruthy();
   });
 
   it("names the app's own tools in plain words, and other tools without their server", () => {
@@ -2323,8 +2375,9 @@ describe("ChatPanel: steps of a reply", () => {
     expect(toolRow("Create issue")).toBeTruthy();
     expect(screen.queryByText(/mcp__/)).toBeNull();
     // The name as the agent has it is still in the details.
-    fireEvent.click(screen.getAllByRole("button", { name: /^Show arguments and output/ })[1]!);
-    expect(screen.getByText("Arguments · mcp__github__create_issue")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: /^Show details of/ })[1]!);
+    expect(screen.getByText("Asked for")).toBeTruthy();
+    expect(screen.getByText("title")).toBeTruthy();
   });
 });
 
@@ -2356,7 +2409,7 @@ describe("ChatPanel: attachments still being saved", () => {
     render(<ChatPanel />);
     type("What is this?");
     await act(async () => paste([shot()]));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Attaching…"));
+    await waitFor(() => expect(screen.getByText("Attaching…").getAttribute("role")).toBe("status"));
     await save.asked();
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).not.toHaveBeenCalled();
@@ -2369,7 +2422,7 @@ describe("ChatPanel: attachments still being saved", () => {
       attachments: ["assets/pasted-image.png"],
     });
     expect(textarea().value).toBe("");
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/^Attaching/)).toBeNull();
     expect(screen.queryByLabelText(/attached image/)).toBeNull();
   });
 
@@ -2389,7 +2442,7 @@ describe("ChatPanel: attachments still being saved", () => {
       includeSlide: true,
       attachments: ["assets/pasted-image.png"],
     });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/^Attaching/)).toBeNull();
   });
 
   it("keeps the message back when its attachment could not be saved", async () => {
@@ -2402,7 +2455,7 @@ describe("ChatPanel: attachments still being saved", () => {
     await save.fail(new Error("disk full"));
     expect(send).not.toHaveBeenCalled();
     expect(textarea().value).toBe("What is this?");
-    expect(lastError(useApp.getState())).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("Could not attach the file: disk full");
     expect(sendButton().getAttribute("aria-busy")).toBeNull();
     // Sent again, it goes out without it.
     fireEvent.click(sendButton());
@@ -2527,8 +2580,7 @@ describe("ChatPanel: the chat's header", () => {
     render(<ChatPanel />);
     await openList();
     expect(document.activeElement).toBe(search());
-    const marked = () =>
-      screen.getAllByRole("button").find((b) => b.dataset.index && b.className.includes(" bg-accent"));
+    const marked = () => document.querySelector<HTMLElement>("[data-index].bg-accent");
     expect(marked()!.textContent).toContain("Alpha");
     // The chat on show cannot be gone on with: Enter on it does nothing.
     fireEvent.keyDown(search(), { key: "Enter" });
@@ -2554,6 +2606,63 @@ describe("ChatPanel: the chat's header", () => {
     await openList();
     expect(search()).toHaveProperty("value", "");
     expect(screen.getByRole("button", { name: /Alpha/ })).toBeTruthy();
+  });
+
+  it("puts the chats about the open deck first, and says that one about another deck opens it", async () => {
+    useApp.setState({ chatKey: "/decks/talk/deck.html" });
+    threads(
+      thread("a", "Other deck's chat", { deck: "/decks/talk/q3/deck.html", association: "q3/deck.html" }),
+      thread("b", "This deck's chat", { deck: "/decks/talk/deck.html", association: "deck.html" }),
+      thread("c", "Folder chat", { association: "." }),
+    );
+    render(<ChatPanel />);
+    await openList();
+    const region = screen.getByRole("region", { name: "Past chats" });
+    const text = region.textContent!;
+    expect(text.indexOf("This deck")).toBeLessThan(text.indexOf("This deck's chat"));
+    expect(text.indexOf("This deck's chat")).toBeLessThan(text.indexOf("Other decks in talk"));
+    expect(text.indexOf("Other decks in talk")).toBeLessThan(text.indexOf("Other deck's chat"));
+    expect(screen.getByRole("button", { name: /Other deck's chat/ }).textContent).toContain("Opens q3/deck.html");
+  });
+
+  it("renames a chat in place, and names the chat on show in the header", async () => {
+    threads(thread("a", "Tighten the text", { current: true }), thread("b", "Beta"));
+    useApp.setState({ messages: [said("u", "Tighten the text")] });
+    render(<ChatPanel />);
+    expect(screen.getByTitle("Tighten the text").textContent).toBe("Tighten the text");
+    await openList();
+    fireEvent.click(screen.getAllByRole("button", { name: "Rename chat" })[0]!);
+    const field = screen.getByRole("textbox", { name: "Chat name" });
+    fireEvent.change(field, { target: { value: "Pricing slide" } });
+    await act(async () => fireEvent.submit(field));
+    expect(invoke).toHaveBeenCalledWith("rename_chat_thread", { thread: "a", title: "Pricing slide" });
+    expect(useApp.getState().chatTitle).toBe("Pricing slide");
+    expect(screen.getByTitle("Pricing slide")).toBeTruthy();
+  });
+
+  it("gives up a rename with Escape", async () => {
+    threads(thread("a", "Alpha"));
+    render(<ChatPanel />);
+    await openList();
+    fireEvent.click(screen.getByRole("button", { name: "Rename chat" }));
+    const field = screen.getByRole("textbox", { name: "Chat name" });
+    fireEvent.change(field, { target: { value: "Something else" } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Chat name" })).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("rename_chat_thread", expect.anything());
+  });
+
+  it("deletes a past chat after asking, but never the one on show", async () => {
+    const { useConfirmQuestion } = await import("../store/confirm");
+    threads(thread("a", "Alpha", { current: true }), thread("b", "Beta"));
+    render(<ChatPanel />);
+    await openList();
+    const [current, other] = screen.getAllByRole("button", { name: "Delete chat…" }) as HTMLButtonElement[];
+    expect(current!.disabled).toBe(true);
+    fireEvent.click(other!);
+    await waitFor(() => expect(useConfirmQuestion.getState().question?.title).toBe("Delete this chat?"));
+    await act(async () => useConfirmQuestion.getState().question!.answer(true));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("delete_chat_thread", { id: "/decks/talk", thread: "b" }));
   });
 
   it("says why a new chat has to wait while the agent works", () => {
@@ -2629,5 +2738,244 @@ describe("ChatPanel: what goes along with a message", () => {
     const rows = within(screen.getByRole("region", { name: "Queued messages" })).getAllByRole("listitem");
     expect(rows[0]!.textContent).toBe("Plain");
     expect(rows[1]!.textContent).toBe("With thingsSlide 3 · 2 attachments · screenshot");
+  });
+});
+
+describe("ChatPanel: drafts of other chats", () => {
+  it("brings back what was being written when the chat is shown again", () => {
+    render(<ChatPanel />);
+    type("For this chat only");
+    act(() => useApp.setState((s) => ({ chatKey: "/decks/other/deck.html", chatRevision: s.chatRevision + 1 })));
+    expect(textarea().value).toBe("");
+    type("Another thought");
+    act(() => useApp.setState((s) => ({ chatKey: "/decks/talk", chatRevision: s.chatRevision + 1 })));
+    expect(textarea().value).toBe("For this chat only");
+    act(() => useApp.setState((s) => ({ chatKey: "/decks/other/deck.html", chatRevision: s.chatRevision + 1 })));
+    expect(textarea().value).toBe("Another thought");
+  });
+
+  it("takes the draft along to a new chat about the same deck, and forgets it once sent", () => {
+    render(<ChatPanel />);
+    type("Start over with this");
+    act(() => useApp.setState((s) => ({ chatRevision: s.chatRevision + 1 })));
+    expect(textarea().value).toBe("Start over with this");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    act(() => useApp.setState((s) => ({ chatRevision: s.chatRevision + 1 })));
+    expect(textarea().value).toBe("");
+  });
+});
+
+describe("ChatPanel: removing an attachment", () => {
+  it("deletes the file it saved for the message, unless a message took it", async () => {
+    openDialog.mockResolvedValue(["/wrong.pdf"]);
+    invoke.mockImplementation(async (command: string) => (command === "import_assets" ? ["assets/wrong.pdf"] : true));
+    render(<ChatPanel />);
+    await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
+    fireEvent.click(screen.getByLabelText("Remove wrong.pdf"));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("discard_attachment", {
+        id: "/decks/talk/deck.html",
+        path: "assets/wrong.pdf",
+      }),
+    );
+  });
+
+  it("leaves a file it did not save, or one a sent message has", async () => {
+    useApp.setState({ messages: [said("u", "Earlier", { attachments: ["assets/kept.pdf"] })] });
+    openDialog.mockResolvedValue(["/kept.pdf"]);
+    invoke.mockImplementation(async (command: string) => (command === "import_assets" ? ["assets/kept.pdf"] : true));
+    render(<ChatPanel />);
+    await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
+    fireEvent.click(screen.getByLabelText("Remove kept.pdf"));
+    act(() => useApp.getState().fillComposer("", { attachments: ["assets/other.csv"] }));
+    fireEvent.click(screen.getByLabelText("Remove other.csv"));
+    await act(async () => {});
+    expect(invoke).not.toHaveBeenCalledWith("discard_attachment", expect.anything());
+  });
+});
+
+describe("ChatPanel: referring to slides and files with @", () => {
+  const typeAt = (text: string) => {
+    fireEvent.change(textarea(), { target: { value: text } });
+    textarea().setSelectionRange(text.length, text.length);
+    fireEvent.select(textarea());
+  };
+
+  it("opens a menu of slides and files, and puts a picked slide on a chip", async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === "list_dir" ? [{ name: "notes.md", path: "notes.md", kind: "file" }] : [],
+    );
+    render(<ChatPanel />);
+    typeAt("Like @");
+    const menu = await screen.findByRole("listbox", { name: "Slides and files to refer to" });
+    await waitFor(() => expect(within(menu).getByText("notes.md")).toBeTruthy());
+    expect(within(menu).getByText("Slide 3 · Outro")).toBeTruthy();
+    typeAt("Like @3");
+    await waitFor(() => expect(within(menu).getAllByRole("option")).toHaveLength(1));
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(textarea().value).toBe("Like ");
+    expect(screen.getByRole("button", { name: "Don't refer to slide 3" })).toBeTruthy();
+    type("Like this one");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Like this one", { includeSlide: true, attachments: [], slides: ["outro"] });
+  });
+
+  it("attaches a picked file, goes through the menu with the arrows, and closes it with Escape", async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === "search_files"
+        ? { found: [{ name: "data.csv", path: "q3/data.csv", kind: "file" }], truncated: false }
+        : [],
+    );
+    render(<ChatPanel />);
+    typeAt("@data");
+    const menu = await screen.findByRole("listbox");
+    await waitFor(() => expect(within(menu).getByText("data.csv")).toBeTruthy());
+    fireEvent.keyDown(textarea(), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    typeAt("@data ");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    typeAt("@dat");
+    const again = await screen.findByRole("listbox");
+    await waitFor(() => expect(within(again).getByText("data.csv")).toBeTruthy());
+    fireEvent.keyDown(textarea(), { key: "ArrowDown" });
+    fireEvent.mouseDown(within(again).getByText("data.csv"));
+    expect(screen.getByRole("button", { name: "Remove q3/data.csv" })).toBeTruthy();
+  });
+
+  it("names the slides picked in the rail on the slide chip, and sends them along", () => {
+    useApp.setState({ selected: "intro", railSelected: ["intro", "#2", "outro"] });
+    render(<ChatPanel />);
+    expect(screen.getByRole("button", { name: "Slides 1–3" })).toBeTruthy();
+    type("Make these match");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Make these match", {
+      includeSlide: true,
+      attachments: [],
+      slides: ["#2", "outro"],
+    });
+  });
+});
+
+describe("ChatPanel: what a reply changed", () => {
+  const changes = { message: "u", changed: ["outro"], added: ["intro"], removed: 2 };
+  const turn = { id: "v", source: "chat" as const, label: "Change it", time: 0, message: "u" };
+
+  it("says which slides it changed, each a way to its slide", () => {
+    showMessages(said("u", "Change it"), reply({ changes }));
+    const line = screen.getByTestId("turn-changes");
+    expect(line.textContent).toBe("Changed slide3·Added slide1·Removed 2 slides");
+    fireEvent.click(within(line).getByRole("button", { name: "3" }));
+    expect(useApp.getState().selected).toBe("outro");
+  });
+
+  it("offers to undo the newest reply's changes while they are the deck's newest, then to redo them", () => {
+    const undo = vi.fn(async () => {});
+    const redo = vi.fn(async () => {});
+    useApp.setState({ undo, redo, history: { undo: turn, redo: null, current: "v" } });
+    showMessages(said("u", "Change it"), reply({ changes }));
+    fireEvent.click(screen.getByRole("button", { name: "Undo changes" }));
+    expect(undo).toHaveBeenCalledOnce();
+    act(() => useApp.setState({ history: { undo: null, redo: turn, current: "w" } }));
+    fireEvent.click(screen.getByRole("button", { name: "Redo changes" }));
+    expect(redo).toHaveBeenCalledOnce();
+    act(() =>
+      useApp.setState({ history: { undo: { ...turn, source: "edit", message: undefined }, redo: null, current: "x" } }),
+    );
+    expect(screen.queryByRole("button", { name: /changes$/ })).toBeNull();
+  });
+
+  it("offers no undo on an older reply", () => {
+    useApp.setState({ history: { undo: turn, redo: null, current: "v" } });
+    showMessages(said("u", "Change it"), reply({ changes }), said("u2", "And this"), reply({ id: "a2" }));
+    expect(screen.queryByRole("button", { name: "Undo changes" })).toBeNull();
+  });
+});
+
+describe("ChatPanel: errors of a turn", () => {
+  it("says what happened and what to do, the agent's words behind Details", () => {
+    const raw = 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+    showMessages(said("u", "Hi"), reply({ status: "error", error: raw }));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("The model is busy right now.");
+    expect(within(alert).queryByText(raw)).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Details" }));
+    expect(within(alert).getByText(raw)).toBeTruthy();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(retryLast).toHaveBeenCalledOnce();
+  });
+
+  it("offers to compact a chat too long, to sign in, and to choose another model", () => {
+    showMessages(said("u", "Hi"), reply({ status: "error", error: "prompt is too long: 300000 tokens" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compact the chat" }));
+    expect(compact).toHaveBeenCalledOnce();
+    cleanup();
+    showMessages(said("u", "Hi"), reply({ status: "error", error: "Invalid API key · Please run /login" }));
+    expect(screen.getByRole("alert").textContent).toContain("Claude Code is not signed in");
+    expect(screen.getByRole("button", { name: "Copy claude" })).toBeTruthy();
+    cleanup();
+    showMessages(said("u", "Hi"), reply({ status: "error", error: "Claude AI usage limit reached" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose another model…" }));
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeTruthy();
+  });
+
+  it("shows an error it does not know as it came", () => {
+    showMessages(said("u", "Hi"), reply({ status: "error", error: "Something odd" }));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe("Something oddRetry");
+    expect(within(alert).queryByRole("button", { name: "Details" })).toBeNull();
+  });
+});
+
+describe("ChatPanel: the conversation for those who listen", () => {
+  it("is a log, and says when the agent is done", () => {
+    useApp.setState({ running: true });
+    showMessages(said("u", "Hi"), reply({ status: "streaming" }));
+    expect(screen.getByRole("log", { name: "Conversation" })).toBeTruthy();
+    const status = () => document.querySelector("p.sr-only[role=status]")!;
+    expect(status().textContent).toBe("");
+    act(() =>
+      useApp.setState((s) => ({
+        running: false,
+        messages: s.messages.map((m) => (m.role === "assistant" ? { ...m, status: "error" as const } : m)),
+      })),
+    );
+    expect(status().textContent).toBe("The agent stopped with an error.");
+  });
+
+  it("marks where each day of a chat that spans days begins, and when a message was sent", () => {
+    const day = 86_400_000;
+    const now = Date.now();
+    showMessages(said("u1", "Yesterday's", { createdAt: now - day }), said("u2", "Today's", { createdAt: now }));
+    const separators = screen.getAllByRole("separator");
+    expect(separators.map((s) => s.textContent)).toEqual(["Yesterday", "Today"]);
+    expect(screen.getByText("Today's").parentElement!.title).toMatch(/^Sent /);
+  });
+
+  it("shows the actions of the newest message and reply without hovering", () => {
+    showMessages(said("u1", "Old"), reply({ id: "a1", parts: [{ kind: "text", text: "A" }] }), said("u2", "New"));
+    const edits = screen.getAllByRole("button", { name: "Edit message" });
+    expect(edits[0]!.className).toContain("opacity-0");
+    expect(edits[1]!.className).not.toContain("opacity-0");
+  });
+});
+
+describe("ChatPanel: stopping", () => {
+  it("shows that the turn is stopping, and cannot be stopped twice", () => {
+    useApp.setState({ running: true, stopping: true });
+    showMessages(said("u", "Go"), reply({ status: "streaming" }));
+    const stop = screen.getByRole("button", { name: "Stopping" }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(true);
+    expect(screen.getByTestId("reply-status").textContent).toContain("Stopping…");
+  });
+});
+
+describe("ChatPanel: links to slides", () => {
+  it("goes to the slide a #link in a reply names, and nowhere for an id that is no slide", () => {
+    showMessages(reply({ parts: [{ kind: "text", text: "See [slide 3](#outro) and [this](#nothing)." }] }));
+    fireEvent.click(screen.getByText("slide 3"));
+    expect(useApp.getState().selected).toBe("outro");
+    fireEvent.click(screen.getByText("this"));
+    expect(useApp.getState().selected).toBe("outro");
   });
 });

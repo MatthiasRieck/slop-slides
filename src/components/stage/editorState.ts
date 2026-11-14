@@ -33,6 +33,10 @@ interface EditorState {
   colors: DeckColor[];
   /** The current slide's background color. */
   background: string | null;
+  /** A gradient or an image lies over that color: the background is not one plain color. */
+  backgroundOther: boolean;
+  /** The color is the slide's own, set on it, not the deck's. */
+  backgroundOwn: boolean;
   menu: EditorMenu | null;
   sizeMode: SizeMode;
   /** Resizes keep the aspect ratio. */
@@ -47,6 +51,8 @@ const NOTHING: EditorState = {
   fonts: [],
   colors: [],
   background: null,
+  backgroundOther: false,
+  backgroundOwn: false,
   menu: null,
   sizeMode: "resize",
   keepRatio: false,
@@ -78,12 +84,28 @@ export function reportFromEditor<K extends keyof SlideReport>(slide: string, abo
 }
 
 /** Takes what the editor reports about the deck's look: its fonts, its colors, the slide's background. */
-export function reportDeckLook(look: { fonts?: FontChoice[]; colors?: DeckColor[]; background?: string | null }) {
+export function reportDeckLook(look: {
+  fonts?: FontChoice[];
+  colors?: DeckColor[];
+  background?: string | null;
+  /** With `background`: whether a gradient or an image lies over the color. */
+  backgroundOther?: boolean;
+  /** With `background`: whether the color is the slide's own. */
+  backgroundOwn?: boolean;
+}) {
   useEditorState.setState((s) => {
     const fonts = look.fonts && !sameFonts(s.fonts, look.fonts) ? look.fonts : s.fonts;
     const colors = look.colors && !sameColors(s.colors, look.colors) ? look.colors : s.colors;
     const background = look.background === undefined ? s.background : look.background;
-    return fonts === s.fonts && colors === s.colors && background === s.background ? s : { fonts, colors, background };
+    const backgroundOther = look.background === undefined ? s.backgroundOther : look.backgroundOther === true;
+    const backgroundOwn = look.background === undefined ? s.backgroundOwn : look.backgroundOwn === true;
+    const same =
+      fonts === s.fonts &&
+      colors === s.colors &&
+      background === s.background &&
+      backgroundOther === s.backgroundOther &&
+      backgroundOwn === s.backgroundOwn;
+    return same ? s : { fonts, colors, background, backgroundOther, backgroundOwn };
   });
 }
 

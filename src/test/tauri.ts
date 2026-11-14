@@ -49,6 +49,41 @@ export const ask: Mock = vi.fn();
 export const save: Mock = vi.fn();
 export const open: Mock = vi.fn();
 
+/** The questions of one copy of ../store/confirm.ts (a store module loaded afresh has its own). */
+type Questions = typeof import("../store/confirm").useConfirmQuestion;
+const answered = new Set<Questions>();
+
+/**
+ * Answers the in-app yes-or-no questions of `questions` as the native dialog was answered before
+ * them: by what `ask`, called with the message and the dialog's title and labels, resolves to.
+ * While `ask` gives no answer (its default), a question stays open for the test to answer.
+ */
+export function answerQuestionsWithAsk(questions: Questions) {
+  if (answered.has(questions)) return;
+  answered.add(questions);
+  questions.subscribe(({ question }, previous) => {
+    if (!question || question === previous.question) return;
+    const { title, message, confirmLabel, cancelLabel } = question;
+    const reply: unknown = ask(message, {
+      title,
+      kind: "warning",
+      okLabel: confirmLabel,
+      ...(cancelLabel !== undefined && { cancelLabel }),
+    });
+    void Promise.resolve(reply).then(
+      (confirmed) => typeof confirmed === "boolean" && question.answer(confirmed),
+      () => {},
+    );
+  });
+}
+
+/** Says no to every question still open, so none outlives its test. */
+export function dropOpenQuestions() {
+  for (const questions of answered) {
+    for (let open = questions.getState().question; open; open = questions.getState().question) open.answer(false);
+  }
+}
+
 /** `@tauri-apps/plugin-opener` */
 export const revealItemInDir: Mock = vi.fn(async () => {});
 export const openUrl: Mock = vi.fn(async () => {});

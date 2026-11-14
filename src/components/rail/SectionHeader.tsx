@@ -1,25 +1,28 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, Pencil, Ungroup } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil } from "lucide-react";
 import { memo } from "react";
 
 import type { Section } from "../../lib/api";
 import { cn, plural } from "../../lib/utils";
 import { showInfo, useApp } from "../../store";
 import { SectionLabel } from "../SectionLabel";
-import { REMOVE_SECTION } from "./menus";
 import { noLayoutAnimation } from "./Thumbnail";
 
 /**
- * Divider row that names a section. Only the editor shows it; the player never does. Memoized,
- * with the same functions for every header, so it renders when its section changes.
+ * Divider row that names a section and says how many slides it holds. Only the editor shows it;
+ * the player never does. Its two buttons (rename, and the menu a right-click opens too) lie over
+ * the row's end while the pointer or the focus is on it, taking no room from the title otherwise.
+ * Memoized, with the same functions for every header, so it renders when its section changes.
  */
 export const SectionHeader = memo(function SectionHeader(props: {
   itemKey: string;
   section: Section;
-  /** Edit mode: the section can be renamed, removed and moved. */
-  editable: boolean;
   filteredOut: boolean;
+  /** How the row sits in its list, such as across every column of a grid. */
+  className?: string;
+  /** A section being dragged would take this one's place. Only the grid marks it. */
+  dropTarget?: boolean;
   /** How many slides are folded under the row while sections are being moved. */
   slides?: number;
   /** Keeps dnd-kit from sliding the row anywhere while the slides fold and open. */
@@ -33,7 +36,7 @@ export const SectionHeader = memo(function SectionHeader(props: {
   editing: boolean;
   /** The section whose title is being typed, by its index; null when that ends. */
   onEditing: (section: number | null) => void;
-  /** A right-click on the row `key`. */
+  /** A right-click on the row `key`, or a press on its "More actions". */
   onMenu: (event: React.MouseEvent, key: string) => void;
 }) {
   const { section, editing, onEditing, onMenu, itemKey } = props;
@@ -60,7 +63,12 @@ export const SectionHeader = memo(function SectionHeader(props: {
       data-testid="section-header"
       data-section-key={props.itemKey}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn(props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1", isDragging && "opacity-0")}
+      className={cn(
+        props.filteredOut ? "hidden" : "group relative flex items-center gap-2 pt-1",
+        isDragging && "opacity-0",
+        props.dropTarget && "rounded outline outline-2 outline-offset-2 outline-primary",
+        props.className,
+      )}
       onContextMenu={editing ? undefined : (event) => onMenu(event, itemKey)}
       {...attributes}
       {...listeners}
@@ -105,12 +113,21 @@ export const SectionHeader = memo(function SectionHeader(props: {
         <>
           {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
           <SectionLabel
-            title={props.editable ? "Double-click to rename" : undefined}
-            onDoubleClick={() => props.editable && onEditing(section.index)}
+            title="Double-click to rename"
+            onDoubleClick={() => onEditing(section.index)}
             className={cn("min-w-0 truncate", !section.title && "italic")}
           >
             {section.title || "Untitled section"}
           </SectionLabel>
+          {!props.collapsed && props.slides === undefined && (
+            <span
+              data-testid="section-count"
+              title={plural(props.count, "slide")}
+              className="shrink-0 text-2xs tabular-nums text-muted-foreground"
+            >
+              {props.count}
+            </span>
+          )}
           <span className="h-px flex-1 bg-border" />
           {props.slides !== undefined ? (
             <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">
@@ -123,19 +140,14 @@ export const SectionHeader = memo(function SectionHeader(props: {
                   {plural(props.count, "slide")}
                 </span>
               )}
-              {props.editable && (
-                <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-                  <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
-                    <Pencil className="size-3" />
-                  </SectionAction>
-                  <SectionAction
-                    title={REMOVE_SECTION}
-                    onClick={() => void useApp.getState().removeSection(section.index)}
-                  >
-                    <Ungroup className="size-3" />
-                  </SectionAction>
-                </div>
-              )}
+              <div className="absolute right-0 top-1 hidden gap-0.5 bg-sidebar pl-1.5 group-focus-within:flex group-hover:flex">
+                <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
+                  <Pencil className="size-3" />
+                </SectionAction>
+                <SectionAction title="More actions" menu onClick={(event) => onMenu(event, itemKey)}>
+                  <MoreHorizontal className="size-3" />
+                </SectionAction>
+              </div>
             </>
           )}
         </>
@@ -144,18 +156,26 @@ export const SectionHeader = memo(function SectionHeader(props: {
   );
 });
 
-function SectionAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
+function SectionAction(props: {
+  title: string;
+  /** It opens a menu. */
+  menu?: boolean;
+  onClick: (event: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       aria-label={props.title}
+      aria-haspopup={props.menu ? "menu" : undefined}
       title={props.title}
       onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
-        props.onClick();
+        props.onClick(e);
       }}
-      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
     >
       {props.children}
     </button>

@@ -77,6 +77,37 @@ pub fn import_assets(file: &Path, paths: Vec<String>) -> Result<Vec<String>> {
     Ok(imported)
 }
 
+/// Takes back a file attached to a chat message that was never sent: removes `reference`
+/// (`assets/<file>`, as [`import_assets`] and [`save_asset`] gave it) from the assets of
+/// `target`, a deck file or a folder, unless a deck there uses it. Returns whether the file is
+/// gone; an `assets/` folder left empty goes with it.
+pub fn discard_asset(target: &Path, reference: &str) -> Result<bool> {
+    let name = reference
+        .strip_prefix("assets/")
+        .filter(|name| !name.is_empty() && !name.contains(['/', '\\']) && *name != "..")
+        .ok_or_else(|| Error::msg("not an attached file"))?;
+    let assets = assets_dir(target);
+    let file = assets.join(name);
+    if !file.is_file() || used_by_a_deck(&assets, reference) {
+        return Ok(false);
+    }
+    fs::remove_file(&file)?;
+    // Only an empty folder goes: the attachment made it.
+    let _ = fs::remove_dir(&assets);
+    Ok(true)
+}
+
+/// Whether an HTML file beside the `assets` folder names `reference`.
+fn used_by_a_deck(assets: &Path, reference: &str) -> bool {
+    let Some(entries) = assets.parent().and_then(|dir| fs::read_dir(dir).ok()) else {
+        return false;
+    };
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "html"))
+        .any(|path| fs::read_to_string(path).is_ok_and(|text| text.contains(reference)))
+}
+
 /// `markup` copied from the deck (or folder) `from`, for pasting into `to`: the `assets/…`
 /// files it references are copied into `to`'s assets and the references point at the copies.
 /// Nothing changes between decks sharing a folder; a file `to` already has with the same name
@@ -265,6 +296,48 @@ mod tests {
         assert_eq!(mime_for("assets/x.tar.gz"), "application/octet-stream");
         assert_eq!(mime_for("assets/no-extension"), "application/octet-stream");
         assert_eq!(mime_for(""), "application/octet-stream");
+    }
+
+    #[test]
+    fn an_unsent_attachment_is_discarded_unless_a_deck_uses_it() {
+        let dir = TempWorkspace::new();
+        let deck = dir.deck("talk");
+        let assets = folder(&deck).join("assets");
+        let wrong = write_asset(&deck, "wrong.pdf", b"pdf").unwrap();
+        let used = write_asset(&deck, "photo.png", b"png").unwrap();
+        fs::write(
+            &deck,
+            "<main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/photo.png\"></section></main>",
+        )
+        .unwrap();
+
+        // A file the deck shows stays, whoever attached it.
+        assert!(!discard_asset(&deck, &used).unwrap());
+        assert!(assets.join("photo.png").is_file());
+        assert!(discard_asset(&deck, &wrong).unwrap());
+        assert!(!assets.join("wrong.pdf").exists());
+        // Gone already: nothing to do.
+        assert!(!discard_asset(&deck, &wrong).unwrap());
+        assert!(assets.is_dir());
+
+        // Only files of the assets folder, by their name.
+        fs::write(folder(&deck).join("notes.md"), "notes").unwrap();
+        for outside in [
+            "notes.md",
+            "assets/../notes.md",
+            "assets/",
+            "assets/..",
+            "/etc/hosts",
+        ] {
+            assert!(discard_asset(&deck, outside).is_err(), "{outside}");
+        }
+        assert!(folder(&deck).join("notes.md").is_file());
+
+        // The folder an attachment made goes with its last file.
+        let empty = TempWorkspace::new();
+        let pasted = write_asset(&empty.0, "pasted.png", b"png").unwrap();
+        assert!(discard_asset(&empty.0, &pasted).unwrap());
+        assert!(!empty.0.join("assets").exists());
     }
 
     #[test]

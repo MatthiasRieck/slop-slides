@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::cloud::Provider;
+use super::settings::{DeckSettings, Delivery};
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::voice::Word;
@@ -55,11 +56,30 @@ pub fn file_stem(slide: &str) -> String {
 }
 
 /// What a slide's audio is made from: its script, voice and language, and the hosted service
-/// and its model saying it. Audio with another fingerprint is out of date.
+/// and its model saying it, with the plain delivery. Audio with another fingerprint is out of
+/// date. The tests' way to make audio as decks have it that never set a pace or a style.
+#[cfg(test)]
 pub fn fingerprint(provider: Provider, text: &str, voice: &str, language: &str) -> String {
+    fingerprint_with(provider, text, voice, language, &Delivery::default())
+}
+
+/// [`fingerprint`] of audio said with `delivery`: the same for the plain one, so audio made
+/// before a deck could set its pace or style stays up to date.
+pub fn fingerprint_with(
+    provider: Provider,
+    text: &str,
+    voice: &str,
+    language: &str,
+    delivery: &Delivery,
+) -> String {
     let mut hasher = Sha256::new();
     for part in [provider.id(), provider.model(), voice, language, text] {
         hasher.update(part.as_bytes());
+        hasher.update([0]);
+    }
+    let mark = delivery.mark(provider);
+    if !mark.is_empty() {
+        hasher.update(mark.as_bytes());
         hasher.update([0]);
     }
     format!("{:x}", hasher.finalize())
@@ -67,11 +87,15 @@ pub fn fingerprint(provider: Provider, text: &str, voice: &str, language: &str) 
 
 pub(super) const MANIFEST: &str = "manifest.json";
 
-/// `narration/manifest.json`: what each slide's audio was made from, and how long it is.
+/// `narration/manifest.json`: what each slide's audio was made from, and how long it is; and
+/// what the deck keeps of how its narration is said and timed (none in files written before
+/// it could).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(super) struct Manifest {
     #[serde(default)]
     pub(super) slides: BTreeMap<String, Entry>,
+    #[serde(default, skip_serializing_if = "DeckSettings::is_default")]
+    pub(super) settings: DeckSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

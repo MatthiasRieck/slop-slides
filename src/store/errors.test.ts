@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { dismissToast, reportingErrors, showError, showInfo, showSuccess, useApp } from "../store";
-import { lastError, reportingErrorsIn, showErrorIn, showInfoIn, showSuccessIn, toastTexts } from "./errors";
+import {
+  lastError,
+  readableError,
+  reportingErrorsIn,
+  showErrorIn,
+  showInfoIn,
+  showSuccessIn,
+  toastTexts,
+  UNREADABLE_ERROR,
+} from "./errors";
 
 beforeEach(() => useApp.setState({ toasts: [] }));
 
@@ -104,5 +113,84 @@ describe("toasts", () => {
     expect(lastError(useApp.getState())).toBe("busy");
     expect(toastTexts(useApp.getState(), "info")).toEqual(["Imported"]);
     expect(toastTexts(useApp.getState(), "success")).toEqual(["Exported"]);
+  });
+});
+
+describe("saying what went wrong", () => {
+  const error = () => useApp.getState().toasts.at(-1)!;
+
+  it("says what was being done, then what happened", () => {
+    showError(new Error("The folder is gone."), { doing: "Could not open the deck" });
+    expect(error().text).toBe("Could not open the deck: The folder is gone.");
+    expect(error().details).toBeUndefined();
+    expect(error().action).toBeUndefined();
+  });
+
+  it("offers a way on from it", async () => {
+    let tries = 0;
+    const retry = { label: "Retry", run: () => void tries++ };
+    await reportingErrors(
+      async () => {
+        throw new Error("offline");
+      },
+      { doing: "Could not load the voices", action: retry },
+    );
+    expect(error().text).toBe("Could not load the voices: offline");
+    error().action!.run();
+    expect(tries).toBe(1);
+  });
+
+  it("marks an error about the slide show, which shows during it", () => {
+    showError("No second screen", { duringShow: true });
+    expect(error().duringShow).toBe(true);
+    showError("disk full");
+    expect(error().duringShow).toBeUndefined();
+  });
+
+  it("leaves an ordinary message as it is", () => {
+    for (const plain of ["disk full", "The slides changed while reordering; try again.", "No slide {id} here"]) {
+      expect(readableError(plain)).toEqual({ text: plain });
+    }
+    expect(readableError(new Error("gone"))).toEqual({ text: "gone" });
+  });
+
+  it("never shows a service's raw answer: its message in words, the rest as details", () => {
+    const raw = 'API error 429: {"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}';
+    expect(readableError(raw)).toEqual({ text: "API error 429: Too many requests", details: raw });
+    expect(readableError('{"message":"Voice not found"}')).toEqual({
+      text: "Voice not found",
+      details: '{"message":"Voice not found"}',
+    });
+    expect(readableError('request failed: {"error":"quota exceeded"}').text).toBe("request failed: quota exceeded");
+    expect(readableError('{"code":17}')).toEqual({ text: UNREADABLE_ERROR, details: '{"code":17}' });
+    const page = "502 Bad Gateway <!DOCTYPE html><html><body>nginx</body></html>";
+    expect(readableError(page)).toEqual({ text: "502 Bad Gateway", details: page });
+    expect(readableError("<html><body>Oops</body></html>").text).toBe(UNREADABLE_ERROR);
+  });
+
+  it("shows the first line of a stack trace or a wall of text, the whole as details", () => {
+    const trace = "TypeError: x is not a function\n    at render (app.js:1:2)\n    at run (app.js:3:4)";
+    expect(readableError(trace)).toEqual({ text: "TypeError: x is not a function", details: trace });
+    const wall = "word ".repeat(200).trim();
+    const read = readableError(wall);
+    expect(read.details).toBe(wall);
+    expect(read.text.length).toBeLessThanOrEqual(401);
+    expect(read.text.endsWith("…")).toBe(true);
+  });
+
+  it("says something for an error that says nothing", () => {
+    expect(readableError("")).toEqual({ text: UNREADABLE_ERROR });
+    showError("  ", { doing: "Could not export" });
+    expect(error().text).toBe(`Could not export: ${UNREADABLE_ERROR}`);
+  });
+
+  it("keeps the raw answer with the toast, for its Details", () => {
+    const raw = 'HTTP 500: {"detail":"model crashed"}';
+    showErrorIn(useApp, raw, { doing: "Could not make the audio" });
+    expect(error().text).toBe("Could not make the audio: HTTP 500: model crashed");
+    expect(error().details).toBe(raw);
+    // A plain prefix still goes before the message as it is.
+    showErrorIn(useApp, raw, "Narration: ");
+    expect(error().text).toBe("Narration: HTTP 500: model crashed");
   });
 });

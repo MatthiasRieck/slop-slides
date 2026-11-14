@@ -10,6 +10,9 @@
 //!
 //! The block is not part of any slide, so commenting never reloads a slide's preview, and works
 //! on locked slides. The player ignores it.
+//!
+//! A comment that went to the agent with a chat message stays in the block, with `"sent":true`,
+//! until the user resolves it; one not sent yet has no `sent` at all.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -93,6 +96,14 @@ pub struct Comment {
     /// playhead held the slide when it was made. None for a comment on the slide whenever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<f64>,
+    /// It went to the agent with a chat message, and stays on its slide until the user resolves
+    /// it. Not written for a comment still to send.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sent: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Comments by slide id.
@@ -159,6 +170,7 @@ mod tests {
             }),
             area: None,
             time: None,
+            sent: false,
         }
     }
 
@@ -236,6 +248,22 @@ mod tests {
         for bad in [-1.0, f64::NAN, f64::INFINITY] {
             assert_eq!(write(DOC, &comments(&[("intro", vec![at(bad)])])), DOC);
         }
+    }
+
+    #[test]
+    fn a_comment_sent_to_the_agent_says_so() {
+        let sent = Comment {
+            sent: true,
+            ..comment("a", "Bigger, please")
+        };
+        let all = comments(&[("intro", vec![sent, comment("b", "Not yet")])]);
+        let html = write(DOC, &all);
+        // Only the sent one carries the mark.
+        assert_eq!(html.matches(r#""sent":true"#).count(), 1);
+        assert!(!html.contains(r#""sent":false"#));
+        assert_eq!(parse(&html), Ok(all));
+        // The mark is a yes or a no.
+        assert!(parse(&html.replace(r#""sent":true"#, r#""sent":"yes""#)).is_err());
     }
 
     #[test]

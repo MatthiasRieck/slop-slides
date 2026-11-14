@@ -336,14 +336,15 @@ pub struct ShowBeats {
 }
 
 /// The beat of the narration audio of `slide` of the deck `file`, placed on its timeline as
-/// [`super::timeline::layout`] lays it out with its [`super::timeline::DEFAULTS`].
+/// [`super::timeline::layout`] lays it out with the deck's own times (see
+/// [`super::timeline::defaults_for`]).
 pub fn on_show(
     file: &std::path::Path,
     deck: &crate::deck::Deck,
     slide: &str,
 ) -> crate::error::Result<SlideBeat> {
     use super::timeline;
-    let slides = timeline::layout(file, deck, &timeline::DEFAULTS);
+    let slides = timeline::layout(file, deck, &timeline::defaults_for(file));
     if !slides
         .iter()
         .any(|s| s.id == slide && s.narration.is_some())

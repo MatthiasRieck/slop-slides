@@ -1,10 +1,15 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke as send } from "@tauri-apps/api/core";
 import type { SlideComment } from "./comments";
+import type { ExportScope, ImageOptions, PdfOptions, WebPageOptions } from "./exportOptions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
+import { trackingSaves } from "./saves";
 import type { SizeInfo, SlideSize } from "./slideSize";
-import type { VideoOptions } from "./video";
+import type { VideoOptions, VideoOutput } from "./video";
+
+/** Every command goes through here, so the top bar can say when the deck is being saved (see ./saves.ts). */
+const invoke = trackingSaves(send);
 
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
 export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
@@ -15,12 +20,68 @@ export interface WorkspaceEntry {
   /** Workspace-relative, `/`-separated. */
   path: string;
   kind: FileKind;
+  /**
+   * For a deck's folder (one holding a `deck.html` that is a SlopSlide deck): the deck's title.
+   * The file tree shows such a folder as the deck (see src-tauri/src/file_ops.rs).
+   */
+  deckTitle?: string;
 }
 
-/** A deck made from a PowerPoint file, and what could not come along. */
+/** What a search of the workspace's files found (see `api.searchFiles`). */
+export interface FileSearch {
+  found: WorkspaceEntry[];
+  /** There may be more: the search stopped at its limit. */
+  truncated: boolean;
+}
+
+/** The start of a text file, for the file viewer (see `api.readTextFile`). */
+export interface TextPreview {
+  text: string;
+  /** The file is longer than what is shown. */
+  truncated: boolean;
+}
+
+/** Something an import or an export changed or left out, and the slides (numbered from 1) it is about; none when it is about all of them. */
+export interface ConversionChange {
+  what: string;
+  slides: number[];
+}
+
+/** A font a PowerPoint file names, and the slides set in it; none when it is the presentation's own, used throughout. */
+export interface FontUse {
+  name: string;
+  slides: number[];
+}
+
+/** A deck made from a PowerPoint file, what could not come along as it was, and the fonts the file names. */
 export interface ImportedPptx {
   deck: Deck;
-  skipped: string[];
+  changes: ConversionChange[];
+  fonts: FontUse[];
+}
+
+/** Payload of `pptx-import-progress` events: reading slide `slide` of `slides`, from 1. */
+export interface ImportProgress {
+  slide: number;
+  slides: number;
+}
+
+/** Payload of `export-progress` events: `done` of `total` slides of the export `job`. */
+export interface ExportProgress {
+  job: string;
+  done: number;
+  total: number;
+}
+
+/** What a PowerPoint export did not keep of the deck. */
+export interface ExportedPptx {
+  changes: ConversionChange[];
+}
+
+/** Where slide images were saved: one image's file, or the folder of several, and how many. */
+export interface SavedImages {
+  path: string;
+  count: number;
 }
 
 /** A workspace file the user opened, with the viewer it needs. */
@@ -51,6 +112,21 @@ export interface RecentDeck {
   /** The folder it opens in. */
   workspace: string;
   openedMs: number;
+}
+
+/** A deck on the start screen: one of the library's, or one opened before. */
+export interface GalleryDeck {
+  /** The deck file's absolute path: the deck's id. */
+  path: string;
+  title: string;
+  /** The folder it opens in. */
+  workspace: string;
+  /** When the deck file last changed, in milliseconds since the Unix epoch. */
+  modifiedMs: number;
+  /** When it was last opened here; null for a deck that is not among the recent ones. */
+  openedMs: number | null;
+  /** Its slide size, which is the shape of its preview. */
+  size: SizeInfo;
 }
 
 export interface Slide {
@@ -198,6 +274,14 @@ export interface DeckHistory {
   current: string | null;
 }
 
+/** Every version kept of a deck, for going back to one of them. */
+export interface DeckVersions {
+  /** The newest first, each with the change that made it. */
+  entries: HistoryEntry[];
+  /** The version the deck is at: the ones before it in `entries` were undone. */
+  current: string | null;
+}
+
 /** What an undo or redo did: the deck it left, the change it took back or made again. */
 export interface HistoryStep {
   deck: Deck;
@@ -313,6 +397,31 @@ export interface NarrationProvider {
   key: SpeechKeySource | null;
   /** Its voices, the default first. */
   voices: NarrationVoice[];
+  /** Whether it takes a note on the manner narration is said in (see `NarrationDelivery.style`). */
+  takesStyle?: boolean;
+}
+
+/** How fast narration is said. */
+export type NarrationPace = "slower" | "normal" | "faster";
+
+/** The times a deck plays with wherever it plays by itself: the timeline, the show's Play, a video. */
+export interface NarrationTiming {
+  /** How long a slide without narration shows, in seconds. */
+  secondsPerSlide: number;
+  /** Silence before and after a slide's narration, in seconds. */
+  pauseBefore: number;
+  pauseAfter: number;
+}
+
+/**
+ * What a deck keeps next to its audio (in `narration/manifest.json`) of how its narration is said
+ * and timed. Each part is missing until the deck sets it: the app's times, a normal pace, no style.
+ */
+export interface DeckNarrationSettings {
+  timing?: NarrationTiming;
+  pace?: NarrationPace;
+  /** A note on the manner it is said in, like "warm and calm"; only some services take one. */
+  style?: string;
 }
 
 export interface NarrationLanguage {
@@ -383,6 +492,13 @@ export interface VoiceDownloadProgress {
 /** How a slide differs from the last commit (see src-tauri/src/git.rs). */
 export type SlideStatus = "added" | "removed" | "modified" | "moved" | "unchanged";
 
+/** A text of a slide that changed, as it was and as it is; either is empty when the text is new or gone. */
+export interface TextChange {
+  where: "slide" | "notes" | "narration";
+  before: string;
+  after: string;
+}
+
 export interface SlideChange {
   /** Tells the rows of the list apart. */
   key: string;
@@ -393,6 +509,8 @@ export interface SlideChange {
   oldId: string | null;
   /** What changed that the slide's picture may not show, such as its speaker notes. */
   details: string[];
+  /** The texts of a modified slide that changed: on the slide, in its notes, in its narration. */
+  textChanges: TextChange[];
   /** It is elsewhere in the deck than at the commit, whatever else changed. */
   moved: boolean;
   /** Its number in the deck at the commit; null for an added slide. */
@@ -401,6 +519,11 @@ export interface SlideChange {
   staged: boolean;
   /** The index has the slide where it is now. */
   moveStaged: boolean;
+}
+
+/** What discarding changes did: the deck now, and how many files around it went back too, which undo does not bring back. */
+export interface Discarded extends RailEdit {
+  files: number;
 }
 
 /** A change to stage or restore. */
@@ -417,7 +540,7 @@ export interface DeckChanges {
   /** A commit is checked out rather than a branch, so the next commit is on no branch. */
   detached: boolean;
   /** The commit compared with; `hash` reloads what is shown from it when it changes. */
-  commit: { hash: string; subject: string } | null;
+  commit: { hash: string; subject: string /** When it was made, in seconds since 1970. */; time: number } | null;
   /** Something every slide shares changed, so any of them may look different. */
   stylesChanged: boolean;
   /** Every slide's canvas at the commit. */
@@ -465,8 +588,17 @@ export const api = {
   presentInWindows: () => invoke<void>("present_in_windows"),
   /** Closes the presenter view window, if open. */
   closePresenterView: () => invoke<void>("close_presenter_view"),
+  /** Puts this window back where it was before `presentOn` moved it, once it has left full screen. */
+  restoreShowWindow: () => invoke<void>("restore_show_window"),
+  /** Keeps the display from sleeping while this window presents (`on`), or no longer. */
+  keepAwake: (on: boolean) => invoke<void>("keep_awake", { on }),
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
+  /**
+   * Which of the menu bar's commands cannot run, and which are on, for this window: the menu bar
+   * shows it while this window has the focus (see src-tauri/src/menu.rs).
+   */
+  setMenuState: (state: { disabled: string[]; checked: string[] }) => invoke<void>("set_menu_state", { state }),
   /** The folder opened from Finder that is waiting to open in this window, once; null without one. */
   takePendingFolder: () => invoke<string | null>("take_pending_folder"),
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
@@ -480,14 +612,36 @@ export const api = {
   forgetDeck: (path: string) => invoke<void>("forget_deck", { path }),
   /** `~/Documents/SlopSlide`, where decks lived before workspaces. */
   libraryFolder: () => invoke<string>("library_folder"),
+  /** The decks of the start screen: the ones opened before and the library's, the newest first. */
+  deckGallery: () => invoke<GalleryDeck[]>("deck_gallery"),
+  /** The folder the deck file at `path` opens in when it is opened by itself (picked, or dropped on the window). */
+  deckWorkspace: (path: string) => invoke<string>("deck_workspace", { path }),
   /** One folder of the open workspace (`""` for its root), folders first. */
   listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
+  /** The files and folders anywhere in the open workspace whose name, or whose deck's title, holds `query`. */
+  searchFiles: (query: string) => invoke<FileSearch>("search_files", { query }),
+  /** Renames a file or folder of the open workspace where it is; its new workspace-relative path. */
+  renameEntry: (path: string, name: string) => invoke<string>("rename_entry", { path, name }),
+  /** Makes a "New folder" in the folder `parent` (`""` for the root); its workspace-relative path. */
+  createFolder: (parent: string) => invoke<string>("create_folder", { parent }),
+  /** Moves a file or folder of the open workspace to the system's trash. */
+  trashEntry: (path: string) => invoke<void>("trash_entry", { path }),
+  /** The start of a text file of the open workspace; refused for a file that is not text. */
+  readTextFile: (path: string) => invoke<TextPreview>("read_text_file", { path }),
+  /** Opens a file of the open workspace in the app the system opens it in; refused for what would run. */
+  openInDefaultApp: (path: string) => invoke<void>("open_in_default_app", { path }),
   /** A file of the open workspace, with the viewer it opens in. */
   openFile: (path: string) => invoke<OpenedFile>("open_file", { path }),
   /** Converts a PowerPoint file into a new deck in the workspace; the file itself stays as it is. */
   importPptx: (path: string) => invoke<ImportedPptx>("import_pptx", { path }),
   /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
+  /** Creates an example deck with slides in the workspace, for a first look at the app. */
+  createExampleDeck: () => invoke<Deck>("create_example_deck"),
+  /** Copies deck `id`, with its folder when it has one of its own, as "<title> copy"; resolves to the copy's id. */
+  duplicateDeck: (id: string) => invoke<string>("duplicate_deck", { id }),
+  /** Moves deck `id` (and its own folder) to the system's trash. Refused while it is open in a window. */
+  trashDeck: (id: string) => invoke<void>("trash_deck", { id }),
   /**
    * Opens deck `id` in this window, whose chat becomes the deck's. A deck open in another window
    * is refused and shown there (not when `quiet`). With `keepChat`, the folder's own chat stays:
@@ -530,6 +684,9 @@ export const api = {
   addSection: (id: string, before: string | null, title: string) => invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) => invoke<Deck>("rename_section", { id, index, title }),
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
+  /** Deletes section `index` along with `slides`, the slides it holds, as one change to the deck. */
+  deleteSectionSlides: (id: string, index: number, slides: string[]) =>
+    invoke<RailEdit>("delete_section_slides", { id, index, slides }),
   /** Deletes `slides` along with their review marks; none of them if any is locked. */
   deleteSlides: (id: string, slides: string[]) => invoke<RailEdit>("delete_slides", { id, slides }),
   /**
@@ -549,6 +706,10 @@ export const api = {
   undoDeck: (id: string) => invoke<HistoryStep>("undo_deck", { id }),
   /** Makes the change undone last again. */
   redoDeck: (id: string) => invoke<HistoryStep>("redo_deck", { id }),
+  /** Every version kept of the deck, the newest first. */
+  deckVersions: (id: string) => invoke<DeckVersions>("deck_versions", { id }),
+  /** Puts the deck back as it was at `version`, as one change that undo takes back. */
+  restoreVersion: (id: string, version: string) => invoke<HistoryStep>("restore_version", { id, version }),
   /** Puts `slides` back as they were at version `since` of the deck's history. */
   restoreSlides: (id: string, since: string, slides: string[]) => invoke<Deck>("restore_slides", { id, since, slides }),
   /** Where `query` is found in the text on the deck's slides (and their notes). */
@@ -583,32 +744,37 @@ export const api = {
   readClipboardText: () => invoke<string>("read_clipboard_text"),
   /** What pasting into deck `id` brings in; pasted images are saved into its assets. */
   pasteFromClipboard: (id: string) => invoke<Pasted>("paste_from_clipboard", { id }),
-  exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
-  /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
-  exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
-  /** Writes the deck to `dest` as a PowerPoint file: one editable slide per shown slide. */
-  exportPptx: (id: string, dest: string) => invoke<void>("export_pptx", { id, dest }),
   /**
-   * Records the deck to `dest` as an MP4, each shown slide on screen for the same time (longer
-   * to fit its narration, with `options.narration`); `video-export-progress` events follow it.
+   * Writes the deck to `dest` as one web page that stands on its own, with the slides and the
+   * author's own material (notes, narration scripts, review marks) `options` asks for.
    */
-  exportVideo: (id: string, dest: string, options: VideoOptions) => invoke<void>("export_video", { id, dest, options }),
+  exportDeck: (id: string, dest: string, options: WebPageOptions) => invoke<void>("export_deck", { id, dest, options }),
+  /**
+   * Prints the slides `options` names to `dest` as a PDF, a page each (and their notes, when asked).
+   * `export-progress` events for `jobId` follow it; `cancelExport(jobId)` stops it, leaving no file.
+   */
+  exportPdf: (id: string, dest: string, jobId: string, options: PdfOptions) =>
+    invoke<void>("export_pdf", { id, dest, jobId, options }),
+  /** Writes the slides `scope` names to `dest` as a PowerPoint file, followed and cancelled as `exportPdf`. */
+  exportPptx: (id: string, dest: string, jobId: string, scope: ExportScope) =>
+    invoke<ExportedPptx>("export_pptx", { id, dest, jobId, scope }),
+  /**
+   * Saves an image of each slide `options` names: one slide to the file `dest`, several to a new
+   * folder named after the deck inside the folder `dest`. Followed and cancelled as `exportPdf`.
+   */
+  exportSlideImages: (id: string, dest: string, jobId: string, options: ImageOptions) =>
+    invoke<SavedImages>("export_slide_images", { id, dest, jobId, options }),
+  /** Stops the export `jobId`, which then fails with EXPORT_CANCELLED before it writes anything. */
+  cancelExport: (jobId: string) => invoke<void>("cancel_export", { jobId }),
+  /**
+   * Records the slides `output` names to `dest` as an MP4, each on screen for the same time (longer
+   * to fit its narration, with `options.narration`), captions beside it when asked;
+   * `video-export-progress` events follow it.
+   */
+  exportVideo: (id: string, dest: string, options: VideoOptions, output: VideoOutput) =>
+    invoke<void>("export_video", { id, dest, options, output }),
   /** Stops the running video export, which then fails with VIDEO_CANCELLED. */
   cancelVideoExport: () => invoke<void>("cancel_video_export"),
-  /** Creates a new folder named after the deck inside `parent`; returns its path. */
-  createImageExportDir: (id: string, parent: string) => invoke<string>("create_image_export_dir", { id, parent }),
-  /**
-   * Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`, at most `width` (the
-   * slides' canvas width) pixels wide; returns its path.
-   */
-  exportSlideImage: (
-    dir: string,
-    index: number,
-    total: number,
-    rect: { x: number; y: number; width: number; height: number },
-    viewport: { width: number; height: number },
-    width: number,
-  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
   /** Whether the deck is in a git repository, which takes git being installed. */
   deckInRepository: (id: string) => invoke<boolean>("deck_in_repository", { id }),
   /** How the deck differs from the last commit. */
@@ -616,9 +782,9 @@ export const api = {
   stageChange: (id: string, change: Change) => invoke<void>("stage_change", { id, change }),
   unstageChange: (id: string, change: Change) => invoke<void>("unstage_change", { id, change }),
   /** Puts a change back as it was committed, in the deck and the index. */
-  restoreChange: (id: string, change: Change) => invoke<RailEdit>("restore_change", { id, change }),
+  restoreChange: (id: string, change: Change) => invoke<Discarded>("restore_change", { id, change }),
   /** Puts the whole deck back as it was committed, as one change to undo. */
-  restoreAllChanges: (id: string) => invoke<RailEdit>("restore_all_changes", { id }),
+  restoreAllChanges: (id: string) => invoke<Discarded>("restore_all_changes", { id }),
   /** Stages the whole deck and the changed files it refers to. */
   stageAll: (id: string) => invoke<void>("stage_all", { id }),
   /** Unstages everything in the deck's folder. */
@@ -662,7 +828,15 @@ export const api = {
       }[]
     >("list_chat_threads", { id }),
   selectChatThread: (id: string, thread: string) =>
-    invoke<{ chat: unknown; provider: Provider | null }>("select_chat_thread", { id, thread }),
+    invoke<{ chat: unknown; provider: Provider | null; title?: string }>("select_chat_thread", { id, thread }),
+  /** The name the user gave the conversation on show in chat `id`; null while it has none. */
+  chatTitle: (id: string) => invoke<string | null>("chat_title", { id }),
+  /** Names conversation `thread`; a blank `title` gives it back the name its first message gives it. */
+  renameChatThread: (thread: string, title: string) => invoke<void>("rename_chat_thread", { thread, title }),
+  /** Deletes conversation `thread` for good; refused for the one on show in chat `id`. */
+  deleteChatThread: (id: string, thread: string) => invoke<void>("delete_chat_thread", { id, thread }),
+  /** Takes back `path` (`assets/…`), attached in the composer of chat `id` and never sent; false when a deck uses it. */
+  discardAttachment: (id: string, path: string) => invoke<boolean>("discard_attachment", { id, path }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
   /** Moves the folder's own chat to the deck open in this window, which it made. */
   moveChatToDeck: () => invoke<void>("move_chat_to_deck"),
@@ -716,6 +890,8 @@ export const api = {
   voiceStatus: () => invoke<VoiceStatus>("voice_status"),
   /** Downloads the speech model to `~/.slopslides/models`, reporting `voice-download` events. */
   downloadVoiceModel: () => invoke<void>("download_voice_model"),
+  /** Stops the speech model's download; `downloadVoiceModel` fails with VOICE_DOWNLOAD_CANCELLED. */
+  cancelVoiceDownload: () => invoke<void>("cancel_voice_download"),
   /** Listens for the teleprompter, reporting recent words as `voice-heard` events; `cancelRecording` ends it. */
   followSpeech: () => invoke<void>("follow_speech"),
   /** Records the microphone, reporting its level as `voice-level` events. */
@@ -728,8 +904,8 @@ export const api = {
    * reporting `voice-level` and `narration-recorded` events (`narration-record-failed` when it
    * goes wrong). `narrationRecordingSlide` says when the slide changes.
    */
-  startNarrationRecording: (id: string, slide: string, mode: NarrationRecordMode) =>
-    invoke<void>("start_narration_recording", { id, slide, mode }),
+  startNarrationRecording: (id: string, slide: string, mode: NarrationRecordMode, replace = false) =>
+    invoke<void>("start_narration_recording", { id, slide, mode, replace }),
   narrationRecordingSlide: (slide: string) => invoke<void>("narration_recording_slide", { slide }),
   /** Ends the narration recording; resolves once all of it is kept. */
   stopNarrationRecording: () => invoke<void>("stop_narration_recording"),
@@ -765,6 +941,19 @@ export const api = {
   /** Every voice the provider's account can use (ElevenLabs: the account's own too). */
   speechVoices: (provider: string) => invoke<NarrationVoice[]>("speech_voices", { provider }),
   setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
+  /** Stops `timeNarration` before its next slide; it fails with NARRATION_CANCELLED, what was heard is kept. */
+  cancelNarrationTiming: () => invoke<void>("cancel_narration_timing"),
+  /** What the deck keeps of how its narration is said and timed. */
+  narrationSettings: (id: string) => invoke<DeckNarrationSettings>("narration_settings", { id }),
+  /** Sets the times the deck plays with; resolves to all it keeps. */
+  setNarrationTiming: (id: string, timing: NarrationTiming) =>
+    invoke<DeckNarrationSettings>("set_narration_timing", { id, timing }),
+  /** Sets how fast and in what manner the deck's narration is said; audio said another way is out of date then. */
+  setNarrationDelivery: (id: string, pace: NarrationPace, style: string) =>
+    invoke<DeckNarrationSettings>("set_narration_delivery", { id, pace, style }),
+  /** A short sample of a voice, as WAV bytes: said once with the user's key, then kept for every deck. */
+  previewNarrationVoice: (provider: string, voice: string, language: string) =>
+    invoke<ArrayBuffer>("preview_narration_voice", { provider, voice, language }),
 };
 
 export function errorMessage(error: unknown): string {

@@ -288,6 +288,10 @@ fn page_for(query: Option<&str>, bytes: Vec<u8>) -> Vec<u8> {
         Some(slide) => html::single_slide(&source, slide, others),
         None => Cow::Borrowed(source.as_ref()),
     };
+    // An export's hidden window is shown only the slides the export is of.
+    if let Some(scoped) = crate::export_scope::page_for(query, &page) {
+        page = Cow::Owned(scoped);
+    }
     if print {
         page = Cow::Owned(html::ensure_runtime(&page));
     }

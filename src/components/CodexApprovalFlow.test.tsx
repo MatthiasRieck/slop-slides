@@ -78,7 +78,7 @@ beforeEach(async () => {
 describe("Codex approval event → store → chat → IPC", () => {
   it.each([
     ["Allow once", "accept"],
-    ["Allow for session", "acceptForSession"],
+    ["Always allow in this chat", "acceptForSession"],
     ["Deny", "decline"],
   ] as const)("routes %s and persists a resolved card", async (label, decision) => {
     emit({ type: "approvalRequested", approval });
@@ -89,9 +89,10 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(useApp.getState().running).toBe(false);
-    await waitFor(() => expect(calls("save_chat")).toHaveLength(1));
-    const saved = calls("save_chat")[0]!.chat as { parts: unknown[] }[];
-    expect(saved.at(-1)!.parts).toContainEqual({ kind: "approval", approval, status: "resolved" });
+    // Saved as answered, and with how: opened again, the chat still says so.
+    await waitFor(() => expect(calls("save_chat").length).toBeGreaterThan(0));
+    const saved = calls("save_chat").at(-1)!.chat as { parts: unknown[] }[];
+    expect(saved.at(-1)!.parts).toContainEqual({ kind: "approval", approval, status: "resolved", decision });
   });
 
   it("Stop closes the request without approving it", async () => {

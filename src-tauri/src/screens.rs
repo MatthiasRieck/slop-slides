@@ -9,13 +9,18 @@
 //! The picker shows a screenshot of each screen, to tell them apart by what is on them. They
 //! are only ever held in the picker: nothing is written to disk. On Linux it goes without (see
 //! [`shots`]).
+//!
+//! A window moved to another screen for a show goes back where it was when the show ends
+//! ([`restore`]), and while any window presents, the display does not go to sleep ([`awake`]).
 
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{
-    ipc::Channel, AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition,
-    Position, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
+    ipc::Channel, AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor,
+    PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder, Window,
+    WindowEvent,
 };
 
 use crate::error::{Error, Result};
@@ -293,7 +298,8 @@ fn validate(count: usize, audience: usize, presenter: Option<usize>) -> Result<(
 }
 
 /// Moves the show window to `audience` (the frontend makes it full screen once it is there)
-/// and opens the presenter view full screen on `presenter`, if given.
+/// and opens the presenter view full screen on `presenter`, if given. Where the window was is
+/// kept, for [`restore`] to put it back there when the show ends.
 pub fn present(
     app: &AppHandle,
     window: &Window,
@@ -302,6 +308,9 @@ pub fn present(
 ) -> Result<()> {
     let screens = list(app)?;
     validate(screens.len(), audience, presenter)?;
+    if let Some(geometry) = geometry_of(window) {
+        lock(&PLACES).remember(window.label(), geometry);
+    }
     window
         .set_position(origin(&screens[audience], LAID_OUT_IN_POINTS))
         .map_err(|e| Error::msg(format!("cannot move the show: {e}")))?;
@@ -374,6 +383,393 @@ pub fn close_presenter_view(app: &AppHandle) {
     }
 }
 
+/// A window's place on the desktop and its size, in the desktop's units (see [`on_desktop`]),
+/// and whether it filled its screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Geometry {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    maximized: bool,
+}
+
+/// Where each window a show moved was before, by the window's label.
+struct Places(Vec<(String, Geometry)>);
+
+impl Places {
+    /// Keeps where the window `label` is before its show moves it. Where it was first counts: a
+    /// show placed twice (StrictMode runs effects twice in dev) is already on its screen the
+    /// second time.
+    fn remember(&mut self, label: &str, geometry: Geometry) {
+        if !self.0.iter().any(|(l, _)| l == label) {
+            self.0.push((label.to_string(), geometry));
+        }
+    }
+
+    /// Where the window `label` was before its show, once.
+    fn take(&mut self, label: &str) -> Option<Geometry> {
+        let at = self.0.iter().position(|(l, _)| l == label)?;
+        Some(self.0.swap_remove(at).1)
+    }
+}
+
+static PLACES: Mutex<Places> = Mutex::new(Places(Vec::new()));
+
+/// The lock on `mutex`, also after a panic while it was held: what it guards stays usable.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Where `window` is now, unless it is full screen (then it is on its show's screen already).
+fn geometry_of(window: &Window) -> Option<Geometry> {
+    if window.is_fullscreen().unwrap_or(false) {
+        return None;
+    }
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let scale = window.scale_factor().ok()?;
+    let (x, y, width, height) = on_desktop(
+        (position.x, position.y),
+        (size.width, size.height),
+        scale,
+        LAID_OUT_IN_POINTS,
+    );
+    Some(Geometry {
+        x,
+        y,
+        width,
+        height,
+        maximized: window.is_maximized().unwrap_or(false),
+    })
+}
+
+/// The size to give a window to have it `geometry`'s size, in the desktop's units as `origin`
+/// takes a position.
+fn size_of(geometry: &Geometry, points: bool) -> Size {
+    if points {
+        LogicalSize::new(geometry.width, geometry.height).into()
+    } else {
+        PhysicalSize::new(geometry.width as u32, geometry.height as u32).into()
+    }
+}
+
+/// How long [`restore`] waits for the window to have left full screen, which the system
+/// animates after the frontend asked.
+const UNFULLSCREEN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Puts `window` back where it was before its show moved it to another screen, as it was
+/// (maximized or not). Nothing for a show that moved nothing. Waits for the window to have left
+/// full screen first: a window still on its way out of it ignores a move. Off the main thread.
+pub fn restore(window: &Window) -> Result<()> {
+    let Some(geometry) = lock(&PLACES).take(window.label()) else {
+        return Ok(());
+    };
+    let started = Instant::now();
+    while window.is_fullscreen().unwrap_or(false) && started.elapsed() < UNFULLSCREEN_TIMEOUT {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let back = |e: tauri::Error| Error::msg(format!("cannot move the window back: {e}"));
+    let screen = Screen {
+        index: 0,
+        name: String::new(),
+        x: geometry.x,
+        y: geometry.y,
+        width: geometry.width,
+        height: geometry.height,
+        pixel_width: 0,
+        pixel_height: 0,
+        primary: false,
+    };
+    window
+        .set_position(origin(&screen, LAID_OUT_IN_POINTS))
+        .map_err(back)?;
+    if geometry.maximized {
+        window.maximize().map_err(back)?;
+    } else {
+        window
+            .set_size(size_of(&geometry, LAID_OUT_IN_POINTS))
+            .map_err(back)?;
+    }
+    Ok(())
+}
+
+/// Forgets what a closed window's show had: where it was, and its hold on the display.
+pub fn window_closed(label: &str) {
+    lock(&PLACES).take(label);
+    awake::keep(label, false);
+}
+
+/// The display kept awake while a show runs: a talk can stay on one slide for minutes, longer
+/// than the display waits before it dims. Each window presenting holds it; it is let go once
+/// none does.
+pub mod awake {
+    use std::sync::Mutex;
+
+    use super::lock;
+
+    /// Keeping the system's display on, or no longer.
+    pub trait Power {
+        /// Keeps the display on; false where that cannot be done.
+        fn hold(&mut self) -> bool;
+        fn let_go(&mut self);
+    }
+
+    /// The windows presenting, and whether the display is held for them.
+    pub struct Awake<P: Power> {
+        power: P,
+        holders: Vec<String>,
+        held: bool,
+    }
+
+    impl<P: Power> Awake<P> {
+        pub const fn new(power: P) -> Self {
+            Self {
+                power,
+                holders: Vec::new(),
+                held: false,
+            }
+        }
+
+        /// The window `label` presents (`on`) or no longer does; the display is held while any does.
+        pub fn keep(&mut self, label: &str, on: bool) {
+            if on {
+                if !self.holders.iter().any(|l| l == label) {
+                    self.holders.push(label.to_string());
+                }
+            } else {
+                self.holders.retain(|l| l != label);
+            }
+            let wanted = !self.holders.is_empty();
+            if wanted && !self.held {
+                self.held = self.power.hold();
+            } else if !wanted && self.held {
+                self.power.let_go();
+                self.held = false;
+            }
+        }
+    }
+
+    static AWAKE: Mutex<Awake<System>> = Mutex::new(Awake::new(System::new()));
+
+    /// The window `label` presents, or no longer does. On Windows the hold belongs to the
+    /// thread that asks for it, so this runs on the main thread, which lasts as long as the app.
+    pub fn keep(label: &str, on: bool) {
+        lock(&AWAKE).keep(label, on);
+    }
+
+    /// macOS: an assertion that keeps the display from sleeping while the user is idle.
+    #[cfg(target_os = "macos")]
+    pub struct System {
+        assertion: Option<u32>,
+    }
+
+    #[cfg(target_os = "macos")]
+    mod iokit {
+        use std::ffi::{c_char, c_void};
+
+        pub const UTF8: u32 = 0x0800_0100;
+        pub const LEVEL_ON: u32 = 255;
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            pub fn CFStringCreateWithCString(
+                alloc: *const c_void,
+                text: *const c_char,
+                encoding: u32,
+            ) -> *const c_void;
+            pub fn CFRelease(object: *const c_void);
+        }
+
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            pub fn IOPMAssertionCreateWithName(
+                kind: *const c_void,
+                level: u32,
+                name: *const c_void,
+                id: *mut u32,
+            ) -> i32;
+            pub fn IOPMAssertionRelease(id: u32) -> i32;
+        }
+
+        /// A CFString of `text`, released when dropped.
+        pub struct CfString(pub *const c_void);
+
+        impl CfString {
+            pub fn new(text: &std::ffi::CStr) -> Self {
+                // SAFETY: a valid C string, copied by CoreFoundation.
+                Self(unsafe { CFStringCreateWithCString(std::ptr::null(), text.as_ptr(), UTF8) })
+            }
+        }
+
+        impl Drop for CfString {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: created above and not released elsewhere.
+                    unsafe { CFRelease(self.0) };
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl System {
+        pub const fn new() -> Self {
+            Self { assertion: None }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Power for System {
+        fn hold(&mut self) -> bool {
+            let kind = iokit::CfString::new(c"PreventUserIdleDisplaySleep");
+            let name = iokit::CfString::new(c"SlopSlide is presenting");
+            if kind.0.is_null() || name.0.is_null() {
+                return false;
+            }
+            let mut id = 0u32;
+            // SAFETY: valid CFStrings and a place for the id; 0 is success.
+            let done = unsafe {
+                iokit::IOPMAssertionCreateWithName(kind.0, iokit::LEVEL_ON, name.0, &mut id)
+            };
+            if done != 0 {
+                return false;
+            }
+            self.assertion = Some(id);
+            true
+        }
+
+        fn let_go(&mut self) {
+            if let Some(id) = self.assertion.take() {
+                // SAFETY: an assertion this created and has not released.
+                unsafe { iokit::IOPMAssertionRelease(id) };
+            }
+        }
+    }
+
+    /// Windows: the thread's execution state, which keeps the display on while it is set.
+    #[cfg(windows)]
+    pub struct System;
+
+    #[cfg(windows)]
+    mod kernel32 {
+        pub const CONTINUOUS: u32 = 0x8000_0000;
+        pub const DISPLAY_REQUIRED: u32 = 0x0000_0002;
+        pub const SYSTEM_REQUIRED: u32 = 0x0000_0001;
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            pub fn SetThreadExecutionState(flags: u32) -> u32;
+        }
+    }
+
+    #[cfg(windows)]
+    impl System {
+        pub const fn new() -> Self {
+            Self
+        }
+    }
+
+    #[cfg(windows)]
+    impl Power for System {
+        fn hold(&mut self) -> bool {
+            use kernel32::*;
+            // SAFETY: only sets flags; 0 means it failed.
+            unsafe { SetThreadExecutionState(CONTINUOUS | DISPLAY_REQUIRED | SYSTEM_REQUIRED) != 0 }
+        }
+
+        fn let_go(&mut self) {
+            // SAFETY: as above, back to the system's own idea of idle.
+            unsafe { kernel32::SetThreadExecutionState(kernel32::CONTINUOUS) };
+        }
+    }
+
+    /// Elsewhere the display is left to the system.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub struct System;
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    impl System {
+        pub const fn new() -> Self {
+            Self
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    impl Power for System {
+        fn hold(&mut self) -> bool {
+            false
+        }
+
+        fn let_go(&mut self) {}
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// What was asked of the system, in order.
+        #[derive(Default)]
+        struct Fake {
+            asked: Vec<&'static str>,
+            refuse: bool,
+        }
+
+        impl Power for Fake {
+            fn hold(&mut self) -> bool {
+                self.asked.push("hold");
+                !self.refuse
+            }
+            fn let_go(&mut self) {
+                self.asked.push("let go");
+            }
+        }
+
+        #[test]
+        fn the_display_is_held_while_any_window_presents_and_let_go_after() {
+            let mut awake = Awake::new(Fake::default());
+            awake.keep("main", true);
+            // A second hold of the same show, and another window's show, ask nothing more.
+            awake.keep("main", true);
+            awake.keep("other", true);
+            awake.keep("main", false);
+            assert_eq!(awake.power.asked, ["hold"]);
+            awake.keep("other", false);
+            assert_eq!(awake.power.asked, ["hold", "let go"]);
+            // Letting go of a show that has gone already asks nothing.
+            awake.keep("other", false);
+            awake.keep("main", true);
+            assert_eq!(awake.power.asked, ["hold", "let go", "hold"]);
+        }
+
+        #[test]
+        fn a_hold_the_system_refused_is_not_let_go_and_is_asked_for_again() {
+            let mut awake = Awake::new(Fake {
+                refuse: true,
+                ..Fake::default()
+            });
+            awake.keep("main", true);
+            awake.keep("main", false);
+            assert_eq!(awake.power.asked, ["hold"]);
+            awake.power.refuse = false;
+            awake.keep("main", true);
+            awake.keep("main", false);
+            assert_eq!(awake.power.asked, ["hold", "hold", "let go"]);
+        }
+
+        /// Holds the real display for a moment: run by hand with `--ignored`, then check
+        /// `pmset -g assertions` (macOS) while it sleeps.
+        #[test]
+        #[ignore]
+        fn holds_the_real_display() {
+            let mut system = System::new();
+            assert!(system.hold() || cfg!(not(any(target_os = "macos", windows))));
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            system.let_go();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +812,15 @@ mod tests {
         assert_eq!(presenter_window_size(Some(&at)), (1000.0, 640.0));
         let (width, height) = presenter_window_size(None);
         assert!(width > 1000.0 && height > 640.0);
+    }
+
+    #[test]
+    fn the_display_is_held_on_the_main_thread_and_the_window_put_back_off_it() {
+        // On Windows a hold on the display lasts as long as the thread that took it; putting
+        // the window back waits for it to leave full screen, which must not hold up input.
+        let commands = include_str!("commands/workspace.rs");
+        assert!(commands.contains("#[tauri::command]\npub fn keep_awake("));
+        assert!(commands.contains("#[tauri::command(async)]\npub fn restore_show_window("));
     }
 
     #[test]
@@ -495,6 +900,45 @@ mod tests {
                 "Monitor #2"
             ]
         );
+    }
+
+    fn geometry(x: f64, maximized: bool) -> Geometry {
+        Geometry {
+            x,
+            y: 20.0,
+            width: 1200.0,
+            height: 800.0,
+            maximized,
+        }
+    }
+
+    #[test]
+    fn a_window_goes_back_where_it_was_before_its_first_move_once() {
+        let mut places = Places(Vec::new());
+        places.remember("main", geometry(10.0, false));
+        // Placed again by the same show, already on its screen: where it was first counts.
+        places.remember("main", geometry(3000.0, false));
+        places.remember("other", geometry(50.0, true));
+        assert_eq!(places.take("main"), Some(geometry(10.0, false)));
+        assert_eq!(places.take("main"), None, "only once");
+        assert_eq!(places.take("other"), Some(geometry(50.0, true)));
+        assert_eq!(places.take("never moved"), None);
+    }
+
+    #[test]
+    fn a_window_gets_its_size_back_in_the_desktops_units() {
+        let at = geometry(10.0, false);
+        assert_eq!(
+            size_of(&at, true),
+            Size::Logical(LogicalSize::new(1200.0, 800.0))
+        );
+        assert_eq!(
+            size_of(&at, false),
+            Size::Physical(PhysicalSize::new(1200, 800))
+        );
+        // A Retina window kept in points comes back at the same size in points.
+        let (_, _, width, height) = on_desktop((0, 0), (2400, 1600), 2.0, true);
+        assert_eq!((width, height), (1200.0, 800.0));
     }
 
     #[test]

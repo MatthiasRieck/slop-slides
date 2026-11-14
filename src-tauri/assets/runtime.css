@@ -121,6 +121,15 @@ html[data-slop-blank] .deck {
   opacity: 0 !important;
   pointer-events: none !important;
 }
+/* In the app's show, the dark screen after the last slide; the app writes "End of show" over it. */
+html[data-slop-end],
+html[data-slop-end] body {
+  background: #000 !important;
+}
+html[data-slop-end] .deck {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 /* In the app's show the cursor goes with the show's controls, once the pointer rests. */
 html[data-slop-idle],
 html[data-slop-idle] * {
@@ -185,6 +194,166 @@ html[data-slop-controls] .slop-controls {
   padding: 0 4px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+/* A finger needs more room than a pointer. */
+@media (pointer: coarse) {
+  .slop-controls button {
+    width: 44px;
+    height: 44px;
+  }
+}
+/* What a screen reader is told as each slide shows; nothing to see. */
+.slop-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* The list of keys (?), in the middle of the window over the slide. */
+.slop-help {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 2147483647;
+  display: none;
+  box-sizing: border-box;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 20px;
+  border-radius: 14px;
+  background: rgba(17, 17, 17, 0.94);
+  color: #fff;
+  font: 400 14px/1.4 system-ui, sans-serif;
+  transform: translate(-50%, -50%);
+}
+html[data-slop-help] .slop-help {
+  display: block;
+}
+.slop-help-title {
+  margin: 0 0 12px;
+  font-weight: 600;
+  font-size: 16px;
+}
+.slop-help dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+.slop-help dt {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.slop-help dd {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+}
+.slop-help-note {
+  margin: 14px 0 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+.slop-help-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.slop-help button {
+  all: unset;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.slop-help button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.slop-help button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+@media (pointer: coarse) {
+  .slop-help button {
+    min-height: 44px;
+  }
+}
+/* Said for a moment to a phone held upright (the player adds and removes it). */
+.slop-hint {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  top: 16px;
+  z-index: 2147483647;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.8);
+  color: #fff;
+  font: 500 13px/1.3 system-ui, sans-serif;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+/* All slides at once (O): the slides themselves, small, in rows the page scrolls through. The
+   player sets --slop-overview-zoom so a few fit side by side; each shows as it ends up, its
+   entrances done, and takes a press as a whole. */
+html[data-slop-overview],
+html[data-slop-overview] body {
+  height: auto !important;
+  min-height: 100%;
+  overflow: visible !important;
+  background: #111 !important;
+}
+html[data-slop-overview] {
+  overflow-y: auto !important;
+}
+html[data-slop-overview] .deck {
+  position: static !important;
+  display: flex !important;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  width: auto !important;
+  height: auto !important;
+  padding: 24px 24px 88px;
+  overflow: visible !important;
+  transform: none !important;
+}
+html[data-slop-overview] .deck > .slide {
+  position: relative !important;
+  inset: auto !important;
+  flex: none;
+  zoom: var(--slop-overview-zoom, 0.2);
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: none !important;
+  cursor: pointer;
+}
+html[data-slop-overview] .deck > .slide[data-hidden] {
+  display: none !important;
+}
+html[data-slop-overview] .deck > .slide * {
+  pointer-events: none !important;
+}
+html[data-slop-overview] .deck > .slide[data-slop-picked] {
+  outline: calc(4px / var(--slop-overview-zoom, 0.2)) solid #fff;
+  outline-offset: calc(3px / var(--slop-overview-zoom, 0.2));
+}
+html[data-slop-overview] .slide .reveal {
+  opacity: 1 !important;
+  animation: none !important;
 }
 .slide img,
 .slide video,
@@ -274,10 +443,14 @@ html[data-slop-static] *::after {
     opacity: 1 !important;
     animation: none !important;
   }
-  .slop-controls {
+  .slop-controls,
+  .slop-help,
+  .slop-hint,
+  .slop-live {
     display: none !important;
   }
-  html[data-slop-blank] .deck {
+  html[data-slop-blank] .deck,
+  html[data-slop-end] .deck {
     opacity: 1 !important;
   }
 }

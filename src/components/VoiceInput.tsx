@@ -6,7 +6,7 @@ import { api, type VoiceDownloadProgress } from "../lib/api";
 import { openLayer } from "../lib/layers";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
-import { showError } from "../store";
+import { showError, type ToastAction } from "../store";
 import { Popover } from "./Popover";
 
 type Phase = "idle" | "offer" | "downloading" | "starting" | "recording" | "transcribing";
@@ -131,9 +131,10 @@ export function VoiceInput(
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
-  const fail = (error: unknown) => {
+  /** Back to rest, saying what could not be done (`doing`) and why. */
+  const fail = (error: unknown, doing: string, action?: ToastAction) => {
     setPhase("idle");
-    showError(error);
+    showError(error, { doing, action });
   };
 
   const record = async () => {
@@ -144,7 +145,7 @@ export function VoiceInput(
       setPhase("recording");
       handlers.current.onStart();
     } catch (error) {
-      fail(error);
+      fail(error, "Could not start recording");
     }
   };
 
@@ -156,7 +157,7 @@ export function VoiceInput(
       handlers.current.onEnd(text, sendWhenDone.current);
     } catch (error) {
       handlers.current.onEnd("", false);
-      fail(error);
+      fail(error, "Could not turn the recording into text");
     }
     sendWhenDone.current = false;
   };
@@ -175,7 +176,7 @@ export function VoiceInput(
       await api.downloadVoiceModel();
       await record();
     } catch (error) {
-      fail(error);
+      fail(error, "Could not download the voice model", { label: "Retry", run: () => void download() });
     }
   };
 
@@ -191,7 +192,7 @@ export function VoiceInput(
       else if (status.downloading) await download();
       else setPhase("offer");
     } catch (error) {
-      fail(error);
+      fail(error, "Could not start voice input");
     }
   };
 

@@ -5,8 +5,14 @@ import { Button, buttonClass, ToolButton, toolButtonClass, withShortcut } from "
 const classes = (value: string) => new Set(value.split(/\s+/).filter(Boolean));
 const ICON_SIZE = "[&_svg:not([class*='size-'])]:size-4";
 const TEXT_ICON_SIZE = "[&_svg:not([class*='size-'])]:size-3.5";
-/** Every disabled button: one opacity, a plain cursor, and the pointer still on it for its tooltip. */
-const DISABLED = "disabled:cursor-default disabled:opacity-40";
+/** A disabled button: faded text-color ink, a plain cursor, and the pointer still on it for its tooltip. */
+const DISABLED = "disabled:cursor-default disabled:text-foreground disabled:opacity-45";
+/** A disabled button that has a color of its own while enabled: a plain muted box. */
+const DISABLED_FLAT = "disabled:cursor-default disabled:border-border disabled:bg-muted disabled:text-muted-foreground";
+/** A toggle or tool that is on. */
+const ON = "bg-primary/10 text-primary enabled:hover:bg-primary/15 enabled:hover:text-primary";
+/** The 24px that the tightest icon button takes presses on, around its 20px box. */
+const HIT_AREA = "relative after:absolute after:top-1/2 after:left-1/2 after:size-6 after:-translate-1/2";
 
 /** Whether a mouse-down on the element had its default (moving focus) prevented. */
 function mouseDownPrevented(element: HTMLElement) {
@@ -65,9 +71,38 @@ describe("ToolButton", () => {
       const all = classes(toolButtonClass(variant));
       expect(all.has("disabled:pointer-events-none")).toBe(false);
       expect(all.has("disabled:cursor-default")).toBe(true);
-      expect(all.has("disabled:opacity-40")).toBe(true);
+      // Faded, but in the text color: a muted icon faded further could not be read.
+      expect(all.has("disabled:opacity-45")).toBe(true);
+      expect(all.has("disabled:text-foreground")).toBe(true);
       expect([...all].filter((name) => name.includes("hover:") && !name.startsWith("enabled:"))).toEqual([]);
     }
+  });
+
+  it("takes presses on 24px at its tightest, without looking bigger", () => {
+    const tight = classes(toolButtonClass("toolbar", "xs"));
+    for (const name of HIT_AREA.split(" ")) expect(tight.has(name)).toBe(true);
+    expect(tight.has("p-0.5")).toBe(true);
+    // The others are 24px and more as they are.
+    expect(classes(toolButtonClass("toolbar", "sm")).has("after:size-6")).toBe(false);
+    // A caller placing it absolutely still can.
+    render(<ToolButton label="Close" size="xs" className="absolute" />);
+    const placed = screen.getByRole("button", { name: "Close" });
+    expect(placed.classList.contains("absolute")).toBe(true);
+    expect(placed.classList.contains("relative")).toBe(false);
+  });
+
+  it("hands its tooltip to the app's tooltips: the keys apart, a disabled reason beside its name", () => {
+    const { rerender } = render(<ToolButton label="Group" shortcut="mod+g" />);
+    const button = screen.getByRole("button", { name: "Group" });
+    expect(button.getAttribute("data-tip-keys")).toBe("Ctrl+G");
+    expect(button.hasAttribute("data-tip-label")).toBe(false);
+    rerender(<ToolButton label="Group" shortcut="mod+g" disabled disabledReason="Select two or more elements" />);
+    expect(button.getAttribute("title")).toBe("Select two or more elements");
+    expect(button.getAttribute("data-tip-label")).toBe("Group");
+    expect(button.hasAttribute("data-tip-keys")).toBe(false);
+    rerender(<ToolButton label="Group" />);
+    expect(button.hasAttribute("data-tip-keys")).toBe(false);
+    expect(button.hasAttribute("data-tip-label")).toBe(false);
   });
 
   it("turns red under the pointer when destructive", () => {
@@ -100,25 +135,34 @@ describe("ToolButton", () => {
     const { rerender } = render(<ToolButton label="Pen" active={false} />);
     const button = screen.getByRole("button", { name: "Pen" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(button.classList.contains("bg-accent")).toBe(false);
+    expect(button.classList.contains("bg-primary/10")).toBe(false);
     rerender(<ToolButton label="Pen" active />);
     expect(button.getAttribute("aria-pressed")).toBe("true");
-    expect(button.classList.contains("bg-accent")).toBe(true);
-    expect(button.classList.contains("text-foreground")).toBe(true);
+    // The accent's tint, not the fill of a button under the pointer.
+    expect(button.classList.contains("bg-primary/10")).toBe(true);
+    expect(button.classList.contains("text-primary")).toBe(true);
+    expect(button.classList.contains("bg-accent")).toBe(false);
+  });
+
+  it("shows what is on the same way in the toolbars, the panels and plain rows", () => {
+    for (const variant of ["toolbar", "panel", "plain"] as const) {
+      const on = classes(toolButtonClass(variant, "sm", true));
+      for (const name of ON.split(" ")) expect(on.has(name)).toBe(true);
+    }
   });
 
   it("shows the presenter's toggles on with their own colors", () => {
     render(<ToolButton variant="presenter" label="Pen" active />);
     const button = screen.getByRole("button", { name: "Pen" });
     expect(button.classList.contains("bg-foreground/20")).toBe(true);
-    expect(button.classList.contains("bg-accent")).toBe(false);
+    expect(button.classList.contains("bg-primary/10")).toBe(false);
   });
 
   it("passes aria-pressed through without the on look when not a styled toggle", () => {
     render(<ToolButton label="Hide slides" aria-pressed />);
     const button = screen.getByRole("button", { name: "Hide slides" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
-    expect(button.classList.contains("bg-accent")).toBe(false);
+    expect(button.classList.contains("bg-primary/10")).toBe(false);
   });
 
   it("clicks, but not while disabled", () => {
@@ -151,7 +195,7 @@ describe("ToolButton", () => {
     expect(button.classList.contains("p-1")).toBe(true);
   });
 
-  // The classes each look replaced, so the shared button looks as the buttons did before it.
+  // Every class of each look, so a change to one is a change made on purpose.
   it.each([
     [
       "toolbar",
@@ -166,7 +210,7 @@ describe("ToolButton", () => {
     [
       "toolbar, tight",
       toolButtonClass("toolbar", "xs"),
-      `rounded-md p-0.5 text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground ${DISABLED} ${ICON_SIZE}`,
+      `rounded-md p-0.5 ${HIT_AREA} text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground ${DISABLED} ${ICON_SIZE}`,
     ],
     [
       "panel",
@@ -183,17 +227,13 @@ describe("ToolButton", () => {
       toolButtonClass("presenter", "md"),
       `flex size-8 items-center justify-center rounded-lg text-foreground/80 enabled:hover:bg-foreground/10 enabled:hover:text-foreground ${DISABLED} ${ICON_SIZE}`,
     ],
-    [
-      "toolbar, on",
-      toolButtonClass("toolbar", "sm", true),
-      `rounded-md p-1 enabled:hover:bg-accent enabled:hover:text-foreground ${DISABLED} ${ICON_SIZE} bg-accent text-foreground`,
-    ],
+    ["toolbar, on", toolButtonClass("toolbar", "sm", true), `rounded-md p-1 ${DISABLED} ${ICON_SIZE} ${ON}`],
     [
       "presenter, on",
       toolButtonClass("presenter", "sm", true),
       `flex size-8 items-center justify-center rounded-lg enabled:hover:bg-foreground/10 enabled:hover:text-foreground ${DISABLED} ${ICON_SIZE} bg-foreground/20 text-foreground`,
     ],
-  ])("looks the same as before: %s", (_, actual, expected) => {
+  ])("looks as it should: %s", (_, actual, expected) => {
     expect(classes(actual)).toEqual(classes(expected));
   });
 });
@@ -260,13 +300,50 @@ describe("Button", () => {
     expect(taller.has("text-xs")).toBe(false);
   });
 
-  it("looks disabled the same in every variant, with no hover", () => {
+  it("looks disabled in every variant, with no hover and the pointer still on it", () => {
     for (const variant of ["outline", "primary", "ghost", "destructive"] as const) {
       const all = classes(buttonClass(variant));
-      expect(all.has("disabled:opacity-40")).toBe(true);
+      expect(all.has("disabled:cursor-default")).toBe(true);
       expect(all.has("disabled:pointer-events-none")).toBe(false);
       expect([...all].filter((name) => name.includes("hover:") && !name.startsWith("enabled:"))).toEqual([]);
     }
+  });
+
+  it("drops its color while disabled, so a disabled primary button does not read as one to press", () => {
+    for (const variant of ["primary", "destructive"] as const) {
+      const all = classes(buttonClass(variant));
+      for (const name of DISABLED_FLAT.split(" ")) expect(all.has(name)).toBe(true);
+      // Not just faded: a faded fill still looks like a soft button.
+      expect([...all].some((name) => name.startsWith("disabled:opacity"))).toBe(false);
+      // The edge it gets is there all along, so it keeps its size.
+      expect(all.has("border")).toBe(true);
+    }
+    for (const variant of ["outline", "ghost"] as const) {
+      expect(classes(buttonClass(variant)).has("disabled:opacity-45")).toBe(true);
+    }
+  });
+
+  it("is as tall as its neighbours whatever its variant: 24px in dense rows, 28px in bars and dialogs", () => {
+    const heights = { xs: "min-h-6", sm: "min-h-6", md: "min-h-6", lg: "min-h-7", xl: "min-h-7" } as const;
+    for (const [size, height] of Object.entries(heights) as [keyof typeof heights, string][]) {
+      for (const variant of ["outline", "primary", "ghost", "destructive"] as const) {
+        const all = classes(buttonClass(variant, size));
+        expect(all.has(height)).toBe(true);
+        // Never by padding, which a border or an icon adds to.
+        expect([...all].filter((name) => /^p[ytb]-/.test(name))).toEqual([]);
+      }
+    }
+  });
+
+  it("takes a tooltip with the keys that do the same", () => {
+    render(
+      <Button title="Start the show" shortcut="mod+enter">
+        Present
+      </Button>,
+    );
+    const button = screen.getByRole("button", { name: "Present" });
+    expect(button.getAttribute("title")).toBe("Start the show (Ctrl+Enter)");
+    expect(button.getAttribute("data-tip-keys")).toBe("Ctrl+Enter");
   });
 
   it("submits its form when a submit button", () => {
@@ -299,34 +376,34 @@ describe("Button", () => {
     expect(classes(button.className)).toEqual(classes(`${buttonClass("outline", "lg")} mt-1`));
   });
 
-  // The classes each look replaced, so the shared button looks as the buttons did before it.
+  // Every class of each look, so a change to one is a change made on purpose.
   it.each([
     [
       "outline (narration)",
       buttonClass("outline", "md"),
-      `flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
+      `flex items-center gap-1 rounded-md border min-h-6 px-2.5 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
     ],
     [
       "outline, tight (timeline)",
       buttonClass("outline", "xs"),
-      `flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
+      `flex items-center gap-1 rounded-md border min-h-6 px-1.5 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
     ],
     [
       "outline, large (export)",
       buttonClass("outline", "xl"),
-      `flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
+      `flex items-center gap-1.5 rounded-md border min-h-7 px-3 text-xs font-medium enabled:hover:bg-accent ${DISABLED} ${TEXT_ICON_SIZE}`,
     ],
     [
       "primary",
       buttonClass("primary", "lg"),
-      `flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground enabled:hover:opacity-90 ${DISABLED} ${TEXT_ICON_SIZE}`,
+      `flex items-center gap-1.5 rounded-md border border-transparent bg-primary min-h-7 px-2.5 text-xs font-medium text-primary-foreground enabled:hover:opacity-90 ${DISABLED_FLAT} ${TEXT_ICON_SIZE}`,
     ],
     [
       "ghost",
       buttonClass("ghost", "sm"),
-      `flex items-center gap-1 rounded-md px-1.5 py-1 text-xs enabled:hover:bg-accent enabled:hover:text-foreground ${DISABLED} ${TEXT_ICON_SIZE}`,
+      `flex items-center gap-1 rounded-md min-h-6 px-2 text-xs enabled:hover:bg-accent enabled:hover:text-foreground ${DISABLED} ${TEXT_ICON_SIZE}`,
     ],
-  ])("looks the same as before: %s", (_, actual, expected) => {
+  ])("looks as it should: %s", (_, actual, expected) => {
     expect(classes(actual)).toEqual(classes(expected));
   });
 });

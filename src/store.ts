@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { createChatSlice } from "./store/chat";
 import { createComposerSlice } from "./store/composer";
 import { createEditingSlice } from "./store/editing";
-import { reportingErrorsIn, showErrorIn, showInfoIn, showSuccessIn } from "./store/errors";
+import { type ErrorAbout, reportingErrorsIn, showErrorIn, showInfoIn, showSuccessIn } from "./store/errors";
 import { initEventBridge as bridgeEvents } from "./store/events";
 import { createHistorySlice } from "./store/history";
 import { createLintSlice } from "./store/lint";
@@ -46,12 +46,22 @@ export {
   tidyPrompt,
   withRevertNotes,
 } from "./store/prompts";
-export { commentsInScope, commentsToSend, deckComments, hasComments, hasReview, heldComment } from "./store/review";
+export {
+  commentGoing,
+  commentsInScope,
+  commentsToSend,
+  deckComments,
+  hasComments,
+  hasReview,
+  hasUnsentComments,
+  heldComment,
+  unsentComments,
+} from "./store/review";
 export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
 export { listedSlides, railSelection } from "./store/slides";
 export type { DesignChange } from "./store/templates";
-export { SIDEBAR_TABS, type SidebarTab, type Toast, type ToastAction, type ToastKind } from "./store/ui";
+export { NOTES_HEIGHT, SIDEBAR_TABS, type SidebarTab, type Toast, type ToastAction, type ToastKind } from "./store/ui";
 export { provideCodeSave, type WorkspaceChange } from "./store/workspace";
 
 export const useApp = create<AppState>()((...a) => ({
@@ -89,8 +99,11 @@ export const leaveForWindowClose = (alsoAsk?: () => Promise<boolean>) => leaveFo
 /** Follows the backend's events: the agent's, changes in the open workspace, and a folder opened from Finder. */
 export const initEventBridge = () => bridgeEvents(useApp);
 
-/** Shows what went wrong in the app's toasts, after `prefix` when there is one; it stays until dismissed. */
-export const showError = (error: unknown, prefix = "") => showErrorIn(useApp, error, prefix);
+/**
+ * Shows what went wrong in the app's toasts; it stays until dismissed. Say what was being done
+ * (`{ doing: "Could not open the deck" }`), and offer a way on (`action`) where there is one.
+ */
+export const showError = (error: unknown, about: string | ErrorAbout = "") => showErrorIn(useApp, error, about);
 
 /** Tells the user something worth knowing that is no failure; `action` is a button in the toast. It goes away by itself. */
 export const showInfo = (text: string, action?: ToastAction) => showInfoIn(useApp, text, action);
@@ -105,4 +118,5 @@ export const dismissToast = (id: number) => useApp.getState().dismissToast(id);
 export const openShortcutHelp = () => useApp.getState().setShortcutHelpOpen(true);
 
 /** Runs `action`, showing what goes wrong in the app's toasts; undefined when it failed. */
-export const reportingErrors = <T>(action: () => Promise<T>, prefix = "") => reportingErrorsIn(useApp, action, prefix);
+export const reportingErrors = <T>(action: () => Promise<T>, about: string | ErrorAbout = "") =>
+  reportingErrorsIn(useApp, action, about);

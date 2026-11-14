@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CheckboxRow, DraftInput, Field, inputClass, NumberField, selectClass } from "./Field";
+import { CheckboxRow, DraftInput, Field, inputClass, NumberBox, NumberField, selectClass } from "./Field";
 
 const digits = (text: string) => text.replace(/[^\d]/g, "");
 const parse = (text: string) => (text === "" ? null : Number(text));
@@ -213,5 +213,55 @@ describe("DraftInput stepping", () => {
     fireEvent.keyDown(screen.getByLabelText("Width"), { key: "ArrowDown" });
     expect(onChange).not.toHaveBeenCalled();
     expect((screen.getByLabelText("Width") as HTMLInputElement).value).toBe("1");
+  });
+});
+
+describe("NumberBox", () => {
+  const box = (more: Partial<Parameters<typeof NumberBox>[0]> = {}) => {
+    const onChange = vi.fn();
+    const onDone = vi.fn();
+    render(
+      <NumberBox
+        label="Line height"
+        value={1.2}
+        min={0.5}
+        max={5}
+        decimals={2}
+        stepBy={0.05}
+        presets={[{ value: null, label: "Deck default" }, { value: 1.5 }]}
+        onChange={onChange}
+        onDone={onDone}
+        {...more}
+      />,
+    );
+    return { onChange, onDone, field: screen.getByLabelText("Line height") as HTMLInputElement };
+  };
+
+  it("takes any value in its range, and steps by its own step", () => {
+    const { onChange, field } = box();
+    fireEvent.change(field, { target: { value: "1.33" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onChange).toHaveBeenLastCalledWith(1.33);
+    fireEvent.change(field, { target: { value: "9" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(field, { key: "ArrowUp" });
+    expect(onChange).toHaveBeenLastCalledWith(1.25);
+  });
+
+  it("offers its usual values, the deck's own among them, and hands the focus back on a pick", () => {
+    const { onChange, onDone } = box();
+    fireEvent.click(screen.getByRole("button", { name: "Line height: usual values" }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Deck default", "1.5"]);
+    fireEvent.click(screen.getByRole("option", { name: "Deck default" }));
+    expect(onChange).toHaveBeenLastCalledWith(null);
+    expect(onDone).toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("shows a dash for no value, and says why it is disabled", () => {
+    box({ value: null, disabled: true, disabledReason: "Select text" });
+    expect((screen.getByLabelText("Line height") as HTMLInputElement).value).toBe("");
+    expect(screen.getByTitle("Select text")).toBeTruthy();
   });
 });

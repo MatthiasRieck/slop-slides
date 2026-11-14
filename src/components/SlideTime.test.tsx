@@ -23,6 +23,14 @@ beforeEach(() => {
 });
 
 describe("SlideTime", () => {
+  it("fits beside the notes when compact: its name only for screen readers, the deck's sum in its tooltip", () => {
+    render(<SlideTime deck={withTimes({ intro: 60, outro: 30 })} compact />);
+    expect(field().value).toBe("1:00");
+    expect(screen.getByText("Planned time").className).toContain("sr-only");
+    expect(screen.queryByTestId("deck-time")).toBeNull();
+    expect(field().title).toContain("All slides shown: 1:30.");
+  });
+
   it("saves the time typed for the selected slide", async () => {
     render(<SlideTime deck={withTimes({})} />);
     await type("1:30");

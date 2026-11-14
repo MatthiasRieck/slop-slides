@@ -2,14 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { forgetModes } from "../lib/permissions";
 import { type ChatPart, useApp } from "../store";
+import { useConfirmQuestion } from "../store/confirm";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ask, invoke } from "../test/tauri";
+import { invoke } from "../test/tauri";
 import { ApprovalCard, ApprovalReview, COMPOSER_INPUT_ATTR, PermissionPicker } from "./Permissions";
 
 const interrupt = vi.fn();
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue(["ask", "autoReview", "fullAccess", "custom"]);
-  ask.mockReset().mockResolvedValue(true);
+  useConfirmQuestion.setState({ question: null, waiting: [] });
   interrupt.mockReset();
   forgetModes();
   useApp.setState({
@@ -27,6 +28,13 @@ const mode = () => useApp.getState().permissionModes[useApp.getState().selection
 const openPicker = async () => {
   fireEvent.click(picker());
   await screen.findByRole("button", { name: /Approve for me/ });
+};
+/** Answers the question the app asks in its own dialog, once it is asked. */
+const answer = async (yes: boolean) => {
+  await waitFor(() => expect(useConfirmQuestion.getState().question).not.toBeNull());
+  const question = useConfirmQuestion.getState().question!;
+  await act(async () => question.answer(yes));
+  return question;
 };
 const part = (): Extract<ChatPart, { kind: "approval" }> => ({
   kind: "approval",
@@ -46,7 +54,7 @@ describe("permission picker", () => {
     render(<PermissionPicker />);
     await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Approve for me/ }));
-    expect(mode()).toBe("autoReview");
+    await waitFor(() => expect(mode()).toBe("autoReview"));
     expect(picker().textContent).toContain("Approve for me");
     expect(invoke).toHaveBeenCalledWith("permission_modes", { provider: "codex", id: "/decks/talk" });
     invoke.mockResolvedValue(["ask", "fullAccess"]);
@@ -73,18 +81,20 @@ describe("permission picker", () => {
     render(<PermissionPicker />);
     fireEvent.click(picker());
     fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    const question = await answer(true);
+    expect(question.message).toContain("GitHub Copilot will be able");
+    expect(question.destructive).toBe(true);
     await waitFor(() => expect(mode()).toBe("fullAccess"));
-    expect(ask.mock.calls[0]![0]).toContain("GitHub Copilot will be able");
   });
 
-  it("confirms Full access and keeps the old mode when cancelled", async () => {
-    ask.mockResolvedValueOnce(false);
+  it("confirms Full access in the app's own dialog and keeps the old mode when cancelled", async () => {
     render(<PermissionPicker />);
     await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
-    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect((await answer(false)).confirmLabel).toBe("Turn on Full access");
     expect(mode()).toBe("ask");
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    await answer(true);
     await waitFor(() => expect(mode()).toBe("fullAccess"));
   });
 
@@ -97,24 +107,19 @@ describe("permission picker", () => {
     expect((picker() as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(picker());
     fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    await answer(true);
     await waitFor(() => expect(mode()).toBe("fullAccess"));
-    expect(ask).toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith("set_permission_mode", { id: "/decks/talk", mode: "fullAccess" });
     expect(screen.queryByText(/next message/)).toBeNull();
   });
 
   it("applies a confirmation that resolves after a turn started", async () => {
-    let resolve!: (value: boolean) => void;
-    ask.mockReturnValue(
-      new Promise<boolean>((r) => {
-        resolve = r;
-      }),
-    );
     render(<PermissionPicker />);
     await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    await waitFor(() => expect(useConfirmQuestion.getState().question).not.toBeNull());
     act(() => useApp.setState({ running: true }));
-    await act(async () => resolve(true));
+    await answer(true);
     expect(mode()).toBe("fullAccess");
     expect(invoke).toHaveBeenCalledWith("set_permission_mode", { id: "/decks/talk", mode: "fullAccess" });
   });
@@ -126,13 +131,12 @@ describe("permission picker", () => {
     expect(screen.getByText("Codex applies a change from your next message.")).toBeTruthy();
   });
 
-  it("keeps the old mode if the confirmation dialog fails", async () => {
-    ask.mockRejectedValueOnce("Dialog unavailable");
+  it("asks nothing for the modes that ask", async () => {
     render(<PermissionPicker />);
     await openPicker();
-    fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
-    expect((await screen.findByRole("alert")).textContent).toBe("Dialog unavailable");
-    expect(mode()).toBe("ask");
+    fireEvent.click(screen.getByRole("button", { name: /Approve for me/ }));
+    await waitFor(() => expect(mode()).toBe("autoReview"));
+    expect(useConfirmQuestion.getState().question).toBeNull();
   });
 
   it("shows only modes returned by Codex and reports an unavailable saved mode", async () => {
@@ -207,7 +211,9 @@ describe("permission picker", () => {
     expect(picker().querySelector(".lucide-shield")).toBeTruthy();
 
     act(() => useApp.setState({ permissionModes: { claude: "ask", codex: "fullAccess", copilot: "ask" } }));
-    expect(screen.getByText("Full access").className).not.toContain("hidden");
+    // Named also where room is short, in a word.
+    expect(screen.getByText("Full").className).toContain("@[26rem]:hidden");
+    expect(screen.getByText("Full access").className).toContain("@[26rem]:inline");
     expect(picker().className).toContain("text-warning");
     expect(picker().querySelector(".lucide-shield-alert")).toBeTruthy();
   });
@@ -230,13 +236,21 @@ describe("approval card", () => {
       decision: label === "Deny" ? "decline" : "accept",
     });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always allow in this chat" })).toBeNull();
+    // Answered, it is one line that says how.
+    expect(screen.getByText(label === "Deny" ? "Denied:" : "Allowed once:", { exact: false })).toBeTruthy();
   });
-  it("offers session approval only when supplied by Codex", async () => {
+  it("offers to allow for the rest of the chat only when the agent offers it, saying what it covers", async () => {
     const p = part();
     p.approval.decisions.push("acceptForSession");
+    p.approval.sessionScope = "commands starting with `cat`";
     render(<ApprovalCard part={p} />);
-    fireEvent.click(screen.getByRole("button", { name: "Allow for session" }));
+    const covers = screen.getByText(/covers/);
+    expect(covers.textContent).toBe(
+      '"Always allow in this chat" covers commands starting with cat, until you start a new chat.',
+    );
+    expect(covers.querySelector("code")!.textContent).toBe("cat");
+    fireEvent.click(screen.getByRole("button", { name: "Always allow in this chat" }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("respond_approval", {
         chat: "/decks/talk",
@@ -262,14 +276,15 @@ describe("approval card", () => {
         decision: "accept",
       }),
     );
-    expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Always allow in this chat" })).toBeNull();
+    expect(screen.queryByText(/covers/)).toBeNull();
   });
   it("tells the answers apart: accepting is the main button, denying a quiet one, stopping set apart", () => {
     const p = part();
     p.approval.decisions.push("acceptForSession");
     render(<ApprovalCard part={p} />);
     const accept = screen.getByRole("button", { name: "Allow once" });
-    const session = screen.getByRole("button", { name: "Allow for session" });
+    const session = screen.getByRole("button", { name: "Always allow in this chat" });
     const deny = screen.getByRole("button", { name: "Deny" });
     const stop = screen.getByRole("button", { name: "Stop" });
     expect(accept.className).toContain("bg-primary");
@@ -283,26 +298,61 @@ describe("approval card", () => {
     expect(stop.parentElement!.lastElementChild).toBe(stop);
   });
 
-  it("stands out and is read out while it waits, and no longer once it is answered", () => {
+  it("stands out and is read out while it waits, and is one quiet line once it is answered", () => {
     const { rerender } = render(<ApprovalCard part={part()} />);
     const card = screen.getByRole("region", { name: "Approval request" });
     expect(card.className).toContain("border-warning");
     const title = screen.getByText("Run a command");
     expect(title.getAttribute("aria-live")).toBe("assertive");
     expect(title.getAttribute("role")).toBe("status");
-    rerender(<ApprovalCard part={{ ...part(), status: "resolved" }} />);
-    expect(card.className).not.toContain("border-warning");
-    expect(screen.getByText("Run a command").getAttribute("aria-live")).toBeNull();
+    rerender(<ApprovalCard part={{ ...part(), status: "resolved", decision: "acceptForSession" }} />);
+    expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+    expect(screen.getByText(/Always allowed in this chat/).textContent).toBe(
+      "Always allowed in this chat: Run a command",
+    );
+    // What was asked unfolds beneath it.
+    expect(screen.queryByText("cat /reference")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show what was asked: Run a command" }));
+    expect(screen.getByText("cat /reference")).toBeTruthy();
   });
 
-  it("takes the keyboard focus when it is on nothing, and then offers Enter", () => {
+  it("takes the keyboard focus when it is on nothing, and then names its keys", () => {
     render(<ApprovalCard part={part()} />);
     const accept = screen.getByRole("button", { name: "Allow once" });
     expect(document.activeElement).toBe(accept);
-    expect(screen.getByText("Enter to allow once")).toBeTruthy();
+    expect(screen.getByText("Enter to allow once · Esc to deny", { exact: false })).toBeTruthy();
     // Enter is the focused button's own key: nothing listens for it anywhere else.
     fireEvent.blur(accept);
-    expect(screen.queryByText("Enter to allow once")).toBeNull();
+    expect(screen.queryByText(/to allow once/)).toBeNull();
+  });
+
+  it("denies with Escape while the focus is on it", async () => {
+    render(<ApprovalCard part={part()} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Allow once" }), { key: "Escape" });
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("respond_approval", { chat: "/decks/talk", id: "r1", decision: "decline" }),
+    );
+  });
+
+  it("keeps how it was answered with the chat", async () => {
+    const reply = {
+      id: "a",
+      role: "assistant" as const,
+      parts: [part()],
+      status: "streaming" as const,
+      thinking: false,
+      error: null,
+      costUsd: null,
+      durationMs: null,
+      createdAt: 0,
+    };
+    useApp.setState({ messages: [reply] });
+    render(<ApprovalCard part={part()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    await waitFor(() => {
+      const saved = useApp.getState().messages[0];
+      expect(saved?.role === "assistant" && saved.parts[0]).toMatchObject({ decision: "decline" });
+    });
   });
 
   it("takes the focus from the empty message input, but not from a draft or another field", () => {
@@ -365,14 +415,20 @@ describe("approval card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
   });
-  it.each(["expired", "resolved"] as const)("has no action buttons for a %s request", (status) => {
+  it.each([
+    ["expired", "Not answered: Run a command"],
+    ["resolved", "Answered: Run a command"],
+  ] as const)("has no answer buttons for a %s request, and says what became of it", (status, line) => {
     render(<ApprovalCard part={{ ...part(), status }} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deny" })).toBeNull();
+    expect(screen.getByText(line.split(":")[0]!, { exact: false }).textContent).toBe(line);
   });
   it("does not offer approval when the agent has finished", () => {
     useApp.setState({ running: false });
     render(<ApprovalCard part={part()} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(screen.getByText(/Not answered/)).toBeTruthy();
   });
   it("displays the automatic reviewer result and reason", () => {
     render(<ApprovalReview part={{ kind: "approvalReview", id: "r", status: "denied", detail: "Outside scope" }} />);

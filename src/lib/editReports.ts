@@ -45,6 +45,8 @@ const sameLayer = (a: EditLayer, b: EditLayer) =>
   a.held === b.held &&
   a.selected === b.selected &&
   a.depth === b.depth &&
+  a.canUp === b.canUp &&
+  a.canDown === b.canDown &&
   sameList(a.path, b.path, Object.is);
 
 /** Whether two layer lists show the same layers, in the same order and state. */
@@ -57,9 +59,12 @@ export function sameTexts(a: readonly string[], b: readonly string[]): boolean {
   return sameList(a, b, Object.is);
 }
 
+const sameFont = (a: FontChoice, b: FontChoice) =>
+  a.name === b.name && a.stack === b.stack && sameList(a.weights ?? [], b.weights ?? [], Object.is);
+
 /** Whether two lists of the deck's fonts offer the same ones. */
 export function sameFonts(a: readonly FontChoice[], b: readonly FontChoice[]): boolean {
-  return sameList(a, b, sameFields);
+  return sameList(a, b, sameFont);
 }
 
 /** Whether two lists of the deck's colors offer the same ones. */

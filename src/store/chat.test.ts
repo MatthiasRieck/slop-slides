@@ -10,6 +10,8 @@ import {
   DECK,
   freshStore,
   type Handler,
+  historyEntry,
+  historyStatus,
   prompts,
   resetBackend,
   type TestStore,
@@ -328,15 +330,17 @@ describe("sending a message", () => {
       expect(prompts()[0]).toContain("Bigger");
     });
 
-    it("takes a comment off its slide once it is sent, in the deck file too, and keeps it in the chat", async () => {
+    it("marks a comment as sent once it went out, in the deck file too, and does not send it again", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK, selected: "intro", comments, commentsHeld: { a: "stale" } });
       await useApp.getState().send("One", { includeSlide: true, attachments: [] });
-      // Only the comments sent go: the other slide's stays.
-      expect(useApp.getState().comments).toEqual({ intro: [], outro: [second] });
+      // Only the comments sent are marked: the other slide's is still to send.
+      expect(useApp.getState().comments).toEqual({ intro: [{ ...first, sent: true }], outro: [second] });
       expect(useApp.getState().commentsHeld).toEqual({});
       expect(useApp.getState().messages[0]).toMatchObject({ comments: [{ id: "a", text: first.text }] });
-      expect(calls("save_comments").at(-1)).toMatchObject({ comments: { outro: [second] } });
+      expect(calls("save_comments").at(-1)).toMatchObject({
+        comments: { intro: [{ id: "a", sent: true }], outro: [second] },
+      });
       const order = invoke.mock.calls.map(([c]) => c);
       expect(order.indexOf("save_comments")).toBeLessThan(order.indexOf("send_message"));
       finish(useApp);
@@ -344,7 +348,7 @@ describe("sending a message", () => {
       expect(prompts()[1]).not.toContain("Comments from the user");
     });
 
-    it("takes sent comments off even when the turn fails", async () => {
+    it("marks comments as sent even when the turn fails", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK, selected: "intro", comments });
       invoke.mockImplementation(async (command: string) => {
@@ -352,14 +356,14 @@ describe("sending a message", () => {
         return undefined;
       });
       await useApp.getState().send("One", { includeSlide: true, attachments: [] });
-      expect(useApp.getState().comments.intro).toEqual([]);
+      expect(useApp.getState().comments.intro).toEqual([{ ...first, sent: true }]);
     });
 
-    it("keeps a comment changed since it was sent", async () => {
+    it("leaves a comment changed since it was sent as one to send", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK, selected: "intro", comments });
-      useApp.getState().removeSentComments([{ ...first, text: "What it said before" }, second]);
-      expect(useApp.getState().comments).toEqual({ intro: [first], outro: [] });
+      useApp.getState().markCommentsSent([{ ...first, text: "What it said before" }, second]);
+      expect(useApp.getState().comments).toEqual({ intro: [first], outro: [{ ...second, sent: true }] });
     });
 
     it("keeps comments held back on their slides", async () => {
@@ -833,5 +837,151 @@ describe("queueing and steering", () => {
     useApp.setState({ running: false });
     await useApp.getState().resetChat();
     expect(useApp.getState().queue).toEqual([]);
+  });
+});
+
+describe("editing a sent message", () => {
+  const conversation = () => [
+    { ...userMessage("First"), id: "m0" },
+    assistantMessage({ id: "a0" }),
+    { ...userMessage("Make it blue"), id: "m1" },
+    assistantMessage({ id: "a1" }),
+  ];
+
+  it("takes the chat and the agent back to before it, undoes its turn's changes when newest, and sends the new text", async () => {
+    const useApp = await freshStore();
+    const turn = historyEntry("Make it blue", "chat", "m1");
+    backend({ undo_deck: () => ({ deck: DECK, entry: turn, status: historyStatus(null, turn) }) });
+    useApp.setState({ deck: DECK, selected: "intro", messages: conversation(), history: historyStatus(turn) });
+    await useApp.getState().editMessage("m1", "Make it green", { includeSlide: false, attachments: [] });
+    expect(calls("rewind_chat")).toEqual([
+      { id: "/decks/talk", message: "m1", note: expect.stringContaining('edited their message "Make it blue"') },
+    ]);
+    expect(calls("rewind_chat")[0]!.note as string).toContain("were undone");
+    expect(calls("undo_deck")).toHaveLength(1);
+    // The turn's message was gone from the chat before its changes were undone: nothing to ask.
+    expect(useApp.getState().rewindAsk).toBeNull();
+    const ids = useApp.getState().messages.map((m) => m.role === "user" && m.text);
+    expect(ids).toEqual(["First", false, "Make it green", false]);
+    expect(prompts().at(-1)).toMatch(/Make it green$/);
+  });
+
+  it("leaves the deck alone when its changes are not the newest", async () => {
+    const useApp = await freshStore();
+    useApp.setState({
+      deck: DECK,
+      messages: conversation(),
+      history: historyStatus(historyEntry("A hand edit")),
+    });
+    await useApp.getState().editMessage("m1", "Make it green", { includeSlide: false, attachments: [] });
+    expect(calls("undo_deck")).toEqual([]);
+    expect(calls("rewind_chat")[0]!.note as string).toContain("as they are now");
+  });
+
+  it("sends a message that is no longer in the chat as a new one, and does nothing while the agent works", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, messages: conversation(), running: true });
+    await useApp.getState().editMessage("m1", "Green", { includeSlide: false, attachments: [] });
+    expect(useApp.getState().messages).toHaveLength(4);
+    useApp.setState({ running: false });
+    await useApp.getState().editMessage("gone", "Green", { includeSlide: false, attachments: [] });
+    expect(calls("rewind_chat")).toEqual([]);
+    expect(useApp.getState().messages).toHaveLength(6);
+  });
+});
+
+describe("what a turn changed in the deck", () => {
+  it("is put on the reply once the turn is over, from the deck file as it is then", async () => {
+    const changed = {
+      ...DECK,
+      slides: [
+        { ...DECK.slides[0]!, hash: "new" },
+        ...DECK.slides.slice(1),
+        { ...DECK.slides[0]!, id: "added", hash: "x" },
+      ],
+    };
+    const { useApp, emit } = await withBridge({ load_deck: () => changed });
+    useApp.setState({ deck: DECK, selected: "intro", chatKey: "/decks/talk" });
+    await useApp.getState().send("Change it", { includeSlide: false, attachments: [] });
+    const message = useApp.getState().messages[0]!.id;
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => {
+      const reply = useApp.getState().messages[1] as AssistantMessage;
+      expect(reply.changes).toEqual({ message, changed: ["intro"], added: ["added"], removed: 0 });
+    });
+  });
+
+  it("is left out when no slide changed", async () => {
+    const { useApp, emit } = await withBridge({ load_deck: () => DECK });
+    useApp.setState({ deck: DECK, chatKey: "/decks/talk" });
+    await useApp.getState().send("Just a question", { includeSlide: false, attachments: [] });
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(calls("load_deck")).toHaveLength(1));
+    expect((useApp.getState().messages[1] as AssistantMessage).changes).toBeUndefined();
+  });
+});
+
+describe("stopping a turn", () => {
+  it("says it is stopping until the turn ends", async () => {
+    const { useApp, emit } = await withBridge();
+    useApp.setState({ deck: DECK, chatKey: "/decks/talk" });
+    await useApp.getState().send("Go", { includeSlide: false, attachments: [] });
+    useApp.getState().interrupt();
+    expect(useApp.getState().stopping).toBe(true);
+    expect(calls("interrupt_agent")).toEqual([{ id: "/decks/talk" }]);
+    emit({ type: "finished", interrupted: true });
+    expect(useApp.getState().stopping).toBe(false);
+  });
+});
+
+describe("an approval answered", () => {
+  it("keeps the answer on its part and saves the chat", async () => {
+    const useApp = await freshStore();
+    const approval = { id: "ap", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: [] };
+    useApp.setState({
+      messages: [assistantMessage({ parts: [{ kind: "approval", approval, status: "pending" }] })],
+    });
+    useApp.getState().approvalAnswered("ap", "decline");
+    expect((useApp.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ decision: "decline" });
+    expect(calls("save_chat")).toHaveLength(1);
+  });
+});
+
+describe("the name of the chat on show", () => {
+  it("is read with the chat, and taken along to a past chat", async () => {
+    const { loadChat } = await import("./chat");
+    const useApp = await freshStore();
+    backend({ chat_title: () => "Pricing", select_chat_thread: () => ({ chat: [], provider: null, title: "Older" }) });
+    await loadChat(useApp, "/decks/talk/deck.html");
+    expect(useApp.getState().chatTitle).toBe("Pricing");
+    await useApp.getState().selectChatThread("t");
+    expect(useApp.getState().chatTitle).toBe("Older");
+    await useApp.getState().resetChat();
+    expect(useApp.getState().chatTitle).toBeNull();
+  });
+
+  it("goes by the first message when it cannot be read", async () => {
+    const { loadChat } = await import("./chat");
+    const useApp = await freshStore();
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "chat_title") throw new Error("gone");
+      return null;
+    });
+    await loadChat(useApp, "/decks/talk/deck.html");
+    expect(useApp.getState().chatTitle).toBeNull();
+  });
+});
+
+describe("referring to other slides", () => {
+  it("sends the slides referred to, leaving out the one it is about and those gone", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selected: "intro" });
+    await useApp.getState().send("Like these", {
+      includeSlide: true,
+      attachments: [],
+      slides: ["outro", "intro", "deleted", "outro"],
+    });
+    expect(useApp.getState().messages[0]).toMatchObject({ slide: "intro", slides: ["outro"] });
+    expect(prompts()[0]).toContain('The user also refers to: <section id="outro"> (slide 3)');
   });
 });

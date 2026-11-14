@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import {
+  type ComponentProps,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -15,6 +16,46 @@ import { isTextField } from "../lib/keys";
 import { openLayer } from "../lib/layers";
 import { cn } from "../lib/utils";
 import { ToolButton } from "./Button";
+
+/** How wide a dialog's box is: `sm` for a question, `md` for a form, `lg` for what shows a lot. */
+export type DialogSize = "sm" | "md" | "lg";
+
+const WIDTHS: Record<DialogSize, string> = { sm: "w-96", md: "w-[32rem]", lg: "w-[44rem]" };
+
+/** The box every dialog with a `size` gets: one surface, one edge, one shadow, never past the window. */
+const BOX =
+  "flex max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] flex-col gap-3 rounded-xl border bg-card p-5 text-foreground shadow-dialog outline-none";
+
+/** A dialog's heading: the question it asks or the name of what it shows. */
+export function DialogTitle({ className, ...props }: ComponentProps<"h2">) {
+  return <h2 {...props} className={cn("text-sm font-semibold", className)} />;
+}
+
+/** What a dialog says under its heading. */
+export function DialogText({ className, ...props }: ComponentProps<"p">) {
+  return <p {...props} className={cn("selectable text-xs leading-relaxed text-muted-foreground", className)} />;
+}
+
+/**
+ * The buttons at the bottom of a dialog, at its right: the one that stays first, the one that goes
+ * ahead last. `aside` is a third way out that is neither (not saving, say), set apart at the left.
+ */
+export function DialogActions({
+  aside,
+  className,
+  children,
+}: {
+  aside?: ReactNode;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("mt-1 flex items-center justify-end gap-2", className)}>
+      {aside !== undefined && <div className="mr-auto flex items-center gap-2">{aside}</div>}
+      {children}
+    </div>
+  );
+}
 
 /** The app under a dialog: everything but what is rendered into the body beside it. */
 const appRoot = () => document.getElementById("root");
@@ -42,14 +83,23 @@ function holdApp(): () => void {
  *
  * It renders into the body, so nothing it is used in clips it. The scrim fades in and the box
  * comes in with it (see `enter-fade` and `enter-pop` in src/index.css).
+ *
+ * Every dialog looks the same: give it a `size` and a `title` (and what it says as `description`),
+ * its content, and its buttons in `DialogActions`. `className` then only adds to the box.
  */
 export function Dialog(props: {
   /** The dialog's accessible name. */
   label: string;
   onClose: () => void;
-  /** The box's classes. */
-  className: string;
-  /** What goes at the top of the box: the heading, and anything said under it. */
+  /** How wide the box is. With it, the box has the dialogs' one look; without, `className` is all of it. */
+  size?: DialogSize;
+  /** The box's classes: all of them without a `size`, else what is added to the standard box. */
+  className?: string;
+  /** The heading, in the dialogs' one style. */
+  title?: ReactNode;
+  /** What is said under the heading. */
+  description?: ReactNode;
+  /** What goes at the top of the box instead of a `title`: a heading of the caller's own. */
   heading?: ReactNode;
   /** The keys that close the dialog; Escape unless given. */
   closeKeys?: string[];
@@ -123,21 +173,25 @@ export function Dialog(props: {
     }
   };
 
-  const heading = props.closeButton ? (
-    <div className="mb-3 flex items-center justify-between">
-      {props.heading}
+  const sized = props.size !== undefined;
+  const title = props.title !== undefined ? <DialogTitle>{props.title}</DialogTitle> : props.heading;
+  const header = props.closeButton ? (
+    <div className={cn("flex items-center justify-between", !sized && "mb-3")}>
+      {title}
       <ToolButton variant="panel" label="Close" onClick={onClose}>
         <X />
       </ToolButton>
     </div>
+  ) : props.title !== undefined ? (
+    title
   ) : (
-    props.heading !== undefined && <div>{props.heading}</div>
+    title !== undefined && <div>{title}</div>
   );
 
   return createPortal(
     <div
       data-testid={props.backdropTestId}
-      className="enter-fade fixed inset-0 z-50 flex items-center justify-center bg-scrim"
+      className="enter-fade fixed inset-0 z-overlay flex items-center justify-center bg-scrim"
       onPointerDown={
         props.closeOnBackdrop
           ? (event) => {
@@ -154,9 +208,11 @@ export function Dialog(props: {
         aria-label={props.label}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={cn("enter-pop", props.className)}
+        className={cn("enter-pop", props.size !== undefined && [BOX, WIDTHS[props.size]], props.className)}
       >
-        {heading}
+        {header}
+        {/* Close under the heading it explains. */}
+        {props.description !== undefined && <DialogText className="-mt-1.5">{props.description}</DialogText>}
         {props.children}
       </div>
     </div>,

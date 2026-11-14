@@ -10,13 +10,68 @@ export function formatElapsed(ms: number): string {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}:${minutes % 60 < 10 ? "0" : ""}${clock}` : clock;
 }
 
-/** Time left of `minutes` after `elapsedMs`, like `12:30`, or `+1:05` once over; and whether it's over. */
-export function remaining(elapsedMs: number, minutes: number): { text: string; over: boolean } {
-  const left = minutes * 60_000 - elapsedMs;
+/** How much of a planned time is little enough left to warn of: a tenth of it, and at least a minute. */
+const WARN_SHARE = 0.1;
+const WARN_LEAST_MS = 60_000;
+
+/**
+ * Time left of `minutes` after `elapsedMs`, like `12:30`, or `+1:05` once over; whether it's
+ * over, and whether it soon will be (`low`: less than a tenth of the time left, or a minute).
+ */
+export function remaining(elapsedMs: number, minutes: number): { text: string; over: boolean; low: boolean } {
+  const planned = minutes * 60_000;
+  const left = planned - elapsedMs;
   const over = left < 0;
   // Counts seconds up (rounding the other way) once over, so the display never sticks at 0:00.
   const text = formatElapsed(over ? -left : Math.ceil(left / 1000) * 1000);
-  return { text: over ? `+${text}` : text, over };
+  const low = !over && left < Math.max(WARN_LEAST_MS, planned * WARN_SHARE);
+  return { text: over ? `+${text}` : text, over, low };
+}
+
+/**
+ * How long each slide was on screen in a show, from its first move on: the time on the slide the
+ * show opened on before anyone moved counts for nothing, as a rehearsal starts when the talk
+ * does. `on` is the slide on screen (null for none, the end of the show), `since` when it came.
+ */
+export interface SlideTimings {
+  begun: boolean;
+  on: string | null;
+  since: number | null;
+  spent: Record<string, number>;
+}
+
+export const NO_TIMINGS: SlideTimings = { begun: false, on: null, since: null, spent: {} };
+
+/** `timings` with `slide` on screen from `now` on. */
+export function timeSlide(timings: SlideTimings, slide: string | null, now: number): SlideTimings {
+  // The slide the show opens on, as it comes to be known.
+  if (!timings.begun && timings.since === null && (timings.on === null || timings.on === slide)) {
+    return { ...timings, on: slide };
+  }
+  if (slide === timings.on && timings.since !== null) return timings;
+  return { begun: true, on: slide, since: now, spent: spentBy(timings, now) };
+}
+
+/** What `timings` add up to by `now`, the slide on screen counted to then. */
+export function spentBy(timings: SlideTimings, now: number): Record<string, number> {
+  const { on, since, spent } = timings;
+  if (on === null || since === null) return spent;
+  return { ...spent, [on]: (spent[on] ?? 0) + Math.max(0, now - since) };
+}
+
+/** The least time a slide must have had in a show for it to count as a run through the slides. */
+const REHEARSED_LEAST_MS = 2000;
+
+/**
+ * The seconds each of the `shown` slides had in a show (`spent`, ms), to keep as their planned
+ * times: only when the show went through all of them, each for a moment at least, as a run
+ * through the talk does. Null otherwise. Locked slides keep the time they have.
+ */
+export function rehearsedTimes(spent: Record<string, number>, shown: Slide[]): Record<string, number> | null {
+  if (shown.length < 2 || shown.some((s) => (spent[s.id] ?? 0) < REHEARSED_LEAST_MS)) return null;
+  const times: Record<string, number> = {};
+  for (const slide of shown) if (!slide.locked) times[slide.id] = Math.round(spent[slide.id]! / 1000);
+  return Object.keys(times).length > 0 ? times : null;
 }
 
 const BUDGET_KEY = "slopslide.presenterBudget";

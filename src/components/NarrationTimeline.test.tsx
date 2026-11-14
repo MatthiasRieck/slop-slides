@@ -2,7 +2,10 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { invoke } from "../test/tauri";
 
-vi.mock("../lib/timelinePlayback", () => ({ playTimeline: vi.fn() }));
+vi.mock("../lib/timelinePlayback", async (original) => ({
+  ...(await original<typeof import("../lib/timelinePlayback")>()),
+  playTimeline: vi.fn(),
+}));
 // Counted, to tell what renders and what is worked out again: a slide's block says how long it
 // shows, a waveform draws its path, and the timeline is laid out.
 vi.mock("../lib/timeline", async (original) => {
@@ -15,6 +18,7 @@ vi.mock("../lib/waveform", async (original) => {
 });
 
 import type { Deck, RailEdit, Slide } from "../lib/api";
+import { formatKeys } from "../lib/keys";
 import { formatDuration } from "../lib/narrationAudio";
 import { forgetNarration } from "../lib/narrationCache";
 import { getSlideClock, onSlideClock } from "../lib/slideClock";
@@ -93,7 +97,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   useApp.setState({ deck: null, selected: null, editing: false, comments: {} });
-  useNarration.setState({ audio: {}, audioDeck: null });
+  useNarration.setState({ audio: {}, audioDeck: null, settings: {}, settingsDeck: null });
 });
 
 describe("NarrationTimeline", () => {
@@ -318,9 +322,16 @@ describe("NarrationTimeline", () => {
     expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: 5, narrationStart: 7.5 }]);
   });
 
-  it("does not move the narration of a locked slide", () => {
+  it("does not move the narration of a locked slide", async () => {
     open({ intro: { narration: "Hello", locked: true } });
-    expect((screen.getByRole("button", { name: "Narration of slide 1" }) as HTMLButtonElement).disabled).toBe(true);
+    const clip = screen.getByRole("button", { name: "Narration of slide 1" });
+    expect(clip.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.pointerDown(clip, { clientX: 100, button: 0 });
+    fireEvent.pointerMove(clip, { clientX: 160 });
+    fireEvent.pointerUp(clip, { clientX: 160 });
+    fireEvent.keyDown(clip, { key: "ArrowRight" });
+    await act(async () => {});
+    expect(timingCalls()).toEqual([]);
   });
 
   it("ignores a press with another button", () => {
@@ -370,7 +381,7 @@ describe("NarrationTimeline", () => {
     open();
     const transport = screen.getByTestId("transport");
     expect([...transport.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(
-      ["Back to start", "Step back", "Play", "Step forward"],
+      ["Back to start", "Step back", "Play", "Step forward", "Playback speed 1×"],
     );
     const bar = transport.parentElement!;
     expect(bar.className).toContain("grid-cols-[1fr_auto_1fr]");
@@ -427,9 +438,9 @@ describe("NarrationTimeline", () => {
     watch({ intro: { narration: "Hello", duration: 2, narrationStart: 1 } });
     const edge = screen.getByRole("button", { name: "End of slide 1" }) as HTMLButtonElement;
     const clip = screen.getByRole("button", { name: "Narration of slide 1" }) as HTMLButtonElement;
-    expect([edge.disabled, clip.disabled]).toEqual([true, true]);
+    expect([edge.disabled, clip.getAttribute("aria-disabled")]).toEqual([true, "true"]);
     expect(edge.title).toBe("Switch to Edit to change the timing");
-    expect(screen.queryByRole("button", { name: "Reset timing" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset all timing" })).toBeNull();
     // Where a disabled button still hears the pointer or a key, they move nothing either.
     for (const handle of [edge, clip]) {
       fireEvent.pointerDown(handle, { clientX: 100 });
@@ -440,8 +451,8 @@ describe("NarrationTimeline", () => {
     expect(timingCalls()).toEqual([]);
     // Edit mode has them back.
     act(() => useApp.setState({ editing: true }));
-    expect([edge.disabled, clip.disabled]).toEqual([false, false]);
-    expect(screen.getByRole("button", { name: "Reset timing" })).toBeTruthy();
+    expect([edge.disabled, clip.getAttribute("aria-disabled")]).toEqual([false, null]);
+    expect(screen.getByRole("button", { name: "Reset all timing" })).toBeTruthy();
   });
 
   it("leaves the stage to the editor in Edit: scrubbing moves the playhead without freezing the slide", () => {
@@ -531,10 +542,10 @@ describe("NarrationTimeline", () => {
 
   it("offers to reset the timing only when there is some", async () => {
     const { unmount } = open();
-    expect(screen.queryByRole("button", { name: "Reset timing" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset all timing" })).toBeNull();
     unmount();
     open({ intro: { duration: 2, narrationStart: 1 }, "#2": { locked: true, duration: 2 } });
-    fireEvent.click(screen.getByRole("button", { name: "Reset timing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset all timing" }));
     await act(async () => {});
     expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: null, narrationStart: null }]);
   });
@@ -610,9 +621,9 @@ describe("NarrationTimeline", () => {
 
   it("zooms in steps", () => {
     open();
-    const out = screen.getByRole("button", { name: "Zoom out" }) as HTMLButtonElement;
+    const out = screen.getByRole("button", { name: "Zoom timeline out" }) as HTMLButtonElement;
     expect(out.disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
     expect(out.disabled).toBe(false);
   });
 });
@@ -831,7 +842,7 @@ describe("NarrationTimeline: what playing and scrubbing cost", () => {
     watch();
     laidOut.mockClear();
     fireEvent.pointerDown(ruler(), { clientX: 150 });
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
     act(() => useApp.getState().select("outro"));
     expect(laidOut).not.toHaveBeenCalled();
   });
@@ -846,7 +857,7 @@ describe("NarrationTimeline: what playing and scrubbing cost", () => {
     fireEvent.pointerMove(edge, { clientX: 140 });
     expect(laidOut).toHaveBeenCalledTimes(1);
     // Something else renders the timeline meanwhile.
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
     expect(laidOut).toHaveBeenCalledTimes(1);
     fireEvent.pointerMove(edge, { clientX: 160 });
     expect(laidOut).toHaveBeenCalledTimes(2);
@@ -946,13 +957,55 @@ describe("NarrationTimeline: keys", () => {
   it("leaves Space and the arrows alone on the buttons of its bar, and anywhere else", () => {
     play.mockReturnValue(vi.fn());
     watch();
-    const zoom = screen.getByRole("button", { name: "Zoom in" });
+    const zoom = screen.getByRole("button", { name: "Zoom timeline in" });
     expect(press(zoom, { key: " " }).defaultPrevented).toBe(false);
     expect(press(zoom, { key: "ArrowRight" }).defaultPrevented).toBe(false);
-    expect(press(document.body, { key: " " }).defaultPrevented).toBe(false);
     expect(press(document.body, { key: "ArrowRight" }).defaultPrevented).toBe(false);
     expect(play).not.toHaveBeenCalled();
     expect(time()).toBe("0:00.0 / 0:15");
+  });
+
+  it("plays and pauses with Space from anywhere but a field, a button or the slide", () => {
+    const stop = vi.fn();
+    play.mockReturnValue(stop);
+    watch();
+    const field = document.createElement("input");
+    document.body.append(field);
+    expect(press(field, { key: " " }).defaultPrevented).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+    expect(press(document.body, { key: " " }).defaultPrevented).toBe(true);
+    expect(play).toHaveBeenCalledOnce();
+    press(document.body, { key: " " });
+    expect(stop).toHaveBeenCalled();
+    // Held down, it does not flicker between playing and pausing.
+    press(document.body, { key: " ", repeat: true });
+    expect(play).toHaveBeenCalledOnce();
+    field.remove();
+  });
+
+  it("steps back with J, pauses with K and plays faster with each L", () => {
+    const stop = vi.fn();
+    play.mockReturnValue(stop);
+    watch();
+    press(ruler(), { key: "End" });
+    press(ruler(), { key: "j" });
+    expect(time()).toBe("0:14.0 / 0:15");
+    press(ruler(), { key: "Home" });
+    press(ruler(), { key: "l" });
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play.mock.lastCall?.[4]).toBe(1);
+    press(ruler(), { key: "l" });
+    // Faster: on from where it is, at 1.5 times.
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(play.mock.lastCall?.[4]).toBe(1.5);
+    expect(screen.getByTestId("playback-rate").textContent).toBe("1.5×");
+    press(ruler(), { key: "k" });
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+    // The rate stays for the next time it plays; its chip goes round.
+    fireEvent.click(screen.getByTestId("playback-rate"));
+    expect(screen.getByTestId("playback-rate").textContent).toBe("2×");
+    fireEvent.click(screen.getByTestId("playback-rate"));
+    expect(screen.getByTestId("playback-rate").textContent).toBe("1×");
   });
 
   it("leaves the arrows to an edge or a narration being moved, in Edit", async () => {
@@ -1037,7 +1090,13 @@ describe("NarrationTimeline: finding one's way", () => {
 
   it("says where narration comes from when there is none", () => {
     const view = open({});
-    expect(screen.getByTestId("no-narration").textContent).toBe("No narration yet. Write it in the Narration tab.");
+    expect(screen.getByTestId("no-narration").textContent).toBe("No narration yet.Write narration");
+    const showNarration = vi.fn();
+    const original = useApp.getState().showNarration;
+    useApp.setState({ showNarration });
+    fireEvent.click(screen.getByRole("button", { name: "Write narration" }));
+    expect(showNarration).toHaveBeenCalled();
+    useApp.setState({ showNarration: original });
     view.unmount();
     open();
     expect(screen.queryByTestId("no-narration")).toBeNull();
@@ -1045,15 +1104,34 @@ describe("NarrationTimeline: finding one's way", () => {
 
   it("says what its zoom buttons do, and why one cannot", () => {
     watch();
-    const out = screen.getByRole("button", { name: "Zoom out" }) as HTMLButtonElement;
-    const zoomIn = screen.getByRole("button", { name: "Zoom in" }) as HTMLButtonElement;
+    const out = screen.getByRole("button", { name: "Zoom timeline out" }) as HTMLButtonElement;
+    const zoomIn = screen.getByRole("button", { name: "Zoom timeline in" }) as HTMLButtonElement;
     expect(out.disabled).toBe(true);
     expect(out.title).toBe("The whole timeline is in sight");
-    expect(zoomIn.title).toBe("Zoom in, around the playhead");
-    for (let i = 0; i < 4; i++) fireEvent.click(zoomIn);
+    expect(zoomIn.title).toBe(`Zoom timeline in, around the playhead (${formatKeys("mod")}-scroll or pinch)`);
+    const level = screen.getByTestId("timeline-zoom") as HTMLButtonElement;
+    expect([level.textContent, level.disabled]).toEqual(["1×", true]);
+    for (let i = 0; i < 5; i++) fireEvent.click(zoomIn);
     expect(zoomIn.disabled).toBe(true);
     expect(zoomIn.title).toBe("Zoomed in all the way");
-    expect(out.title).toBe("Zoom out");
+    expect(out.title).toBe(`Zoom timeline out (${formatKeys("mod")}-scroll or pinch)`);
+    expect(level.textContent).toBe("32×");
+    // The readout fits the whole timeline in again.
+    fireEvent.click(level);
+    expect(level.textContent).toBe("1×");
+    expect(out.disabled).toBe(true);
+  });
+
+  it("zooms with ⌘/Ctrl and the wheel, or a pinch, and leaves a plain wheel to scrolling", () => {
+    watch();
+    const scroller = screen.getByTestId("ruler").parentElement!.parentElement!;
+    const level = () => screen.getByTestId("timeline-zoom").textContent;
+    const plain = new WheelEvent("wheel", { deltaY: -200, cancelable: true, bubbles: true });
+    act(() => void scroller.dispatchEvent(plain));
+    expect([level(), plain.defaultPrevented]).toEqual(["1×", false]);
+    const pinch = new WheelEvent("wheel", { deltaY: -200, ctrlKey: true, cancelable: true, bubbles: true });
+    act(() => void scroller.dispatchEvent(pinch));
+    expect([level(), pinch.defaultPrevented]).toEqual(["2.7×", true]);
   });
 
   describe("zoomed in", () => {
@@ -1076,12 +1154,12 @@ describe("NarrationTimeline: finding one's way", () => {
       const ruler = screen.getByTestId("ruler");
       ruler.getBoundingClientRect = () => ({ left: 0, width: 400 }) as DOMRect;
       fireEvent.pointerDown(ruler, { clientX: 200 });
-      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
       // Twice as wide, it is at 400: scrolled by 200, it is still 200 from the left.
       expect(scroller.scrollLeft).toBe(200);
-      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
       expect(scroller.scrollLeft).toBe(600);
-      fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+      fireEvent.click(screen.getByRole("button", { name: "Zoom timeline out" }));
       expect(scroller.scrollLeft).toBe(200);
     });
 
@@ -1101,8 +1179,8 @@ describe("NarrationTimeline: finding one's way", () => {
       try {
         watch();
         const scroller = sized();
-        fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-        fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+        fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
+        fireEvent.click(screen.getByRole("button", { name: "Zoom timeline in" }));
         // 1600 pixels of track over 15 seconds, 400 of them in sight.
         act(() => {
           for (const callback of resized) callback();
@@ -1122,7 +1200,7 @@ describe("NarrationTimeline: finding one's way", () => {
 });
 
 describe("NarrationTimeline: timing", () => {
-  const openTiming = () => fireEvent.click(screen.getByRole("button", { name: "Timing" }));
+  const openTiming = () => fireEvent.click(screen.getByRole("button", { name: "Timing…" }));
   const field = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
   const time = () => screen.getByTestId("timeline-time").textContent;
 
@@ -1134,8 +1212,27 @@ describe("NarrationTimeline: timing", () => {
     expect(field("Seconds per slide without narration").value).toBe("5");
     fireEvent.change(field("Seconds per slide without narration"), { target: { value: "8" } });
     expect(time()).toBe("0:00.0 / 0:24");
-    // Saved as it is typed, where the video export and the show's Play read it.
-    expect(JSON.parse(localStorage.getItem("slopslide.video") ?? "{}").secondsPerSlide).toBe(8);
+    // Saved with the deck as it is typed, where the video export and the show's Play read it.
+    expect(invoke).toHaveBeenCalledWith("set_narration_timing", {
+      id: deckOf().id,
+      timing: { secondsPerSlide: 8, pauseBefore: 0.5, pauseAfter: 1 },
+    });
+    expect(localStorage.getItem("slopslide.video")).toBeNull();
+  });
+
+  it("starts from the deck's own times, or from what this computer last used for a deck without any", () => {
+    localStorage.setItem("slopslide.video", JSON.stringify({ secondsPerSlide: 6, fps: 30 }));
+    const view = open({});
+    expect(time()).toBe("0:00.0 / 0:18");
+    view.unmount();
+    useNarration.setState({
+      settings: { timing: { secondsPerSlide: 2, pauseBefore: 0, pauseAfter: 0 } },
+      settingsDeck: deckOf().id,
+    });
+    open({});
+    expect(time()).toBe("0:00.0 / 0:06");
+    openTiming();
+    expect(field("Seconds per slide without narration").value).toBe("2");
   });
 
   it("sets the pauses around narration", async () => {
@@ -1148,10 +1245,10 @@ describe("NarrationTimeline: timing", () => {
     fireEvent.change(field("Pause before narration"), { target: { value: "3" } });
     fireEvent.change(field("Pause after narration"), { target: { value: "4" } });
     expect(time()).toBe("0:00.0 / 0:20");
-    const stored = JSON.parse(localStorage.getItem("slopslide.video") ?? "{}");
-    expect([stored.pauseBefore, stored.pauseAfter]).toEqual([3, 4]);
-    // It keeps what else is stored: whether a video speaks its narration is the video's choice.
-    expect(stored.narration).toBe(true);
+    expect(invoke).toHaveBeenLastCalledWith("set_narration_timing", {
+      id: deckOf().id,
+      timing: { secondsPerSlide: 5, pauseBefore: 3, pauseAfter: 4 },
+    });
   });
 
   it("says what is wrong with a time it cannot use, and does not save it", () => {
@@ -1159,7 +1256,7 @@ describe("NarrationTimeline: timing", () => {
     openTiming();
     fireEvent.change(field("Seconds per slide without narration"), { target: { value: "0" } });
     expect(screen.getByRole("alert").textContent).toMatch(/0.5 to 600 seconds/);
-    expect(localStorage.getItem("slopslide.video")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("set_narration_timing", expect.anything());
     expect(time()).toBe("0:00.0 / 0:15");
     fireEvent.change(field("Seconds per slide without narration"), { target: { value: "6" } });
     expect(screen.queryByRole("alert")).toBeNull();
@@ -1174,5 +1271,127 @@ describe("NarrationTimeline: timing", () => {
     fireEvent.keyDown(field("Seconds per slide without narration"), { key: "ArrowRight" });
     expect(play).not.toHaveBeenCalled();
     expect(time()).toBe("0:00.0 / 0:15");
+  });
+});
+
+describe("NarrationTimeline: clips, snapping and its own size", () => {
+  /** The track 1500 pixels wide: 100 pixels a second for the three slides of five seconds. */
+  function wide() {
+    const line = screen.getByTestId("ruler").parentElement as HTMLElement;
+    line.getBoundingClientRect = () => ({ left: 0, width: 1500 }) as DOMRect;
+  }
+
+  it("goes to a narration's slide and start when it is pressed, also in View", () => {
+    watch({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
+    const clip = screen.getByRole("button", { name: /^Narration of slide 3/ });
+    expect(clip.title).toBe(
+      "Narration of slide 3, not spoken yet · 0:10.5 – 0:10.9 (0.4s). Double-click for its script.",
+    );
+    fireEvent.click(clip);
+    expect(useApp.getState().selected).toBe("outro");
+    expect(screen.getByTestId("timeline-time").textContent).toBe("0:10.5 / 0:15");
+  });
+
+  it("opens a narration's script with a double-click", () => {
+    const showNarration = vi.fn();
+    const original = useApp.getState().showNarration;
+    watch();
+    useApp.setState({ showNarration });
+    act(() => useApp.getState().select("outro"));
+    fireEvent.doubleClick(screen.getByRole("button", { name: "Narration of slide 1" }));
+    expect(useApp.getState().selected).toBe("intro");
+    expect(showNarration).toHaveBeenCalled();
+    useApp.setState({ showNarration: original });
+  });
+
+  it("does not go anywhere after a drag", async () => {
+    open({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
+    wide();
+    const clip = screen.getByRole("button", { name: "Narration of slide 1" });
+    fireEvent.pointerDown(clip, { clientX: 100, button: 0 });
+    fireEvent.pointerMove(clip, { clientX: 250, altKey: true });
+    // While it is dragged, it says where it starts.
+    expect(screen.getByTestId("clip-time").textContent).toBe("Starts 0:02.0");
+    fireEvent.pointerUp(clip, { clientX: 250 });
+    fireEvent.click(clip);
+    await act(async () => {});
+    expect(screen.queryByTestId("clip-time")).toBeNull();
+    expect(screen.getByTestId("timeline-time").textContent).toMatch(/^0:00\.0/);
+  });
+
+  it("marks out-of-date audio on its clip as a warning", async () => {
+    open();
+    act(() => useNarration.setState({ audio: { intro: { slide: "intro", state: "stale", seconds: 3 } } }));
+    await act(async () => {});
+    const clip = screen.getByRole("button", { name: "Narration of slide 1, out of date" });
+    expect(clip.className).toContain("border-warning");
+    expect(clip.title).toMatch(/update it in the Narration tab/);
+  });
+
+  it("snaps a slide's end to where its narration ends with the pause after it, showing where; Alt lets it go", async () => {
+    open();
+    wide();
+    const edge = screen.getByRole("button", { name: "End of slide 1" });
+    // The narration of slide 1 ends at 3.5 s, 4.5 s with the pause after it. Dragged to 4.55 s:
+    fireEvent.pointerDown(edge, { clientX: 500, button: 0 });
+    fireEvent.pointerMove(edge, { clientX: 455 });
+    expect(screen.getByTestId("snap-guide").style.left).toBe("30%");
+    fireEvent.pointerUp(edge, { clientX: 455 });
+    await act(async () => {});
+    expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: 4.5, narrationStart: null }]);
+    expect(screen.queryByTestId("snap-guide")).toBeNull();
+    fireEvent.pointerDown(edge, { clientX: 450, button: 0 });
+    fireEvent.pointerMove(edge, { clientX: 455, altKey: true });
+    expect(screen.queryByTestId("snap-guide")).toBeNull();
+    fireEvent.pointerUp(edge, { clientX: 455 });
+    await act(async () => {});
+    expect(timingCalls().at(-1).timing[0].duration).not.toBe(4.5);
+  });
+
+  it("snaps a narration's start to where its slide starts", async () => {
+    open({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
+    wide();
+    // Slide 3's narration starts 0.5 s in, at 10.5 s; dragged to 10.03 s it starts with the slide.
+    const clip = screen.getByRole("button", { name: /^Narration of slide 3/ });
+    fireEvent.pointerDown(clip, { clientX: 1050, button: 0 });
+    fireEvent.pointerMove(clip, { clientX: 1003 });
+    fireEvent.pointerUp(clip, { clientX: 1003 });
+    await act(async () => {});
+    expect(timingCalls()[0].timing).toEqual([{ slide: "outro", duration: 5, narrationStart: 0 }]);
+  });
+
+  it("marks a slide timed by hand, which a double-click on its handle lets follow its narration again", async () => {
+    open({ intro: { narration: "Hello", duration: 7 } });
+    expect(screen.getAllByTestId("slide-pinned")).toHaveLength(1);
+    const edge = screen.getByRole("button", { name: "End of slide 1" });
+    expect(edge.title).toMatch(/Double-click or press Delete to let it follow its narration again/);
+    fireEvent.doubleClick(edge);
+    await act(async () => {});
+    expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: null, narrationStart: null }]);
+    // Delete does the same; a slide that follows its narration has nothing to reset.
+    fireEvent.keyDown(edge, { key: "Delete" });
+    await act(async () => {});
+    expect(timingCalls()).toHaveLength(2);
+    fireEvent.doubleClick(screen.getByRole("button", { name: "End of slide 2" }));
+    await act(async () => {});
+    expect(timingCalls()).toHaveLength(2);
+  });
+
+  it("is dragged taller or lower by its top edge, and remembers it", () => {
+    const view = watch();
+    const section = screen.getByRole("region", { name: "Narration timeline" });
+    expect(section.style.height).toBe("176px");
+    const handle = screen.getByRole("separator", { name: "Resize timeline" });
+    fireEvent.pointerDown(handle, { clientY: 500, button: 0 });
+    fireEvent.pointerMove(handle, { clientY: 400 });
+    fireEvent.pointerUp(handle);
+    expect(section.style.height).toBe("276px");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(section.style.height).toBe("120px");
+    view.unmount();
+    watch();
+    expect(screen.getByRole("region", { name: "Narration timeline" }).style.height).toBe("120px");
+    fireEvent.doubleClick(screen.getByRole("separator", { name: "Resize timeline" }));
+    expect(screen.getByRole("region", { name: "Narration timeline" }).style.height).toBe("176px");
   });
 });

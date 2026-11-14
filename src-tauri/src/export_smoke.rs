@@ -18,8 +18,10 @@ use tauri::{AppHandle, Manager, RunEvent};
 
 use crate::capture::{self, Image};
 use crate::error::{Error, Result};
+use crate::export_job::Job;
+use crate::export_scope::{self, Scope, WebPage};
 use crate::workspace::OpenWorkspace;
-use crate::{deck, export_window, html, pdf, pptx, protocol, render, video};
+use crate::{deck, html, pdf, pptx, protocol, render, video};
 
 pub const FLAG: &str = "--export-smoke";
 /// The label the workspace is opened under; no window has it, the exports only need the
@@ -125,10 +127,11 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
         .map(|s| s.id.clone())
         .collect();
     let canvas = html::slide_size(&deck::read_html(&file)?).pixels();
+    let job = Job::unattended();
 
     step("PDF export", async {
         let pdf_file = out.join("deck.pdf");
-        pdf::export(app, &file, &pdf_file).await?;
+        pdf::export(app, &file, &pdf_file, &pdf::Options::default(), &job).await?;
         check_pdf(
             &std::fs::read(&pdf_file)?,
             shown.len(),
@@ -140,7 +143,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
 
     let pptx_file = step("PowerPoint export", async {
         let pptx_file = out.join("deck.pptx");
-        pptx::export(app, &file, &pptx_file).await?;
+        pptx::export(app, &file, &pptx_file, &Scope::default(), &job).await?;
         check_pptx(&std::fs::read(&pptx_file)?, shown.len(), &args.texts)?;
         Ok(pptx_file)
     })
@@ -149,7 +152,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
     step("PowerPoint import", async {
         let import_root = out.join("imported");
         std::fs::create_dir_all(&import_root)?;
-        let imported = pptx::import(&pptx_file, &import_root)?;
+        let imported = pptx::import(&pptx_file, &import_root, |_| {})?;
         if imported.deck.slides.len() != shown.len() {
             return Err(Error::msg(format!(
                 "{} slides back from {}",
@@ -175,11 +178,19 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
                 pause_before: 0.0,
                 pause_after: 0.0,
             };
-            video::export(app, &file, &path, options, |_| {}).await?;
+            video::export(
+                app,
+                &file,
+                &path,
+                options,
+                &video::Output::default(),
+                |_| {},
+            )
+            .await?;
             check_mp4(
                 &std::fs::read(&path)?,
                 &VideoExpect {
-                    size: video::video_size(canvas.0, canvas.1),
+                    size: video::video_size(canvas.0, canvas.1, None),
                     fps: VIDEO_FPS,
                     slides: shown.len(),
                     frames_per_slide: options.frames_per_slide(),
@@ -192,7 +203,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
 
     step("Slide image export", async {
         let dir = crate::files::create_export_dir(&out, &loaded.title)?;
-        let images = slide_images(app, &file, &shown, &dir, canvas).await?;
+        let images = slide_images(app, &file, &dir).await?;
         for image in &images {
             check_png(&std::fs::read(image)?, canvas)
                 .map_err(|e| Error::msg(format!("{}: {e}", image.display())))?;
@@ -226,7 +237,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
 
     step("HTML export", async {
         let html_file = out.join("deck-export.html");
-        deck::export(&file, &html_file)?;
+        export_scope::web_page(&file, &html_file, &WebPage::default())?;
         check_html_export(&std::fs::read_to_string(&html_file)?, &shown)?;
         // Opened again away from the deck's folder, it must show its slides on its own.
         app.state::<OpenWorkspace>()
@@ -234,7 +245,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
         let dir = out.join("html-export-slides");
         std::fs::create_dir_all(&dir)?;
         let html_file = html_file.canonicalize()?;
-        for image in slide_images(app, &html_file, &shown, &dir, canvas).await? {
+        for image in slide_images(app, &html_file, &dir).await? {
             check_png(&std::fs::read(&image)?, canvas)
                 .map_err(|e| Error::msg(format!("{}: {e}", image.display())))?;
         }
@@ -288,48 +299,11 @@ async fn check_renders(
     Ok(rendered)
 }
 
-/// Exports the `shown` slides of the deck `file` as images into `dir`, as the app's slide
-/// image export does: each slide shown whole, then captured at most the canvas width wide.
-async fn slide_images(
-    app: &AppHandle,
-    file: &Path,
-    shown: &[String],
-    dir: &Path,
-    canvas: (u32, u32),
-) -> Result<Vec<PathBuf>> {
-    let (window, signals) = render::open(app, file, false)?;
-    let mut helper = export_window::Helper {
-        window: &window,
-        signals,
-        task: render::TASK,
-    };
-    let saved = async {
-        helper.answer("ready").await?;
-        let mut saved = Vec::new();
-        for (index, id) in shown.iter().enumerate() {
-            let answer = render::show(&mut helper, id, None)
-                .await?
-                .ok_or_else(|| Error::msg(format!("slide {id} was not found")))?;
-            let (rect, viewport) = export_window::geometry(&answer)?;
-            // The fitted slide sits at a fraction of a pixel; keep its edge out of the image.
-            let rect = export_window::inside_whole_points(rect);
-            let path = capture::save_slide_image(
-                window.as_ref(),
-                dir,
-                index,
-                shown.len(),
-                rect,
-                viewport,
-                Some(canvas.0),
-            )
-            .await?;
-            saved.push(path);
-        }
-        Ok(saved)
-    }
-    .await;
-    let _ = window.destroy();
-    saved
+/// Exports the shown slides of the deck `file` as images into `dir`, as the Export menu does.
+async fn slide_images(app: &AppHandle, file: &Path, dir: &Path) -> Result<Vec<PathBuf>> {
+    let options = crate::slide_images::Options::default();
+    let target = crate::slide_images::Target::Folder(dir);
+    crate::slide_images::save(app, file, target, &options, &Job::unattended()).await
 }
 
 /// Whether `bytes` are a whole PDF of `pages` pages of `page` size, with text in it.

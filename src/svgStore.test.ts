@@ -128,7 +128,11 @@ describe("the SVG editor's drawing", () => {
       slide: "intro",
       path: [1],
     });
-    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "svg", sidebarTabs: ["chat", "svg"] });
+    expect(useApp.getState()).toMatchObject({
+      sidebarOpen: true,
+      sidebarTab: "svg",
+      sidebarTabs: ["chat", "files", "narration", "code", "svg"],
+    });
   });
 
   it("refuses markup that is not a drawing", async () => {
@@ -236,7 +240,10 @@ describe("the SVG editor's drawing", () => {
     ask.mockResolvedValue(true);
     expect(await useSvgEditor.getState().close()).toBe(true);
     expect(useSvgEditor.getState().edit).toBeNull();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarMaximized: false });
+    expect(useApp.getState()).toMatchObject({
+      sidebarTabs: ["chat", "files", "narration", "code"],
+      sidebarMaximized: false,
+    });
   });
 
   it("closes without asking when nothing changed", async () => {

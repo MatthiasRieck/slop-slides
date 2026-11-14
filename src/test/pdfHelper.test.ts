@@ -22,6 +22,7 @@ interface Helper {
   show: (index: number) => void;
   paint: (index: number, url: string) => void;
   text: () => void;
+  notes: (pages: { slide: number; label: string; text: string }[]) => void;
 }
 
 /** Loads the deck, runs the helper, and records its answers instead of navigating. */
@@ -72,6 +73,34 @@ describe("PDF helper", () => {
     expect(css).toContain("@media print");
     expect(css).toContain("--slop-w: 794px !important; --slop-h: 1122px !important;");
     expect(css).toContain("@page { size: 794px 1122px; margin: 0; }");
+  });
+
+  it("puts a page of speaker notes after each printed slide that has them, in print only", async () => {
+    const { doc, api, answers, settle } = helper();
+    await settle();
+    api.notes([
+      { slide: 0, label: "Notes for slide 1", text: "Greet the room\n<b>not markup</b>" },
+      { slide: 1, label: "Notes for slide 2", text: "Thank everyone" },
+      { slide: 7, label: "Notes for slide 8", text: "No such slide" },
+    ]);
+    expect(answers.at(-1)).toBe("notes");
+    const order = [...doc.querySelectorAll(".deck > *")].map((el) => el.id || el.className);
+    // The hidden slide is no printed slide: the second page of notes follows the last slide.
+    expect(order).toEqual(["intro", "slop-pdf-notes", "slide", "end", "slop-pdf-notes"]);
+    const [first, second] = [...doc.querySelectorAll(".slop-pdf-notes")];
+    expect(first!.querySelector("h2")!.textContent).toBe("Notes for slide 1");
+    expect(first!.querySelector("p")!.textContent).toBe("Greet the room\n<b>not markup</b>");
+    expect(first!.querySelector("b")).toBeNull();
+    expect(second!.querySelector("p")!.textContent).toBe("Thank everyone");
+    const css = doc.querySelector("style[data-slop-pdf-notes]")!.textContent!;
+    expect(css).toMatch(/^\.slop-pdf-notes \{ display: none; \}/);
+    expect(css).toContain("@media print");
+    expect(css).toContain("break-after: page");
+    // The slides the PDF counts and captures are still the slides alone.
+    api.show(1);
+    await settle();
+    expect(new URLSearchParams(answers.at(-1)).get("shown")).toBe("1");
+    expect(doc.getElementById("end")!.classList.contains("active")).toBe(true);
   });
 
   it("hides the text for the decor, keeping currentColor for borders and icons", async () => {

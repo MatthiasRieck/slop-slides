@@ -38,7 +38,7 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(tabs()).toEqual(["View", "Edit", "Git"]);
+    expect(tabs()).toEqual(["View", "Edit", "Changes"]);
     expect(selected()).toEqual(["View"]);
   });
 
@@ -49,8 +49,8 @@ describe("ModeTabs", () => {
     fireEvent.keyDown(tab("View"), { key: "ArrowRight" });
     expect(document.activeElement).toBe(tab("Edit"));
     fireEvent.keyDown(tab("Edit"), { key: "End" });
-    expect(document.activeElement).toBe(tab("Git"));
-    fireEvent.keyDown(tab("Git"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Changes"));
+    fireEvent.keyDown(tab("Changes"), { key: "ArrowRight" });
     expect(document.activeElement).toBe(tab("View"));
     // Moving the focus changes no mode; a click (Enter, Space) does.
     expect(selected()).toEqual(["View"]);
@@ -72,7 +72,7 @@ describe("ModeTabs", () => {
 
   it.each([
     ["Edit", "edit"],
-    ["Git", "git"],
+    ["Changes", "git"],
   ])("switches to %s and back to View", (name, mode) => {
     render(<ModeTabs />);
     fireEvent.click(tab(name));
@@ -85,20 +85,20 @@ describe("ModeTabs", () => {
 
   it("shows each mode as an icon over its label, highlighting the selected one", () => {
     render(<ModeTabs />);
-    fireEvent.click(tab("Git"));
+    fireEvent.click(tab("Changes"));
     for (const t of screen.getAllByRole("tab")) {
       expect(t.querySelector("svg")).not.toBeNull();
       expect(t.className).toContain("flex-col");
-      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Git");
+      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Changes");
       // Filled too, so the selected mode differs by more than the color of its text.
-      expect(t.classList.contains("bg-primary/10")).toBe(t.textContent === "Git");
+      expect(t.classList.contains("bg-primary/10")).toBe(t.textContent === "Changes");
     }
   });
 
   it("leaves edit mode when switching to another mode", () => {
     render(<ModeTabs />);
     fireEvent.click(tab("Edit"));
-    fireEvent.click(tab("Git"));
+    fireEvent.click(tab("Changes"));
     expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
   });
 
@@ -112,7 +112,7 @@ describe("ModeTabs", () => {
     expect(screen.getAllByRole("tab").map((t) => t.title)).toEqual([
       "View: present, play and comment (Ctrl+1)",
       "Edit: change slides, their order and timing (Ctrl+2)",
-      "Git: see what changed since the last commit (Ctrl+3)",
+      "Changes: what changed since the last saved version (Git) (Ctrl+3)",
     ]);
     for (const t of screen.getAllByRole("tab")) expect(t.title.length).toBeLessThan(70);
   });
@@ -126,21 +126,27 @@ describe("ModeTabs", () => {
     expect(deckMode(useApp.getState())).toBe("edit");
   });
 
-  it("has no Settings tab, and selects no tab in Settings mode", () => {
-    useApp.setState({ slideMode: "settings" });
+  it("has no Settings tab: the deck's settings are a dialog", () => {
     render(<ModeTabs />);
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
-    expect(selected()).toEqual([]);
+  });
+
+  it("shows only the icons, each still named, where the bar is short of room", () => {
+    render(<ModeTabs compact />);
+    const view = tab("View");
+    expect(view.textContent).toBe("");
+    expect(view.getAttribute("aria-label")).toBe("View");
+    expect(view.title).toContain("View:");
   });
 
   it("has Edit for a deck without slides, to add the first one in", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
     render(<ModeTabs />);
     const enabled = screen.getAllByRole("tab").filter((t) => !(t as HTMLButtonElement).disabled);
-    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Edit", "Git"]);
+    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Edit", "Changes"]);
   });
 
-  describe("the Git tab", () => {
+  describe("the Changes tab", () => {
     beforeEach(() => {
       useChanges.setState({ repository: null });
     });
@@ -154,9 +160,9 @@ describe("ModeTabs", () => {
 
     it("shows up once the deck is found in a repository", async () => {
       render(<ModeTabs />);
-      expect(tabs()).not.toContain("Git");
+      expect(tabs()).not.toContain("Changes");
       await settled();
-      expect(tabs()).toContain("Git");
+      expect(tabs()).toContain("Changes");
     });
 
     it("shows up on coming back to the window after a git init", async () => {
@@ -167,7 +173,7 @@ describe("ModeTabs", () => {
       await act(async () => {
         fireEvent.focus(window);
       });
-      expect(tabs()).toContain("Git");
+      expect(tabs()).toContain("Changes");
     });
 
     it("shows up after a git init by the agent", async () => {
@@ -177,21 +183,21 @@ describe("ModeTabs", () => {
       await settled();
       inRepository(true);
       await act(async () => useApp.setState({ running: false }));
-      expect(tabs()).toContain("Git");
+      expect(tabs()).toContain("Changes");
     });
 
-    it("closes Git mode when the repository goes away", async () => {
+    it("closes Changes mode when the repository goes away", async () => {
       inRepository(true);
       render(<ModeTabs />);
       await settled();
-      fireEvent.click(tab("Git"));
+      fireEvent.click(tab("Changes"));
       expect(deckMode(useApp.getState())).toBe("git");
       inRepository(false);
       await act(async () => {
         fireEvent.focus(window);
       });
       expect(deckMode(useApp.getState())).toBe("view");
-      expect(tabs()).not.toContain("Git");
+      expect(tabs()).not.toContain("Changes");
     });
 
     it("stops looking when closed", async () => {

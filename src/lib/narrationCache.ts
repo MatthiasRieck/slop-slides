@@ -27,6 +27,8 @@ export interface BorrowedSound {
 }
 
 const peaks = new Map<string, Promise<number[] | null>>();
+// A voice's sample, by who says it in which language: a few seconds each, kept while the app runs.
+const samples = new Map<string, Promise<string>>();
 // The one played last is last.
 const sounds = new Map<string, Sound>();
 
@@ -41,6 +43,23 @@ export function narrationPeaks(deck: string, slide: string): Promise<number[] | 
   peaks.set(key, read);
   // What could not be read is asked for again by the next.
   read.catch(() => peaks.get(key) === read && peaks.delete(key));
+  return read;
+}
+
+/**
+ * An object URL of the sample of `voice` of `provider` in `language` (see
+ * `api.previewNarrationVoice`), asked for once: the backend keeps it for every deck, and this
+ * keeps it from crossing over again. What could not be made is asked for again by the next.
+ */
+export function voiceSample(provider: string, voice: string, language: string): Promise<string> {
+  const key = [provider, voice, language].join("\n");
+  const known = samples.get(key);
+  if (known) return known;
+  const read = api
+    .previewNarrationVoice(provider, voice, language)
+    .then((bytes) => URL.createObjectURL(new Blob([bytes], { type: "audio/wav" })));
+  samples.set(key, read);
+  read.catch(() => samples.get(key) === read && samples.delete(key));
   return read;
 }
 

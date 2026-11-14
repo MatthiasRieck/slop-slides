@@ -171,6 +171,7 @@ fn commented() -> String {
         target: None,
         area: None,
         time: None,
+        sent: false,
     };
     let on_area = comments::Comment {
         id: "second".into(),
@@ -187,9 +188,19 @@ fn commented() -> String {
         time: Some(3.25),
         ..comment.clone()
     };
+    let sent = comments::Comment {
+        id: "fourth".into(),
+        text: "Done already?".into(),
+        sent: true,
+        ..comment.clone()
+    };
     comments::write(
         &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
-        &[("intro".to_string(), vec![comment, on_area, on_a_moment])].into(),
+        &[(
+            "intro".to_string(),
+            vec![comment, on_area, on_a_moment, sent],
+        )]
+        .into(),
     )
 }
 
@@ -223,6 +234,12 @@ fn flags_damaged_or_misplaced_comments() {
             ["comments-invalid"]
         );
     }
+    // Whether a comment went to the agent is a yes or a no.
+    assert!(html.contains("\"sent\":true"));
+    assert_eq!(
+        rules(&html.replace("\"sent\":true", "\"sent\":\"yes\"")),
+        ["comments-invalid"]
+    );
     let block = &html[comments::block_range(&html).unwrap()];
     let inside = deck(&format!(
         r#"<section class="slide" id="intro"><p>Hi</p>{block}</section>"#

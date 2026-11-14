@@ -116,6 +116,20 @@ pub fn close_presenter_view(app: AppHandle) {
     screens::close_presenter_view(&app);
 }
 
+/// Puts the show window back where it was before `present_on` moved it, once it has left full
+/// screen. Off the main thread: it waits for the system to finish leaving full screen.
+#[tauri::command(async)]
+pub fn restore_show_window(window: Window) -> Result<()> {
+    screens::restore(&window)
+}
+
+/// Keeps the display awake while this window presents (`on`), or no longer. On the main thread,
+/// where the hold lasts on Windows (see [`screens::awake::keep`]).
+#[tauri::command]
+pub fn keep_awake(window: Window, on: bool) {
+    screens::awake::keep(window.label(), on);
+}
+
 #[tauri::command(async)]
 pub fn recent_workspaces() -> Result<Vec<workspace::RecentWorkspace>> {
     Ok(workspace::recent(&files::app_home()?))
@@ -137,6 +151,45 @@ pub fn forget_deck(path: String) -> Result<()> {
     workspace::forget_deck(&files::app_home()?, &path)
 }
 
+/// The decks the start screen shows: the ones opened before and the library's. Their folders are
+/// served from here on, for the previews of their first slides. Off the main thread: the start
+/// of every deck is read.
+#[tauri::command(async)]
+pub fn deck_gallery(
+    app: AppHandle,
+    open: State<OpenWorkspace>,
+) -> Result<Vec<workspace::GalleryDeck>> {
+    let decks = workspace::gallery(
+        &files::app_home()?,
+        &files::library_root(&app)?,
+        std::env::home_dir().as_deref(),
+    );
+    let shown: Vec<_> = decks
+        .iter()
+        .map(|deck| std::path::PathBuf::from(&deck.path))
+        .collect();
+    open.list(&shown);
+    Ok(decks)
+}
+
+/// The folder the deck file at `path` opens in when it is opened by itself (see
+/// [`workspace::workspace_for`]).
+#[tauri::command(async)]
+pub fn deck_workspace(app: AppHandle, path: String) -> Result<String> {
+    let file = crate::deck::deck_file(&path)?;
+    let recent: Vec<_> = workspace::recent(&files::app_home()?)
+        .into_iter()
+        .map(|folder| std::path::PathBuf::from(folder.path))
+        .collect();
+    let folder = workspace::workspace_for(
+        &file,
+        &files::library_root(&app)?,
+        &recent,
+        std::env::home_dir().as_deref(),
+    );
+    Ok(folder.to_string_lossy().into_owned())
+}
+
 /// `~/Documents/SlopSlide`, where decks lived before workspaces.
 #[tauri::command]
 pub fn library_folder(app: AppHandle) -> Result<String> {
@@ -146,8 +199,8 @@ pub fn library_folder(app: AppHandle) -> Result<String> {
 /// One folder of the open workspace (`""` for its root). Off the main thread: the start of
 /// every HTML file in the folder is read to tell decks from other pages.
 #[tauri::command(async)]
-pub fn list_dir(window: Window, path: String) -> Result<Vec<workspace::Entry>> {
-    workspace::list_dir(&workspace_root(&window)?, &path)
+pub fn list_dir(window: Window, path: String) -> Result<Vec<crate::file_ops::Listed>> {
+    crate::file_ops::list_dir(&workspace_root(&window)?, &path)
 }
 
 /// A file of the open workspace, with the viewer it opens in. Off the main thread: the file is

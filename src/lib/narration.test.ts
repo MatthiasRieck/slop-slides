@@ -1,7 +1,26 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { formatDuration, normalizeNarration, speakingTime, wordCount } from "./narration";
+import type { Slide } from "./api";
+import {
+  describeGeneration,
+  formatDuration,
+  generationSize,
+  narrationMark,
+  normalizeNarration,
+  slidesToScriptFromNotes,
+  speakingTime,
+  wordCount,
+} from "./narration";
+
+const slide = (id: string, more: Partial<Slide> = {}): Slide => ({
+  id,
+  hash: id,
+  hidden: false,
+  locked: false,
+  moved: false,
+  ...more,
+});
 
 describe("normalizeNarration", () => {
   it("trims line ends and keeps one blank line between paragraphs", () => {
@@ -31,5 +50,53 @@ describe("formatDuration", () => {
     [754, "12:34"],
   ])("shows %s seconds as %s", (seconds, shown) => {
     expect(formatDuration(seconds)).toBe(shown);
+  });
+});
+
+describe("narrationMark", () => {
+  it("says what a slide has of narration", () => {
+    expect(narrationMark(slide("a"), undefined)).toBe("none");
+    expect(narrationMark(slide("a", { narration: "Hi." }), undefined)).toBe("script");
+    expect(narrationMark(slide("a", { narration: "Hi." }), { slide: "a", state: "missing", seconds: null })).toBe(
+      "script",
+    );
+    expect(narrationMark(slide("a", { narration: "Hi." }), { slide: "a", state: "ready", seconds: 1 })).toBe("ready");
+    expect(narrationMark(slide("a", { narration: "Hi." }), { slide: "a", state: "stale", seconds: 1 })).toBe("stale");
+    // A recording is the slide's audio whatever its script says.
+    expect(narrationMark(slide("a"), { slide: "a", state: "ready", seconds: 1, recorded: true })).toBe("recorded");
+  });
+});
+
+describe("generationSize", () => {
+  it("counts what would go to the service: the said text of missing and stale audio only", () => {
+    const slides = [
+      slide("a", { narration: "**One** two." }),
+      slide("b", { narration: "Three four five six." }),
+      slide("c", { narration: "Kept." }),
+      slide("d"),
+    ];
+    const size = generationSize(slides, {
+      a: { slide: "a", state: "missing", seconds: null },
+      b: { slide: "b", state: "stale", seconds: 2 },
+      c: { slide: "c", state: "ready", seconds: 1 },
+    });
+    expect([size.slides, size.characters]).toEqual([2, 28]);
+    expect(size.seconds).toBeCloseTo(2.4);
+    expect(describeGeneration(size)).toBe("2 slides, 28 characters, about 0:02 of audio");
+    expect(describeGeneration({ slides: 1, characters: 2140, seconds: 140 })).toBe(
+      "1 slide, 2,140 characters, about 2:20 of audio",
+    );
+  });
+});
+
+describe("slidesToScriptFromNotes", () => {
+  it("takes the slides with notes, no script, and no lock", () => {
+    const slides = [
+      slide("a", { notes: "N" }),
+      slide("b", { notes: "N", narration: "Mine." }),
+      slide("c", { notes: "N", locked: true }),
+      slide("d", { notes: "  " }),
+    ];
+    expect(slidesToScriptFromNotes(slides).map((s) => s.id)).toEqual(["a"]);
   });
 });

@@ -21,10 +21,14 @@ import { useApp } from "../../store";
  * `select`, which the rail, the stage and the code view all answer) only when the playhead comes
  * to another one, not for every moment within it. What it gives back to call stays the same from
  * one render to the next.
+ *
+ * It plays at `rate` (1 as recorded, faster up to 2): `changeRate` sets it, and while it plays,
+ * it plays on from where it is at the new rate.
  */
 export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = false) {
   const [clock] = useState(createPlaybackClock);
   const [stop, setStop] = useState<(() => void) | null>(null);
+  const [rate, setRate] = useState(1);
   const playing = stop !== null;
 
   // Replacing what stops it stops it, and so does leaving.
@@ -66,27 +70,42 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = fa
     if (editing) setSlideClock(null);
     else clockAt(to, true);
   };
-  /** Plays from `from` (the start, at the end), the stage following along. */
-  const playFrom = (at: number) => {
+  /** Plays from `from` (the start, at the end) at `speed`, the stage following along. */
+  const playFrom = (at: number, speed = rate) => {
     const from = at >= timeline.end ? 0 : Math.max(0, at);
-    clock.runFrom(from);
+    clock.runFrom(from, speed);
     select(slideAt(timeline, from));
-    const stopping = playTimeline(deck.id, timeline, from, {
-      slide: select,
-      // What plays says where it is some times a second: the clock runs on between, every frame.
-      tick: (at) => {
-        clock.sync(at);
-        clockAt(at);
+    const stopping = playTimeline(
+      deck.id,
+      timeline,
+      from,
+      {
+        slide: select,
+        // What plays says where it is some times a second: the clock runs on between, every frame.
+        tick: (at) => {
+          clock.sync(at);
+          clockAt(at);
+        },
+        ended: () => {
+          setStop(null);
+          clock.stopAt(0);
+          setSlideClock(null);
+        },
       },
-      ended: () => {
-        setStop(null);
-        clock.stopAt(0);
-        setSlideClock(null);
-      },
-    });
+      speed,
+    );
     setStop(() => stopping);
   };
   const play = () => (stop ? freeze(clock.time()) : playFrom(clock.time()));
+  /** Plays at `next` from now on: playing, on from where it is. */
+  const changeRate = (next: number) => {
+    setRate(next);
+    if (stop) playFrom(clock.time(), next);
+  };
+  /** Stops where it is, if it plays. */
+  const pause = () => {
+    if (stop) freeze(clock.time());
+  };
   /**
    * Goes to the start of the slide at `index`: playing, it plays on from there; stopped, the
    * playhead waits there with the slide selected and showing as it does anywhere else, its
@@ -101,5 +120,5 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = fa
     setSlideClock(null);
   };
 
-  return { clock, playing, ...useHandlers({ play, freeze, goToSlide }) };
+  return { clock, playing, rate, ...useHandlers({ play, pause, freeze, goToSlide, changeRate }) };
 }

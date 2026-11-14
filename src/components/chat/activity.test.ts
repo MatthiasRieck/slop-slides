@@ -1,8 +1,7 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import type { AssistantMessage, ChatPart } from "../../store/messages";
-import { formatElapsed, replyActivity } from "./activity";
+import { dayLabel, dayOf, formatElapsed, replyActivity, timeLabel } from "./activity";
 
 const reply = (patch: Partial<AssistantMessage>): AssistantMessage => ({
   id: "a",
@@ -29,7 +28,7 @@ describe("replyActivity", () => {
     ["nothing yet", reply({}), "Thinking…"],
     ["thinking after some text", reply({ thinking: true, parts: [text] }), "Thinking…"],
     ["text coming in", reply({ parts: [tool, text] }), "Writing…"],
-    ["a tool running", reply({ parts: [text, tool] }), "Working…"],
+    ["a tool running", reply({ parts: [text, tool] }), "Running a command…"],
     [
       "a tool that finished, before what comes next",
       reply({ parts: [{ ...tool, status: "done" } as ChatPart] }),
@@ -40,6 +39,28 @@ describe("replyActivity", () => {
     ["compacting", reply({ compacting: true, thinking: true }), "Compacting the conversation…"],
   ])("says what the agent is doing with %s", (_, message, label) => {
     expect(replyActivity(message)).toBe(label);
+  });
+
+  it("names the file a running edit is on, and says when the turn is stopping", () => {
+    const edit: ChatPart = { ...tool, name: "Edit", input: { file_path: "/d/talk/deck.html" } } as ChatPart;
+    expect(replyActivity(reply({ parts: [edit] }), "/d/talk/deck.html")).toBe("Editing deck.html…");
+    expect(replyActivity(reply({ parts: [edit] }), "", true)).toBe("Stopping…");
+  });
+});
+
+describe("dayLabel and timeLabel", () => {
+  const now = new Date(2026, 10, 14, 15, 0).getTime();
+  it("names today and yesterday, and dates the days before", () => {
+    expect(dayLabel(new Date(2026, 10, 14, 1, 0).getTime(), now)).toBe("Today");
+    expect(dayLabel(new Date(2026, 10, 13, 23, 0).getTime(), now)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 10, 2).getTime(), now)).not.toMatch(/Today|Yesterday|2026/);
+    expect(dayLabel(new Date(2025, 10, 2).getTime(), now)).toMatch(/2025/);
+  });
+
+  it("gives the time alone for today, with the day otherwise", () => {
+    expect(timeLabel(new Date(2026, 10, 14, 9, 5).getTime(), now)).not.toMatch(/Today|,/);
+    expect(timeLabel(new Date(2026, 10, 13, 9, 5).getTime(), now)).toMatch(/^Yesterday, /);
+    expect(dayOf(new Date(2026, 10, 14, 0, 1).getTime())).toBe(dayOf(new Date(2026, 10, 14, 23, 59).getTime()));
   });
 });
 

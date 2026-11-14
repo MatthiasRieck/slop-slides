@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useChanges, visibleRows } from "./changesStore";
+import { shownView, useChanges, visibleRows } from "./changesStore";
 import type { DeckChanges, SlideChange, SlideStatus } from "./lib/api";
 import { DEFAULT_DIVIDER } from "./lib/compare";
 import { useApp } from "./store";
@@ -14,6 +14,7 @@ const row = (status: SlideStatus, id: string): SlideChange => ({
   id: status === "removed" ? null : id,
   oldId: status === "added" ? null : id,
   details: [],
+  textChanges: [],
   moved: false,
   oldNumber: null,
   staged: false,
@@ -24,7 +25,7 @@ const changes = (...slides: SlideChange[]): DeckChanges => ({
   tracking: "committed",
   branch: "main",
   detached: false,
-  commit: { hash: "abc123", subject: "First" },
+  commit: { hash: "abc123", subject: "First", time: 1_700_000_000 },
   stylesChanged: false,
   oldSize: null,
   slides,
@@ -47,6 +48,8 @@ beforeEach(() => {
     onlyChanges: false,
     divider: DEFAULT_DIVIDER,
     view: "split",
+    flipped: false,
+    textOpen: true,
     loading: false,
     error: null,
   });
@@ -229,19 +232,70 @@ describe("changing the repository", () => {
     expect(called()).toContain("deck_changes");
   });
 
-  it("selects another slide when a restore took the selected one away", async () => {
+  /** Answers the commands of a discard: the deck it leaves, the files that went back, and what the history can undo. */
+  const discards = (files: number, undo: string | null) =>
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "restore_change" || cmd === "restore_all_changes") {
+        return { deck: deckFor(DECK_HTML), created: [], files };
+      }
+      if (cmd === "deck_history") return { undo: undo ? { label: undo, source: "deck" } : null, redo: null };
+      if (cmd === "undo_deck")
+        return { deck: deckFor(DECK_HTML, "2"), status: { undo: null, redo: null }, entry: null };
+      return changes();
+    });
+  const toasts = () => useApp.getState().toasts;
+
+  it("selects another slide when a discard took the selected one away", async () => {
     useApp.setState({ selected: "added" });
-    vi.mocked(invoke).mockImplementation(async (cmd) =>
-      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "", source: "", created: [] } : changes(),
-    );
-    await useChanges.getState().restore(DECK, { kind: "slide", id: "added", oldId: null });
+    discards(0, "Discard changes");
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "added", oldId: null }, "Took the new slide out");
     expect(useApp.getState().selected).toBe("intro");
   });
 
-  it("says whether the commit worked, and which commit it made", async () => {
-    answer({ ...changes(), commit: { hash: "def456", subject: "Fix" } });
+  it("says what a discard did, and takes it back from the message", async () => {
+    discards(0, "Discard changes");
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "intro", oldId: "intro" }, "The slide is back");
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["The slide is back"]);
+    expect(toasts()[0]?.action?.label).toBe("Undo");
+    expect(called()).not.toContain("undo_deck");
+    toasts()[0]?.action?.run();
+    await vi.waitFor(() => expect(called()).toContain("undo_deck"));
+  });
+
+  it("offers no Undo when the deck's history has nothing of the discard to take back", async () => {
+    // Only a file went back: the deck's text, which is all the history keeps, did not change.
+    discards(1, "Edit slide");
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "intro", oldId: "intro" }, "The slide is back");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([
+      "The slide is back, with 1 file it used (Undo does not bring files back)",
+    ]);
+    expect(toasts()[0]?.action).toBeUndefined();
+  });
+
+  it("does not undo something else when the deck changed after the discard", async () => {
+    discards(0, "Discard changes");
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "intro", oldId: "intro" }, "The slide is back");
+    discards(0, "Edit slide");
+    toasts()[0]?.action?.run();
+    await vi.waitFor(() => expect(lastError(useApp.getState())).toContain("cannot be undone"));
+    expect(called()).not.toContain("undo_deck");
+  });
+
+  it("says nothing when the discard failed but that it did", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "restore_change") throw "This slide is locked";
+      return changes();
+    });
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "intro", oldId: "intro" }, "The slide is back");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
+    expect(lastError(useApp.getState())).toContain("locked");
+    expect(called()).toContain("deck_changes");
+  });
+
+  it("says that it saved a version, in words without git's", async () => {
+    answer({ ...changes(), commit: { hash: "def456", subject: "Fix", time: 1_700_000_500 } });
     expect(await useChanges.getState().commit(DECK, "Fix")).toBe(true);
-    expect(toastTexts(useApp.getState(), "success")).toEqual(["Committed def456"]);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Saved a version"]);
     useApp.setState({ toasts: [] });
     vi.mocked(invoke).mockImplementation(async (cmd) => {
       if (cmd === "commit_changes") throw "no";
@@ -256,7 +310,7 @@ describe("changing the repository", () => {
     answer(changes());
     expect(await useChanges.getState().commitAll(DECK, "Fix")).toBe(true);
     expect(called()).toEqual(["stage_all", "commit_changes", "deck_changes"]);
-    expect(toastTexts(useApp.getState(), "success")).toEqual(["Committed abc123"]);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Saved a version"]);
   });
 
   it("does not commit when staging everything failed", async () => {
@@ -270,15 +324,17 @@ describe("changing the repository", () => {
     expect(lastError(useApp.getState())).toContain("index.lock exists");
   });
 
-  it("discards every change as one edit of the deck, and selects a slide that is still there", async () => {
+  it("discards every change as one edit of the deck, selects a slide that is still there, and offers Undo", async () => {
     useApp.setState({ selected: "added" });
-    vi.mocked(invoke).mockImplementation(async (cmd) =>
-      cmd === "restore_all_changes" ? { deck: deckFor(DECK_HTML), previous: "", source: "", created: [] } : changes(),
-    );
+    discards(2, "Discard all changes");
     await useChanges.getState().restoreAll(DECK);
     expect(called().filter((cmd) => cmd === "restore_all_changes")).toHaveLength(1);
     expect(called()).toContain("deck_changes");
     expect(useApp.getState().selected).toBe("intro");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([
+      "The deck is back as in the last version, with 2 files it used (Undo does not bring files back)",
+    ]);
+    expect(toasts()[0]?.action?.label).toBe("Undo");
   });
 });
 
@@ -288,13 +344,33 @@ describe("the view of a slide that changed", () => {
     useChanges.getState().setView("before");
     expect(useChanges.getState().view).toBe("before");
   });
+
+  it("flips to the other version while that is held, and to the slide as it was from the split view", () => {
+    expect(shownView("split", false)).toBe("split");
+    expect(shownView("split", true)).toBe("before");
+    expect(shownView("before", true)).toBe("after");
+    expect(shownView("after", true)).toBe("before");
+  });
+
+  it("lets go of a flip when another view is picked", () => {
+    useChanges.getState().setFlipped(true);
+    expect(useChanges.getState().flipped).toBe(true);
+    useChanges.getState().setView("after");
+    expect(useChanges.getState()).toMatchObject({ view: "after", flipped: false });
+  });
+
+  it("folds the list of changed words, and keeps it that way", () => {
+    expect(useChanges.getState().textOpen).toBe(true);
+    useChanges.getState().setTextOpen(false);
+    expect(useChanges.getState().textOpen).toBe(false);
+  });
 });
 
 describe("the divider", () => {
   it("keeps what is not changed, and resets", () => {
     useChanges.getState().setDivider({ angle: 30 });
-    useChanges.getState().setDivider({ feather: 50 });
-    expect(useChanges.getState().divider).toMatchObject({ angle: 30, feather: 50, x: 0.5 });
+    useChanges.getState().setDivider({ x: 0.2 });
+    expect(useChanges.getState().divider).toEqual({ angle: 30, x: 0.2, y: 0.5 });
     useChanges.getState().resetDivider();
     expect(useChanges.getState().divider).toEqual(DEFAULT_DIVIDER);
   });

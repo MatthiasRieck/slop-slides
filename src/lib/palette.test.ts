@@ -4,7 +4,9 @@ import { DEFAULT_EDIT_STYLES, EDIT_COLORS } from "./editTools";
 import { DEFAULT_COLORS, INK_COLORS, LASER_RGB } from "./ink";
 import {
   colorLabel,
+  mixColor,
   parseHexInput,
+  parseRecentColors,
   RECENT_COLORS,
   rgbChannels,
   SWATCHES,
@@ -60,5 +62,21 @@ describe("naming and typing colors", () => {
     for (let n = 0; n < 10; n++) recent = withRecentColor(recent, `#1111${10 + n}`);
     expect(recent).toHaveLength(RECENT_COLORS);
     expect(recent[0]).toBe("#111119");
+  });
+});
+
+describe("deck color mixes and remembered colors", () => {
+  it("mixes a color with white for a tint and with black for a shade", () => {
+    expect(mixColor("#000000", 0.5)).toBe("#808080");
+    expect(mixColor("#ffffff", -0.5)).toBe("#808080");
+    expect(mixColor("#3b82f6", 0)).toBe("#3b82f6");
+    expect(mixColor("#3b82f6", 1)).toBe("#ffffff");
+  });
+
+  it("takes back only the well-formed colors it remembered, as many as it keeps", () => {
+    expect(parseRecentColors(["#112233", "red", 4, "#ABCDEF", "#445566"])).toEqual(["#112233", "#445566"]);
+    expect(parseRecentColors("nope")).toEqual([]);
+    const many = Array.from({ length: 10 }, (_, i) => `#00000${i}`);
+    expect(parseRecentColors(many)).toHaveLength(RECENT_COLORS);
   });
 });

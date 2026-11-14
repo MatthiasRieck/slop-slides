@@ -92,6 +92,11 @@ jsonschema = { version = "0.33.0", default-features = false }
 [profile.dev.package.slopslide]
 opt-level = 2
 
+# No debug info for dependencies: it was most of each dev target dir (several GB per worktree).
+# Our own crate keeps full debug info; dependency frames still show function names in backtraces.
+[profile.dev.package."*"]
+debug = false
+
 [profile.dev.package.rav1e]
 opt-level = 3
 

@@ -1,15 +1,24 @@
-import { EditorState, Prec, type StateEffect } from "@codemirror/state";
+import { EditorState, Prec, type StateEffect, type Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { AlertTriangle, FileCode2, RotateCcw, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
 import { onDiskRead } from "../lib/codeSync";
-import { basename, cn, isMac } from "../lib/utils";
-import { showError, useApp } from "../store";
+import { formatKeys } from "../lib/keys";
+import { basename, cn } from "../lib/utils";
+import { provideCodeSave, showError, useApp } from "../store";
 import { Button } from "./Button";
-import { replaceText, type SlideMarks, setActiveSlide, slideMarks, sourceExtensions } from "./code/sourceEditor";
+import {
+  fromDisk,
+  replaceText,
+  type SlideMarks,
+  setActiveSlide,
+  slideMarks,
+  sourceExtensions,
+} from "./code/sourceEditor";
 import { useDeckFile } from "./code/useDeckFile";
+import { Dialog } from "./Dialog";
 
 /** The sidebar's HTML tab: the open deck's source, or a line saying there is no deck to show. */
 export function CodePanel({ active }: { active: boolean }) {
@@ -18,9 +27,17 @@ export function CodePanel({ active }: { active: boolean }) {
   return <CodeView active={active} />;
 }
 
+/** How long typing pauses before text as long as the saved one is compared with it (see `noteEdit`). */
+export const DIRTY_CHECK_DELAY = 200;
+
 /**
  * The deck file's source with the selected slide highlighted and kept in view. Edits are saved
- * with ⌘S; if the file changes on disk meanwhile (the agent), the user picks which wins.
+ * with ⌘S; if the file changes on disk meanwhile (the agent), the user picks which wins. Revert
+ * gives the unsaved edits up, once the user has said so.
+ *
+ * It stays mounted behind the other sidebar tabs, to keep its unsaved edits, and does nothing
+ * the size of the file there: the file is read, and the selected slide followed, only while the
+ * tab shows (`active`), catching up as it shows again.
  */
 export function CodeView({ active }: { active: boolean }) {
   const deck = useApp((s) => s.deck);
@@ -33,18 +50,41 @@ export function CodeView({ active }: { active: boolean }) {
   /** The deck file changed on disk while the editor held unsaved edits. */
   const [conflict, setConflict] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Asking whether to give up the unsaved edits, which Revert does. */
+  const [reverting, setReverting] = useState(false);
   /** The disk text the editor's unedited state corresponds to. */
   const baseline = useRef("");
   /** The editor itself picked this slide (caret moved into it), so don't scroll to it. */
   const pickedInEditor = useRef<string | null>(null);
   /** Scroll the selected slide into view once its position is known. */
   const pendingReveal = useRef(true);
-  const saveRef = useRef<(force?: boolean) => void>(() => {});
+  const saveRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const dirtyCheck = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const setDirty = (isDirty: boolean) => {
+    if (isDirty !== useApp.getState().codeDirty) useApp.getState().setCodeDirty(isDirty);
+  };
+  /**
+   * The user changed the text to `doc`: it has unsaved edits. Comparing it with the saved text
+   * reads the whole file, so no key does that: text of another length differs for sure, and text
+   * of the same length (an edit undone, say) is compared once the typing pauses.
+   */
+  const noteEdit = (doc: Text) => {
+    clearTimeout(dirtyCheck.current);
+    setDirty(true);
+    if (doc.length !== baseline.current.length) return;
+    dirtyCheck.current = setTimeout(() => {
+      const view = viewRef.current;
+      if (view) setDirty(view.state.doc.toString() !== baseline.current);
+    }, DIRTY_CHECK_DELAY);
+  };
+  const noteEditRef = useRef(noteEdit);
+  noteEditRef.current = noteEdit;
 
   const deckId = deck?.id;
   const fileName = basename(deckId ?? "") || "deck.html";
   /** The deck file as last read from disk, and why it could not be. */
-  const { source, error } = useDeckFile(deck);
+  const { source, error } = useDeckFile(deck, active);
 
   // Create the editor once.
   useEffect(() => {
@@ -71,9 +111,9 @@ export function CodeView({ active }: { active: boolean }) {
           EditorView.updateListener.of((update) => {
             const marksNow = update.state.field(slideMarks);
             if (marksNow !== update.startState.field(slideMarks)) setMarks(marksNow);
-            if (update.docChanged) {
-              const isDirty = update.state.doc.toString() !== baseline.current;
-              if (isDirty !== useApp.getState().codeDirty) useApp.getState().setCodeDirty(isDirty);
+            // Text from disk is the saved text; whoever loads it says what that makes of the edits.
+            if (update.transactions.some((tr) => tr.docChanged && !tr.annotation(fromDisk))) {
+              noteEditRef.current(update.state.doc);
             }
             if (!update.selectionSet || !update.transactions.some((tr) => tr.isUserEvent("select"))) return;
             const head = update.state.selection.main.head;
@@ -87,6 +127,7 @@ export function CodeView({ active }: { active: boolean }) {
     });
     viewRef.current = view;
     return () => {
+      clearTimeout(dirtyCheck.current);
       view.destroy();
       viewRef.current = null;
       useApp.getState().setCodeDirty(false);
@@ -100,7 +141,8 @@ export function CodeView({ active }: { active: boolean }) {
     baseline.current = text;
     setConflict(false);
     replaceText(view, text);
-    useApp.getState().setCodeDirty(false);
+    clearTimeout(dirtyCheck.current);
+    setDirty(false);
   };
 
   // Follow the deck file on disk, unless that would throw away unsaved edits.
@@ -123,7 +165,8 @@ export function CodeView({ active }: { active: boolean }) {
       const next = await api.saveDeckSource(deckId, text, force ? null : baseline.current);
       baseline.current = text;
       setConflict(false);
-      useApp.getState().setCodeDirty(view.state.doc.toString() !== text);
+      clearTimeout(dirtyCheck.current);
+      setDirty(view.state.doc.toString() !== text);
       useApp.getState().setDeck(next);
     } catch (err) {
       const message = errorMessage(err);
@@ -134,20 +177,24 @@ export function CodeView({ active }: { active: boolean }) {
     }
   };
 
+  // What leaves the deck (another file, closing the tab or the window) can save the edits first.
+  useEffect(() => provideCodeSave(() => saveRef.current()), []);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: any of these changes asks for a fresh reveal
   useEffect(() => {
     pendingReveal.current = true;
   }, [selected, revealRev, active]);
 
-  // Highlight the selected slide, and scroll to it when the selection came from elsewhere.
+  // Highlight the selected slide, and scroll to it when the selection came from elsewhere. Hidden,
+  // the editor is left alone: it catches up with the selection as the tab shows again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: revealRev forces a reveal of the same slide
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || source === null) return;
+    if (!view || source === null || !active) return;
     const effects: StateEffect<unknown>[] = [setActiveSlide.of(selected)];
     const span = view.state.field(slideMarks).spans.find((s) => s.id === selected);
     const fromEditor = pickedInEditor.current === selected;
-    if (span && active && pendingReveal.current) {
+    if (span && pendingReveal.current) {
       pendingReveal.current = false;
       pickedInEditor.current = null;
       if (!fromEditor) {
@@ -164,7 +211,6 @@ export function CodeView({ active }: { active: boolean }) {
   const span = marks.spans[index];
   const doc = viewRef.current?.state.doc;
   const lines = span && doc ? [doc.lineAt(span.from).number, doc.lineAt(span.to).number] : null;
-  const mod = isMac ? "⌘" : "Ctrl+";
 
   return (
     <div className={cn("@container h-full flex-col bg-background", active ? "flex" : "hidden")}>
@@ -187,14 +233,14 @@ export function CodeView({ active }: { active: boolean }) {
           </>
         )}
         <span className="ml-auto hidden text-2xs @2xl:inline">
-          {mod}F search · {mod}S save
+          {formatKeys("mod+f")} search · {formatKeys("mod+s")} save
         </span>
         <span className="ml-auto @2xl:hidden" />
         <Button
           variant="ghost"
           size="sm"
           disabled={!dirty || saving}
-          onClick={() => source !== null && loadText(source)}
+          onClick={() => setReverting(true)}
           title="Discard unsaved changes"
         >
           <RotateCcw className="size-3.5" />
@@ -205,7 +251,7 @@ export function CodeView({ active }: { active: boolean }) {
           size="md"
           disabled={!dirty || saving}
           onClick={() => saveRef.current()}
-          title={`Save ${fileName} (${mod}S)`}
+          title={`Save ${fileName} (${formatKeys("mod+s")})`}
           className="shadow-sm"
         >
           <Save className="size-3.5" />
@@ -231,6 +277,37 @@ export function CodeView({ active }: { active: boolean }) {
             Overwrite with mine
           </button>
         </div>
+      )}
+      {reverting && (
+        <Dialog
+          label="Discard unsaved changes"
+          closeOnBackdrop
+          onClose={() => setReverting(false)}
+          className="flex w-96 max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
+          heading={
+            <>
+              <h2 className="text-base font-semibold">Discard your unsaved changes?</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                What you typed into {fileName} since it was last saved is lost; the file itself stays as it is.
+              </p>
+            </>
+          }
+        >
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" data-autofocus onClick={() => setReverting(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setReverting(false);
+                if (source !== null) loadText(source);
+              }}
+            >
+              Discard changes
+            </Button>
+          </div>
+        </Dialog>
       )}
       {error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
       <div ref={hostRef} className="selectable min-h-0 flex-1 overflow-hidden" />

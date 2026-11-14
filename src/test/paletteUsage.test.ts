@@ -13,6 +13,17 @@ const TAILWIND_COLOR = new RegExp(
   `(?<![\\w-])(?:[a-z-]+:)*(?:bg|text|border|ring|ring-offset|fill|stroke|from|via|to|shadow|outline|divide|accent|decoration|caret)-(?:(?:${SCALES})-\\d+|white|black)(?![\\w-])`,
   "g",
 );
+/** A class that sets a color from a name: the kind of utility, then what Tailwind is asked for. */
+const NAMED_COLOR =
+  /(?<![\w-])(?:[a-z-]+:|\[[^\]]*\]:)*(bg|text|border|ring-offset|ring|fill|stroke|from|via|to|outline|divide|accent|decoration|caret|placeholder|shadow)-([a-z]+(?:-[a-z]+)*)(?:\/\d+)?(?![\w-])/g;
+/** What those utilities take that is no color of the palette: Tailwind's own keywords, sizes and sides. */
+const NOT_A_TOKEN = new Set([
+  ...["transparent", "current", "inherit", "none", "inset", "solid", "dashed", "dotted"],
+  ...["xs", "sm", "base", "md", "lg", "xl", "left", "center", "right"],
+  ...["t", "r", "b", "l", "x", "y"],
+  // SVG attributes, which read the same.
+  ...["dasharray", "linecap", "linejoin", "width"],
+]);
 const RAW_COLOR = /#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|\b(?:rgba?|hsla?|oklch)\(/gi;
 
 const sources = (dir: string): string[] =>
@@ -35,6 +46,34 @@ describe("palette", () => {
       [...readFileSync(path, "utf8").matchAll(TAILWIND_COLOR)].map((m) => `${path}: ${m[0]}`),
     );
     expect(found).toEqual([]);
+  });
+
+  it("uses no color the palette does not define", () => {
+    const theme = css.match(/@theme inline \{[\s\S]*?\n\}/)?.[0] ?? "";
+    const defined = new Set([...theme.matchAll(/--(?:color|shadow)-([a-z-]+):/g)].map((m) => m[1]!));
+    expect(defined.has("ring")).toBe(true);
+    const unknown = (source: string) =>
+      [...source.matchAll(NAMED_COLOR)].filter(([, , name]) => !defined.has(name!) && !NOT_A_TOKEN.has(name!));
+    // The check sees a made-up token, with variants and an opacity, and passes the real ones.
+    expect(
+      unknown("hover:bg-popover/50 focus:ring-ringg border-b text-xs bg-card ring-offset-background"),
+    ).toHaveLength(2);
+    const found = sources("src").flatMap((path) => unknown(readFileSync(path, "utf8")).map((m) => `${path}: ${m[0]}`));
+    expect(found).toEqual([]);
+  });
+
+  it("gives what has the keyboard's focus one outline, in the palette's ring color, in both themes", () => {
+    for (const block of [":root", ".dark"]) expect(tokensIn(blockOf(css, block))).toContain("--ring");
+    expect(css).toMatch(/:focus-visible \{\s*outline: 2px solid var\(--ring\);/);
+  });
+
+  it("follows the theme with the native controls, and tones motion down for those who ask", () => {
+    expect(blockOf(css, ":root")).toMatch(/color-scheme: light;/);
+    expect(blockOf(css, ".dark")).toMatch(/color-scheme: dark;/);
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(reduced).toMatch(/animation-duration: 0\.01ms !important;/);
+    expect(reduced).toMatch(/transition-duration: 0\.01ms !important;/);
+    expect(reduced).toMatch(/\.shimmer-text \{\s*animation: none !important;/);
   });
 
   it("keeps raw colors out of the components", () => {

@@ -12,10 +12,11 @@ import {
   parseTarget,
   type SlideComment,
 } from "../../lib/comments";
+import { dismissTopLayer } from "../../lib/layers";
 import { getSlideClock } from "../../lib/slideClock";
 import { loadText, trySaveText } from "../../lib/storage";
 import { useApp } from "../../store";
-import { fromFrameIn } from "./frames";
+import type { FrameMessages } from "./messages";
 
 /** The comment being written or changed; a new one has no id yet. */
 export interface OpenComment {
@@ -82,11 +83,13 @@ const NO_COMMENTS: SlideComment[] = [];
 
 /**
  * Comments on the slide on the stage, while `shown`: the comment tools, one picking elements in
- * the preview and one outlining an area over `slideRef` (the box the slide is shown in), where
- * the preview found the elements the comments are on, and the open comment.
+ * the preview (whose `messages` say what was picked) and one outlining an area over `slideRef`
+ * (the box the slide is shown in, inside the stage area `areaRef`), where the preview found the
+ * elements the comments are on, and the open comment.
  */
 export function useSlideComments(
   areaRef: RefObject<HTMLDivElement | null>,
+  messages: FrameMessages,
   post: (data: unknown) => void,
   shown: boolean,
   slideRef: RefObject<HTMLDivElement | null>,
@@ -113,37 +116,37 @@ export function useSlideComments(
   // Keeps what the open comment says when something else closes it.
   const keepOpen = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data;
-      // Keys pressed in the preview after a click on the slide land here.
-      if (data?.type === "slop:key" && data.key === "Escape") {
-        setPicking(false);
-        setOutlining(false);
-      }
-      if (data?.type !== "slop:comment-pick" && data?.type !== "slop:comment-spots") return;
-      if (!fromFrameIn(areaRef.current, event.source) || data.slide !== useApp.getState().selected) return;
-      if (data.type === "slop:comment-spots") {
-        setFound({ slide: data.slide, spots: parseSpots(data.spots) });
-      } else if ([data.x, data.y].every(Number.isFinite)) {
-        keepOpen.current?.();
-        setOpen({
-          key: crypto.randomUUID(),
-          slide: data.slide,
-          id: null,
-          x: data.x,
-          y: data.y,
-          target: parseTarget(data.target),
-          area: null,
-          shot: null,
-          time: heldMoment(data.slide),
-          text: "",
-        });
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [areaRef]);
+  useEffect(
+    () =>
+      messages.on({
+        // Keys pressed in the preview after a click on the slide land here.
+        "slop:key": (data, event) => {
+          if (data.key !== "Escape" || dismissTopLayer(event)) return;
+          setPicking(false);
+          setOutlining(false);
+        },
+        "slop:comment-spots": (data) => {
+          if (data.slide === useApp.getState().selected) setFound({ slide: data.slide, spots: parseSpots(data.spots) });
+        },
+        "slop:comment-pick": (data) => {
+          if (data.slide !== useApp.getState().selected || ![data.x, data.y].every(Number.isFinite)) return;
+          keepOpen.current?.();
+          setOpen({
+            key: crypto.randomUUID(),
+            slide: data.slide,
+            id: null,
+            x: data.x,
+            y: data.y,
+            target: parseTarget(data.target),
+            area: null,
+            shot: null,
+            time: heldMoment(data.slide),
+            text: "",
+          });
+        },
+      }),
+    [messages],
+  );
 
   useEffect(() => {
     post({ type: "slop:comment-tool", on: commenting });
@@ -183,6 +186,33 @@ export function useSlideComments(
     setOpen({ key: crypto.randomUUID(), slide, id: null, x: left, y: top, target: null, area, shot, time, text: "" });
   };
 
+  const openComment = (comment: SlideComment) => {
+    if (!selected) return;
+    keepOpen.current?.();
+    setOpen({
+      key: crypto.randomUUID(),
+      slide: selected,
+      id: comment.id,
+      x: comment.x,
+      y: comment.y,
+      target: comment.target ?? null,
+      area: comment.area ?? null,
+      shot: null,
+      time: comment.time ?? null,
+      text: comment.text,
+    });
+  };
+
+  // The list of comments (see `CommentsOverview`) asks for one to be opened, on its slide.
+  const asked = useApp((s) => s.commentAsked);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opens once per ask, when its slide and its comments are there
+  useEffect(() => {
+    if (!asked || asked.slide !== selected || !shown) return;
+    const comment = comments.find((c) => c.id === asked.id);
+    useApp.getState().commentShown();
+    if (comment) openComment(comment);
+  }, [asked, selected, shown, comments]);
+
   const spots = found?.slide === selected ? found.spots : null;
   return {
     /** A click on the slide starts a comment on what is under it. */
@@ -202,22 +232,7 @@ export function useSlideComments(
     open,
     /** Where a comment's pin goes. */
     spotOf: (comment: SlideComment): CommentSpot => spots?.[comment.id] ?? { ...comment, found: true },
-    openComment: (comment: SlideComment) => {
-      if (!selected) return;
-      keepOpen.current?.();
-      setOpen({
-        key: crypto.randomUUID(),
-        slide: selected,
-        id: comment.id,
-        x: comment.x,
-        y: comment.y,
-        target: comment.target ?? null,
-        area: comment.area ?? null,
-        shot: null,
-        time: comment.time ?? null,
-        text: comment.text,
-      });
-    },
+    openComment,
     close: useCallback(() => setOpen(null), []),
     keepOpen,
     onFrameReady: () => {

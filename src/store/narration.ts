@@ -17,7 +17,10 @@ export interface NarrationSlice {
   setNotes: (slide: string, text: string) => Promise<void>;
   /** Sets the seconds expected on the slide; 0 removes them. */
   setSlideTime: (slide: string, seconds: number) => Promise<void>;
-  /** Hands the composer a request to clean up the recorded narration of `slide`, or (null) of every slide. */
+  /**
+   * Hands the composer a request to clean up the recorded narration of `slide`, or (null) of every
+   * slide, and shows the chat, where it waits for the user to send it.
+   */
   cleanNarration: (slide: string | null) => void;
   /** Saves slides' timing on the narration timeline, as one change the rail's history can undo. */
   setSlideTiming: (timing: SlideTiming[]) => Promise<void>;

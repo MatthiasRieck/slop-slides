@@ -10,7 +10,7 @@ const withTimes = (times: Record<string, number>): Deck => {
   const deck = deckFor(DECK_HTML);
   return { ...deck, slides: deck.slides.map((s) => ({ ...s, time: times[s.id] ?? 0 })) };
 };
-const field = () => screen.getByLabelText("Expected time for this slide") as HTMLInputElement;
+const field = () => screen.getByLabelText("Planned time") as HTMLInputElement;
 const type = async (text: string) => {
   fireEvent.change(field(), { target: { value: text } });
   await act(async () => fireEvent.blur(field()));
@@ -42,11 +42,50 @@ describe("SlideTime", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("goes back to the time it had on what is no time", async () => {
+  it("is labelled as the time planned, not as progress", () => {
+    render(<SlideTime deck={withTimes({ intro: 75, outro: 645 })} />);
+    expect(screen.getByText("Planned time")).toBeTruthy();
+    expect(screen.getByTestId("deck-time").textContent).toBe("of 12:00 planned");
+  });
+
+  it("marks what is no time instead of throwing it away unseen", async () => {
     render(<SlideTime deck={withTimes({ intro: 75 })} />);
+    expect(field().getAttribute("aria-invalid")).toBeNull();
     await type("soon");
     expect(invoke).not.toHaveBeenCalled();
+    // It stays as typed, marked, and says what a time looks like.
+    expect(field().value).toBe("soon");
+    expect(field().getAttribute("aria-invalid")).toBe("true");
+    const problem = screen.getByRole("alert");
+    expect(problem.textContent).toMatch(/1:30/);
+    expect(field().getAttribute("aria-describedby")).toBe(problem.id);
+    expect(field().className).toContain("ring-destructive");
+    // Typing over it clears the mark; a time is saved as ever.
+    fireEvent.change(field(), { target: { value: "2" } });
+    expect(field().getAttribute("aria-invalid")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => fireEvent.blur(field()));
+    expect(invoke).toHaveBeenCalledWith("set_slide_time", expect.objectContaining({ seconds: 120 }));
+  });
+
+  it("Escape takes back what is no time", async () => {
+    render(<SlideTime deck={withTimes({ intro: 75 })} />);
+    await type("soon");
+    fireEvent.keyDown(field(), { key: "Escape" });
+    await act(async () => fireEvent.blur(field()));
     expect(field().value).toBe("1:15");
+    expect(field().getAttribute("aria-invalid")).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("drops the mark with the slide it was typed for", async () => {
+    const deck = withTimes({ intro: 75 });
+    const { rerender } = render(<SlideTime deck={deck} />);
+    await type("soon");
+    act(() => useApp.setState({ selected: "outro" }));
+    rerender(<SlideTime deck={deck} />);
+    expect(field().value).toBe("");
+    expect(field().getAttribute("aria-invalid")).toBeNull();
   });
 
   it("cancels with Escape", async () => {
@@ -61,10 +100,10 @@ describe("SlideTime", () => {
   it("adds up the times of the slides shown", () => {
     const deck = withTimes({ intro: 60, outro: 30 });
     const { rerender } = render(<SlideTime deck={deck} />);
-    expect(screen.getByTestId("deck-time").textContent).toBe("of 1:30");
+    expect(screen.getByTestId("deck-time").textContent).toBe("of 1:30 planned");
     const hidden = { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: s.id === "outro" })) };
     rerender(<SlideTime deck={hidden} />);
-    expect(screen.getByTestId("deck-time").textContent).toBe("of 1:00");
+    expect(screen.getByTestId("deck-time").textContent).toBe("of 1:00 planned");
   });
 
   it("leaves the time of a locked slide alone", () => {

@@ -1,8 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
+import { answerUnsaved, unsavedAsked } from "../test/unsaved";
+import { lastError } from "./errors";
 import type { AssistantMessage, ChatMessage } from "./messages";
-import { assistantMessage, backend, calls, DECK, freshStore, type Handler, resetBackend, userMessage } from "./testing";
+import {
+  assistantMessage,
+  backend,
+  calls,
+  DECK,
+  freshModule,
+  freshStore,
+  type Handler,
+  resetBackend,
+  userMessage,
+} from "./testing";
 
 beforeEach(resetBackend);
 
@@ -72,7 +84,7 @@ describe("workspaces", () => {
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("notes.md");
     await useApp.getState().openPath("gone.html");
-    expect(useApp.getState().error).toBe("file not found: gone.html");
+    expect(lastError(useApp.getState())).toBe("file not found: gone.html");
     expect(useApp.getState().openedFile).toEqual(opened("notes.md", "file"));
   });
 
@@ -82,12 +94,44 @@ describe("workspaces", () => {
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
     useApp.setState({ codeDirty: true });
-    ask.mockResolvedValue(false);
-    await useApp.getState().openPath("site/index.html");
+    const opening = useApp.getState().openPath("site/index.html");
+    expect(await answerUnsaved("cancel")).toBe("q3.html");
+    await opening;
     expect(useApp.getState().deck).toEqual(TALK);
-    expect(await useApp.getState().closeWorkspace()).toBe(false);
+    const closing = useApp.getState().closeWorkspace();
+    await answerUnsaved("cancel");
+    expect(await closing).toBe(false);
     expect(useApp.getState().workspace).toEqual(WS);
     expect(calls("close_workspace")).toEqual([]);
+  });
+
+  it("opens a deck file in its folder, or in the folder it was open in before", async () => {
+    let useApp = await freshStore(false);
+    workspaceBackend();
+    await useApp.getState().openDeckFile("/ws/talks/q3.html", "/ws");
+    expect(calls("open_workspace")).toEqual([{ path: "/ws" }]);
+    expect(calls("open_file")).toEqual([{ path: "talks/q3.html" }]);
+    expect(useApp.getState().deck).toEqual(TALK);
+
+    // Without a folder given, the one the file is in becomes the workspace.
+    useApp = await freshStore(false);
+    resetBackend();
+    workspaceBackend({ open_file: ({ path }) => ({ path, absolute: `/ws/talks/${String(path)}`, kind: "deck" }) });
+    await useApp.getState().openDeckFile("/ws/talks/q3.html");
+    expect(calls("open_workspace")).toEqual([{ path: "/ws/talks" }]);
+    expect(calls("open_file")).toEqual([{ path: "q3.html" }]);
+  });
+
+  it("opens no deck file when its folder does not open", async () => {
+    const useApp = await freshStore(false);
+    workspaceBackend({
+      open_workspace: () => {
+        throw "ws is already open in another window.";
+      },
+    });
+    await useApp.getState().openDeckFile("/ws/talks/q3.html", "/ws");
+    expect(lastError(useApp.getState())).toBe("ws is already open in another window.");
+    expect(calls("open_file")).toEqual([]);
   });
 
   it("reopens the file last open in a folder", async () => {
@@ -115,7 +159,7 @@ describe("workspaces", () => {
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().openedFile).toBeNull();
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
   });
 
@@ -140,7 +184,111 @@ describe("workspaces", () => {
     backend({ open_workspace: () => Promise.reject("not a folder: /nope") });
     await useApp.getState().openWorkspace("/nope");
     expect(useApp.getState().workspace).toBeNull();
-    expect(useApp.getState().error).toBe("not a folder: /nope");
+    expect(lastError(useApp.getState())).toBe("not a folder: /nope");
+  });
+
+  describe("reopening the deck last open in a folder", () => {
+    const remembered = () => localStorage.setItem("slopslide.lastFile:/ws", "talks/q3.html");
+
+    it("loads the deck's chat only: the folder's own would give way to it at once", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ load_chat: ({ id }) => (id === TALK.id ? [userMessage("about the talk")] : null) });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(calls("load_chat")).toEqual([{ id: TALK.id }]);
+      expect(calls("session_provider")).toEqual([{ id: TALK.id }]);
+      expect(calls("open_deck")).toEqual([{ id: TALK.id, keepChat: false, quiet: true }]);
+      expect(useApp.getState()).toMatchObject({
+        workspace: WS,
+        openedFile: { path: "talks/q3.html", kind: "deck" },
+        deck: TALK,
+        selected: TALK.slides[0]!.id,
+        chatKey: TALK.id,
+        messages: [userMessage("about the talk")],
+      });
+    });
+
+    it("shows the folder and its deck together, never the folder without the deck", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      remembered();
+      /** What the main area would have shown, at every change of the store. */
+      const shown = new Set<string>();
+      useApp.subscribe(({ workspace, deck }) => shown.add(workspace ? (deck ? "deck" : "no deck") : "start screen"));
+      await useApp.getState().openWorkspace("/ws");
+      expect([...shown]).toEqual(["deck"]);
+      // The tab on show stays: only a folder with nothing to reopen starts at its files.
+      expect(useApp.getState().sidebarTab).not.toBe("files");
+    });
+
+    it("asks what the file is and whether the folder's agent works at the same time", async () => {
+      const useApp = await freshStore(false);
+      const asked: string[] = [];
+      let answer = () => {};
+      const held = new Promise<void>((resolve) => (answer = resolve));
+      workspaceBackend({
+        open_file: async ({ path }) => {
+          asked.push("open_file");
+          await held;
+          return opened(String(path), "deck");
+        },
+        agent_running: async () => {
+          asked.push("agent_running");
+          await held;
+          return false;
+        },
+      });
+      remembered();
+      const opening = useApp.getState().openWorkspace("/ws");
+      await vi.waitFor(() => expect(asked).toEqual(["open_file", "agent_running"]));
+      answer();
+      await opening;
+      expect(useApp.getState().deck).toEqual(TALK);
+    });
+
+    it("keeps the folder's chat on show while its agent is still at work", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ agent_running: ({ id }) => id === "/ws" });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(calls("open_deck")).toEqual([]);
+      expect(calls("load_chat")).toEqual([{ id: "/ws" }]);
+      expect(useApp.getState()).toMatchObject({ workspace: WS, deck: null, chatKey: "/ws", running: true });
+      expect(useApp.getState().sidebarTab).toBe("files");
+      // The deck is still the one to come back to.
+      expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("talks/q3.html");
+    });
+
+    it("starts at the files, with the folder's chat, when the deck is open in another window", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend({ open_deck: () => Promise.reject("open in another window") });
+      remembered();
+      await useApp.getState().openWorkspace("/ws");
+      expect(useApp.getState()).toMatchObject({ workspace: WS, deck: null, openedFile: null, chatKey: "/ws" });
+      expect(useApp.getState().sidebarTab).toBe("files");
+      expect(lastError(useApp.getState())).toBeNull();
+    });
+
+    it("shows a page that is no deck with the folder, in one step, beside the folder's chat", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      localStorage.setItem("slopslide.lastFile:/ws", "site/index.html");
+      const shown = new Set<string>();
+      useApp.subscribe(({ workspace, openedFile }) => workspace && shown.add(openedFile?.path ?? "no file"));
+      await useApp.getState().openWorkspace("/ws");
+      expect([...shown]).toEqual(["site/index.html"]);
+      expect(calls("load_chat")).toEqual([{ id: "/ws" }]);
+      expect(useApp.getState().chatKey).toBe("/ws");
+    });
+
+    it("forgets a file that is gone since", async () => {
+      const useApp = await freshStore(false);
+      workspaceBackend();
+      localStorage.setItem("slopslide.lastFile:/ws", "gone.html");
+      await useApp.getState().openWorkspace("/ws");
+      expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
+      expect(useApp.getState()).toMatchObject({ workspace: WS, openedFile: null, sidebarTab: "files" });
+    });
   });
 
   it("creates decks in the open folder and opens them", async () => {
@@ -246,7 +394,7 @@ describe("each deck's own chat", () => {
     });
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().openDeck(B.id)).toBe(true);
-    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, error: null });
+    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, toasts: [] });
   });
 
   it("keeps the open deck and its chat when the next one is open in another window", async () => {
@@ -258,7 +406,7 @@ describe("each deck's own chat", () => {
     });
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().openDeck(B.id)).toBe(false);
-    expect(useApp.getState().error).toBe("b.html is already open in another window.");
+    expect(lastError(useApp.getState())).toBe("b.html is already open in another window.");
     expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id, messages: said("about a") });
     expect(useApp.getState().openedFile?.path).toBe("a.html");
   });
@@ -271,7 +419,7 @@ describe("each deck's own chat", () => {
       },
     });
     expect(calls("open_deck")).toEqual([{ id: A.id, keepChat: false, quiet: true }]);
-    expect(useApp.getState()).toMatchObject({ deck: null, openedFile: null, error: null, sidebarTab: "files" });
+    expect(useApp.getState()).toMatchObject({ deck: null, openedFile: null, toasts: [], sidebarTab: "files" });
     expect(useApp.getState().chatKey).toBe("/ws");
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("a.html");
   });
@@ -285,7 +433,7 @@ describe("each deck's own chat", () => {
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().closeDeck()).toBe(false);
     await useApp.getState().openPath("page.html");
-    expect(useApp.getState().error).toMatch(/^ws is already open without a deck/);
+    expect(lastError(useApp.getState())).toMatch(/^ws is already open without a deck/);
     expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id });
     expect(useApp.getState().openedFile?.path).toBe("a.html");
   });
@@ -338,32 +486,111 @@ describe("closing a deck with unsaved HTML edits", () => {
 
   it("stays open when the user keeps their edits", async () => {
     const useApp = await freshStore();
-    ask.mockResolvedValue(false);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    expect(await useApp.getState().closeDeck()).toBe(false);
-    expect(ask).toHaveBeenCalledOnce();
+    const closing = useApp.getState().closeDeck();
+    expect(await answerUnsaved("cancel")).toBe("deck.html");
+    expect(await closing).toBe(false);
+    expect(await unsavedAsked()).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
     expect(useApp.getState().deck).not.toBeNull();
     expect(useApp.getState().codeDirty).toBe(true);
   });
 
-  it("closes and clears the dirty flag when the user discards", async () => {
-    const useApp = await freshStore();
-    ask.mockResolvedValue(true);
+  it("closes and clears the dirty flag when the user does not save", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => {});
+    provideCodeSave(save);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    expect(await useApp.getState().closeDeck()).toBe(true);
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("discard");
+    expect(await closing).toBe(true);
+    expect(save).not.toHaveBeenCalled();
     expect(useApp.getState().deck).toBeNull();
     expect(useApp.getState().codeDirty).toBe(false);
   });
 
-  it("falls back to window.confirm when the native dialog is unavailable", async () => {
-    const useApp = await freshStore();
-    ask.mockRejectedValue(new Error("no dialog plugin"));
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("saves the edits through the HTML tab's editor, then closes", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => useApp.getState().setCodeDirty(false));
+    provideCodeSave(save);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    await useApp.getState().closeDeck();
-    expect(confirm).toHaveBeenCalledOnce();
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(true);
+    expect(save).toHaveBeenCalledOnce();
+    expect(useApp.getState().deck).toBeNull();
+  });
+
+  it("stays open, on the HTML tab, when the edits could not be saved", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    // The file changed on disk meanwhile: the editor keeps the edits and says so.
+    provideCodeSave(async () => {});
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true, sidebarTab: "chat", sidebarTabs: ["chat", "code"] });
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(false);
     expect(useApp.getState().deck).not.toBeNull();
-    confirm.mockRestore();
+    expect(useApp.getState().sidebarTab).toBe("code");
+  });
+
+  it("does not save through an editor that is gone", async () => {
+    const { useApp, provideCodeSave } = await freshModule();
+    const save = vi.fn(async () => useApp.getState().setCodeDirty(false));
+    provideCodeSave(save)();
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
+    const closing = useApp.getState().closeDeck();
+    await answerUnsaved("save");
+    expect(await closing).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("asks one question at a time: asked again, the first is cancelled", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
+    const first = useApp.getState().closeDeck();
+    await vi.waitFor(async () => expect(await unsavedAsked()).toBe(true));
+    const second = useApp.getState().closeDeck();
+    expect(await first).toBe(false);
+    await answerUnsaved("discard");
+    expect(await second).toBe(true);
+  });
+});
+
+describe("renaming a deck", () => {
+  it("gives the deck its new title, trimmed", async () => {
+    const useApp = await freshStore();
+    backend({ rename_deck: ({ title }) => ({ ...DECK, title }) });
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("  Board update  ")).toBe(true);
+    expect(calls("rename_deck")).toEqual([{ id: DECK.id, title: "Board update" }]);
+    expect(useApp.getState().deck?.title).toBe("Board update");
+  });
+
+  it("takes no empty title, and leaves an unchanged one alone", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("   ")).toBe(false);
+    expect(await useApp.getState().renameDeck(` ${DECK.title} `)).toBe(true);
+    expect(calls("rename_deck")).toEqual([]);
+  });
+
+  it("says why a deck could not be renamed, and keeps its title", async () => {
+    const useApp = await freshStore();
+    backend({
+      rename_deck: () => {
+        throw "the deck file is read-only";
+      },
+    });
+    useApp.setState({ deck: DECK });
+    expect(await useApp.getState().renameDeck("Other")).toBe(false);
+    expect(lastError(useApp.getState())).toBe("the deck file is read-only");
+    expect(useApp.getState().deck?.title).toBe(DECK.title);
+  });
+
+  it("renames nothing without a deck", async () => {
+    const useApp = await freshStore();
+    expect(await useApp.getState().renameDeck("Other")).toBe(false);
+    expect(calls("rename_deck")).toEqual([]);
   });
 });
 
@@ -456,7 +683,7 @@ describe("opening and creating decks", () => {
       },
     });
     await useApp.getState().openDeck("/decks/talk/deck.html");
-    expect(useApp.getState().error).toBe("deck not found: talk");
+    expect(lastError(useApp.getState())).toBe("deck not found: talk");
     expect(useApp.getState().deck).toBeNull();
   });
 
@@ -479,7 +706,7 @@ describe("opening and creating decks", () => {
       },
     });
     await useApp.getState().createDeck("Talk");
-    expect(useApp.getState().error).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("disk full");
   });
 
   it("closeDeck resets the editor state", async () => {

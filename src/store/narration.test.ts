@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -37,9 +38,9 @@ describe("what is said over the slides", () => {
         throw "The slide `intro` is locked; unlock it to change it.";
       },
     });
-    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", error: null });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", toasts: [] });
     await useApp.getState().setNarration("intro", "Hi");
-    expect(useApp.getState().error).toContain("locked");
+    expect(lastError(useApp.getState())).toContain("locked");
   });
 
   it("saves speaker notes after edits still being saved, and shows the deck", async () => {
@@ -49,7 +50,7 @@ describe("what is said over the slides", () => {
     backend({ set_slide_notes: () => next });
     await useApp.getState().setNotes("intro", "Pause here");
     expect(calls("set_slide_notes")).toEqual([{ id: DECK.id, slide: "intro", text: "Pause here" }]);
-    expect(useApp.getState().deck).toBe(next);
+    expect(useApp.getState().deck).toEqual(next);
   });
 });
 
@@ -60,5 +61,16 @@ describe("cleaning up recorded narration", () => {
     useApp.setState({ fillComposer, sidebarOpen: true, sidebarTab: "chat" });
     useApp.getState().cleanNarration("intro");
     expect(fillComposer.mock.calls[0]?.[0]).toContain("the narration of slide `intro`");
+  });
+
+  it("opens the chat, where the request waits, when another tab or nothing is showing", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ sidebarOpen: true, sidebarTab: "narration", sidebarTabs: ["chat", "narration"] });
+    useApp.getState().cleanNarration(null);
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    useApp.getState().setSidebarOpen(false);
+    useApp.getState().cleanNarration("intro");
+    expect(useApp.getState().sidebarOpen).toBe(true);
+    expect(useApp.getState().sidebarTab).toBe("chat");
   });
 });

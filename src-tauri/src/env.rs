@@ -1,6 +1,12 @@
 //! Process environment for spawning agent CLIs (Claude Code, Codex, Copilot) from a GUI app.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::thread::JoinHandle;
+
+/// How long the login shell gets to answer.
+#[cfg(unix)]
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
 #[cfg(any(unix, test))]
 const MARKER: &str = "__SLOPSLIDE_ENV__";
@@ -9,16 +15,51 @@ const MARKER: &str = "__SLOPSLIDE_ENV__";
 #[cfg(any(unix, test))]
 const SKIPPED: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
 
+/// The probe of the login shell, while it runs (see [`adopt_login_shell_env`]).
+static PROBE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
 /// GUI apps on macOS and Linux start with a minimal environment. Adopt the user's login-shell
 /// environment so `claude` (and the tools it shells out to) resolve as they do in a terminal,
 /// and see what the terminal sees: PATH, but also proxy settings (`HTTPS_PROXY`, `NO_PROXY`),
 /// custom CA bundles (`NODE_EXTRA_CA_CERTS`) and provider config exported in shell profiles.
+///
+/// A login shell with a heavy profile takes seconds to answer, so it is asked on a thread of
+/// its own, started first thing, and the window opens meanwhile. Whatever needs the environment
+/// (starting a CLI or `git`, finding one, reading a key or a proxy from it) waits with
+/// [`ready`]. The variables are still set on the process, from that thread, rather than handed
+/// to each child: the HTTP client and the libraries read proxies and certificates from the
+/// process environment themselves.
 pub fn adopt_login_shell_env() {
+    let mut probe = PROBE.lock().unwrap_or_else(|e| e.into_inner());
+    if probe.is_none() {
+        *probe = Some(std::thread::spawn(adopt));
+    }
+}
+
+/// Waits until the login shell's environment is adopted, if it is being asked for; at once
+/// after that, and where it never is (the agent's tool server, tests).
+pub fn ready() {
+    // The lock is held while waiting, so everyone who asks meanwhile waits too.
+    let mut probe = PROBE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(running) = probe.take() {
+        let _ = running.join();
+    }
+}
+
+/// Asks the login shell for its environment and sets it on this process.
+fn adopt() {
+    for (key, value) in login_shell_env() {
+        std::env::set_var(key, value);
+    }
+}
+
+/// The environment of the user's login shell; empty where there is none to ask (Windows) or it
+/// does not answer in time.
+fn login_shell_env() -> Vec<(String, String)> {
     #[cfg(unix)]
     {
         use std::io::Read;
         use std::process::{Command, Stdio};
-        use std::time::Duration;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let Ok(mut child) = Command::new(shell)
@@ -31,7 +72,7 @@ pub fn adopt_login_shell_env() {
             .stderr(Stdio::null())
             .spawn()
         else {
-            return;
+            return Vec::new();
         };
         // Drain stdout on a thread so a large environment cannot fill the pipe and stall the shell.
         let mut stdout = child.stdout.take().expect("stdout is piped");
@@ -41,17 +82,20 @@ pub fn adopt_login_shell_env() {
             let _ = stdout.read_to_end(&mut out);
             let _ = tx.send(out);
         });
-        // A misbehaving shell profile must not hang app startup.
-        let Ok(out) = rx.recv_timeout(Duration::from_secs(4)) else {
+        // A misbehaving shell profile must not keep the agent from ever starting.
+        let Ok(out) = rx.recv_timeout(PROBE_TIMEOUT) else {
             let _ = child.kill();
             let _ = child.wait();
-            return;
+            return Vec::new();
         };
         let _ = child.wait();
-        for (key, value) in parse_env(&String::from_utf8_lossy(&out)) {
-            std::env::set_var(key, value);
-        }
+        parse_env(&String::from_utf8_lossy(&out))
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
     }
+    #[cfg(not(unix))]
+    Vec::new()
 }
 
 /// The variables between the markers of `env -0` output, minus shell bookkeeping. Anything a
@@ -81,6 +125,8 @@ pub fn resolve_copilot() -> Option<PathBuf> {
 }
 
 fn resolve_cli(name: &str, override_var: &str, extra: &[&str]) -> Option<PathBuf> {
+    // The CLIs are on the PATH of the user's shell.
+    ready();
     if let Some(custom) = std::env::var_os(override_var).map(PathBuf::from) {
         return custom.is_file().then_some(custom);
     }
@@ -165,6 +211,59 @@ mod tests {
             .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(parse_env(&stdout).contains(&("SLOPSLIDE_PROBE", "a b=c")));
+    }
+
+    /// What waiting on a probe does, with `probe` in place of the login shell.
+    fn wait_on(probe: &Mutex<Option<JoinHandle<()>>>) {
+        let mut probe = probe.lock().unwrap();
+        if let Some(running) = probe.take() {
+            running.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn starting_the_probe_does_not_wait_for_it_but_ready_does() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        // A shell that answers only once it is let go, as a heavy profile would after seconds.
+        let (go, wait) = mpsc::channel::<()>();
+        let adopted = Arc::new(AtomicBool::new(false));
+        let set = adopted.clone();
+        let probe = Arc::new(Mutex::new(Some(std::thread::spawn(move || {
+            wait.recv().unwrap();
+            set.store(true, Ordering::SeqCst);
+        }))));
+        assert!(
+            !adopted.load(Ordering::SeqCst),
+            "the window opens while the shell is still asked"
+        );
+
+        // Two who need the environment both wait until it is there.
+        let waiting: Vec<_> = (0..2)
+            .map(|_| {
+                let (probe, adopted) = (probe.clone(), adopted.clone());
+                std::thread::spawn(move || {
+                    wait_on(&probe);
+                    adopted.load(Ordering::SeqCst)
+                })
+            })
+            .collect();
+        go.send(()).unwrap();
+        for waiter in waiting {
+            assert!(
+                waiter.join().unwrap(),
+                "ready returned before the probe did"
+            );
+        }
+        wait_on(&probe);
+    }
+
+    #[test]
+    fn ready_returns_at_once_where_the_shell_is_never_asked() {
+        // Tests never start the probe; this would hang if `ready` waited for one.
+        ready();
+        ready();
     }
 
     // The only test that touches SLOPSLIDE_CLAUDE_PATH, so parallel tests cannot race on it.

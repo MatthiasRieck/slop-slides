@@ -1,7 +1,7 @@
 //! Locked slides: what they were like when the agent's turn started, and putting them back.
 
 use super::edit::{end_of_deck, indent_before};
-use super::spans::{find_slides, span_of};
+use super::spans::{find_slides, span_of, SlideSpan};
 
 /// A locked slide as it was when a guard was set up: what it must stay like.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -31,11 +31,15 @@ pub fn locked_slides(html: &str) -> Vec<LockedSlide> {
 
 /// Ids of the `locked` slides that `html` changed or removed. Moving one is not a change.
 pub fn changed_locked(html: &str, locked: &[LockedSlide]) -> Vec<String> {
-    let slides = find_slides(html);
+    changed_locked_in(html, &find_slides(html), locked)
+}
+
+/// [`changed_locked`] with `slides`, the slides of `html` already found.
+pub fn changed_locked_in(html: &str, slides: &[SlideSpan], locked: &[LockedSlide]) -> Vec<String> {
     locked
         .iter()
         .filter(|l| {
-            span_of(&slides, &l.id).map(|s| &html[s.range.clone()]) != Some(l.markup.as_str())
+            span_of(slides, &l.id).map(|s| &html[s.range.clone()]) != Some(l.markup.as_str())
         })
         .map(|l| l.id.clone())
         .collect()
@@ -46,10 +50,15 @@ pub fn changed_locked(html: &str, locked: &[LockedSlide]) -> Vec<String> {
 pub fn restore_locked(html: &str, locked: &[LockedSlide]) -> (String, Vec<String>) {
     let mut out = html.to_string();
     let mut restored = Vec::new();
+    // Found again only after a slide was put back: most turns leave the locked slides alone.
+    let mut found: Option<Vec<SlideSpan>> = None;
     for slide in locked {
-        let slides = find_slides(&out);
+        let slides = found.take().unwrap_or_else(|| find_slides(&out));
         match span_of(&slides, &slide.id) {
-            Some(span) if out[span.range.clone()] == slide.markup => continue,
+            Some(span) if out[span.range.clone()] == slide.markup => {
+                found = Some(slides);
+                continue;
+            }
             Some(span) => out.replace_range(span.range.clone(), &slide.markup),
             None => {
                 let anchor = match &slide.after {
@@ -137,6 +146,21 @@ mod tests {
             changed_locked(&delete(LOCKED_DECK, "b").unwrap(), &locked),
             ["b"]
         );
+    }
+
+    #[test]
+    fn locked_slides_left_alone_are_checked_with_one_scan() {
+        let locked = locked_slides(LOCKED_DECK);
+        assert_eq!(locked.len(), 2);
+        let before = scans();
+        let (same, restored) = restore_locked(LOCKED_DECK, &locked);
+        assert_eq!((same.as_str(), restored.len()), (LOCKED_DECK, 0));
+        assert_eq!(scans() - before, 1);
+        // One changed: found again after it is put back, for the one after it.
+        let edited = LOCKED_DECK.replace(">B<", ">B!<");
+        let before = scans();
+        assert_eq!(restore_locked(&edited, &locked).0, LOCKED_DECK);
+        assert_eq!(scans() - before, 2);
     }
 
     #[test]

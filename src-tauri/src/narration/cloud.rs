@@ -265,6 +265,8 @@ pub fn key(home: &Path, provider: Provider) -> Option<(String, KeySource)> {
     if let Some(saved) = saved {
         return Some((saved, KeySource::Saved));
     }
+    // A key exported in the shell's profile (see [`crate::env`]).
+    crate::env::ready();
     let env = std::env::var(provider.key_env()).ok()?;
     let env = env.trim();
     (!env.is_empty()).then(|| (env.to_string(), KeySource::Environment))
@@ -491,6 +493,8 @@ pub fn failure(provider: Provider, status: u16, body: &[u8]) -> Error {
 }
 
 fn client() -> Result<reqwest::Client> {
+    // It reads the proxy to go through from the shell's environment (see [`crate::env`]).
+    crate::env::ready();
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(180))

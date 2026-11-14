@@ -2,6 +2,7 @@
 
 use super::edit::{insert_after_head, remove};
 use super::meta::slide_size;
+use super::scan::rfind_ci;
 
 const RUNTIME_CSS: &str = include_str!("../../assets/runtime.css");
 const RUNTIME_JS: &str = include_str!("../../assets/runtime.js");
@@ -33,10 +34,7 @@ pub fn ensure_runtime(html: &str) -> String {
     match replace_block(&html, JS_START, JS_END, &js) {
         Some(updated) => updated,
         None => {
-            let at = html
-                .to_ascii_lowercase()
-                .rfind("</body")
-                .unwrap_or(html.len());
+            let at = rfind_ci(&html, "</body").unwrap_or(html.len());
             format!("{}  {js}\n{}", &html[..at], &html[at..])
         }
     }

@@ -5,6 +5,7 @@ import { useChanges, visibleRows } from "./changesStore";
 import type { DeckChanges, SlideChange, SlideStatus } from "./lib/api";
 import { DEFAULT_DIVIDER } from "./lib/compare";
 import { useApp } from "./store";
+import { lastError, toastTexts } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
 const row = (status: SlideStatus, id: string): SlideChange => ({
@@ -21,6 +22,8 @@ const row = (status: SlideStatus, id: string): SlideChange => ({
 
 const changes = (...slides: SlideChange[]): DeckChanges => ({
   tracking: "committed",
+  branch: "main",
+  detached: false,
   commit: { hash: "abc123", subject: "First" },
   stylesChanged: false,
   oldSize: null,
@@ -43,7 +46,11 @@ beforeEach(() => {
     picked: null,
     onlyChanges: false,
     divider: DEFAULT_DIVIDER,
+    view: "split",
+    loading: false,
+    error: null,
   });
+  useApp.setState({ toasts: [] });
 });
 
 describe("refresh", () => {
@@ -96,10 +103,40 @@ describe("refresh", () => {
     expect(useChanges.getState().changes?.slides[0]?.id).toBe("new");
   });
 
-  it("reports what went wrong", async () => {
+  it("says what went wrong in the view, which offers to try again, not in a message", async () => {
     vi.mocked(invoke).mockRejectedValue("the deck is gone");
     await useChanges.getState().refresh(DECK);
-    expect(useApp.getState().error).toContain("the deck is gone");
+    expect(useChanges.getState()).toMatchObject({ deck: DECK, error: "the deck is gone", loading: false });
+    expect(lastError(useApp.getState())).toBeNull();
+    answer(changes(row("modified", "a")));
+    await useChanges.getState().refresh(DECK);
+    expect(useChanges.getState()).toMatchObject({ error: null, loading: false });
+    expect(useChanges.getState().changes?.slides).toHaveLength(1);
+  });
+
+  it("keeps what was read when reading it again fails", async () => {
+    answer(changes(row("modified", "a")));
+    await useChanges.getState().refresh(DECK);
+    vi.mocked(invoke).mockRejectedValue("git is busy");
+    await useChanges.getState().refresh(DECK);
+    expect(useChanges.getState().error).toBe("git is busy");
+    expect(useChanges.getState().changes?.slides).toHaveLength(1);
+  });
+
+  it("is loading until the answer is there, and shows nothing of another deck meanwhile", async () => {
+    answer(changes(row("modified", "a")));
+    await useChanges.getState().refresh("/decks/other/deck.html");
+    let finish!: (value: DeckChanges) => void;
+    vi.mocked(invoke).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const reading = useChanges.getState().refresh(DECK);
+    expect(useChanges.getState()).toMatchObject({ deck: DECK, changes: null, picked: null, loading: true });
+    finish(changes(row("modified", "b")));
+    await reading;
+    expect(useChanges.getState()).toMatchObject({ loading: false, picked: "b" });
   });
 });
 
@@ -156,12 +193,12 @@ describe("checkRepository", () => {
   });
 
   it("counts a failed check as no repository, without an error", async () => {
-    useApp.setState({ error: null });
+    useApp.setState({ toasts: [] });
     useChanges.setState({ repository: DECK });
     found(Promise.reject("the deck is gone"));
     await useChanges.getState().checkRepository(DECK);
     expect(useChanges.getState().repository).toBeNull();
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("ignores an answer about a deck that is no longer open", async () => {
@@ -188,7 +225,7 @@ describe("changing the repository", () => {
       return changes();
     });
     await useChanges.getState().unstage(DECK, STYLES);
-    expect(useApp.getState().error).toContain("index.lock exists");
+    expect(lastError(useApp.getState())).toContain("index.lock exists");
     expect(called()).toContain("deck_changes");
   });
 
@@ -201,14 +238,55 @@ describe("changing the repository", () => {
     expect(useApp.getState().selected).toBe("intro");
   });
 
-  it("says whether the commit worked", async () => {
-    answer(changes());
+  it("says whether the commit worked, and which commit it made", async () => {
+    answer({ ...changes(), commit: { hash: "def456", subject: "Fix" } });
     expect(await useChanges.getState().commit(DECK, "Fix")).toBe(true);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Committed def456"]);
+    useApp.setState({ toasts: [] });
     vi.mocked(invoke).mockImplementation(async (cmd) => {
       if (cmd === "commit_changes") throw "no";
       return changes();
     });
     expect(await useChanges.getState().commit(DECK, "Fix")).toBe(false);
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
+    expect(lastError(useApp.getState())).toContain("no");
+  });
+
+  it("commits everything: stages it all, then commits", async () => {
+    answer(changes());
+    expect(await useChanges.getState().commitAll(DECK, "Fix")).toBe(true);
+    expect(called()).toEqual(["stage_all", "commit_changes", "deck_changes"]);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Committed abc123"]);
+  });
+
+  it("does not commit when staging everything failed", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "stage_all") throw "index.lock exists";
+      return changes();
+    });
+    expect(await useChanges.getState().commitAll(DECK, "Fix")).toBe(false);
+    expect(called()).not.toContain("commit_changes");
+    expect(called()).toContain("deck_changes");
+    expect(lastError(useApp.getState())).toContain("index.lock exists");
+  });
+
+  it("discards every change as one edit of the deck, and selects a slide that is still there", async () => {
+    useApp.setState({ selected: "added" });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_all_changes" ? { deck: deckFor(DECK_HTML), previous: "", source: "", created: [] } : changes(),
+    );
+    await useChanges.getState().restoreAll(DECK);
+    expect(called().filter((cmd) => cmd === "restore_all_changes")).toHaveLength(1);
+    expect(called()).toContain("deck_changes");
+    expect(useApp.getState().selected).toBe("intro");
+  });
+});
+
+describe("the view of a slide that changed", () => {
+  it("is split until another is picked", () => {
+    expect(useChanges.getState().view).toBe("split");
+    useChanges.getState().setView("before");
+    expect(useChanges.getState().view).toBe("before");
   });
 });
 

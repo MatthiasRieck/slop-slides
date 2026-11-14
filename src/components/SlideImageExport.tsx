@@ -1,10 +1,12 @@
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useContentSize } from "../hooks/useContentSize";
 import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
+import { basename, plural } from "../lib/utils";
 import { showError, useApp } from "../store";
+import { Dialog } from "./Dialog";
+import { showSaved } from "./exportSaved";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */
@@ -15,7 +17,7 @@ const NO_AREA = { width: 0, height: 0 };
 /**
  * Saves every slide as a PNG. Each slide is shown in turn, as large as the window allows,
  * in its final animation state, and screenshotted natively (see src-tauri/src/capture.rs).
- * Covers the editor while it works; when done, reveals the folder.
+ * Covers the editor while it works; when done, says so, with a way to the folder.
  */
 export function SlideImageExport() {
   const job = useApp((s) => s.imageExport);
@@ -34,6 +36,8 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   const width = Math.max(0, Math.min(area.width, (area.height * canvas.width) / canvas.height));
   const stopped = useRef(false);
   const captured = useRef(-1);
+  // How many images are saved so far: a slide deleted meanwhile has none.
+  const saved = useRef(0);
   const total = slides.length;
   const slide = deck.slides.find((s) => s.id === slides[index]);
 
@@ -42,18 +46,10 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     useApp.getState().endImageExport();
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: install the Escape handler once for the export's lifetime
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      cancel();
-    };
     stopped.current = false;
-    window.addEventListener("keydown", onKey);
     return () => {
       stopped.current = true;
-      window.removeEventListener("keydown", onKey);
     };
   }, []);
 
@@ -63,7 +59,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
       return;
     }
     useApp.getState().endImageExport();
-    void revealItemInDir(dir).catch(() => {});
+    showSaved(dir, `Saved ${plural(saved.current, "slide image")} in ${basename(dir)}`);
   };
 
   // A slide deleted since the export started has nothing to show.
@@ -86,14 +82,16 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
       useApp.getState().endImageExport();
       return;
     }
+    saved.current += 1;
     if (!stopped.current) next();
   };
 
   return (
-    <div
-      role="dialog"
-      aria-label="Saving slide images"
-      className="dark fixed inset-0 z-50 flex flex-col bg-background text-foreground"
+    // Escape cancels, as the button does.
+    <Dialog
+      label="Saving slide images"
+      onClose={cancel}
+      className="dark fixed inset-0 flex flex-col bg-background text-foreground outline-none"
     >
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
@@ -121,7 +119,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
           Cancel
         </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

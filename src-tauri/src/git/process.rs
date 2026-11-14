@@ -9,6 +9,8 @@ use crate::error::{Error, Result};
 use super::Commit;
 
 fn command(dir: &Path, args: &[&str]) -> Command {
+    // `git` is found on the PATH of the user's shell (see [`crate::env`]).
+    crate::env::ready();
     let mut command = Command::new("git");
     command.args(args).current_dir(dir);
     #[cfg(windows)]
@@ -71,6 +73,15 @@ pub fn read_at_head(file: &Path) -> Option<Vec<u8>> {
     )
 }
 
+/// The id of the last commit of the repository around `dir`; None without a repository or a
+/// commit. What a commit holds never changes, so its files can be kept by this (see
+/// `protocol/head.rs`).
+pub fn head_oid(dir: &Path) -> Option<String> {
+    let out = git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"])?;
+    let oid = String::from_utf8_lossy(&out).trim().to_string();
+    (!oid.is_empty()).then_some(oid)
+}
+
 /// The last commit of the repository around `dir`.
 pub(super) fn head_commit(dir: &Path) -> Option<Commit> {
     let out = git(dir, &["log", "-1", "--format=%h%x00%s"])?;
@@ -80,6 +91,14 @@ pub(super) fn head_commit(dir: &Path) -> Option<Commit> {
         hash: hash.into(),
         subject: subject.into(),
     })
+}
+
+/// The branch checked out in the repository around `dir`, which it has before its first commit
+/// too; None while a commit is checked out instead (a detached HEAD).
+pub(super) fn current_branch(dir: &Path) -> Option<String> {
+    let out = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    let name = String::from_utf8_lossy(&out).trim().to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 /// The files around `dir`, relative to it, that differ from the last commit.

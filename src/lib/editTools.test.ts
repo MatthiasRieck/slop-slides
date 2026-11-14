@@ -2,10 +2,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AUTOFIT_LABELS,
+  combineElements,
   DEFAULT_EDIT_STYLES,
   defaultsFrom,
   EDIT_TOOL_KEYS,
   type EditSelection,
+  FIT_LABELS,
+  FIT_POSITION_NAMES,
+  FIT_POSITIONS,
   familyOf,
   familyOfKind,
   firstFamily,
@@ -17,9 +22,11 @@ import {
   parseFontSize,
   parseFonts,
   parseHexColor,
+  parseMenuTarget,
   parseSelection,
   SYSTEM_FONTS,
   stepFontSize,
+  strokeWidths,
   toolbarState,
 } from "./editTools";
 
@@ -28,6 +35,9 @@ const SELECTION: EditSelection = {
   text: true,
   vector: false,
   color: "#111111",
+  colorOther: false,
+  fillOther: false,
+  strokeOther: false,
   fontSize: 48,
   fontFamily: "Inter",
   bold: false,
@@ -123,7 +133,7 @@ describe("edit tools", () => {
         color: "red",
         fill: "#ABCDEF",
         fontSize: "big",
-        align: "justify",
+        align: "start",
         valign: "baseline",
         strokeWidth: NaN,
         script: "super",
@@ -138,6 +148,9 @@ describe("edit tools", () => {
       text: false,
       vector: false,
       color: null,
+      colorOther: false,
+      fillOther: false,
+      strokeOther: false,
       fontSize: null,
       fontFamily: null,
       bold: false,
@@ -344,5 +357,63 @@ describe("parseElement", () => {
     expect(parseElement(null)).toBeNull();
     expect(parseElement("p")).toBeNull();
     expect(parseElement({ path: "#a", markup: 1, name: "p" })).toBeNull();
+  });
+});
+
+describe("what the toolbar and the context menu are told", () => {
+  const A = { path: "#intro > h1:nth-child(1)", markup: "<h1>A</h1>", name: '<h1> "A"', added: true };
+  const B = { path: "#intro > p:nth-child(2)", markup: "<p>B</p>", name: '<p> "B"', added: false };
+
+  it("reports justified text as justified", () => {
+    expect(parseSelection({ kind: "text", align: "justify" })?.align).toBe("justify");
+  });
+
+  it("tells a color that is not one plain color from none", () => {
+    const mixed = parseSelection({ kind: "shape", fill: null, fillOther: true, strokeOther: "yes" });
+    expect(mixed).toMatchObject({ fill: null, fillOther: true, strokeOther: false, colorOther: false });
+  });
+
+  it("reads a context menu report, leaving out what is malformed", () => {
+    expect(parseMenuTarget({ element: A, elements: [A, { path: 3 }, B], editable: true, locked: true })).toEqual({
+      element: A,
+      elements: [A, B],
+      editable: true,
+      unlockable: true,
+    });
+    // A report without the list (an older editor) is about its one element.
+    expect(parseMenuTarget({ element: A })).toEqual({ element: A, elements: [A], editable: false, unlockable: false });
+    expect(parseMenuTarget({ element: null, locked: "yes" })).toEqual({
+      element: null,
+      elements: [],
+      editable: false,
+      unlockable: false,
+    });
+    expect(parseMenuTarget(null).element).toBeNull();
+  });
+
+  it("makes several elements the one thing a question is about", () => {
+    expect(combineElements([])).toBeNull();
+    expect(combineElements([A])).toBe(A);
+    expect(combineElements([A, B])).toEqual({
+      path: "#intro > h1:nth-child(1), #intro > p:nth-child(2)",
+      markup: "<h1>A</h1>\n<p>B</p>",
+      name: "2 elements",
+      added: false,
+    });
+    expect(combineElements([A, A])?.added).toBe(true);
+  });
+
+  it("offers no zero width for a line, which would be gone", () => {
+    expect(strokeWidths(0, false)).toEqual([0, 1, 2, 4, 6, 8, 12, 16]);
+    expect(strokeWidths(3, false)).toContain(3);
+    expect(strokeWidths(6, true)).toEqual([1, 2, 4, 6, 8, 12, 16]);
+    expect(strokeWidths(0, true)).not.toContain(0);
+  });
+
+  it("names the choices in plain words", () => {
+    expect(AUTOFIT_LABELS.map((c) => c.label)).toEqual(["Don't autofit", "Shrink text to fit", "Grow box to fit"]);
+    expect(FIT_LABELS.map((c) => c.label)).toEqual(["Fit inside", "Fill and crop", "Stretch"]);
+    expect(FIT_POSITION_NAMES).toHaveLength(FIT_POSITIONS.length);
+    expect(FIT_POSITION_NAMES[FIT_POSITIONS.indexOf("50% 50%")]).toBe("Center");
   });
 });

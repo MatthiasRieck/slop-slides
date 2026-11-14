@@ -65,12 +65,12 @@ beforeEach(async () => {
     sketches: {},
     sketchesSent: {},
     favoriteModels: [],
-    error: null,
+    toasts: [],
   });
   await initEventBridge();
   render(<ChatPanel />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Please lint the deck" } });
-  fireEvent.click(screen.getByTitle("Send"));
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
   await waitFor(() => expect(calls("send_message")).toHaveLength(1));
   expect(calls("send_message")[0]!.args).toMatchObject({ provider: "codex", permissionMode: "ask" });
 });

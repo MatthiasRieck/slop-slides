@@ -39,7 +39,7 @@ export type EditTool =
 /** Tools whose new elements share style defaults. */
 export type ToolFamily = "text" | "shape" | "draw";
 
-export type TextAlign = "left" | "center" | "right";
+export type TextAlign = "left" | "center" | "right" | "justify";
 export type VerticalAlign = "top" | "middle" | "bottom";
 export type StackOrder = "front" | "forward" | "backward" | "back";
 export type ListKind = "ul" | "ol";
@@ -128,6 +128,13 @@ export interface EditSelection {
   /** A drawing: fill and border are its line's fill and stroke. */
   vector: boolean;
   color: string | null;
+  /**
+   * The text color, fill or line is not one plain color (a gradient, an image, `currentColor`),
+   * or differs among the selected elements: the color itself is then null, as it is for none.
+   */
+  colorOther: boolean;
+  fillOther: boolean;
+  strokeOther: boolean;
   fontSize: number | null;
   /** The first family of its font. */
   fontFamily: string | null;
@@ -168,7 +175,7 @@ export interface EditSelection {
   fit: ImageFit | null;
   fitPosition: string | null;
   alt: string | null;
-  /** Flipping mirrors what it shows without mirroring text (images, shapes like a triangle, drawings but not lines). */
+  /** Flipping mirrors what it shows without mirroring text: images, shapes like a triangle, drawings, and lines (through their points). */
   flippable: boolean;
   flipX: boolean;
   flipY: boolean;
@@ -189,6 +196,48 @@ export interface EditElement {
   /** The user added it by hand (`data-added` / `data-dropped`), so it has no place in the layout yet. */
   added: boolean;
 }
+
+/** What a right-click in the slide editor reports for the app's menu (see `slop:edit-menu` in assets/editor/). */
+export interface EditMenuTarget {
+  /** The primary selected element; null on an empty spot. */
+  element: EditElement | null;
+  /** Every selected element, in the slide's order. */
+  elements: EditElement[];
+  /** The one selected element holds text that can be edited. */
+  editable: boolean;
+  /** Something on the slide is locked. */
+  unlockable: boolean;
+}
+
+/** A context menu report from the slide editor; what is malformed in it is left out. */
+export function parseMenuTarget(data: unknown): EditMenuTarget {
+  const v = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+  const element = parseElement(v.element);
+  const listed = Array.isArray(v.elements) ? v.elements.flatMap((e) => parseElement(e) ?? []) : [];
+  return {
+    element,
+    elements: listed.length > 0 ? listed : element ? [element] : [],
+    editable: v.editable === true,
+    unlockable: v.locked === true,
+  };
+}
+
+/**
+ * Several selected elements as the one thing a question to the agent is about: their selectors
+ * and markup together, named by how many they are. One element is itself; none is null.
+ */
+export function combineElements(elements: EditElement[]): EditElement | null {
+  if (elements.length <= 1) return elements[0] ?? null;
+  return {
+    path: elements.map((e) => e.path).join(", "),
+    markup: elements.map((e) => e.markup).join("\n"),
+    name: `${elements.length} elements`,
+    added: elements.every((e) => e.added),
+  };
+}
+
+/** What the agent adds to a slide for the user, started from the toolbar's Insert section. */
+export type AgentInsert = "table" | "chart" | "icon";
 
 /** Single-key shortcuts in edit mode. */
 export const EDIT_TOOL_KEYS: Record<string, EditTool> = {
@@ -230,6 +279,29 @@ export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
 export const EDIT_COLORS = Object.values(SWATCHES);
 
 export const BORDER_WIDTHS = [0, 1, 2, 4, 6, 8, 12, 16] as const;
+
+/**
+ * The widths the border (or line) width list offers: the usual ones and the current one. A line
+ * has no "none": at zero it would be gone, with nothing left to select.
+ */
+export function strokeWidths(current: number, vector: boolean): number[] {
+  const widths = [...new Set<number>([...BORDER_WIDTHS, current])].sort((a, b) => a - b);
+  return vector ? widths.filter((w) => w > 0) : widths;
+}
+
+/** How the toolbar names each way of handling text that does not fit; "" is no autofit. */
+export const AUTOFIT_LABELS: { value: Autofit | ""; label: string }[] = [
+  { value: "", label: "Don't autofit" },
+  { value: "shrink", label: "Shrink text to fit" },
+  { value: "grow", label: "Grow box to fit" },
+];
+
+/** How the toolbar names each way an image fills its box. */
+export const FIT_LABELS: { value: ImageFit; label: string }[] = [
+  { value: "contain", label: "Fit inside" },
+  { value: "cover", label: "Fill and crop" },
+  { value: "fill", label: "Stretch" },
+];
 
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 200, 240];
 
@@ -300,6 +372,9 @@ export function parseSelection(value: unknown): EditSelection | null {
     text: v.text === true,
     vector: v.vector === true,
     color: color(v.color),
+    colorOther: v.colorOther === true,
+    fillOther: v.fillOther === true,
+    strokeOther: v.strokeOther === true,
     fontSize: num(v.fontSize),
     fontFamily: typeof v.fontFamily === "string" && v.fontFamily ? v.fontFamily : null,
     bold: v.bold === true,
@@ -309,7 +384,7 @@ export function parseSelection(value: unknown): EditSelection | null {
     script: v.script === "sup" || v.script === "sub" ? v.script : null,
     letterSpacing: num(v.letterSpacing) ?? 0,
     lineHeight: num(v.lineHeight),
-    align: v.align === "center" || v.align === "right" ? v.align : "left",
+    align: v.align === "center" || v.align === "right" || v.align === "justify" ? v.align : "left",
     valign: v.valign === "top" || v.valign === "middle" || v.valign === "bottom" ? v.valign : null,
     list: v.list === "ul" || v.list === "ol" ? v.list : null,
     link: typeof v.link === "string" ? v.link : null,
@@ -457,6 +532,19 @@ export const FIT_POSITIONS = [
   "0% 100%",
   "50% 100%",
   "100% 100%",
+] as const;
+
+/** What each of `FIT_POSITIONS` is called, in the same order. */
+export const FIT_POSITION_NAMES = [
+  "Top left",
+  "Top",
+  "Top right",
+  "Left",
+  "Center",
+  "Right",
+  "Bottom left",
+  "Bottom",
+  "Bottom right",
 ] as const;
 
 /** The file types the toolbar's image picker offers (see `IMAGE_EXTENSIONS` in drop.ts). */

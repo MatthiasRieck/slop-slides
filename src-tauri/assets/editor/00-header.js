@@ -42,8 +42,8 @@
    edited or formatted (also in boxes saved without one, and in any other flex or grid box whose
    own text it formats), and keeps everything typed or pasted in it.
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
-   centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
-   resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
+   centers, with guide lines (hold ⌘ / Ctrl to move freely, or with snapping turned off, to snap;
+   Shift-resizes, and turned elements' resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
    move straight across or straight up and down. Nudges never snap.
    Shift- or ⌘-click adds to the selection or takes out of it, and dragging from empty space on
    the slide (or from a see-through wrapper that is not selected) draws a marquee around what to
@@ -59,22 +59,39 @@
    holds) as one; a double-click goes into it, to select what it holds, until something outside it
    is picked. ⇧⌘G (or { type: "slop:edit-ungroup" }) takes it apart, everything staying where it
    shows. { type: "slop:edit-lock", locked, path } locks (`data-lock`) or unlocks the selection, or
-   the element at `path`: a locked element (and what it holds) cannot be picked on the slide, by
-   the marquee, ⌘A or Tab, and when selected (from the Layers panel) shows its frame without
+   the element at `path`: a locked element (and what it holds) is out of the way on the slide: a
+   press picks what is under it, and the marquee, ⌘A and Tab pass it by. A click where nothing
+   else is to pick selects it (as the Layers panel does), and it then shows its frame without
    handles and is not moved, aligned or deleted. The editor reports the slide's layers, the
    top-most first, whenever they change: { type: "slop:edit-layers", slide, layers: [{ path, name,
    group, locked, held, selected, depth }] }, `held` when something it is in is locked, `depth` how
    many groups in it is.
+   With ⌘ / Ctrl: ] and [ bring the selection forward and send it backward (with Shift, to the
+   front and the back); Shift+L / E / R / J align its text left, center, right or justified and
+   Shift+. / Shift+, make it larger or smaller (while typing too); Shift+H / Shift+V flip it;
+   Alt+L locks or unlocks it; Alt+C copies its look and Alt+V pastes the copied one (the app keeps
+   it, and is asked for it with { type: "slop:edit-request", slide, what: "paste-style" }); K asks
+   the app for its Link popover ({ type: "slop:edit-request", slide, what: "link" }).
    Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
    the layout stays put.
    Every change is posted to the app as the slide's new markup:
-   { type: "slop:edit-commit", slide, markup, select, also }; `select` and `also` are the paths of
-   the selection's primary element and of the others, which the app selects again after the
-   reload with { type: "slop:edit-select", path, also }.
+   { type: "slop:edit-commit", slide, markup, select, also, group }; `select` and `also` are the
+   paths of the selection's primary element and of the others, which the app selects again after
+   the reload with { type: "slop:edit-select", path, also }. `group` is there only for a save of
+   arrow-key nudges, which save once they pause: "nudge:" and the paths of the elements nudged
+   ("nudge:0.1,2"), the same for every such save of a run of nudges, so the app can keep them as
+   one step to undo.
 
-   A selected SVG drawing (an <svg> on the slide) shows an "Edit SVG" button at its top right,
+   What follows the pointer is done once a frame, however many events a frame brings: placing
+   the handles, picking what is hovered, the readout, the reports of the selection and its
+   geometry, a figure's redrawing. What takes measuring the whole slide (what overflows, the
+   layers) waits until a drag, a marquee or the typing is over. Where the slide is on screen and
+   how far it is zoomed comes from the pasteboard (`scale()`, `origin()`), not from measuring it.
+
+   A selected SVG drawing (an <svg> on the slide) shows an "Edit SVG" button at its top right
+   (not a line or arrow drawn with the line tools, which has its own handles and toolbar controls),
    which hands it to the app's SVG editor: { type: "slop:edit-open-svg", slide, path, markup,
    width, height, color, vars, css, fonts, ancestors } with its markup (without the editor's
    marks), its size in slide pixels, its text color, the CSS variables it can see, the deck's
@@ -84,7 +101,11 @@
    editor saves its changes into the deck itself.
 
    A right-click selects what is under it and asks the app for its menu: { type: "slop:edit-menu",
-   slide, x, y, element: { path, markup, name, added } | null }, with (x, y) in the preview's pixels.
+   slide, x, y, element: { path, markup, name, added } | null, elements, editable, locked }, with
+   (x, y) in the preview's pixels, `elements` every selected element (as `element`), `editable`
+   whether the one selected element holds text to edit, and `locked` whether anything on the slide
+   is locked. With a tool in hand, the tool goes back to Select first. Where nothing unlocked is
+   under the pointer, the locked element there is selected, so the menu can unlock it.
 
    Images dropped on the slide come from the app (which saved them as assets) as
    { type: "slop:edit-insert-images", images: [{ src, w, h }], x, y }: each is placed on top,
@@ -95,12 +116,17 @@
    clipboard, `html` being its markup behind a header saying where it came from (for several
    elements, the header's `group` lists each one's). ⌘V goes to the
    app, which reads the clipboard and sends back what to paste. Whatever is pasted goes on top
-   of the slide, absolutely positioned so the layout stays put, centered on the pointer when it
-   is over the slide and otherwise in the middle of the view:
-   - { type: "slop:edit-paste", html } an element copied here, sized and looking as it did
-     (offset when a copy already sits at the same spot, so the copy shows);
-   - { type: "slop:edit-paste-text", text, style } a text box with `text`;
-   - { type: "slop:edit-paste-images", images: [{ src, w, h }] } images, as dropped ones.
+   of the slide, absolutely positioned so the layout stays put. Each message may give a point
+   (x, y in this window's pixels: where the context menu was opened), which the paste is then
+   centered on:
+   - { type: "slop:edit-paste", html, x, y } an element copied here, sized and looking as it did,
+     at the coordinates it had on the slide it came from: on another slide in the same place, on
+     its own slide a step down and right of the original while that still sits there (and of
+     every copy already at the spot, so each copy shows);
+   - { type: "slop:edit-paste-text", text, style, x, y } a text box with `text`, centered on the
+     pointer when it is over the slide and otherwise in the middle of the view;
+   - { type: "slop:edit-paste-images", images: [{ src, w, h }], x, y } images, as dropped ones,
+     placed like pasted text.
 
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
@@ -136,7 +162,22 @@
      or null) and `route` ("straight", "elbow" or "curved"), figures with proportions `adjust`.
      Images, figures and drawings take `flipX` and `flipY` (an inline `transform`, after any tilt;
      a figure mirrors its shape, not its text; a line is mirrored through its points, each time,
-     and its ends stick to what they land on). A group's restyle goes to what it holds.
+     and its ends stick to what they land on). A group's restyle goes to what it holds. With
+     `preview: true` (a slider being dragged) the restyle shows but is not saved, until the same
+     message without it applies it for good, as one change; { type: "slop:edit-style-cancel" }
+     puts the elements back as they were. Text alignment is "left", "center", "right" or "justify".
+   - { type: "slop:edit-flip", axis: "x" | "y" } mirrors every selected element that can flip,
+     each in its own place; what is in a group too.
+   - { type: "slop:edit-font-step", step: 1 | -1 } takes the selection's text a size up or down.
+   - { type: "slop:edit-clear-formatting" } takes the inline formatting off the selected text
+     (while typing) or off all the text of the selection; links stay.
+   - { type: "slop:edit-copy-style" } hands the selection's look to the app, as the format
+     painter takes it: { type: "slop:edit-style-copied", slide, style }; the app gives it to the
+     selection of any slide with { type: "slop:edit-paste-style", style }.
+   - { type: "slop:edit-unlock-all" } unlocks everything locked on the slide, and
+     { type: "slop:edit-edit-text" } starts typing in the selected element.
+   - { type: "slop:edit-snap", on } turns snapping to the guides on or off; ⌘ / Ctrl held while
+     dragging does the opposite of what is set.
    - { type: "slop:edit-replace-image", src } points the selected image at another `assets/…`
      file, keeping its box (and cropping to it with `object-fit: cover`, unless it has a fit).
    - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
@@ -173,7 +214,9 @@
    geometry: { count, x, y, w, h, rotation } } (null when nothing is selected): the unturned box
    of one element, or the bounds of several, with a null rotation.
    Whenever the selection changes it reports whether anything is selected and what the toolbar
-   shows for it: { type: "slop:edit-selection", slide, selected, selection }. It reports the
+   shows for it: { type: "slop:edit-selection", slide, selected, selection }. A color that is not
+   one plain color (a gradient, an image, `currentColor`), or that several selected elements do
+   not share, is null with `colorOther` / `fillOther` / `strokeOther` set, to tell it from none. It reports the
    fonts the deck uses once: { type: "slop:edit-fonts", slide, fonts: [{ name, stack }] }, and
    the colors in its CSS variables: { type: "slop:edit-colors", slide, colors: [{ name, value }] }.
 

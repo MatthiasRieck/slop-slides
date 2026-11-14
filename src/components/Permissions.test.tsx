@@ -1,15 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { forgetModes } from "../lib/permissions";
 import { type ChatPart, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
-import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
+import { ApprovalCard, ApprovalReview, COMPOSER_INPUT_ATTR, PermissionPicker } from "./Permissions";
 
 const interrupt = vi.fn();
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue(["ask", "autoReview", "fullAccess", "custom"]);
   ask.mockReset().mockResolvedValue(true);
   interrupt.mockReset();
+  forgetModes();
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
     chatKey: "/decks/talk",
@@ -157,6 +159,58 @@ describe("permission picker", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("group", { name: "Permission modes" })).toBeNull();
   });
+
+  it("shows the modes it knows at once the next time, and asks again in the background", async () => {
+    render(<PermissionPicker />);
+    await openPicker();
+    fireEvent.keyDown(document, { key: "Escape" });
+    let answer!: (modes: string[]) => void;
+    invoke.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    fireEvent.click(picker());
+    // No "Checking…": what was offered before is there while the answer is on its way.
+    expect(screen.queryByText(/Checking/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => answer(["ask", "fullAccess"]));
+    expect(screen.queryByRole("button", { name: /Approve for me/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Full access/ })).toBeTruthy();
+  });
+
+  it("keeps the modes it knows when asking again fails", async () => {
+    render(<PermissionPicker />);
+    await openPicker();
+    fireEvent.keyDown(document, { key: "Escape" });
+    invoke.mockRejectedValue("CLI unavailable");
+    fireEvent.click(picker());
+    await act(async () => {});
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+  });
+
+  it("checks the selected mode in the list", async () => {
+    render(<PermissionPicker />);
+    await openPicker();
+    const selected = screen.getByRole("button", { name: /Ask for approval/, pressed: true });
+    expect(selected.querySelector(".lucide-check")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Approve for me/ }).querySelector(".lucide-check")).toBeNull();
+  });
+
+  it("makes Full access stand out from the modes that ask: a warning color, and its name always on show", () => {
+    render(<PermissionPicker />);
+    const safe = screen.getByText("Ask for approval");
+    expect(safe.className).toContain("hidden");
+    expect(picker().className).not.toContain("text-warning");
+    expect(picker().querySelector(".lucide-shield")).toBeTruthy();
+
+    act(() => useApp.setState({ permissionModes: { claude: "ask", codex: "fullAccess", copilot: "ask" } }));
+    expect(screen.getByText("Full access").className).not.toContain("hidden");
+    expect(picker().className).toContain("text-warning");
+    expect(picker().querySelector(".lucide-shield-alert")).toBeTruthy();
+  });
 });
 
 describe("approval card", () => {
@@ -210,6 +264,93 @@ describe("approval card", () => {
     );
     expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
   });
+  it("tells the answers apart: accepting is the main button, denying a quiet one, stopping set apart", () => {
+    const p = part();
+    p.approval.decisions.push("acceptForSession");
+    render(<ApprovalCard part={p} />);
+    const accept = screen.getByRole("button", { name: "Allow once" });
+    const session = screen.getByRole("button", { name: "Allow for session" });
+    const deny = screen.getByRole("button", { name: "Deny" });
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(accept.className).toContain("bg-primary");
+    expect(session.className).toContain("border");
+    expect(session.className).not.toContain("bg-primary");
+    expect(deny.className).not.toContain("border");
+    expect(deny.className).not.toContain("bg-primary");
+    // Stop is no answer to the request: a text button on the far side, after a spacer.
+    expect(stop.className).not.toContain("border");
+    expect(stop.previousElementSibling!.className).toContain("flex-1");
+    expect(stop.parentElement!.lastElementChild).toBe(stop);
+  });
+
+  it("stands out and is read out while it waits, and no longer once it is answered", () => {
+    const { rerender } = render(<ApprovalCard part={part()} />);
+    const card = screen.getByRole("region", { name: "Approval request" });
+    expect(card.className).toContain("border-warning");
+    const title = screen.getByText("Run a command");
+    expect(title.getAttribute("aria-live")).toBe("assertive");
+    expect(title.getAttribute("role")).toBe("status");
+    rerender(<ApprovalCard part={{ ...part(), status: "resolved" }} />);
+    expect(card.className).not.toContain("border-warning");
+    expect(screen.getByText("Run a command").getAttribute("aria-live")).toBeNull();
+  });
+
+  it("takes the keyboard focus when it is on nothing, and then offers Enter", () => {
+    render(<ApprovalCard part={part()} />);
+    const accept = screen.getByRole("button", { name: "Allow once" });
+    expect(document.activeElement).toBe(accept);
+    expect(screen.getByText("Enter to allow once")).toBeTruthy();
+    // Enter is the focused button's own key: nothing listens for it anywhere else.
+    fireEvent.blur(accept);
+    expect(screen.queryByText("Enter to allow once")).toBeNull();
+  });
+
+  it("takes the focus from the empty message input, but not from a draft or another field", () => {
+    const input = document.createElement("textarea");
+    input.setAttribute(COMPOSER_INPUT_ATTR, "");
+    const other = document.createElement("input");
+    document.body.append(input, other);
+    try {
+      input.focus();
+      const first = render(<ApprovalCard part={part()} />);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Allow once" }));
+      first.unmount();
+
+      input.value = "Half a sentence";
+      input.focus();
+      const second = render(<ApprovalCard part={part()} />);
+      expect(document.activeElement).toBe(input);
+      expect(screen.queryByText(/^Enter to/)).toBeNull();
+      second.unmount();
+
+      other.focus();
+      render(<ApprovalCard part={part()} />);
+      expect(document.activeElement).toBe(other);
+    } finally {
+      input.remove();
+      other.remove();
+    }
+  });
+
+  it("does not answer to Enter pressed elsewhere", () => {
+    const other = document.createElement("input");
+    document.body.append(other);
+    try {
+      other.focus();
+      render(<ApprovalCard part={part()} />);
+      fireEvent.keyDown(other, { key: "Enter" });
+      fireEvent.keyDown(document.body, { key: "Enter" });
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      other.remove();
+    }
+  });
+
+  it("does not take the focus for a request that is already closed", () => {
+    render(<ApprovalCard part={{ ...part(), status: "expired" }} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("stops the turn without sending an approval", () => {
     render(<ApprovalCard part={part()} />);
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));

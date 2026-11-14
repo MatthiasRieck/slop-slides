@@ -2,7 +2,7 @@
 
 use tauri::{AppHandle, State};
 
-use super::changing;
+use super::{changing, reading};
 use crate::deck::{self, Deck};
 use crate::error::Result;
 use crate::files;
@@ -50,11 +50,12 @@ pub async fn stop_narration_recording(voice: State<'_, voice::Voice>) -> Result<
 }
 
 /// Deletes a slide's recorded narration; returns every slide's audio.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_recorded_narration(id: String, slide: String) -> Result<Vec<narration::SlideAudio>> {
-    let file = deck::deck_file(&id)?;
-    narration::delete_recording(&file, &slide)?;
-    Ok(narration::statuses(&file, &deck::load(&file)?))
+    reading(&id, |file| {
+        narration::delete_recording(file, &slide)?;
+        Ok(narration::statuses(file, &deck::load(file)?))
+    })
 }
 
 #[tauri::command]
@@ -63,10 +64,12 @@ pub fn speech_status(narration: State<narration::Narration>) -> Result<narration
 }
 
 /// Each slide's narration audio: whether it is there and up to date, and how long it plays.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn narration_audio(id: String) -> Result<Vec<narration::SlideAudio>> {
-    let file = deck::deck_file(&id)?;
-    Ok(narration::statuses(&file, &deck::load(&file)?))
+    // The deck comes from the deck cache: the one just loaded or saved is not parsed again.
+    reading(&id, |file| {
+        Ok(narration::statuses(file, &deck::load(file)?))
+    })
 }
 
 /// Says the narration of the deck's `slides` (all for None) that has no up-to-date audio,
@@ -125,13 +128,13 @@ pub async fn time_narration(
 
 /// When each word of a slide's narration audio is said, in seconds from the audio's start;
 /// null until `time_narration` heard it.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn narration_words(id: String, slide: String) -> Result<Option<Vec<voice::Word>>> {
     Ok(narration::words(&deck::deck_file(&id)?, &slide))
 }
 
 /// A slide's narration audio, as WAV bytes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
     let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
     Ok(tauri::ipc::Response::new(std::fs::read(file)?))
@@ -145,7 +148,7 @@ pub async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
     Ok(narration::audio::peaks(&samples, rate))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
     changing(
         &id,
@@ -154,7 +157,7 @@ pub fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_narration_provider(id: String, provider: String) -> Result<Deck> {
     changing(
         &id,
@@ -191,7 +194,7 @@ pub async fn speech_voices(provider: String) -> Result<Vec<narration::cloud::Voi
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_narration_language(id: String, language: String) -> Result<Deck> {
     changing(
         &id,

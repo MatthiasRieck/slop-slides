@@ -34,10 +34,10 @@ use crate::size::SizeInfo;
 use diff::{compare, mark_staged, same_slides, shell, slide_of, snapshots, strip_slides};
 use merge::{adopt_slide, empty_deck, move_slide, with_slides_of};
 use process::{
-    changed_files, git, git_write, head_commit, in_work_tree, matching_endings, paths, read_index,
-    split, staged_files, unstaged_files, untracked, write_index,
+    changed_files, current_branch, git, git_write, head_commit, in_work_tree, matching_endings,
+    paths, read_index, split, staged_files, unstaged_files, untracked, write_index,
 };
-pub use process::{existing_folder, read_at_head};
+pub use process::{existing_folder, head_oid, read_at_head};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +94,11 @@ pub struct Commit {
 #[serde(rename_all = "camelCase")]
 pub struct DeckChanges {
     pub tracking: Tracking,
+    /// The branch checked out, which the next commit goes to; None outside a repository and
+    /// while `detached`.
+    pub branch: Option<String>,
+    /// A commit is checked out rather than a branch, so the next commit is on no branch.
+    pub detached: bool,
     /// HEAD, when the deck is in it.
     pub commit: Option<Commit>,
     /// Something every slide shares changed, so any of them may look different.
@@ -291,6 +296,31 @@ pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<()> 
     }
 }
 
+/// The deck as it was committed, with every change since undone; the comments and review marks
+/// made since stay, as they are no change to the slides. An error for a deck never committed,
+/// which has nothing to go back to.
+pub fn restored_all(file: &Path) -> Result<String> {
+    let v = versions(file)?;
+    if !v.in_head {
+        return Err(Error::msg(
+            "This deck was never committed, so there is nothing to go back to.",
+        ));
+    }
+    Ok(comments::write(
+        &review::write(&html::ensure_runtime(&v.head), &review::read(&v.work)),
+        &comments::read(&v.work),
+    ))
+}
+
+/// Takes the deck out of the index's changes and puts the files it used back, those of the
+/// commit and those of `before`, the deck as it was; the deck is already written.
+pub fn finish_restore_all(file: &Path, before: &str) -> Result<()> {
+    let v = versions(file)?;
+    let (dir, name) = split(file)?;
+    git_write(dir, &["reset", "-q", "--", name], b"")?;
+    restore_assets(file, &format!("{}\n{before}", v.head))
+}
+
 /// Stages the whole deck and every changed file it refers to.
 pub fn stage_all(file: &Path) -> Result<()> {
     let (dir, name) = split(file)?;
@@ -339,7 +369,11 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
         in_head,
         ..
     } = versions_of(file, source);
-    let commit = head_commit(dir).filter(|_| in_head);
+    let last = head_commit(dir);
+    let branch = current_branch(dir);
+    // Before the first commit there is nothing to be detached at.
+    let detached = branch.is_none() && last.is_some();
+    let commit = last.filter(|_| in_head);
     let others = |files: Vec<String>| -> Vec<String> {
         files.into_iter().filter(|path| path != name).collect()
     };
@@ -362,6 +396,8 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
             Some(_) => Tracking::Committed,
             None => Tracking::NotCommitted,
         },
+        branch,
+        detached,
         old_size: commit.as_ref().map(|_| html::slide_size(&committed).into()),
         commit,
         styles_changed,
@@ -378,6 +414,8 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
 fn no_repository() -> DeckChanges {
     DeckChanges {
         tracking: Tracking::NoRepository,
+        branch: None,
+        detached: false,
         commit: None,
         styles_changed: false,
         old_size: None,
@@ -787,6 +825,100 @@ mod tests {
             fs::read_to_string(repo.0.join("talk/assets/a.png")).unwrap(),
             "old"
         );
+    }
+
+    #[test]
+    fn says_which_branch_is_checked_out() {
+        let repo = Repo::new();
+        repo.run(&["checkout", "-q", "-b", "draft"]);
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.branch.as_deref(), Some("draft"), "before any commit");
+        assert!(!found.detached);
+
+        repo.commit("First");
+        repo.run(&["checkout", "-q", "-b", "talks/q3"]);
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.branch.as_deref(), Some("talks/q3"));
+        assert!(!found.detached);
+    }
+
+    #[test]
+    fn says_when_a_commit_is_checked_out_instead_of_a_branch() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        repo.commit("First");
+        repo.run(&["checkout", "-q", "--detach"]);
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.branch, None);
+        assert!(found.detached);
+        assert_eq!(found.commit.unwrap().subject, "First", "still compared");
+    }
+
+    #[test]
+    fn a_deck_outside_a_repository_is_on_no_branch() {
+        let root = TempDir::new("nobranch");
+        let file = root.join("deck.html");
+        fs::write(&file, deck(&["a=A"])).unwrap();
+        let found = changes(&file).unwrap();
+        assert_eq!(found.branch, None);
+        assert!(!found.detached);
+    }
+
+    /// Discards every change, as the command does: writes the deck, then tidies the index.
+    fn restore_all(repo: &Repo) {
+        let before = work_of(repo);
+        let text = restored_all(&repo.deck()).unwrap();
+        fs::write(repo.deck(), text).unwrap();
+        finish_restore_all(&repo.deck(), &before).unwrap();
+    }
+
+    #[test]
+    fn discards_every_change_at_once() {
+        let repo = Repo::new();
+        repo.write("talk/assets/pic.png", "old");
+        repo.write(
+            "talk/deck.html",
+            &deck(&["a=<img src='assets/pic.png'>", "b=B", "c=C"]),
+        );
+        repo.commit("First");
+        repo.write("talk/assets/pic.png", "new");
+        repo.write(
+            "talk/deck.html",
+            &deck_styled("blue", &["c=See", "a=<img src='assets/pic.png'>", "d=D"]),
+        );
+        stage(&repo.deck(), &slide("c")).unwrap();
+
+        restore_all(&repo);
+        let found = changes(&repo.deck()).unwrap();
+        assert!(!found.styles_changed);
+        assert!(found
+            .slides
+            .iter()
+            .all(|s| s.status == Unchanged && !s.moved));
+        assert_eq!(ids(&work_of(&repo)), ["a", "b", "c"]);
+        assert_eq!(found.staged_files, 0, "what was staged of it is gone too");
+        let picture = fs::read_to_string(repo.0.join("talk/assets/pic.png")).unwrap();
+        assert_eq!(picture, "old", "the image it showed is back as committed");
+    }
+
+    #[test]
+    fn discarding_everything_leaves_staged_files_elsewhere_alone() {
+        let repo = committed(&["a=A"], &["a=Ay"]);
+        repo.write("notes.txt", "x");
+        repo.run(&["add", "notes.txt"]);
+        restore_all(&repo);
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!((found.staged_files, found.staged_elsewhere), (1, 1));
+        assert_eq!(found.slides[0].status, Unchanged);
+    }
+
+    #[test]
+    fn a_deck_never_committed_has_nothing_to_go_back_to() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        let error = restored_all(&repo.deck()).unwrap_err().to_string();
+        assert!(error.contains("never committed"), "{error}");
     }
 
     #[test]

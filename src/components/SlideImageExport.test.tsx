@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
+import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke, revealItemInDir } from "../test/tauri";
 import { SETTLE_MS, SlideImageExport } from "./SlideImageExport";
@@ -26,7 +27,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(24, 30, 1280, 720));
   useApp.setState({
     deck: deckFor(DECK_HTML),
-    error: null,
+    toasts: [],
     imageExport: { dir: DIR, slides: ["intro", "#2", "outro"] },
   });
 });
@@ -72,7 +73,7 @@ describe("SlideImageExport", () => {
     expect((label as HTMLElement).style.minWidth).toBe("16ch");
   });
 
-  it("saves every slide in order, then reveals the folder", async () => {
+  it("saves every slide in order, then says so, with a way to the folder", async () => {
     render(<SlideImageExport />);
     for (const id of ["intro", "#2", "outro"]) {
       expect(frame().getAttribute("title")).toBe(id);
@@ -82,8 +83,24 @@ describe("SlideImageExport", () => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     expect(exports()).toEqual([0, 1, 2].map((index) => ({ dir: DIR, index, total: 3, rect, viewport, width: 1920 })));
     expect(useApp.getState().imageExport).toBeNull();
+    // The file manager opens when asked for, from the toast.
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Saved 3 slide images in Talk"]);
+    const toast = useApp.getState().toasts.at(-1)!;
+    expect(toast.action?.label).toBe("Show in folder");
+    await act(async () => toast.action?.run());
     expect(revealItemInDir).toHaveBeenCalledWith(DIR);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says the folder could not be shown, not that the images were not saved", async () => {
+    revealItemInDir.mockRejectedValueOnce("no file manager");
+    render(<SlideImageExport />);
+    for (let i = 0; i < 3; i++) await loadSlide();
+    await act(async () => useApp.getState().toasts.at(-1)?.action?.run());
+    expect(lastError(useApp.getState())).toBe(
+      "Talk is saved, but it could not be shown in its folder: no file manager",
+    );
   });
 
   it("shows slides of another size in their own shape, saved at most their canvas width", async () => {
@@ -150,7 +167,7 @@ describe("SlideImageExport", () => {
     expect(frame().getAttribute("title")).toBe("outro");
     await loadSlide();
     expect(exports().map((args) => (args as { index: number }).index)).toEqual([0, 2]);
-    expect(revealItemInDir).toHaveBeenCalledWith(DIR);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Saved 2 slide images in Talk"]);
   });
 
   it("can be cancelled with the button", async () => {
@@ -162,12 +179,12 @@ describe("SlideImageExport", () => {
     });
     expect(exports()).toEqual([]);
     expect(useApp.getState().imageExport).toBeNull();
-    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
   });
 
   it("can be cancelled with Escape", () => {
     render(<SlideImageExport />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(useApp.getState().imageExport).toBeNull();
   });
 
@@ -175,11 +192,11 @@ describe("SlideImageExport", () => {
     invoke.mockRejectedValue("slide screenshots are not supported on this platform");
     render(<SlideImageExport />);
     await loadSlide();
-    expect(useApp.getState().error).toBe(
+    expect(lastError(useApp.getState())).toBe(
       "Could not save slide 1 as an image: slide screenshots are not supported on this platform",
     );
     expect(useApp.getState().imageExport).toBeNull();
     expect(exports()).toHaveLength(1);
-    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
   });
 });

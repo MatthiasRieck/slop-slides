@@ -1,16 +1,16 @@
 import { api, type Deck, type OpenedFile, type WorkspaceInfo } from "../lib/api";
 import { loadText, saveText } from "../lib/storage";
-import { basename } from "../lib/utils";
+import { basename, dirname } from "../lib/utils";
 import { leaveChat, loadChat } from "./chat";
-import { confirmDiscard, confirmStopAgent } from "./confirm";
+import { askUnsaved, confirmStopAgent } from "./confirm";
 import { NO_EDIT_STATE } from "./editing";
-import { showErrorIn } from "./errors";
+import { showErrorIn, showInfoIn } from "./errors";
 import { refreshHistory } from "./history";
-import { workspaceName } from "./paths";
+import { relativePath, workspaceName } from "./paths";
 import { flushReview, reviewLoaded } from "./review";
 import { NO_SEARCH } from "./search";
-import { NO_RAIL_STATE } from "./slides";
-import type { AppStore, Slice } from "./types";
+import { NO_RAIL_STATE, railStateOf } from "./slides";
+import type { AppState, AppStore, Slice } from "./types";
 
 /** Files changed on disk in the open workspace, as the watcher reported them last. */
 export interface WorkspaceChange {
@@ -36,6 +36,11 @@ export interface WorkspaceSlice {
 
   /** Opens a folder in the file tree, reopening the file last open in it. */
   openWorkspace: (path: string) => Promise<void>;
+  /**
+   * Opens the deck file at the absolute path `file` in `folder` (the folder the file is in,
+   * unless given), which becomes the workspace: how a deck opens from outside a workspace.
+   */
+  openDeckFile: (file: string, folder?: string) => Promise<void>;
   /** Back to the start screen; false when the user kept unsaved edits, or the agent's running turn, instead. */
   closeWorkspace: () => Promise<boolean>;
   /**
@@ -58,6 +63,8 @@ export interface WorkspaceSlice {
    * user kept unsaved edits or the agent's running turn, or another window shows that chat.
    */
   closeDeck: () => Promise<boolean>;
+  /** Gives the open deck the title `title`; false when it is empty or the deck could not be renamed. */
+  renameDeck: (title: string) => Promise<boolean>;
   setCodeDirty: (dirty: boolean) => void;
 }
 
@@ -72,30 +79,82 @@ export interface OpenDeckOptions {
 /** The file last open in each workspace, reopened with it: `slopslide.lastFile:<root>`. */
 const LAST_FILE_KEY = "slopslide.lastFile:";
 
-/** Whether the user gives up the unsaved edits in the sidebar's HTML tab. */
-export function confirmDiscardEdits(app: AppStore): Promise<boolean> {
-  const name = basename(app.getState().deck?.id ?? "") || "the deck";
-  return confirmDiscard(`You have unsaved changes to ${name}. Discard them?`);
+/** Saves what the sidebar's HTML tab holds to the deck file, while the tab's editor is there to. */
+type CodeSave = () => Promise<void>;
+let codeSave: CodeSave | null = null;
+
+/**
+ * Lets the store save the HTML tab's edits: the editor (components/CodeView.tsx) gives its own
+ * save while it is mounted. Returns what takes it back.
+ */
+export function provideCodeSave(save: CodeSave): () => void {
+  codeSave = save;
+  return () => {
+    if (codeSave === save) codeSave = null;
+  };
+}
+
+/**
+ * Saves the HTML tab's edits to the deck file. False when they are still unsaved after it (the
+ * file changed on disk meanwhile, say): the tab then shows, where the editor says why.
+ */
+async function saveCodeEdits(app: AppStore): Promise<boolean> {
+  await codeSave?.();
+  if (!app.getState().codeDirty) return true;
+  app.getState().setSidebarTab("code");
+  return false;
+}
+
+/**
+ * Settles the unsaved edits in the sidebar's HTML tab before what would lose them: the user
+ * saves them, gives them up, or stays. True when nothing unsaved is left to lose.
+ */
+export async function settleUnsavedEdits(app: AppStore): Promise<boolean> {
+  const { deck, codeDirty } = app.getState();
+  if (!deck || !codeDirty) return true;
+  const answer = await askUnsaved(basename(deck.id) || "the deck");
+  if (answer === "cancel") return false;
+  return answer === "discard" || saveCodeEdits(app);
+}
+
+/** What leaving what is open is for, and what else stands in its way. */
+interface LeaveOptions {
+  /** What stopping the agent is for, as the question ends: "Stop it to …?" */
+  to?: string;
+  /** Asked after the unsaved edits and before the agent's turn; false when the user stays for it. */
+  alsoAsk?: () => Promise<boolean>;
 }
 
 /**
  * Gets what is open ready to give way, the chat about `next` coming on show (null: none). False
- * when the user stays: for unsaved edits, or for the agent's turn, which ends with its chat
- * leaving.
+ * when the user stays: for unsaved edits (which they can save or give up instead), for what
+ * `alsoAsk` asks about, or for the agent's turn, which ends with its chat leaving.
  */
-async function leaveFile(app: AppStore, next: string | null): Promise<boolean> {
-  const { deck, codeDirty, running, chatKey, workspace } = app.getState();
-  if (deck && codeDirty && !(await confirmDiscardEdits(app))) return false;
+async function leaveFile(app: AppStore, next: string | null, options: LeaveOptions = {}): Promise<boolean> {
+  if (!(await settleUnsavedEdits(app))) return false;
+  const { deck, running, chatKey, workspace } = app.getState();
+  if (options.alsoAsk && !(await options.alsoAsk())) return false;
   const leaving = chatKey !== next;
   if (leaving && running) {
     const about = deck ? basename(deck.id) : (workspace?.name ?? "this folder");
-    if (!(await confirmStopAgent(`The agent is still working in the chat of ${about}. Stop it to go on?`))) {
+    const to = options.to ?? "go on";
+    if (!(await confirmStopAgent(`The agent is still working in the chat of ${about}. Stop it to ${to}?`))) {
       return false;
     }
   }
   if (deck) await flushReview(app);
   if (leaving) await leaveChat(app);
   return true;
+}
+
+/**
+ * Gets what is open ready for its window to close, as for any leaving (see `leaveFile`): the
+ * user is asked about unsaved edits, about what `alsoAsk` holds (changes kept outside this
+ * store) and about the agent's running turn, and the review marks and the chat are saved. False
+ * when the user stays, and the window with them.
+ */
+export function leaveForClose(app: AppStore, alsoAsk?: () => Promise<boolean>): Promise<boolean> {
+  return leaveFile(app, null, { to: "close the window", alsoAsk });
 }
 
 /** Reopens `path` the next time its workspace opens. */
@@ -126,10 +185,9 @@ async function switchToDeck(app: AppStore, id: string, { keepChat = false, quiet
     if (!quiet) showErrorIn(app, error);
     return false;
   }
-  const path = workspaceName(app.getState().workspace, id);
-  rememberFile(app, path);
-  app.setState({ ...NO_DECK, openedFile: { path, absolute: id, kind: "deck" } });
-  await loadDeckState(app, deck);
+  const { workspace } = app.getState();
+  rememberFile(app, workspaceName(workspace, id));
+  showDeck(app, id, deck, { workspace });
   if (keepChat) app.setState({ chatFollowsDeck: true });
   else await loadChat(app, id);
   return true;
@@ -158,29 +216,62 @@ const NO_DECK = {
   ...NO_RAIL_STATE,
 };
 
-/** Starts the editor afresh on a deck just opened. */
-async function loadDeckState(app: AppStore, deck: Deck) {
+/** The workspace a deck shows in; `workspaceChange` is reset when the workspace opens with the deck. */
+type WorkspaceOpening = Pick<AppState, "workspace"> & Partial<Pick<AppState, "workspaceChange">>;
+
+/**
+ * Shows the deck just opened from the file `id`, the editor starting afresh on it, in the
+ * workspace `workspace` (which may open with it). One change of state: the window goes from
+ * what it showed to the deck, with nothing in between.
+ */
+function showDeck(app: AppStore, id: string, deck: Deck, opening: WorkspaceOpening) {
+  const { workspace } = opening;
   reviewLoaded(deck);
   app.setState({
+    ...NO_DECK,
+    ...opening,
+    openedFile: { path: workspaceName(workspace, id), absolute: id, kind: "deck" },
     deck,
     selected: deck.slides[0]?.id ?? null,
     assetsRev: 0,
-    presenting: false,
-    lint: null,
-    composerFill: null,
     sketches: deck.review ?? {},
-    sketchesSent: {},
     comments: deck.comments ?? {},
-    commentsHeld: {},
-    imageExport: null,
     search: NO_SEARCH,
-    editing: false,
-    slideMode: "view",
-    editTool: "select",
-    ...NO_EDIT_STATE,
-    ...NO_RAIL_STATE,
+    ...railStateOf(deck.id),
   });
   void refreshHistory(app);
+}
+
+/** What a workspace opens with: the file last open in it, if it can show again. */
+interface Reopened {
+  /** The file last open, when it is still there and the folder's own chat does not stay on show. */
+  file: OpenedFile | null;
+  /** That file's deck, open again in the backend. */
+  deck: Deck | null;
+}
+
+/**
+ * Opens again what was last open in `workspace`, in the backend only. The folder's chat, still
+ * at work, stays on show rather than give way to a deck's, so nothing reopens then; a deck open
+ * in another window stays there; and a file that is gone since is forgotten.
+ */
+async function reopenLast(workspace: WorkspaceInfo): Promise<Reopened> {
+  const key = LAST_FILE_KEY + workspace.path;
+  const last = loadText(key);
+  if (last === null) return { file: null, deck: null };
+  // Neither waits for the other: what the file is, and whether the folder's agent is at work.
+  const [file, busy] = await Promise.all([
+    api.openFile(last).catch(() => null),
+    api.agentRunning(workspace.path).catch(() => false),
+  ]);
+  if (!file) saveText(key, null);
+  if (!file || busy) return { file: null, deck: null };
+  if (file.kind !== "deck") return { file, deck: null };
+  try {
+    return { file, deck: await api.openDeck(file.absolute, { keepChat: false, quiet: true }) };
+  } catch {
+    return { file: null, deck: null };
+  }
 }
 
 export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
@@ -194,27 +285,37 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
   openWorkspace: async (path) => {
     if (get().workspace?.path === path) return;
     if (!(await get().closeWorkspace())) return;
+    let workspace: WorkspaceInfo;
     try {
-      const workspace = await api.openWorkspace(path);
-      set({ workspace, openedFile: null, workspaceChange: null });
+      workspace = await api.openWorkspace(path);
+    } catch (error) {
+      showErrorIn(app, error);
+      return;
+    }
+    const { file, deck } = await reopenLast(workspace);
+    try {
+      if (file && deck) {
+        // The folder and its deck show together, and only the deck's chat is loaded: the
+        // folder's own would give way to it at once.
+        showDeck(app, file.absolute, deck, { workspace, workspaceChange: null });
+        await loadChat(app, file.absolute);
+        return;
+      }
+      set((s) => ({ workspace, openedFile: file, fileRev: s.fileRev + (file ? 1 : 0), workspaceChange: null }));
       await loadChat(app, workspace.path);
     } catch (error) {
       showErrorIn(app, error);
       return;
     }
-    const workspacePath = get().workspace!.path;
-    const last = loadText(LAST_FILE_KEY + workspacePath);
-    // The folder's chat, still at work, stays on show rather than give way to a deck's.
-    if (last === null || get().running) return get().setSidebarTab("files");
-    let opened = false;
-    try {
-      // A deck open in another window stays there: this one starts at the files.
-      opened = await openFileAt(app, last, await api.openFile(last), { quiet: true });
-    } catch {
-      // A file that is gone since just leaves the viewer empty.
-      saveText(LAST_FILE_KEY + workspacePath, null);
-    }
-    if (!opened) get().setSidebarTab("files");
+    if (!file) get().setSidebarTab("files");
+  },
+
+  openDeckFile: async (file, folder = dirname(file)) => {
+    await get().openWorkspace(folder);
+    const { workspace } = get();
+    // The folder may not have opened: it is open, without a deck, in another window.
+    if (!workspace) return;
+    await get().openPath(relativePath(workspace, file) ?? basename(file));
   },
 
   closeWorkspace: async () => {
@@ -239,7 +340,10 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     if (!workspace || openedFile?.path === path) return;
     if (byAgent && deck && chatKey === deck.id) {
       // A deck's chat stays with its deck; going to the file is the user's to do.
-      set({ error: `The agent made ${path}. Open it from the Files tab: this chat stays with ${basename(deck.id)}.` });
+      showInfoIn(app, `The agent made ${path}. This chat stays with ${basename(deck.id)}.`, {
+        label: "Open",
+        run: () => void get().openPath(path),
+      });
       return;
     }
     try {
@@ -273,7 +377,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     try {
       const { deck, skipped } = await api.importPptx(path);
       await switchToDeck(app, deck.id, {});
-      if (skipped.length > 0) set({ error: `Imported, with these changes: ${skipped.join("; ")}.` });
+      if (skipped.length > 0) showInfoIn(app, `Imported, with these changes: ${skipped.join("; ")}.`);
     } catch (error) {
       showErrorIn(app, error);
     }
@@ -295,6 +399,21 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     set(NO_DECK);
     if (workspace && get().chatKey !== workspace.path) await loadChat(app, workspace.path);
     return true;
+  },
+
+  renameDeck: async (title) => {
+    const { deck } = get();
+    const next = title.trim();
+    if (!deck || !next) return false;
+    if (next === deck.title) return true;
+    try {
+      const renamed = await api.renameDeck(deck.id, next);
+      if (get().deck?.id === deck.id) get().setDeck(renamed);
+      return true;
+    } catch (error) {
+      showErrorIn(app, error);
+      return false;
+    }
   },
 
   setCodeDirty: (codeDirty) => set({ codeDirty }),

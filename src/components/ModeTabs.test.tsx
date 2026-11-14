@@ -42,6 +42,29 @@ describe("ModeTabs", () => {
     expect(selected()).toEqual(["View"]);
   });
 
+  it("moves between the modes with the arrow keys, Tab stopping at the selected one", () => {
+    render(<ModeTabs />);
+    expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+    tab("View").focus();
+    fireEvent.keyDown(tab("View"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Edit"));
+    fireEvent.keyDown(tab("Edit"), { key: "End" });
+    expect(document.activeElement).toBe(tab("Git"));
+    fireEvent.keyDown(tab("Git"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("View"));
+    // Moving the focus changes no mode; a click (Enter, Space) does.
+    expect(selected()).toEqual(["View"]);
+    fireEvent.click(tab("Edit"));
+    expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it("leaves the focus where it is when a mode is pressed, for the keys that work there", () => {
+    render(<ModeTabs />);
+    const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    tab("Edit").dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+  });
+
   it("leaves narration, notes and the HTML to the sidebar's tabs", () => {
     render(<ModeTabs />);
     for (const name of ["Narration", "Notes", "HTML"]) expect(screen.queryByRole("tab", { name })).toBeNull();
@@ -67,6 +90,8 @@ describe("ModeTabs", () => {
       expect(t.querySelector("svg")).not.toBeNull();
       expect(t.className).toContain("flex-col");
       expect(t.classList.contains("text-primary")).toBe(t.textContent === "Git");
+      // Filled too, so the selected mode differs by more than the color of its text.
+      expect(t.classList.contains("bg-primary/10")).toBe(t.textContent === "Git");
     }
   });
 
@@ -80,15 +105,23 @@ describe("ModeTabs", () => {
   it("has no Play tab: the deck plays on the timeline, in View and in Edit", () => {
     render(<ModeTabs />);
     expect(screen.queryByRole("tab", { name: "Play" })).toBeNull();
-    expect(tab("View").title).toContain("without changing the slides");
-    expect(tab("Edit").title).toContain("set how long each slide shows");
+  });
+
+  it("says in one short line what each mode is for, and the keys that go to it", () => {
+    render(<ModeTabs />);
+    expect(screen.getAllByRole("tab").map((t) => t.title)).toEqual([
+      "View: present, play and comment (Ctrl+1)",
+      "Edit: change slides, their order and timing (Ctrl+2)",
+      "Git: see what changed since the last commit (Ctrl+3)",
+    ]);
+    for (const t of screen.getAllByRole("tab")) expect(t.title.length).toBeLessThan(70);
   });
 
   it("enters Edit on a locked slide too, and says the slide is locked", () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)) });
     render(<ModeTabs />);
     expect(tab("Edit").disabled).toBe(false);
-    expect(tab("Edit").title).toContain("locked");
+    expect(tab("Edit").title).toBe("Edit: this slide is locked; unlock it to change it (Ctrl+2)");
     fireEvent.click(tab("Edit"));
     expect(deckMode(useApp.getState())).toBe("edit");
   });

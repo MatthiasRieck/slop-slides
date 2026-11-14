@@ -9,7 +9,7 @@ export type RailItem =
 export const sectionKey = (index: number) => `section:${index}`;
 
 /** The deck's slides and section markers in document order. */
-export function railItems(deck: Deck): RailItem[] {
+export function railItems(deck: Pick<Deck, "slides" | "sections">): RailItem[] {
   const sections = [...deck.sections].sort((a, b) => a.before - b.before || a.index - b.index);
   const items: RailItem[] = [];
   let next = 0;
@@ -40,6 +40,46 @@ export function applyOrder(deck: Deck, keys: string[]): Deck {
     else if (section) nextSections.push({ ...section, index: nextSections.length, before: nextSlides.length });
   }
   return { ...deck, slides: nextSlides, sections: nextSections };
+}
+
+/**
+ * The deck as it will be once the slides `gone` are deleted. A section's marker stays where it
+ * is among the slides that are left.
+ */
+export function withoutSlides(deck: Deck, gone: ReadonlySet<string>): Deck {
+  if (!deck.slides.some((slide) => gone.has(slide.id))) return deck;
+  // How many of the first n slides stay, for every n.
+  const kept = [0];
+  for (const slide of deck.slides) kept.push(kept.at(-1)! + (gone.has(slide.id) ? 0 : 1));
+  return {
+    ...deck,
+    slides: deck.slides.filter((slide) => !gone.has(slide.id)),
+    sections: deck.sections.map((section) => {
+      const before = kept[Math.min(section.before, deck.slides.length)]!;
+      return before === section.before ? section : { ...section, before };
+    }),
+  };
+}
+
+/** The deck as it will be once `slides` are hidden or shown, or locked or unlocked, as `marks` says. */
+export function withSlidesMarked(
+  deck: Deck,
+  slides: readonly string[],
+  marks: Partial<Pick<Slide, "hidden" | "locked">>,
+): Deck {
+  const marked = (slide: Slide) =>
+    (marks.hidden === undefined || slide.hidden === marks.hidden) &&
+    (marks.locked === undefined || slide.locked === marks.locked);
+  if (!deck.slides.some((slide) => slides.includes(slide.id) && !marked(slide))) return deck;
+  return {
+    ...deck,
+    slides: deck.slides.map((slide) => (slides.includes(slide.id) && !marked(slide) ? { ...slide, ...marks } : slide)),
+  };
+}
+
+/** How many slides each section holds, by the section's key. */
+export function sectionSizes(blocks: SectionBlock[]): Map<string, number> {
+  return new Map(blocks.map((block) => [block.key, block.rows.length - 1]));
 }
 
 /** Whether a section marker sits directly before the slide at `index`. */

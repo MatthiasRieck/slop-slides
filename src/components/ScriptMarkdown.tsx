@@ -1,16 +1,26 @@
 import { Eye, Pencil } from "lucide-react";
+import { memo } from "react";
 import Markdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 /** Where notes are shown, a click must not leave the app, and paths mean nothing. */
 const NOT_SHOWN = ["a", "img"];
 
-/** Speaker notes or narration, formatted: sized by what holds it, its lines kept as typed. */
-export function ScriptMarkdown(props: { text: string; rehypePlugins?: Options["rehypePlugins"] }) {
+/** What the Markdown is read with: the same list each time, so that only another text is read again. */
+const REMARK_PLUGINS = [remarkGfm];
+
+/**
+ * Speaker notes or narration, formatted: sized by what holds it, its lines kept as typed. Read
+ * again only when the text or the `rehypePlugins` are others than before.
+ */
+export const ScriptMarkdown = memo(function ScriptMarkdown(props: {
+  text: string;
+  rehypePlugins?: Options["rehypePlugins"];
+}) {
   return (
     <div className="markdown script">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={props.rehypePlugins}
         disallowedElements={NOT_SHOWN}
         unwrapDisallowed
@@ -19,7 +29,7 @@ export function ScriptMarkdown(props: { text: string; rehypePlugins?: Options["r
       </Markdown>
     </div>
   );
-}
+});
 
 /** Switches a script's editor between the Markdown it is written in and how that looks. */
 export function ScriptPreviewToggle(props: { preview: boolean; onChange: (preview: boolean) => void }) {

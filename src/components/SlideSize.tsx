@@ -16,9 +16,10 @@ import {
   withOrientation,
 } from "../lib/slideSize";
 import { cn } from "../lib/utils";
-import { useApp } from "../store";
+import { type DesignChange, useApp } from "../store";
 import { Button } from "./Button";
 import { Field, NumberField, selectClass } from "./Field";
+import { RequestStatus } from "./Templates";
 
 const ORIENTATIONS: { id: Orientation; label: string; icon: typeof Square }[] = [
   { id: "landscape", label: "Landscape", icon: RectangleHorizontal },
@@ -32,11 +33,24 @@ const UNITS: { id: SizeUnit; label: string }[] = [
   { id: "cm", label: "cm" },
 ];
 
-/** The deck's slide size, in Settings mode. */
+const SIZE_BUSY = "Wait for the agent to finish to change the slide size";
+
+/** The deck's slide size, in the deck's settings. */
 export function SlideSizeSettings() {
   const size = useApp((s) => s.deck?.size) ?? DEFAULT_SIZE;
-  // Starts over from the deck's size when it changes, by Apply or by the agent.
-  return <SlideSizePanel key={`${size.width}x${size.height}${size.unit}`} current={size} />;
+  const deckId = useApp((s) => s.deck?.id);
+  /** How the last Apply went, and for which deck; kept here, as the panel starts over with the new size. */
+  const [applied, setApplied] = useState<{ deck: string | undefined; change: DesignChange } | null>(null);
+  const change = applied && applied.deck === deckId ? applied.change : null;
+  return (
+    // Starts over from the deck's size when it changes, by Apply or by the agent.
+    <SlideSizePanel
+      key={`${size.width}x${size.height}${size.unit}`}
+      current={size}
+      applied={change}
+      onApplied={(next) => setApplied(next && { deck: deckId, change: next })}
+    />
+  );
 }
 
 /**
@@ -44,7 +58,12 @@ export function SlideSizeSettings() {
  * Applying resizes every slide and, for a deck with slides, prepares a message asking the agent
  * to lay them out again.
  */
-function SlideSizePanel(props: { current: SlideSize }) {
+function SlideSizePanel(props: {
+  current: SlideSize;
+  /** How the last Apply went: the status under the form says so. */
+  applied: DesignChange | null;
+  onApplied: (change: DesignChange | null) => void;
+}) {
   const current: SlideSize = { width: props.current.width, height: props.current.height, unit: props.current.unit };
   const [unit, setUnit] = useState<SizeUnit>(current.unit);
   const [width, setWidth] = useState(String(current.width));
@@ -63,9 +82,10 @@ function SlideSizePanel(props: { current: SlideSize }) {
     setHeight(String(size.height));
   };
 
-  const apply = () => {
+  const apply = async () => {
     if (problem || unchanged || running) return;
-    void useApp.getState().resizeSlides(draft);
+    props.onApplied(null);
+    props.onApplied(await useApp.getState().resizeSlides(draft));
   };
 
   const pixels = problem ? null : toPixels(draft);
@@ -74,7 +94,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
       className="flex flex-col gap-3 p-3 text-xs"
       onSubmit={(event) => {
         event.preventDefault();
-        apply();
+        void apply();
       }}
     >
       <div className="font-medium">Slide size</div>
@@ -87,7 +107,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
             disabled={!!problem}
             onClick={() => show(withOrientation(draft, id))}
             className={cn(
-              "flex items-center justify-center gap-1.5 rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground disabled:opacity-50",
+              "flex items-center justify-center gap-1.5 rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground disabled:opacity-40",
               orientation === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
             )}
           >
@@ -152,7 +172,16 @@ function SlideSizePanel(props: { current: SlideSize }) {
           size.
         </p>
       )}
-      <div className="flex justify-end gap-2">
+      {props.applied === "requested" && (
+        <RequestStatus>Slides resized. Request added to the chat. Send it to lay the slides out again.</RequestStatus>
+      )}
+      {props.applied === "applied" && (
+        <p role="status" className="text-2xs text-foreground">
+          Slide size changed.
+        </p>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {running && <span className="mr-auto text-2xs text-muted-foreground">{SIZE_BUSY}.</span>}
         <Button size="lg" disabled={unchanged} onClick={() => show(current)}>
           Reset
         </Button>
@@ -161,7 +190,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
           size="lg"
           type="submit"
           disabled={!!problem || unchanged || running}
-          title={running ? "Wait for the agent to finish to change the slide size" : undefined}
+          title={running ? SIZE_BUSY : undefined}
         >
           Apply
         </Button>

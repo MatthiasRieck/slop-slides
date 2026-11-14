@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-
+import { formatKeys, isMod } from "../lib/keys";
+import { memoizeLast } from "../lib/memo";
 import {
   contextWindowLabel,
   effortLabel,
@@ -11,8 +12,9 @@ import {
   type ProviderInfo,
   type ProviderModel,
 } from "../lib/models";
-import { cn, isMac } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
+import { InstallHint } from "./chat/InstallHint";
 import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
 
@@ -30,7 +32,7 @@ export function ModelPicker() {
   const close = useMemo(() => () => setOpen(false), []);
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    <div ref={rootRef} className="relative min-w-0 shrink">
       <button
         type="button"
         aria-expanded={open}
@@ -40,7 +42,8 @@ export function ModelPicker() {
         className={cn(triggerClass, "max-w-full")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
-        <span className="hidden truncate font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
+        {/* The name always shows, cut short as room runs out; effort and permissions give way first. */}
+        <span className="truncate font-medium text-foreground/90">{selection.label}</span>
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
@@ -51,7 +54,6 @@ export function ModelPicker() {
           variant="menu"
           portal
           follow
-          capture
           className="flex overflow-hidden"
         >
           <ModelMenu onClose={close} />
@@ -117,7 +119,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       choose(rows[active]);
-    } else if ((isMac ? e.metaKey : e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+    } else if (isMod(e) && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
       choose(rows[Number(e.key) - 1]);
     }
@@ -224,7 +226,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                     onMouseMove={() => setActive(index)}
                     onFocus={() => setActive(index)}
                     aria-pressed={row.provider === selection.provider && row.id === selection.model}
-                    className="min-w-0 flex-1 rounded text-left focus-visible:outline focus-visible:outline-primary"
+                    className="min-w-0 flex-1 rounded text-left"
                   >
                     <div className="flex items-center gap-1.5 text-sm text-foreground">
                       <span className="truncate">{row.label}</span>
@@ -244,8 +246,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                   )}
                   {index < 9 && (
                     <kbd className="shrink-0 font-sans text-2xs text-muted-foreground/80">
-                      {isMac ? "⌘" : "Ctrl+"}
-                      {index + 1}
+                      {formatKeys(`mod+${index + 1}`)}
                     </kbd>
                   )}
                   <button
@@ -288,7 +289,9 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
       ) : (
         <>
           <p className="text-sm text-foreground">{cli} is not installed</p>
-          <p className="text-xs leading-relaxed text-muted-foreground">{install}</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            <InstallHint text={install} />
+          </p>
         </>
       )}
       <button
@@ -303,6 +306,14 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
   );
 }
 
+/**
+ * What a provider says of one of its models. Asked on every update of the store, a word of the
+ * agent's included; looked up only when the providers or the selection changed.
+ */
+const modelOf = memoizeLast((providers: ProviderInfo[] | undefined, provider: Provider, model: string) =>
+  providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model),
+);
+
 /** Reasoning effort and context window for the selected model, like T3 Code's traits menu. */
 export function EffortPicker() {
   const selection = useApp((s) => s.selection);
@@ -310,9 +321,7 @@ export function EffortPicker() {
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
 
-  const model = useApp((s) =>
-    s.providers?.find((p) => p.id === s.selection.provider)?.models.find((m) => m.id === s.selection.model),
-  );
+  const model = useApp((s) => modelOf(s.providers, s.selection.provider, s.selection.model));
   const efforts = model?.efforts ?? [];
   const contextWindows = model?.contextWindows ?? [];
   if (efforts.length === 0 && contextWindows.length === 0) return null;
@@ -355,7 +364,7 @@ export function EffortPicker() {
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
-        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow capture className="p-1.5">
+        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
               <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>

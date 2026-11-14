@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
@@ -25,25 +25,61 @@ describe("RewindDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("offers to rewind the chat by default", () => {
+  it("does not look through the messages until then, however often they change", () => {
+    const find = vi.spyOn(Array.prototype, "find");
+    try {
+      useApp.setState({ rewindAsk: null });
+      render(<RewindDialog />);
+      const message = useApp.getState().messages[0]!;
+      const messages = () => Array.from({ length: 50 }, (_, i) => ({ ...message, id: `u${i}` }));
+      find.mockClear();
+      for (let update = 0; update < 20; update++) act(() => useApp.setState({ messages: messages() }));
+      const searched = find.mock.contexts.filter((list) => Array.isArray(list) && list.length === 50);
+      expect(searched).toHaveLength(0);
+    } finally {
+      find.mockRestore();
+    }
+  });
+
+  it("says what happened and asks what becomes of the chat", () => {
     render(<RewindDialog />);
-    expect(screen.getByRole("dialog", { name: "Undo chat changes" }).textContent).toContain("“Bigger title”");
-    expect((screen.getByRole("radio", { name: /Also rewind the chat/ }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const dialog = screen.getByRole("dialog", { name: "Undo chat changes" });
+    expect(screen.getByRole("heading").textContent).toBe("You undid the agent's changes. What about the chat?");
+    expect(dialog.textContent).toContain("“Bigger title”");
+  });
+
+  it("rewinds the chat with its main button, which has the focus", () => {
+    render(<RewindDialog />);
+    const rewind = screen.getByRole("button", { name: /^Rewind the chat too/ });
+    expect(document.activeElement).toBe(rewind);
+    expect(rewind.className).toContain("bg-primary");
+    expect(rewind.textContent).toContain("returns to the message box");
+    fireEvent.click(rewind);
     expect(answerRewind).toHaveBeenCalledWith("rewind", false);
   });
 
-  it("can keep the chat, and remember the answer", () => {
+  it("can keep the chat and tell the agent, and remember the answer", () => {
     render(<RewindDialog />);
-    fireEvent.click(screen.getByRole("radio", { name: /Only undo the deck changes/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Don't ask again" }));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const remember = screen.getByRole("checkbox", { name: /^Don't ask again/ });
+    // Where to take the answer back is said beside it.
+    expect(remember.closest("label")!.textContent).toContain("You can change this in the app settings.");
+    fireEvent.click(remember);
+    const keep = screen.getByRole("button", { name: /^Keep the chat, tell the agent/ });
+    expect(keep.textContent).toContain("Your next message tells the agent");
+    fireEvent.click(keep);
     expect(answerRewind).toHaveBeenCalledWith("deck", true);
   });
 
-  it("skipping leaves the chat alone", () => {
+  it("explains what doing nothing means, and leaves the chat alone", () => {
     render(<RewindDialog />);
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(screen.getByText(/without telling the agent/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Do nothing" }));
+    expect(answerRewind).toHaveBeenCalledWith(null, false);
+  });
+
+  it("does nothing on Escape", () => {
+    render(<RewindDialog />);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(answerRewind).toHaveBeenCalledWith(null, false);
   });
 

@@ -2,6 +2,8 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
+import { forgetNarration } from "../lib/narrationCache";
+import { wavePath } from "../lib/waveform";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -13,6 +15,12 @@ vi.mock("../lib/narrationAudio", async (original) => ({
   ...(await original<typeof import("../lib/narrationAudio")>()),
   playNarration: (...args: unknown[]) => playNarration(...args),
 }));
+
+// Counted, to tell when a waveform is drawn again.
+vi.mock("../lib/waveform", async (original) => {
+  const actual = await original<typeof import("../lib/waveform")>();
+  return { wavePath: vi.fn(actual.wavePath) };
+});
 
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
 
@@ -66,6 +74,7 @@ function audioOf(entries: SlideAudio[]) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  forgetNarration();
   setNarration.mockClear();
   invoke.mockReset();
   // A backend that knows nothing, until a test says what it answers.
@@ -89,7 +98,7 @@ afterEach(() => {
 describe("NarrationPanel", () => {
   it("holds the time expected for the slide", () => {
     render(<NarrationPanel />);
-    expect(screen.getByRole("textbox", { name: "Expected time for this slide" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Planned time" })).toBeTruthy();
   });
 
   it("shows the current slide's narration with its length", () => {
@@ -185,6 +194,8 @@ describe("NarrationPanel audio", () => {
     const playback = {
       ended: new Promise<void>((resolve) => (end = resolve)),
       stop: vi.fn(() => end()),
+      pause: vi.fn(),
+      resume: vi.fn(async () => {}),
       time: () => at,
     };
     playNarration.mockResolvedValueOnce(playback);
@@ -230,27 +241,67 @@ describe("NarrationPanel audio", () => {
     expect(wave("Narration audio, out of date").querySelector("[data-word]")).toBeNull();
   });
 
-  it("plays from where the waveform is pressed, a line showing where it is, and stops from the button", async () => {
+  it("plays from where the waveform is pressed, a line showing where it is", async () => {
     await withAudio();
     wave().getBoundingClientRect = () => ({ left: 0, width: 200 }) as DOMRect;
     const first = playing(3);
     await act(async () => fireEvent.click(wave(), { clientX: 100 }));
     expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 2);
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("75%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(75%)");
     // Pressed again elsewhere, it starts over from there.
     const second = playing(1);
     await act(async () => fireEvent.click(wave(), { clientX: 50 }));
     expect(first.stop).toHaveBeenCalled();
     expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 1);
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop" })));
-    expect(second.stop).toHaveBeenCalled();
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(25%)");
+    expect(second.stop).not.toHaveBeenCalled();
     expect(playNarration).toHaveBeenCalledTimes(2);
-    expect(screen.queryByTestId("wave-playhead")).toBeNull();
-    // The button plays it from the start.
-    playing(0);
+  });
+
+  it("the button plays from the start, pauses, and plays on from there instead of starting over", async () => {
+    await withAudio();
+    const playback = playing(0);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
     expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 0);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Pause" })));
+    expect(playback.pause).toHaveBeenCalledOnce();
+    expect(playback.stop).not.toHaveBeenCalled();
+    // The line stays where it stopped.
+    expect(screen.getByTestId("wave-playhead")).toBeTruthy();
+    const resume = screen.getByRole("button", { name: "Resume" });
+    expect(resume.title).toBe("Play on from where it was paused");
+    await act(async () => fireEvent.click(resume));
+    expect(playback.resume).toHaveBeenCalledOnce();
+    expect(playNarration).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+  });
+
+  it("goes back to Play when the audio has played to its end", async () => {
+    await withAudio();
+    let end!: () => void;
+    playNarration.mockResolvedValueOnce({
+      ended: new Promise<void>((resolve) => (end = resolve)),
+      stop: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      time: () => 0,
+    });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    await act(async () => end());
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+    expect(screen.queryByTestId("wave-playhead")).toBeNull();
+  });
+
+  it("pressing the waveform while paused plays from there", async () => {
+    await withAudio();
+    wave().getBoundingClientRect = () => ({ left: 0, width: 200 }) as DOMRect;
+    const first = playing(0);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Pause" })));
+    playing(2);
+    await act(async () => fireEvent.click(wave(), { clientX: 100 }));
+    expect(first.stop).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
   });
 
   it("follows the audio with the line as it plays", async () => {
@@ -258,11 +309,65 @@ describe("NarrationPanel audio", () => {
     let at = 1;
     playNarration.mockResolvedValueOnce({ ended: new Promise<void>(() => {}), stop: vi.fn(), time: () => at });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(25%)");
     at = 9;
     await act(async () => void vi.advanceTimersByTime(60));
     // Never past the end of the audio.
-    expect(screen.getByTestId("wave-playhead").style.left).toBe("100%");
+    expect(screen.getByTestId("wave-playhead").style.transform).toBe("translateX(100%)");
+  });
+
+  it("moves the line every frame without drawing the waveform or the words again", async () => {
+    await withAudio({ timed: true });
+    let at = 0;
+    playNarration.mockResolvedValueOnce({ ended: new Promise<void>(() => {}), stop: vi.fn(), time: () => at });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    vi.mocked(wavePath).mockClear();
+    const words = [...wave().querySelectorAll("[data-word]")];
+    const places = new Set<string>();
+    for (let i = 0; i < 60; i++) {
+      at += 1 / 60;
+      await act(async () => void vi.advanceTimersByTime(17));
+      places.add(screen.getByTestId("wave-playhead").style.transform);
+    }
+    expect(places.size).toBeGreaterThan(10);
+    expect(wavePath).not.toHaveBeenCalled();
+    expect([...wave().querySelectorAll("[data-word]")]).toEqual(words);
+  });
+
+  it("scrolls on only when the line runs out of sight, and stands still while paused", async () => {
+    await withAudio({ timed: true });
+    // 800 pixels of waveform over four seconds, 200 of them in sight.
+    const scroller = wave().parentElement!;
+    const scrolls: number[] = [];
+    Object.defineProperty(scroller, "clientWidth", { configurable: true, get: () => 200 });
+    Object.defineProperty(scroller, "scrollWidth", { configurable: true, get: () => 800 });
+    Object.defineProperty(scroller, "scrollLeft", {
+      configurable: true,
+      get: () => scrolls.at(-1) ?? 0,
+      set: (to: number) => void scrolls.push(to),
+    });
+    let at = 0;
+    const playback = { ended: new Promise<void>(() => {}), stop: vi.fn(), pause: vi.fn(), time: () => at };
+    playNarration.mockResolvedValueOnce(playback);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    for (at = 0.1; at < 0.9; at += 0.1) await act(async () => void vi.advanceTimersByTime(17));
+    expect(scrolls).toEqual([]);
+    // 1.5 s in, the line is at 300: a page on, the line near its left.
+    for (at = 1.5; at < 2.2; at += 0.1) await act(async () => void vi.advanceTimersByTime(17));
+    expect(scrolls).toEqual([280]);
+    // Paused, nothing asks the audio where it is any more.
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Pause" })));
+    const time = vi.spyOn(playback, "time");
+    await act(async () => void vi.advanceTimersByTime(500));
+    expect(time).not.toHaveBeenCalled();
+  });
+
+  it("reads the waveform once, however often the slide is shown", async () => {
+    const view = await withAudio();
+    view.unmount();
+    await withAudio();
+    expect(wave().querySelector("path")).toBeTruthy();
+    expect(invoke.mock.calls.filter(([command]) => command === "narration_peaks")).toHaveLength(1);
   });
 });
 
@@ -422,12 +527,38 @@ describe("NarrationPanel speech", () => {
     act(() => fireEvent.click(screen.getByRole("button", { name: /Generate all/ })));
     expect(invoke).toHaveBeenCalledWith("render_narration", { id: deckFor(DECK_HTML).id, slides: null });
     act(() => useNarration.setState({ render: { deck: deckFor(DECK_HTML).id, slide: "outro", done: 1, total: 2 } }));
-    expect(screen.getByText(/Speaking slide 2 of 2/)).toBeTruthy();
+    expect(screen.getByText(/Generating audio for slide 2 of 2/)).toBeTruthy();
+    // Slide 1 is not the one being generated: its own button waits, saying why.
+    expect(screen.getAllByRole("button", { name: /Cancel/ })).toHaveLength(1);
+    expect((screen.getByRole("button", { name: /Regenerate|Generate$/ }) as HTMLButtonElement).title).toBe(
+      "Audio is being generated for another slide",
+    );
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(invoke).toHaveBeenCalledWith("cancel_narration");
   });
 
-  it("times the words of audio that is not timed yet, showing how far it has got", async () => {
+  it("offers Cancel in place of Generate on the slide whose audio is being generated", async () => {
+    backend(SPEECH);
+    await show();
+    invoke.mockImplementation((command: string) =>
+      command === "render_narration" ? new Promise(() => {}) : Promise.resolve(SPEECH),
+    );
+    const controls = () => screen.getByText(/Generating audio…|No audio yet/).closest("div")!;
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Generate" })));
+    act(() => useNarration.setState({ render: { deck: deckFor(DECK_HTML).id, slide: "intro", done: 0, total: 1 } }));
+    expect(screen.getByText("Generating audio…")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
+    // Right where Generate was, not only at the bottom of the tab.
+    const cancel = [...controls().querySelectorAll("button")].find((b) => b.textContent === "Cancel")!;
+    expect(cancel.title).toBe("Stop generating the audio");
+    invoke.mockClear();
+    fireEvent.click(cancel);
+    expect(invoke).toHaveBeenCalledWith("cancel_narration");
+    act(() => useNarration.setState({ render: null }));
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+  });
+
+  it("syncs the words to audio that is not synced yet, showing how far it has got", async () => {
     backend(SPEECH);
     useApp.setState({ deck: deckWith({ intro: "One.", outro: "Three." }) });
     await show();
@@ -439,25 +570,28 @@ describe("NarrationPanel speech", () => {
       ]),
     );
     expect(screen.getByText("Audio 0:01")).toBeTruthy();
-    expect(screen.getByText("1 slide's words not timed")).toBeTruthy();
+    expect(screen.getByText("1 slide's words are not synced to the audio")).toBeTruthy();
+    expect(screen.queryByText(/Time words/)).toBeNull();
     let finish!: (audio: SlideAudio[]) => void;
     invoke.mockImplementation((command: string) =>
       command === "time_narration"
         ? new Promise((resolve) => (finish = resolve))
         : Promise.resolve(command === "voice_status" ? { modelReady: true } : SPEECH),
     );
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Time words/ })));
+    const sync = screen.getByRole("button", { name: "Sync words to audio" });
+    expect(sync.title).toMatch(/when each word is said/);
+    await act(async () => fireEvent.click(sync));
     expect(invoke).toHaveBeenCalledWith("time_narration", { id: deckFor(DECK_HTML).id, slides: null });
     act(() => useNarration.setState({ timing: { deck: deckFor(DECK_HTML).id, slide: "intro", done: 0, total: 1 } }));
-    expect(screen.getByText("Timing words of slide 1 of 1…")).toBeTruthy();
+    expect(screen.getByText("Syncing words of slide 1 of 1…")).toBeTruthy();
     await act(async () =>
       finish([
         { slide: "intro", state: "ready", seconds: 1, timed: true },
         { slide: "outro", state: "stale", seconds: 2 },
       ]),
     );
-    expect(screen.getByText("Audio 0:01, words timed")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Time words/ })).toBeNull();
+    expect(screen.getByText("Audio 0:01, words synced")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Sync words/ })).toBeNull();
   });
 
   it("says when it downloads the speech model to time words", async () => {
@@ -503,7 +637,7 @@ describe("NarrationPanel speech", () => {
         name === "delete_recorded_narration" ? [{ slide: "intro", state: "none", seconds: null }] : SPEECH,
       );
       await act(async () => void render(<NarrationPanel />));
-      expect(screen.getByText("Imported audio 3:05, words timed")).toBeTruthy();
+      expect(screen.getByText("Imported audio 3:05, words synced")).toBeTruthy();
       expect(screen.queryByText(/Your recording/)).toBeNull();
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove audio" })));
       expect(vi.mocked(ask).mock.lastCall?.[1]).toMatchObject({ title: "Remove audio", okLabel: "Remove" });
@@ -531,6 +665,11 @@ describe("NarrationPanel speech", () => {
       const cleanNarration = vi.fn();
       useApp.setState({ cleanNarration });
       await act(async () => void render(<NarrationPanel />));
+      // Both say that they put a request in the chat rather than change anything by themselves.
+      expect(screen.getByRole("button", { name: "Clean up" }).title).toMatch(/Puts a request in the chat.*you send it/);
+      expect(screen.getByRole("button", { name: "Clean up all narration" }).title).toMatch(
+        /Puts a request in the chat.*you send it/,
+      );
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up" })));
       expect(cleanNarration).toHaveBeenLastCalledWith("intro");
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up all narration" })));

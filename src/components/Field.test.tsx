@@ -162,3 +162,56 @@ describe("CheckboxRow", () => {
     expect(onChange).toHaveBeenCalledWith(false);
   });
 });
+
+describe("DraftInput stepping", () => {
+  it("steps by one with the arrows and by ten with Shift, applying at once and keeping the focus", () => {
+    const { input, onChange, onDone } = draft(12);
+    input.focus();
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(onChange).toHaveBeenLastCalledWith(13);
+    expect(input.value).toBe("13");
+    fireEvent.keyDown(input, { key: "ArrowDown", shiftKey: true });
+    expect(onChange).toHaveBeenLastCalledWith(3);
+    expect(input.value).toBe("3");
+    // The focus stays for the next step.
+    expect(onDone).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("steps from what is typed, and from the value when that is no number", () => {
+    const { input, onChange } = draft(12);
+    fireEvent.change(input, { target: { value: "40" } });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(onChange).toHaveBeenLastCalledWith(41);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.keyDown(input, { key: "ArrowUp", shiftKey: true });
+    expect(onChange).toHaveBeenLastCalledWith(22);
+  });
+
+  it("does not step a field without a value, or with a modifier held", () => {
+    const empty = draft(null);
+    fireEvent.keyDown(empty.input, { key: "ArrowUp" });
+    expect(empty.onChange).not.toHaveBeenCalled();
+    empty.rerender(5);
+    fireEvent.keyDown(empty.input, { key: "ArrowUp", ctrlKey: true });
+    fireEvent.keyDown(empty.input, { key: "ArrowUp", altKey: true });
+    expect(empty.onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps a step within what the field takes", () => {
+    const onChange = vi.fn();
+    render(
+      <DraftInput
+        aria-label="Width"
+        value={1}
+        parse={(text) => (Number(text) >= 1 ? Number(text) : null)}
+        sanitize={(text) => text}
+        onChange={onChange}
+        onDone={() => {}}
+      />,
+    );
+    fireEvent.keyDown(screen.getByLabelText("Width"), { key: "ArrowDown" });
+    expect(onChange).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Width") as HTMLInputElement).value).toBe("1");
+  });
+});

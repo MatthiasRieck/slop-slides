@@ -4,11 +4,12 @@ import { useDismiss } from "../components/Popover";
 
 /**
  * A button's dropdown: whether its panel is open, and `ref` for the box around the button and
- * the panel, a press outside which closes it (after `onClose`); with `escape`, so does Escape
- * (`capture`: see `useDismiss`). While `disabled` it stays closed, as when what it works on goes away.
+ * the panel. A press outside that box closes it (after `onClose`), and so does Escape, unless
+ * `escape` is false (see `useDismiss`). While `disabled` it stays closed, as when what it works
+ * on goes away. A panel that is a menu takes `useMenuKeys` for its keys.
  */
 export function useDropdown<E extends HTMLElement = HTMLDivElement>(
-  options: { disabled?: boolean; onClose?: () => void; escape?: boolean; capture?: boolean } = {},
+  options: { disabled?: boolean; onClose?: () => void; escape?: boolean } = {},
 ) {
   const [open, setOpen] = useState(false);
   const ref = useRef<E>(null);
@@ -19,7 +20,7 @@ export function useDropdown<E extends HTMLElement = HTMLDivElement>(
       options.onClose?.();
       setOpen(false);
     },
-    { escape: options.escape, capture: options.capture },
+    { escape: options.escape },
   );
   if (options.disabled && open) setOpen(false);
   return { open, setOpen, ref, toggle: () => setOpen(!open) };

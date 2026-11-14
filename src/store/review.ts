@@ -1,6 +1,7 @@
 import { api, type Deck } from "../lib/api";
 import { type CommentScope, type PlacedComment, placeComments, type SlideComment } from "../lib/comments";
 import type { Stroke } from "../lib/ink";
+import { memoizeLast } from "../lib/memo";
 import { loadFlag, saveFlag } from "../lib/storage";
 import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
@@ -27,6 +28,8 @@ export interface ReviewSlice {
    * once changed, or when the user picks them in the composer.
    */
   commentsHeld: Record<string, string>;
+  /** The comment the list of comments asked the stage to open, once its slide is shown; null when none. */
+  commentAsked: { slide: string; id: string } | null;
 
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
@@ -46,18 +49,42 @@ export interface ReviewSlice {
   /** Leaves a comment out of the next messages, or takes it along again. */
   setCommentHeld: (comment: SlideComment, held: boolean) => void;
   holdComments: (comments: SlideComment[]) => void;
+  /** Goes to `slide` with the review on show and asks the stage to open comment `id` there. */
+  showComment: (slide: string, id: string) => void;
+  /** The stage opened the comment it was asked to, or found it gone. */
+  commentShown: () => void;
+  /** Has the next message take every comment of the deck along, those left out before too. */
+  takeAllComments: () => void;
 }
 
 const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
 const COMMENT_TEXTS_KEY = "slopslide.commentTexts";
 
+// What the store's readers derive from the review is asked for on every update of the store, by
+// selectors, and is the same until the review or the deck's slides change: each is worked out
+// once for the comments, marks and slides it was last asked about, and handed out again after.
+const NO_COMMENTS: PlacedComment[] = [];
+const placed = memoizeLast(placeComments);
+const onSlide = memoizeLast((all: PlacedComment[], slide: string | null) => all.filter((c) => c.slide === slide));
+const notHeld = memoizeLast(
+  (comments: PlacedComment[], held: Record<string, string>) => comments.filter((c) => held[c.id] !== c.text).length,
+);
+const someIn = (review: Record<string, unknown[]>) => Object.values(review).some((items) => items.length > 0);
+const someMarks = memoizeLast(someIn);
+const someComments = memoizeLast(someIn);
+
+/** Every comment on the open deck's slides, in deck order. */
+export function deckComments(state: Pick<AppState, "deck" | "comments">): PlacedComment[] {
+  return state.deck ? placed(state.comments, state.deck.slides) : NO_COMMENTS;
+}
+
 /** The comments the composer offers to send: the selected slide's or the deck's, in deck order. */
 export function commentsInScope(
   state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible">,
 ): PlacedComment[] {
-  if (!state.deck || !state.reviewVisible) return [];
-  const placed = placeComments(state.comments, state.deck.slides);
-  return state.commentScope === "deck" ? placed : placed.filter((c) => c.slide === state.selected);
+  if (!state.reviewVisible) return NO_COMMENTS;
+  const all = deckComments(state);
+  return state.commentScope === "deck" ? all : onSlide(all, state.selected);
 }
 
 /** Whether a comment stays out of the next message: it has not changed since it last went out. */
@@ -65,7 +92,24 @@ export function heldComment(state: Pick<AppState, "commentsHeld">, comment: Slid
   return state.commentsHeld[comment.id] === comment.text;
 }
 
-export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
+/** How many of the comments in scope go out with the next message: those not held back. */
+export function commentsToSend(
+  state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible" | "commentsHeld">,
+): number {
+  return notHeld(commentsInScope(state), state.commentsHeld);
+}
+
+/** Whether any slide has a comment. */
+export function hasComments(state: Pick<AppState, "comments">): boolean {
+  return someComments(state.comments);
+}
+
+/** Whether there is any review to show or hide: a mark or a comment on any slide. */
+export function hasReview(state: Pick<AppState, "sketches" | "comments">): boolean {
+  return someMarks(state.sketches) || hasComments(state);
+}
+
+export const createReviewSlice: Slice<ReviewSlice> = (set, get, app) => ({
   sketches: {},
   sketchesSent: {},
   reviewVisible: loadFlag(REVIEW_VISIBLE_KEY, true),
@@ -73,6 +117,7 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
   comments: {},
   commentScope: "slide",
   commentsHeld: {},
+  commentAsked: null,
 
   setSketches: (update) => {
     set((s) => ({ sketches: update(s.sketches) }));
@@ -140,6 +185,20 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
     set((s) => ({
       commentsHeld: { ...s.commentsHeld, ...Object.fromEntries(comments.map((c) => [c.id, c.text])) },
     })),
+
+  showComment: (slide, id) => {
+    const app = get();
+    if (!app.reviewVisible) app.setReviewVisible(true);
+    if (app.selected !== slide) app.select(slide);
+    set({ commentAsked: { slide, id } });
+  },
+
+  commentShown: () => set({ commentAsked: null }),
+
+  takeAllComments: () => {
+    if (!get().reviewVisible) get().setReviewVisible(true);
+    set({ commentScope: "deck", commentsHeld: {} });
+  },
 });
 
 const REVIEW_SAVE_DELAY = 400;

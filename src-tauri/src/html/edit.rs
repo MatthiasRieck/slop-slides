@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use super::scan::find_ci;
+use super::scan::{find_ci, rfind_ci};
 
 /// `snippet` put in right after the `<head>` tag, or at the start without one.
 pub(super) fn insert_after_head(html: &str, snippet: &str) -> String {
@@ -25,10 +25,8 @@ pub(crate) fn indent_before(html: &str, at: usize) -> &str {
 
 /// Where new content goes in a deck without slides: just before the end of `<main>`.
 pub(crate) fn end_of_deck(html: &str) -> Result<usize, String> {
-    let lower = html.to_ascii_lowercase();
-    let at = lower
-        .rfind("</main")
-        .or_else(|| lower.rfind("</body"))
+    let at = rfind_ci(html, "</main")
+        .or_else(|| rfind_ci(html, "</body"))
         .ok_or("The deck has no <main class=\"deck\"> container.")?;
     Ok(html[..at].trim_end().len())
 }

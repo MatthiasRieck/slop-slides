@@ -1,32 +1,47 @@
 import { Lock, LockOpen, Sparkles } from "lucide-react";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useContentSize } from "../hooks/useContentSize";
-import { api } from "../lib/api";
-import { defaultsFrom, type EditStyle, familyOf, familyOfKind } from "../lib/editTools";
+import type { ArrangeMessage } from "../lib/arrange";
+import {
+  defaultsFrom,
+  type EditStyle,
+  type EditTool,
+  familyOf,
+  familyOfKind,
+  type ListKind,
+  type StackOrder,
+} from "../lib/editTools";
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
-import { deckMode, editingSlide, reportingErrors, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { deckMode, editingSlide, searchHighlight, useApp } from "../store";
 import { Button } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
-import { EditContextMenu } from "./EditContextMenu";
+import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
-import { AnnotationLayer, useAnnotations } from "./PresenterTools";
-import { ShortcutHelp } from "./ShortcutHelp";
-import { CurrentSlide } from "./stage/CurrentSlide";
+import { FindBar, useDeckSearch, useFindShortcut } from "./FindReplace";
+import { useAnnotations } from "./PresenterTools";
 import { DiscardButton } from "./stage/DiscardButton";
 import { toolMessage } from "./stage/editKeys";
+import { slideReport, useEditorMenu, useSlideReport } from "./stage/editorState";
+import { useFrameMessages } from "./stage/messages";
+import { StageArea, StageInk } from "./stage/StageArea";
 import { StageFooter } from "./stage/StageFooter";
-import { inkBox, usePasteboard } from "./stage/usePasteboard";
+import { usePasteboard } from "./stage/usePasteboard";
 import { useSlideEditing } from "./stage/useSlideEditing";
 import { useSketchKeyboard, useSlideKeyboard } from "./stage/useSlideKeyboard";
 import { TimelineTools } from "./TimelineTools";
 import { ViewToolbar } from "./ViewToolbar";
 
-/** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
-const AREA_PADDING = 32;
-
-/** The current slide, fit to the available space with letterboxing. */
+/**
+ * The current slide, fit to the available space with letterboxing, between the tools of the
+ * deck's mode and the row under the slide.
+ *
+ * It renders when the deck, the slide shown, the mode or a tool changes. What changes many times
+ * a second is not its state, and is read by just what shows it: the slide editor's reports (see
+ * stage/editorState.ts), the pasteboard's view (stage/stageView.ts) and the size of the area
+ * (stage/StageArea.tsx). The callbacks it hands its toolbars stay the same, so those render
+ * only for what they show.
+ */
 export function Stage() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
@@ -35,7 +50,6 @@ export function Stage() {
   // The editor is at work on the slide: Edit mode, and the slide is not locked.
   const editing = useApp(editingSlide);
   const mode = useApp(deckMode);
-  const running = useApp((s) => s.running);
   const editTool = useApp((s) => s.editTool);
   const editStyles = useApp((s) => s.editStyles);
   const annotations = useAnnotations(selected ?? "", {
@@ -43,32 +57,24 @@ export function Stage() {
     setInk: useApp.getState().setSketches,
   });
   const areaRef = useRef<HTMLDivElement>(null);
-  const pasteboard = usePasteboard(areaRef);
-  const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
-  const postToEditor = editFrames.post;
+  const messages = useFrameMessages(areaRef);
+  const pasteboard = usePasteboard(messages);
+  const editor = useSlideEditing(areaRef, messages, pasteboard.resetView);
+  const postToEditor = editor.post;
   // Comments are written in View, and stay on show while the slide is edited.
   const reviewShown = (mode === "view" || mode === "edit") && reviewVisible;
   const inkRef = useRef<HTMLDivElement>(null);
-  const commentPins = useSlideComments(areaRef, postToEditor, reviewShown, inkRef);
+  const commentPins = useSlideComments(areaRef, messages, postToEditor, reviewShown, inkRef);
   const pinAnchor = useRef<HTMLButtonElement>(null);
   const setCommenting = commentPins.setCommenting;
   const setDrawingArea = commentPins.setDrawingArea;
   const drawingArea = commentPins.drawingArea;
   const canvas = pixelsOf(deck);
-  // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
-  const inside = useContentSize(areaRef);
-  const arena = inside
-    ? { width: inside.width + 2 * AREA_PADDING, height: inside.height + 2 * AREA_PADDING }
-    : undefined;
-  // The slide as large as fits the area, in its own shape.
-  const width = arena
-    ? Math.max(
-        0,
-        Math.min(arena.width - 2 * AREA_PADDING, ((arena.height - 2 * AREA_PADDING) * canvas.width) / canvas.height),
-      )
-    : 0;
 
   useSlideKeyboard();
+  // The search is the stage's in View and in Edit; View's ribbon and Edit's bar are where it shows.
+  useFindShortcut();
+  useDeckSearch();
   useSketchKeyboard(annotations.tool !== "pointer" || commentPins.commenting || drawingArea, () => {
     annotations.setTool("pointer");
     setCommenting(false);
@@ -96,13 +102,26 @@ export function Stage() {
   useEffect(() => {
     postToEditor({ type: "slop:search", ...highlight });
   }, [highlight, postToEditor]);
-  const restyle = (changes: EditStyle) => {
-    const selection = editFrames.selection;
-    // Restyling also sets how the next one of its kind looks; styling a few words does not.
-    const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
-    if (family && !selection?.editing) useApp.getState().setEditStyle(family, defaultsFrom(changes));
-    if (selection) postToEditor({ type: "slop:edit-style", style: changes });
-  };
+
+  // What the edit tools do, the same functions for as long as the stage is there.
+  const editTools = useMemo(
+    () => ({
+      onTool: (tool: EditTool) => useApp.getState().setEditTool(tool),
+      onStyle: (changes: EditStyle) => {
+        const { selection } = slideReport();
+        // Restyling also sets how the next one of its kind looks; styling a few words does not.
+        const family = selection ? familyOfKind(selection.kind) : familyOf(useApp.getState().editTool);
+        if (family && !selection?.editing) useApp.getState().setEditStyle(family, defaultsFrom(changes));
+        if (selection) postToEditor({ type: "slop:edit-style", style: changes });
+      },
+      onList: (list: ListKind) => postToEditor({ type: "slop:edit-list", list }),
+      onLink: (href: string | null) => postToEditor({ type: "slop:edit-link", href }),
+      onBackground: (color: string | null) => postToEditor({ type: "slop:edit-background", color }),
+      onOrder: (to: StackOrder) => postToEditor({ type: "slop:edit-order", to }),
+      onArrange: (message: ArrangeMessage) => postToEditor(message),
+    }),
+    [postToEditor],
+  );
 
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
@@ -116,34 +135,20 @@ export function Stage() {
         <ModeBar>
           <EditToolbar
             tool={editTool}
-            selection={editFrames.selection}
             styles={editStyles}
-            sizeMode={editFrames.sizeMode}
-            onSizeMode={editFrames.setSizeMode}
-            keepRatio={editFrames.keepRatio}
-            onKeepRatio={editFrames.setKeepRatio}
-            fonts={editFrames.fonts}
-            colors={editFrames.colors}
-            background={editFrames.background}
-            slides={deck?.slides.map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })) ?? []}
-            onTool={(tool) => useApp.getState().setEditTool(tool)}
-            onStyle={restyle}
-            onList={(list) => postToEditor({ type: "slop:edit-list", list })}
-            onLink={(href) => postToEditor({ type: "slop:edit-link", href })}
-            onBackground={(color) => postToEditor({ type: "slop:edit-background", color })}
-            onPickImage={editFrames.pickImage}
-            onReturnFocus={editFrames.focus}
-            onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
-            onDelete={editFrames.deleteSelection}
-            geometry={editFrames.geometry}
-            layers={editFrames.layers}
-            onArrange={postToEditor}
+            {...editTools}
+            onSizeMode={editor.setSizeMode}
+            onKeepRatio={editor.setKeepRatio}
+            onPickImage={editor.pickImage}
+            onInsertAsk={editor.askForInsert}
+            onReturnFocus={editor.focus}
+            onDelete={editor.deleteSelection}
           />
         </ModeBar>
       )}
       {slide && mode === "edit" && locked && (
         <ModeBar>
-          <LockedNote deck={deck.id} slide={slide.id} />
+          <LockedNote slide={slide.id} />
           {/* The timeline is Edit mode's on a locked slide too, to play the deck and time the others. */}
           <TimelineTools collapsed={false} />
         </ModeBar>
@@ -161,58 +166,33 @@ export function Stage() {
           />
         </ModeBar>
       )}
-      {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
-      <div
-        ref={areaRef}
-        data-testid="stage-area"
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8"
+      <StageArea
+        areaRef={areaRef}
+        deckId={deck.id}
+        slide={slide}
+        size={canvas}
+        editing={editing}
+        inkRef={inkRef}
+        onFrameReady={(frame) => {
+          pasteboard.onFrameReady(frame);
+          editor.onFrameReady(frame);
+          commentPins.onFrameReady();
+          const search = searchHighlight(useApp.getState());
+          if (search.query) postToEditor({ type: "slop:search", ...search });
+        }}
+        ink={
+          <>
+            <StageInk annotations={annotations} />
+            <CommentPins pins={commentPins} inking={annotations.tool !== "pointer" || drawingArea} anchor={pinAnchor} />
+            {drawingArea && (
+              <AreaDrawer shape={commentPins.areaShape} onArea={(area) => void commentPins.commentOnArea(area)} />
+            )}
+          </>
+        }
       >
-        {slide ? (
-          // The slide's frame (outline, shadow, the edit-mode ring) is drawn in the preview, so it
-          // pans and zooms with the slide.
-          <div
-            style={{ width }}
-            {...{ [SKETCH_TARGET_ATTR]: "" }}
-            data-editing={editing || undefined}
-            className="relative"
-          >
-            <CurrentSlide
-              deckId={deck.id}
-              slide={slide}
-              size={canvas}
-              editing={editing}
-              arena={arena}
-              canvas={areaRef}
-              onFrameReady={(frame) => {
-                pasteboard.onFrameReady(frame);
-                editFrames.onFrameReady(frame);
-                commentPins.onFrameReady();
-                const search = searchHighlight(useApp.getState());
-                if (search.query) postToEditor({ type: "slop:search", ...search });
-              }}
-            />
-            {/* Ink sits on the slide, wherever the pasteboard has moved it. */}
-            <div
-              ref={inkRef}
-              data-testid="annotation-view"
-              className="pointer-events-none absolute"
-              style={inkBox(pasteboard.current, width / canvas.width)}
-            >
-              <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
-              <CommentPins
-                pins={commentPins}
-                inking={annotations.tool !== "pointer" || drawingArea}
-                anchor={pinAnchor}
-              />
-              {drawingArea && (
-                <AreaDrawer shape={commentPins.areaShape} onArea={(area) => void commentPins.commentOnArea(area)} />
-              )}
-            </div>
-          </div>
-        ) : (
-          <EmptyStage />
-        )}
+        {!slide && <EmptyStage />}
         {slide && editing && <DiscardButton />}
+        {mode === "edit" && <FindBar />}
         {commentPins.open && (
           <CommentEditor
             key={commentPins.open.key}
@@ -222,33 +202,48 @@ export function Stage() {
             onClose={commentPins.close}
           />
         )}
-      </div>
-      {editFrames.menu && (
-        <EditContextMenu
-          {...editFrames.menu}
-          running={running}
-          flippable={!!editFrames.selection?.flippable}
-          several={(editFrames.geometry?.count ?? 0) > 1}
-          group={!!editFrames.selection?.group}
-          locked={!!editFrames.selection?.locked}
-          onAction={editFrames.runMenuAction}
-          onClose={editFrames.closeMenu}
-        />
-      )}
-      {editing && <ShortcutHelp />}
+      </StageArea>
+      <EditorMenu onAction={editor.runMenuAction} onClose={editor.closeMenu} />
       {deck.slides.length > 0 && (
         <StageFooter
           index={index}
           count={deck.slides.length}
           slide={slide}
-          view={pasteboard.view}
           onResetView={pasteboard.resetView}
-          overflow={editFrames.overflow}
-          running={running}
-          onClearSelection={editFrames.clearSelection}
+          onZoomBy={pasteboard.zoomBy}
+          onZoomTo={pasteboard.zoomTo}
+          onClearSelection={editor.clearSelection}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The menu a right-click in the slide editor opened, while it is open. It reads what the editor
+ * reported of the selection for itself, so the stage does not render as the editor reports.
+ */
+function EditorMenu(props: { onAction: (action: EditMenuAction) => void; onClose: () => void }) {
+  const menu = useEditorMenu();
+  const running = useApp((s) => s.running);
+  const canPasteStyle = useApp((s) => s.copiedStyle !== null);
+  const flippable = useSlideReport((report) => !!report.selection?.flippable);
+  const several = useSlideReport((report) => (report.geometry?.count ?? 0) > 1);
+  const group = useSlideReport((report) => !!report.selection?.group);
+  const locked = useSlideReport((report) => !!report.selection?.locked);
+  if (!menu) return null;
+  return (
+    <EditContextMenu
+      {...menu}
+      canPasteStyle={canPasteStyle}
+      running={running}
+      flippable={flippable}
+      several={several}
+      group={group}
+      locked={locked}
+      onAction={props.onAction}
+      onClose={props.onClose}
+    />
   );
 }
 
@@ -262,11 +257,8 @@ function ModeBar({ children }: { children: ReactNode }) {
 }
 
 /** Edit mode on a locked slide: why nothing on it can be changed, and the way to change that. */
-function LockedNote({ deck, slide }: { deck: string; slide: string }) {
-  const unlock = async () => {
-    const next = await reportingErrors(() => api.setSlideLocked(deck, slide, false));
-    if (next) useApp.getState().setDeck(next);
-  };
+function LockedNote({ slide }: { slide: string }) {
+  const unlock = () => useApp.getState().setSlidesLocked([slide], false);
   return (
     <div role="status" className="flex flex-1 items-center gap-2 [&_svg]:size-3.5">
       <Lock />

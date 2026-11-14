@@ -24,9 +24,12 @@ class ReportingObserver {
   }
 }
 
+let renders = 0;
+
 function Measured() {
   const ref = useRef<HTMLDivElement>(null);
   const size = useContentSize(ref);
+  renders++;
   return <div ref={ref}>{size ? `${size.width}x${size.height}` : "unmeasured"}</div>;
 }
 
@@ -46,5 +49,18 @@ describe("useContentSize", () => {
     expect(screen.getByText("640x360")).toBeTruthy();
     unmount();
     expect(observers[0]!.disconnected).toBe(true);
+  });
+
+  it("renders once for a size reported twice, or one less than a pixel off", () => {
+    vi.stubGlobal("ResizeObserver", ReportingObserver);
+    render(<Measured />);
+    act(() => observers[0]!.report(320, 180));
+    const measured = renders;
+    act(() => observers[0]!.report(320, 180));
+    act(() => observers[0]!.report(320.3, 179.8));
+    expect(renders).toBe(measured);
+    expect(screen.getByText("320x180")).toBeTruthy();
+    act(() => observers[0]!.report(321, 180));
+    expect(renders).toBe(measured + 1);
   });
 });

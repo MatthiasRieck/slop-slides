@@ -7,66 +7,105 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   it shows the slides, plays them on the timeline and takes your comments. Edit changes the
   deck: the slide on the stage, the slides and sections in the list on the left, and the
   timing on the timeline. What changes the deck is off in View.
-- **Left:** live thumbnails. In Edit, drag to reorder; hover to lock, hide, duplicate, or delete; `+`
-  adds a slide. A locked slide (lock icon) can be changed by neither you nor the agent: it
+- **Left:** live thumbnails. In Edit, drag to reorder (several picked slides go together, or
+  Space on a thumbnail picks it up for the arrow keys); hover to lock, hide, duplicate, or
+  delete; `+` adds a slide (from View it switches to Edit first). A right-click on a slide opens
+  everything that can be done with it (new slide, duplicate, copy, cut, paste after, delete, hide,
+  lock, move, start a section), for all the picked slides when it is one of them; a right-click
+  on a section's heading renames, folds, selects or removes it. In the list ⌘A picks every
+  slide, ⌘D duplicates, ⌘X cuts and Delete deletes the picked ones, ⇧⌘N adds a blank slide, and
+  Home and End go to the first and last slide. Deleting slides or removing a section says so
+  with an Undo. Thumbnails show how many comments a slide has, and the heading how many slides
+  are hidden. A locked slide (lock icon) can be changed by neither you nor the agent: it
   cannot be edited on the stage, deleted, or saved changed from the code view, and if the
   agent changes it anyway the app puts it back after the turn. Unlock it to change it.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the whole section (every section folds to its heading while you do, and slides before
-  the first section stay put), hover to remove it. Drag a slide across a heading to move the boundary. ⌘C copies the selected slide (in Edit, after a press in the slide list),
-  and in Edit ⌘V pastes a copied slide after the selected one. A locked slide stays as it is in Edit too: the stage says so and offers to unlock it.
+  the first section stay put), hover to remove it (its slides stay). Which sections are folded is remembered per deck. Drag a slide across a heading to move the boundary. ⌘C copies the picked slides (in Edit, after a press in the slide list),
+  and in Edit ⌘V pastes the copied slides after the selected one. A locked slide stays as it is in Edit too: the stage says so and offers to unlock it.
 - **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
-  size), scaled to fit. Arrow keys navigate.
+  size), scaled to fit. Arrow keys navigate (through the slides a search found, while one is
+  on), and the position under the slide ("3 / 20") is a field: click it, type a number, Enter.
+  The zoom is next to it: out, in (⌘- / ⌘+), and a menu with Fit (⌘0 or 0), 50%, 100% and 200%.
+  A hidden or locked slide says so there, and the chip shows or unlocks it.
   The move button below it turns on edit mode: click an element to select it, drag it (or
   use the arrow keys) to move it, double-click (or press Enter) to edit its text (Enter
   starts a new line, Escape or ⌘Enter finishes), Escape to select the parent, Delete (or the trash button in the edit bar) to remove
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
   to undo (the deck's one history; see How it works). ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
-  on top of the slide, under the pointer (or in the middle of the view), without moving the
-  layout. Right-click an element for these actions and its stacking order, to ask the agent
-  about it, or to have the agent tidy just an element you added. `?` lists the shortcuts.
+  on top of the slide without moving the layout: an element lands where it was copied from (on
+  its own slide a step away from the original, so the copy shows), images and text under the
+  pointer (or in the middle of the view), and Paste from the right-click menu where you clicked.
+  Right-click an element for these actions, its stacking order, editing its text, copying and
+  pasting its style, flipping, grouping and locking it, to ask the agent about it (about all of
+  them, with several selected), or to have the agent tidy just an element you added; the menu
+  shows only what applies. Right-click an empty spot to paste there, select everything, unlock
+  what is locked or set the slide's background, and a locked element to unlock it.
+  With ⌘ / Ctrl: ] and [ bring the selection forward and send it backward (with Shift, to the
+  front and back), Shift+H / Shift+V flip it, Alt+L locks or unlocks it, Alt+C / Alt+V copy and
+  paste its style, D duplicates it.
   Lines and arrows have a point at each end instead of a box: drag one to move that end,
   drag the small handle on the line to add a point that curves it, and double-click a point
   in between to remove it.
-  The edit ribbon above the slide groups its tools in sections, which collapse to an icon that
-  opens them when the window gets narrow. It styles text: font (the deck's fonts and system
-  fonts), size (±, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
-  strikethrough, superscript and subscript, line height and letter spacing, bulleted and
+  The edit ribbon above the slide groups its tools in sections (Insert, Text, Paragraph, Style,
+  Slide, Arrange), which collapse to an icon that opens them when the window gets narrow. A
+  control that waits for a selection says in its tooltip what to select, and tooltips name the
+  keys that do the same. Insert also starts a request to the agent for a table, a chart or an
+  icon: the chat gets the start of the request, with the slide, for you to finish. Arrange has
+  aligning and distributing at hand, "Snap to guides" (hold ⌘ / Ctrl while dragging for the
+  opposite), Duplicate, and one "Position and size" popover for exact numbers (↑ / ↓ step a
+  number, with Shift by ten), matching sizes, flips, quarter turns and the 3D rotation. The
+  color wells name their swatches, remember the colors picked last, take a hex value, and tell
+  no color from a mixed or gradient one; the opacity, shadow and corner sliders show their
+  effect in the slide while dragged. It styles text: font (the deck's fonts and system
+  fonts), size (±, ⌘⇧. / ⌘⇧, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
+  strikethrough, superscript and subscript, alignment (left, center, right, justified:
+  ⌘⇧L / E / R / J), clearing the formatting, line height and letter spacing, bulleted and
   numbered lists (Enter starts a new item, Tab / Shift+Tab indent and outdent, Backspace at
-  the start of an item or Enter on an empty one takes its bullet away), and links to
+  the start of an item or Enter on an empty one takes its bullet away), and links (⌘K) to
   web pages, email addresses or other slides. While typing, these apply to the selected words
   (a list, to the lines the selection is in, so plain lines and lists mix in one text);
   otherwise to the whole element. A text box or shape stays one element whatever its text
   holds: it is selected, moved and resized whole. A text box can shrink its text or grow to fit instead of
   overflowing. Pasting into text keeps bold, italic, links and line breaks (⌘⇧V pastes plain
-  text). The search field in the View ribbon (⌘F) searches the text of all slides and their
+  text). The search (⌘F, in View's ribbon and as a bar over the slide in Edit) searches the text of all slides and their
   notes as you type: the slide list shows only the slides that contain it, the slide you pick
-  highlights it, and the arrows (or Enter and ⇧Enter) go through the matches. The button next to
-  it replaces them, leaving locked slides alone. Moved
+  highlights it, and the arrows (or Enter and ⇧Enter) go through the matches; a match in a
+  slide's notes opens the Notes tab. What is searched for stays when you switch between View and
+  Edit. In Edit the button next to it replaces them (this match, those on this slide, or all:
+  Enter and ⌘Enter in its field), leaving locked slides alone. Moved
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
 - **Git:** for a deck in a git repository, the Git tab shows what changed since the last commit,
-  staged or not. Without a repository, or without `git` installed, there is no Git tab. The
-  slide list marks each slide with an icon in the middle of its thumbnail: a green plus for
+  staged or not, and on which branch (or that a commit is checked out instead of one). Without
+  a repository, or without `git` installed, there is no Git tab. The
+  slide list marks each slide with an icon in a corner of its thumbnail: a green plus for
   added, an orange pen for modified, a red trash can for removed and a blue arrow for moved
   (with the number it used to have). A slide that was edited and moved shows both, and removed
   slides stay in the list where they used to be (the filter button leaves out the slides that
-  did not change). Click a modified slide to compare its two versions: drag across the slide to
-  move the divider, drag its round handle to rotate it (Shift for steps of 15°), and set Angle
-  and Feather above the slide. A feather of 0 is a sharp edge, 50 fades from one version to the
-  other over 50 slide pixels. Slides show the images of their own version. What a picture
+  did not change). Click a modified slide to compare its two versions: **Split** shows both,
+  **Before** and **After** one of them. In the split view, drag across the slide to
+  move the divider and drag its round handle to rotate it (Shift for steps of 15°); **Divider**
+  above the slide has its Angle and Feather. A feather of 0 is a sharp edge, 50 fades from one version to the
+  other over 50 slide pixels. **Refresh** reads the changes again; if they cannot be read, the
+  view says why and offers to retry. Slides show the images of their own version. What a picture
   cannot show, like speaker notes, is named under the slide.
-  Left of each of those icons, a button stages that change (or unstages it), and right of it a
-  button restores it, so a slide's edit and its move go separately; a change to the deck's shared
+  Under each changed slide, **Stage** adds that change to the next commit (or **Unstage** takes
+  it out), and a second button puts it back as it was committed, named by what that does:
+  **Discard changes**, **Discard new slide**, **Bring back** (a removed slide) or **Undo move**,
+  so a slide's edit and its move go separately; a change to the deck's shared
   styles (CSS, fonts, anything outside the slides) gets a row of its own at the top of the list,
   and its buttons are above the slide too. Staging one slide leaves the others out of the next commit,
-  and brings along the images it shows. Restoring puts that one change back as it was committed;
-  ⌘Z takes it back. The box above the list commits what is staged, and its + and − buttons stage
-  and unstage the whole deck (changes to sections only go in that way). Before a
+  and brings along the images it shows. Putting a change back is undone with ⌘Z. The box above
+  the list commits what is staged, or with nothing staged everything (**Commit all**), and says
+  which commit it made; **Stage all** and **Unstage all** take the whole deck (changes to
+  sections only go in that way), and **Discard all…** puts the whole deck back as committed,
+  after asking. With nothing changed there is no commit box, just "No changes since" the last
+  commit. Before a
   deck's first commit every slide is new; staging one puts the deck with just the staged slides in
-  the next commit, restoring one takes it out of the deck, and the styles count as changed once
+  the next commit, discarding one takes it out of the deck, and the styles count as changed once
   they differ from what is staged.
 - **Right:** chat with the agent. Every deck has a chat of its own, which comes on show with
   the deck; with no deck open, the chat is the folder's own (say, to have a deck made, which
@@ -74,15 +113,30 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   other decks and files in it. Past chats lists the chats of every deck in the folder: picking
   a deck's opens that deck, and picking any other goes on with it here. Leaving a deck while
   the agent works on it asks whether to stop the agent first. It knows which slide you're on, and you can attach images
-  (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
+  and other files (paperclip, paste, or drop files anywhere on the window); a message sent while one
+  is still being saved waits for it, and a sent message shows its images. An empty chat suggests
+  what to ask. While the agent replies, the last line says what it is doing and for how long;
+  a finished reply folds its tool calls into one line of steps. A turn that failed or was stopped
+  offers **Retry**, and any message of yours can go back into the message box (the pencil under
+  it). Links in replies open in your browser, or in the app for a file of the folder. ⌘L goes to
+  the message box from anywhere, the up arrow in the empty box brings back the last message, and
+  Esc there stops the agent. When the agent needs an approval or finishes while you are in
+  another app, the app asks for your attention (the Dock icon bounces, the taskbar button
+  lights up). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc
   discards it). On macOS the first use asks for microphone access (when running from a
   terminal or editor, macOS asks for that app instead). Speech is
   transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
   multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
-- **Folders:** the start screen opens a folder, one opened before, or a deck (in the folder it
-  is in). In a folder, the menu on the file's path at the top left opens another folder or
-  closes this one, back to the start screen.
+- **Folders:** the start screen starts a deck in the library, opens a folder (⌘O), a deck (in
+  the folder it is in), a deck or a folder opened before (**Recent decks**, **Recent folders**),
+  or imports a PowerPoint file; a folder, a deck or a PowerPoint file dropped on it opens the
+  same way. In a folder, the menu on the file's path at the top left has what is done to the
+  deck (**Rename…**, which turns the title into a field, **Deck settings**, **Close deck**) and
+  to the folder (**Show in Files**, **Open folder…**, **Close folder**, back to the start
+  screen). The Files tab of the sidebar is the folder as a tree: the arrow keys go through it,
+  a right-click on a row opens, reveals or copies the path of its file (and imports a
+  PowerPoint file), and images open as a preview.
 - **Windows:** File › New Window (⌘N; Ctrl+N on Windows and Linux) opens another window,
   each with a folder and a deck of its own. Two windows can have the same folder open, each
   with another of its decks, and the agent can work on both decks at once; a deck is open in
@@ -95,25 +149,68 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   window paste into another; the images they show are copied into the receiving deck's
   `assets/`. A pasted element keeps its size and text look, but styles that come from the
   other deck's CSS (its classes, its theme) do not come along.
+  A window is named after what is open in it (the deck and its folder), and asks before it
+  closes over unsaved HTML edits (**Save**, **Don't save** or **Cancel**, as when the deck or
+  the HTML tab closes), a drawing with changes not accepted, or the agent's running turn.
+- **Keyboard:** `?` (or ⌘/, Ctrl+/ on Windows and Linux) lists every shortcut, by where it works:
+  the slides, View, Edit, text, the chat, presenting, the HTML and SVG editors. Tooltips name a
+  button's shortcut as the system writes it (⌘Z on macOS, Ctrl+Z elsewhere), also on a button
+  that is off, where the tooltip says what it waits for. Escape closes what opened last, one
+  thing at a time: a menu, a popover, a dialog, then a message; in a field it first does what
+  the field does with it. That holds with the focus in the slide too, and a press in the slide
+  closes what is open in the app. Menus take the arrow keys, Home and End, and so do tabs;
+  a dialog keeps Tab and the keys inside it and gives the focus back when it closes.
+  ⌘1, ⌘2 and ⌘3 go to View, Edit and Git; ⌘\ shows or hides the sidebar and ⇧⌘\ the slide
+  list; ⌘, opens the app's settings and ⌘O another folder (Ctrl on Windows and Linux). The
+  keyboard button at the bottom of the sidebar opens the list too.
+- **Settings:** **App settings** (the gear at the bottom of the sidebar, ⌘,) are the app's, for
+  every deck: its appearance, what undoing an agent's changes does to the chat, where the
+  library is, and the app's version. **Deck settings** (the file menu) are the open deck's:
+  its title, slide size and style; **Done** or Escape goes back to the mode they opened from.
+- **Sidebar:** its toggle (⌘\) carries a mark while the chat is out of sight and the agent
+  works (a spinner) or waits for an approval (a dot), and so does the Chat tab. A tab closes
+  from the × on its trailing edge or with a middle click.
+- **Messages:** what goes wrong shows at the bottom right of the window and stays until
+  dismissed; what is only worth knowing (what an import changed, a file the agent made, with
+  a button to open it) goes away after a few seconds, unless the pointer is on it. Up to three
+  show at once.
+- **Appearance:** the app follows the system's light or dark appearance, native controls and
+  scrollbars included, unless App settings › Appearance says Light or Dark, and its request for reduced motion: nothing in the app then slides,
+  fades or spins, and lists jump instead of scrolling. A slide's own animations are the deck's.
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
   with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in
   `~/.slopslides/templates/<name>/deck.html`. Pick a style when creating a deck or in the
-  Settings mode (it puts a restyle request in the chat; an empty deck
+  deck's settings (it puts a restyle request in the chat, and says so; an empty deck
   takes it at once); the same page has **Save deck as template**, which copies the deck there
   with its text replaced by placeholder words. The rail's `+` shows a blank slide and every
   layout of the deck's style as thumbnails and adds the one you click; **Layout** below the
   slide asks the agent to rebuild the current slide on a layout.
-- **Slide size:** the Settings mode sets every slide's canvas: landscape,
+- **Slide size:** the deck's settings set every slide's canvas: landscape,
   portrait or square, a width and height in px, in or cm (96 px per inch), or a common size
   (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
   `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
   message in the chat asking the agent to lay them out again for the new size.
-- **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit). With
+- **Present:** full-screen slideshow from the selected slide (⌘↵ / Ctrl+Enter) or, from the
+  menu beside the button, from the beginning (⇧⌘↵ / Ctrl+Shift+Enter). The keys are the
+  player's (see Export), plus the tools': `L` laser, `P` pen, `H` highlighter, `E` eraser, `C`
+  clears the slide's ink and ⌘Z / ⇧⌘Z undo and redo any change to it, clearing and erasing
+  included; `0` fits the slide again, `N` opens the presenter view, `?` lists the keys and `Esc`
+  puts a tool away, then ends the show. One bar at the bottom holds the tools, previous and
+  next around the slide's number, Play, the presenter view and **End show**; it comes with any
+  move of the pointer and goes, with the cursor, after it rests. With
   several screens attached, a picker shows them as they are arranged, each with a screenshot
   of what is on it (on macOS this needs the Screen Recording permission; without it the picker
   shows the arrangement alone, as it does on Linux), to choose where the slides and the
-  presenter view go.
+  presenter view go; each screen says what it shows, **Swap** exchanges the two, and the choice
+  is remembered for those screens (the first time, the slides go on a screen that is not the
+  main one).
+  The presenter view shows the time since the show started (pause, resume and restart it there),
+  the time on the slide, the time of day, the notes at a size you pick and the next slide, which
+  a press goes to; **Timer settings** holds the total time and the time per slide to count down
+  against. In a window of its own it also has Previous, Next, Play and End show, and the keys
+  pressed there work as in the show. Its clocks, the teleprompter and a recording go on while
+  the panel beside the slide is closed; a pill over the slide then says the microphone is on.
   The teleprompter button in the presenter view (N) listens to you and follows you through the
   slide's narration, or its notes when it has none: what you said fades and the text scrolls
   along, even when you paraphrase or jump to another part. Words you jump over stay as they
@@ -141,9 +238,16 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   transparent picture. Web fonts are not embedded, so install them
   where the file is opened.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
-  that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
+  that plays in any browser: →/↓, Space, Page Down, Enter or `N` (or a click) for the next slide,
+  ←/↑, Page Up, Backspace, Shift+Space or `P` for the previous one, Home/End, a number then
+  Enter for that slide, `B` (or `.`) and `W` to blank the screen to black or white, `F` for
+  full screen, `R` for review marks; none of them with ⌘, Ctrl or Alt held, which stay the
+  browser's. A small strip of controls (previous, "3 / 12", next, full screen) shows while the
+  pointer moves. `#slide-id`
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a
-  new folder). The PDF has one page per shown slide, sized to the slide canvas, each slide as
+  new folder). Every export ends with a message that the file is saved, with a button to show
+  it in its folder. Hidden slides stay in the HTML file (the show skips them) and are among the
+  PNG images; the PDF, PowerPoint and video leave them out. The PDF has one page per shown slide, sized to the slide canvas, each slide as
   it looks once its animations finish, with real, selectable text: the system webview prints
   the deck straight to the file. On Windows and Linux everything in it is vector. macOS
   WebKit cannot print transparency, so there each slide's decor (backgrounds, shapes, images)
@@ -155,15 +259,18 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
   a short pause, and the slide stays until the narration and a pause after it end; the set
   seconds become the least a slide is shown. Slides timed on the narration timeline keep to
-  that instead.
+  that instead. While the video is made the Export button shows how far it has got, and
+  pressing it opens the details, with Cancel.
 - **View ribbon:** View mode's tools sit in a ribbon like the edit tools', in sections that
   collapse to an icon when the window gets narrow: Mark up, Review, Animations, Timeline and Find. Under
-  Animations, **Play** runs a slide's animations whenever it is shown, and **Final state** shows
-  every slide as it ends up, with no animations, as the slide list does.
+  Animations, **Play** runs a slide's animations whenever it is shown, **Final** shows
+  every slide as it ends up, with no animations, as the slide list does, and **Replay** plays
+  the current slide's animations again.
 - **Marks and comments:** the View ribbon has a pen, a highlighter and an eraser for
   marking up the slide, and the comment tool: click an element (or the slide) and write what
   should change. Comments show as numbered pins that follow their element; click a pin to change
-  or delete it. Marks and comments are saved in the deck file and can be hidden together. The
+  or delete it. **Comments** in the ribbon lists every comment of the deck by slide: press one to
+  go to it, or send them all to the agent. Marks and comments are saved in the deck file and can be hidden together. The
   composer attaches the comments to your next message, either this slide's or all slides', and
   lists them so you can leave some out. Each goes out once, and again if you change it.
 - **Notes and narration in Markdown:** both are written in Markdown, with a preview in their
@@ -173,14 +280,14 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   (entered in the tab, or `OPENAI_API_KEY` / `ELEVENLABS_API_KEY` in the environment), in the
   voice and one of ten languages chosen per deck. Each slide's audio is
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
-  changed is spoken again, the rest never. The tab shows the slide's audio as a waveform above its text, with each word where it is said once the words are timed: press it to play from there. When presenting, the play button between the
-  arrows runs the show by itself, speaking each slide's narration with the video export's
+  changed is spoken again, the rest never. The tab shows the slide's audio as a waveform above its text, with each word where it is said once the words are synced to the audio (**Sync words to audio**): press it to play from there; Play pauses and plays on. When presenting, the play button in the
+  bar runs the show by itself, always speaking each slide's narration, on the timeline's
   timing. The timeline under the slide (Timeline in the ribbon, in View and in Edit) shows the slides above the audio. In Edit, drag the end of a
   slide to change how long it shows, and the slides after it follow, each narration keeping
   its place in its slide. Drag a narration to move it, up to the narration on either side, so
   it can run over into the next slide, with the slide changing mid-sentence; video
   exports and the self-running show follow it, and the slide keeps its timing in the deck
-  (`data-duration`, `data-narration-start`). Play, pause and the step buttons (a tenth of a second; a second with Shift) are in the middle of its bar; paused, stepped or with the playhead moved on the ruler, the slide is frozen as it is at that moment, its animations that far in (in View; in Edit the slide stays the editor's, and only playing takes it). A comment made in View while the slide is held so is about that moment: it is marked on the timeline's ruler, where pressing the mark goes back to it, and the agent is told how many seconds into the slide it is.
+  (`data-duration`, `data-narration-start`). **Timing** in its bar sets how long a slide without narration shows and the pauses around narration, the same times a video export and the show's Play use. Back to start, play, pause and the step buttons (a tenth of a second; a second with Shift) are in the middle of its bar, and with the focus in the timeline Space, ←/→ and Home/End do the same; pressing a slide moves the playhead to where it starts. Paused, stepped or with the playhead moved on the ruler, the slide is frozen as it is at that moment, its animations that far in (in View; in Edit the slide stays the editor's, and only playing takes it). A comment made in View while the slide is held so is about that moment: it is marked on the timeline's ruler, where pressing the mark goes back to it, and the agent is told how many seconds into the slide it is.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
@@ -242,9 +349,11 @@ release, run `scripts/update-codex-schemas.sh <version>` and then `./check.sh`. 
 behavior tests below remain opt-in; schema validation cannot detect every behavioral
 change in an external CLI.
 
-The top bar shows whether the open deck file passes the HTML lint. When it does not, clicking the
-status puts fix instructions into the chat composer; the agent then fixes the issues and
-re-checks with its `lint_deck` tool.
+The row under the slide shows whether the open deck file passes the HTML lint. When it does not,
+it says how many problems there are; clicking that lists them all, with **Ask the agent to fix**,
+which puts fix instructions into the chat composer (the agent then fixes the issues and
+re-checks with its `lint_deck` tool), and **Check again**. A check that could not run says so
+and is tried again with a click.
 
 ## Permissions
 
@@ -272,7 +381,8 @@ unavailable in the installed CLI or disallowed by managed requirements are omitt
 remains responsible for enforcing the effective policy.
 
 Requests appear in chat with the command, proposed file changes, network destination, or
-requested permissions. Choose **Allow once**, **Deny**, or **Stop**; **Allow for session** is
+requested permissions; scrolled away from one, the button that jumps down says **Approval
+needed**. Choose **Allow once** or **Deny**, or **Stop** to end the turn; **Allow for session** is
 shown when the agent offers it (Claude Code's session rules are kept for the session only,
 never saved to settings). Codex's additional permission grants are limited to the current
 turn. Automatic reviews show their status and rationale. Requests close when their turn ends.
@@ -337,7 +447,7 @@ src-tauri/src/
   comments.rs           the user's comments on slide elements, in a managed block in deck.html
   find.rs               find and replace in the text on a deck's slides (never markup)
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
-                        rules; shown as the status button in the top bar
+                        rules; shown as the status button in the row under the slide
   mcp.rs                stdio MCP server (`slopslide --lint-mcp [workspace] [session]`) exposing the
                         linter to the agent as its `lint_deck` tool, and `render_slide`
   render.rs             renders slides in a hidden window for `render_slide`, answering
@@ -381,6 +491,8 @@ sessions/<session id>/     one chat about a deck, or about a folder: meta.json (
                            deck file or the folder), chat.json, each provider's session id,
                            rewind.json, sketches/, templates staged for the agent,
                            and Claude Code's generated mcp.json and claude-plugins/
+recent-workspaces.json     the folders opened last, for the start screen
+recent-decks.json          the decks opened last, each with the folder it was open in
 system-prompt.md           the system prompt file Claude Code reads
 mcp.json                   your MCP servers, for every agent (see Extensions)
 skills/<name>/SKILL.md     your skills

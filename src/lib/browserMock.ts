@@ -20,6 +20,7 @@ export function installBrowserMock() {
         case "library_folder":
           return fromServer("library");
         case "recent_workspaces":
+        case "recent_decks":
           return [];
         case "open_workspace": {
           const path = String(a.path);
@@ -108,7 +109,7 @@ export function installBrowserMock() {
         case "save_asset":
           return `assets/${String(a.name)}`;
         case "copy_to_clipboard":
-        case "copy_slide":
+        case "copy_slides":
         case "new_window":
         case "present_on":
         case "present_in_windows":
@@ -117,7 +118,7 @@ export function installBrowserMock() {
         case "list_screens":
         case "screen_previews":
           return [];
-        case "paste_slide":
+        case "paste_slides":
         case "take_pending_folder":
           return null;
         case "paste_from_clipboard":
@@ -127,6 +128,7 @@ export function installBrowserMock() {
         case "find_in_deck":
           return [];
         case "replace_in_deck":
+        case "replace_match_in_deck":
           throw new Error("Replacing is not available in the browser preview.");
         case "session_provider":
           return null;

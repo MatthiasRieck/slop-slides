@@ -2,15 +2,16 @@
 
 use std::ops::Range;
 
-use super::attrs::{
-    DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, MAX_DURATION, MIN_DURATION, NARRATION_START_ATTR,
-    TIME_ATTR,
-};
-use super::edit::remove;
+#[cfg(test)]
+use super::attrs::{DURATION_ATTR, HIDDEN_ATTR, NARRATION_START_ATTR};
+use super::attrs::{LOCKED_ATTR, MAX_DURATION, MIN_DURATION, TIME_ATTR};
+use super::edit::with_indent;
 use super::spans::{find_slides, slide_span, span_of, SlideSpan};
 
 /// Adds or removes the slide's `data-hidden` attribute. Leaves the markup untouched when
-/// the slide is already in the requested state.
+/// the slide is already in the requested state. The app hides slides several at once (see
+/// [`super::edit_slides`]); this is the change to one, which tests hold that against.
+#[cfg(test)]
 pub fn set_hidden(html: &str, id: &str, hidden: bool) -> Result<String, String> {
     set_flag(html, id, HIDDEN_ATTR, hidden, |s| s.hidden.clone())
 }
@@ -47,17 +48,38 @@ pub fn parse_narration_start(value: &str) -> Option<f64> {
         .then_some(seconds)
 }
 
-/// Sets the slide's `data-duration` to `seconds`; None removes it.
+/// Sets the slide's `data-duration` to `seconds`; None removes it. The app times slides
+/// several at once (see [`super::edit_slides`]); this is the change to one, which tests hold
+/// that against.
+#[cfg(test)]
 pub fn set_duration(html: &str, id: &str, seconds: Option<f64>) -> Result<String, String> {
+    set_value(html, id, DURATION_ATTR, check_duration(seconds)?, |s| {
+        &s.duration
+    })
+}
+
+/// The `data-duration` value for `seconds`, refusing what [`parse_duration`] would not read.
+pub(super) fn check_duration(seconds: Option<f64>) -> Result<Option<String>, String> {
     let value = seconds.map(|s| s.to_string());
     if let Some(value) = value.as_deref().filter(|v| parse_duration(v).is_none()) {
         return Err(format!("A slide cannot be shown for {value} seconds."));
     }
-    set_value(html, id, DURATION_ATTR, value, |s| &s.duration)
+    Ok(value)
 }
 
-/// Sets the slide's `data-narration-start` to `seconds`; None removes it.
+/// Sets the slide's `data-narration-start` to `seconds`; None removes it (see
+/// [`set_duration`]).
+#[cfg(test)]
 pub fn set_narration_start(html: &str, id: &str, seconds: Option<f64>) -> Result<String, String> {
+    let value = check_narration_start(seconds)?;
+    set_value(html, id, NARRATION_START_ATTR, value, |s| {
+        &s.narration_start
+    })
+}
+
+/// The `data-narration-start` value for `seconds`, refusing what [`parse_narration_start`]
+/// would not read.
+pub(super) fn check_narration_start(seconds: Option<f64>) -> Result<Option<String>, String> {
     let value = seconds.map(|s| s.to_string());
     if let Some(value) = value
         .as_deref()
@@ -65,9 +87,7 @@ pub fn set_narration_start(html: &str, id: &str, seconds: Option<f64>) -> Result
     {
         return Err(format!("Narration cannot start at {value} seconds."));
     }
-    set_value(html, id, NARRATION_START_ATTR, value, |s| {
-        &s.narration_start
-    })
+    Ok(value)
 }
 
 /// Sets the slide's attribute `name`, which `current` finds on it, to `value`; None removes it.
@@ -80,19 +100,53 @@ fn set_value(
 ) -> Result<String, String> {
     let slides = find_slides(html);
     let span = slide_span(&slides, id)?;
+    let current = current(span).as_ref().map(|(range, _)| range.clone());
+    Ok(edited(html, value_edit(html, span, name, current, value)))
+}
+
+/// Text to put in place of a range of the document; an empty range puts it in there.
+pub(super) type Edit = (Range<usize>, String);
+
+/// `html` with `edit` made, if there is one.
+fn edited(html: &str, edit: Option<Edit>) -> String {
+    match edit {
+        Some((range, text)) => format!("{}{text}{}", &html[..range.start], &html[range.end..]),
+        None => html.to_string(),
+    }
+}
+
+/// What sets the attribute `name` of the slide at `span`, now at `current`, to `value`: put in
+/// right after the tag's name when new, taken out with the space before it for None.
+pub(super) fn value_edit(
+    html: &str,
+    span: &SlideSpan,
+    name: &str,
+    current: Option<Range<usize>>,
+    value: Option<String>,
+) -> Option<Edit> {
     let attr = value.map(|value| format!("{name}=\"{value}\""));
-    Ok(match (current(span), attr) {
-        (Some((range, _)), None) => remove(html, range),
-        (Some((range, _)), Some(attr)) => {
-            format!("{}{attr}{}", &html[..range.start], &html[range.end..])
-        }
-        (None, None) => html.to_string(),
-        (None, Some(attr)) => format!(
-            "{} {attr}{}",
-            &html[..span.tag_name_end],
-            &html[span.tag_name_end..]
-        ),
-    })
+    match (current, attr) {
+        (Some(range), None) => Some((with_indent(html, &range), String::new())),
+        (Some(range), Some(attr)) => Some((range, attr)),
+        (None, None) => None,
+        (None, Some(attr)) => Some((span.tag_name_end..span.tag_name_end, format!(" {attr}"))),
+    }
+}
+
+/// What turns the valueless attribute `attr` of the slide at `span`, now at `current`, `on`
+/// or off; None when it is that already.
+pub(super) fn flag_edit(
+    html: &str,
+    span: &SlideSpan,
+    attr: &str,
+    current: Option<Range<usize>>,
+    on: bool,
+) -> Option<Edit> {
+    match (current, on) {
+        (None, true) => Some((span.tag_name_end..span.tag_name_end, format!(" {attr}"))),
+        (Some(range), false) => Some((with_indent(html, &range), String::new())),
+        _ => None,
+    }
 }
 
 fn set_flag(
@@ -104,15 +158,7 @@ fn set_flag(
 ) -> Result<String, String> {
     let slides = find_slides(html);
     let span = slide_span(&slides, id)?;
-    Ok(match (current(span), on) {
-        (None, true) => format!(
-            "{} {attr}{}",
-            &html[..span.tag_name_end],
-            &html[span.tag_name_end..]
-        ),
-        (Some(range), false) => remove(html, &range),
-        _ => html.to_string(),
-    })
+    Ok(edited(html, flag_edit(html, span, attr, current(span), on)))
 }
 
 /// Whether slide `id` exists and is locked.

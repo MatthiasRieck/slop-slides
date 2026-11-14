@@ -1,7 +1,6 @@
-import { MessageSquare, Trash2, X } from "lucide-react";
+import { MessageSquare, Send, Trash2, X } from "lucide-react";
 import { Fragment, type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-
 import {
   type AreaShape,
   areaFromDrag,
@@ -12,9 +11,11 @@ import {
   commentTime,
 } from "../lib/comments";
 import { toFraction } from "../lib/ink";
-import { cn } from "../lib/utils";
+import { formatKeys } from "../lib/keys";
+import { cn, plural } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
-import { commentsInScope, heldComment, useApp } from "../store";
+import { commentsInScope, commentsToSend, deckComments, hasComments, heldComment, useApp } from "../store";
+import { Button } from "./Button";
 import { Popover } from "./Popover";
 import { type OpenComment, type SlideComments, useSlideComments } from "./stage/useSlideComments";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
@@ -309,7 +310,7 @@ export function CommentEditor(props: {
           value={shown}
           rows={3}
           aria-label="Comment text"
-          placeholder="Add a comment…"
+          placeholder={`Add a comment… ${formatKeys("enter")} saves, ${formatKeys("shift+enter")} adds a line`}
           readOnly={!!dictation}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -317,7 +318,7 @@ export function CommentEditor(props: {
               e.preventDefault();
               submit();
             } else if (e.key === "Escape") {
-              // Keeps the popover from taking it as a close, which saves.
+              // Keeps the popover from taking it as a close, which saves (see ../lib/layers.ts).
               e.stopPropagation();
               cancel();
             }
@@ -371,8 +372,8 @@ const SCOPES: { id: CommentScope; label: string; title: string }[] = [
  */
 export function ComposerComments() {
   const scope = useApp((s) => s.commentScope);
-  const visible = useApp((s) => s.reviewVisible && Object.values(s.comments).some((c) => c.length > 0));
-  const count = useApp((s) => commentsInScope(s).filter((c) => !heldComment(s, c)).length);
+  const visible = useApp((s) => s.reviewVisible && hasComments(s));
+  const count = useApp(commentsToSend);
   const [listOpen, setListOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setListOpen(false), []);
@@ -443,16 +444,7 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
   );
   const comments = commentsInScope(state);
   return (
-    <Popover
-      anchor={anchor}
-      onClose={onClose}
-      width={300}
-      variant="menu"
-      portal
-      follow
-      capture
-      className="p-1 shadow-composer"
-    >
+    <Popover anchor={anchor} onClose={onClose} width={300} variant="menu" portal follow className="p-1 shadow-composer">
       {comments.length === 0 && <p className="p-2 text-xs text-muted-foreground">No comments on this slide.</p>}
       {comments.map((comment) => {
         const included = !heldComment(state, comment);
@@ -472,6 +464,77 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
           </label>
         );
       })}
+    </Popover>
+  );
+}
+
+/**
+ * Every comment of the deck, grouped by slide, in a panel next to `anchor`: the overview that the
+ * pins, one slide at a time, do not give. A comment pressed goes to its slide and opens there;
+ * "Send to agent" has the next message take them all along and goes to the chat to write it.
+ */
+export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLElement | null>; onClose: () => void }) {
+  const comments = useApp(deckComments);
+  const selected = useApp((s) => s.selected);
+  const numbers = [...new Set(comments.map((c) => c.slideNumber))];
+  const send = () => {
+    const app = useApp.getState();
+    app.takeAllComments();
+    app.focusComposer();
+    onClose();
+  };
+  return (
+    <Popover anchor={anchor} placement="below" width={340} label="Comments" onClose={onClose}>
+      <p className="shrink-0 border-b px-3 py-2 text-xs font-medium">
+        {comments.length === 0
+          ? "No comments yet"
+          : `${plural(comments.length, "comment")} on ${plural(numbers.length, "slide")}`}
+      </p>
+      <div className="min-h-0 flex-1 overflow-y-auto p-1 text-xs">
+        {comments.length === 0 && (
+          <p className="p-2 leading-relaxed text-muted-foreground">
+            Comment on an element or an area of a slide with the tools beside this button. Comments go to the agent with
+            your next message.
+          </p>
+        )}
+        {numbers.map((number) => (
+          // biome-ignore lint/a11y/useSemanticElements: a labelled group of rows, not a form's fieldset
+          <div key={number} role="group" aria-label={`Slide ${number}`}>
+            <p className="px-2 pb-0.5 pt-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+              Slide {number}
+            </p>
+            {comments
+              .filter((c) => c.slideNumber === number)
+              .map((comment) => (
+                <button
+                  key={comment.id}
+                  type="button"
+                  aria-current={comment.slide === selected ? "true" : undefined}
+                  title="Go to this comment"
+                  onClick={() => {
+                    useApp.getState().showComment(comment.slide, comment.id);
+                    onClose();
+                  }}
+                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                >
+                  <MessageSquare className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="line-clamp-3 min-w-0 whitespace-pre-wrap break-words">{comment.text}</span>
+                </button>
+              ))}
+          </div>
+        ))}
+      </div>
+      <div className="flex shrink-0 justify-end border-t p-2">
+        <Button
+          variant="primary"
+          disabled={comments.length === 0}
+          title="Takes every comment along with your next message, and goes to the chat to write it"
+          onClick={send}
+        >
+          <Send />
+          Send to agent
+        </Button>
+      </div>
     </Popover>
   );
 }

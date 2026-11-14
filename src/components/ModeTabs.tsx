@@ -2,10 +2,14 @@ import { Eye, GitCompare, Pencil } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
+import { useRovingTabs } from "../hooks/useRovingTabs";
+import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
+import { selectedSlideLocked } from "../store/chrome";
+import { keepFocus, withShortcut } from "./Button";
 
-/** The modes with a tab. Settings opens from the file menu instead (TopBar). */
+/** The modes with a tab. The deck's settings open from the file menu instead (TopBar). */
 type TabMode = Exclude<DeckMode, "settings">;
 
 const MODES: { id: TabMode; label: string; icon: typeof Eye }[] = [
@@ -41,35 +45,38 @@ function useInRepository() {
  * The deck's modes, in the top bar: what the stage does with the slide. Each brings its own tools
  * to the row under it. View changes nothing in the deck but its review; Edit changes the slides,
  * their order and their timing. The deck's timeline opens under the slide in either, and the
- * slide's narration and notes and the deck's HTML are tabs of the sidebar.
+ * slide's narration and notes and the deck's HTML are tabs of the sidebar. The tab of the mode
+ * the deck is in is filled; with the deck's settings open, none is.
  */
 export function ModeTabs() {
   const mode = useApp(deckMode);
-  const locked = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.locked);
+  const locked = useApp(selectedSlideLocked);
   const inRepository = useInRepository();
 
+  /** One line each: what the mode is for, then the keys that go to it. */
   const titles: Record<TabMode, string> = {
-    view: "Show the slide, play the deck on its timeline, and mark up and comment on what you see, without changing the slides; marks and comments go to the agent with your next message",
-    edit: locked
-      ? "Change the deck: add, remove and reorder slides and set their timing. This slide is locked; unlock it to edit it"
-      : "Change the deck: on the slide, click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them; in the slide list, add, remove and reorder slides; on the timeline, set how long each slide shows and when its narration starts",
-    git: "See what changed since the last commit, and compare each slide before and after",
+    view: "View: present, play and comment",
+    edit: locked ? "Edit: this slide is locked; unlock it to change it" : "Edit: change slides, their order and timing",
+    git: "Git: see what changed since the last commit",
   };
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
+  const tabs = useRovingTabs();
 
   return (
-    <div role="tablist" aria-label="Mode" className="flex items-center gap-1 self-stretch">
+    <div role="tablist" aria-label="Mode" {...tabs} className="flex items-center gap-1 self-stretch">
       {modes.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
           type="button"
           role="tab"
           aria-selected={mode === id}
-          title={titles[id]}
+          title={withShortcut(titles[id], SHELL_SHORTCUTS[id])}
+          // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
+          onMouseDown={keepFocus}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
             "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
-            mode === id && "text-primary hover:text-primary",
+            mode === id && "bg-primary/10 font-medium text-primary hover:bg-primary/15 hover:text-primary",
           )}
         >
           <Icon className="size-5" strokeWidth={1.75} />

@@ -151,14 +151,61 @@ export function slideAt(timeline: Timeline, time: number): number {
   return index >= 0 ? index : timeline.slides.length - 1;
 }
 
+/** How much of its picture a filmstrip must have room for to show it, as a part of the picture's width. */
+export const LEAST_PICTURE = 0.25;
+
 /**
- * Which pictures of a filmstrip show: the strip is `width` wide and filled from its left with
- * pictures `picture` wide, the last one cut off where the strip ends, and only what lies
- * between `from` and `to` (measured from the strip's left) is in sight. All in pixels.
+ * Whether a filmstrip shows its picture. A strip has one picture, `picture` wide, at its start;
+ * the rest of it is empty film. The strip starts `left` along the track and is `width` wide, and
+ * what lies between `from` and `to` of the track is in sight. All in pixels. A strip with room
+ * for only a sliver of the picture shows none: a slide nobody could make out is not worth loading.
  */
-export function filmstripFrames(width: number, picture: number, from: number, to: number): number[] {
-  if (!(width > 0) || !(picture > 0)) return [];
-  const first = Math.max(0, Math.floor(from / picture));
-  const last = Math.min(Math.ceil(width / picture), Math.ceil(to / picture)) - 1;
-  return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => first + i);
+export function showsPicture(left: number, width: number, picture: number, from: number, to: number): boolean {
+  if (!(picture > 0) || !(width >= picture * LEAST_PICTURE)) return false;
+  return left < to && left + Math.min(width, picture) > from;
+}
+
+/**
+ * How far a track is scrolled, in steps of `step` pixels: what is in sight is worked out anew
+ * only from one step to the next, not with every pixel scrolled.
+ */
+export function scrollStep(scrolled: number, step: number): number {
+  return step > 0 ? Math.floor(scrolled / step) * step : 0;
+}
+
+/** `seconds` to the tenth, like `0:03.2`: what a step of a tenth of a second changes. */
+export function formatTenths(seconds: number): string {
+  const tenths = Math.max(0, Math.round(seconds * 10));
+  return `${Math.floor(tenths / 600)}:${String(Math.floor(tenths / 10) % 60).padStart(2, "0")}.${tenths % 10}`;
+}
+
+/** How long a slide shows, for its block on the track: `5.0s`, or `1:05` from a minute on. */
+export function formatShown(seconds: number): string {
+  if (seconds < 59.95) return `${seconds.toFixed(1)}s`;
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** How far from the edge of what is in sight the playhead is kept, as a part of it. */
+const VIEW_MARGIN = 0.1;
+
+/**
+ * Where a track scrolled to `scrolled` (showing `view` pixels of it) scrolls to, for the playhead
+ * at `x` to be in sight: where it is while the playhead is, or else on by a page, the playhead
+ * near its left, as a playing track turns its pages.
+ */
+export function scrollToPlayhead(x: number, scrolled: number, view: number): number {
+  if (!(view > 0) || (x >= scrolled && x <= scrolled + view)) return scrolled;
+  return Math.max(0, x - view * VIEW_MARGIN);
+}
+
+/**
+ * Where a track scrolls to as its width changes from `before` to `after` (a zoom), for the
+ * playhead, at `at` of its length (0 to 1), to stay where it is on screen; one out of sight
+ * comes to the middle.
+ */
+export function scrollForZoom(at: number, before: number, after: number, scrolled: number, view: number): number {
+  const was = at * before - scrolled;
+  const offset = was >= 0 && was <= view ? was : view / 2;
+  return Math.max(0, Math.min(at * after - offset, Math.max(0, after - view)));
 }

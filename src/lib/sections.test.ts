@@ -11,9 +11,12 @@ import {
   railItems,
   sectionBlocks,
   sectionKey,
+  sectionSizes,
   sectionStarts,
   startsSection,
   stepRows,
+  withoutSlides,
+  withSlidesMarked,
 } from "./sections";
 
 const deck = (sections: [string, number][], ids = ["a", "b", "c"]): Deck => ({
@@ -264,5 +267,65 @@ describe("folding sections", () => {
     expect(foldHolding(blocks, ["b"], "c")).toBe("b");
     expect(foldHolding(blocks, ["b"], "a")).toBeUndefined();
     expect(foldHolding(blocks, [], "c")).toBeUndefined();
+  });
+});
+
+describe("the deck as a change to its slides will leave it", () => {
+  it("takes deleted slides out and keeps each section before the slide it started at", () => {
+    const before = deck(
+      [
+        ["One", 1],
+        ["Two", 3],
+        ["End", 4],
+      ],
+      ["a", "b", "c", "d"],
+    );
+    const next = withoutSlides(before, new Set(["a", "c"]));
+    expect(next.slides.map((s) => s.id)).toEqual(["b", "d"]);
+    expect(keys(next)).toEqual(["section:0", "b", "section:1", "d", "section:2"]);
+    // What stays is what it was.
+    expect(next.slides[0]).toBe(before.slides[1]);
+  });
+
+  it("is the deck itself when none of the slides to delete is in it", () => {
+    const before = deck([["One", 1]]);
+    expect(withoutSlides(before, new Set(["gone"]))).toBe(before);
+  });
+
+  it("hides, shows, locks and unlocks the slides named, leaving the others as they are", () => {
+    const before = deck([]);
+    const hidden = withSlidesMarked(before, ["a", "c"], { hidden: true });
+    expect(hidden.slides.map((s) => s.hidden)).toEqual([true, false, true]);
+    expect(hidden.slides[1]).toBe(before.slides[1]);
+    expect(withSlidesMarked(hidden, ["a"], { hidden: false }).slides.map((s) => s.hidden)).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    expect(withSlidesMarked(before, ["b"], { locked: true }).slides.map((s) => s.locked)).toEqual([false, true, false]);
+  });
+
+  it("is the deck itself when the slides are marked that way already", () => {
+    const before = deck([]);
+    expect(withSlidesMarked(before, ["a"], { hidden: false })).toBe(before);
+    const hidden = withSlidesMarked(before, ["a"], { hidden: true });
+    expect(withSlidesMarked(hidden, ["a"], { hidden: true })).toBe(hidden);
+  });
+});
+
+describe("sectionSizes", () => {
+  it("counts each section's slides", () => {
+    const blocks = sectionBlocks(
+      railItems(
+        deck([
+          ["One", 1],
+          ["Two", 3],
+        ]),
+      ),
+    );
+    expect([...sectionSizes(blocks)]).toEqual([
+      ["section:0", 2],
+      ["section:1", 0],
+    ]);
   });
 });

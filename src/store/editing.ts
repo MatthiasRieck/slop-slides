@@ -1,11 +1,16 @@
-import { api, type Deck, errorMessage } from "../lib/api";
+import { api, type Deck } from "../lib/api";
 import {
+  type AgentInsert,
+  combineElements,
   DEFAULT_EDIT_STYLES,
   type EditElement,
   type EditStyle,
   type EditTool,
   type ToolFamily,
 } from "../lib/editTools";
+import { memoizeLast } from "../lib/memo";
+import { withRecentColor } from "../lib/palette";
+import { loadFlag, saveFlag } from "../lib/storage";
 import { captureSlide } from "./capture";
 import { promptAgent } from "./composer";
 import { editsSaved, queueEdit } from "./editQueue";
@@ -48,15 +53,40 @@ export interface EditingSlice {
    * a version, so the stage keeps it running instead of loading the slide again.
    */
   editSaved: Record<string, string>;
+  /** Dragging and resizing snap to the guides; remembered between slides and launches. */
+  editSnap: boolean;
+  /** The colors picked last in the edit toolbar's color wells, the latest first. */
+  recentColors: string[];
+  /**
+   * The look copied from an element (⌥⌘C), as the slide editor reported it, to paste onto others
+   * on any slide. The editor reads it back, so the app only keeps it.
+   */
+  copiedStyle: unknown;
+  /**
+   * A popover of the edit toolbar to open, asked for from outside it (⌘K, the context menu), with
+   * a counter so the same one can be asked for again.
+   */
+  editPanelAsk: { panel: EditPanel; rev: number } | null;
 
+  /** Turns snapping to the guides on or off. */
+  setEditSnap: (on: boolean) => void;
+  /** Counts `color` as picked last in a color well. */
+  noteColor: (color: string) => void;
+  setCopiedStyle: (style: unknown) => void;
+  /** Asks the edit toolbar to open one of its popovers. */
+  askForEditPanel: (panel: EditPanel) => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
   /** Switches the deck to a mode, leaving the one it is in. */
   setMode: (mode: DeckMode) => void;
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
-  /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
-  saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  /**
+   * Saves `markup` as the new version of `slide`, after any edits still being saved. `group` is
+   * the editor's name for a run of small edits (arrow-key nudges of the same elements), whose
+   * saves the deck's history keeps as one step to undo.
+   */
+  saveSlideEdit: (slide: string, markup: string, group?: string) => Promise<void>;
   /**
    * Saves `slide` of the open deck as `change` makes its markup in the file, after any edits still
    * being saved; false (with the error shown) when `change` throws or the save fails.
@@ -75,9 +105,30 @@ export interface EditingSlice {
   tidyLayout: (overflow?: string[]) => Promise<void>;
   /** Readies the composer for a question about `element`, with a screenshot of the slide showing it selected. */
   askAboutElement: (element: EditElement) => Promise<void>;
+  /** Like `askAboutElement`, about all of `elements` together. */
+  askAboutElements: (elements: EditElement[]) => Promise<void>;
+  /**
+   * Starts a request to the agent for something the edit tools do not draw (a table, a chart, an
+   * icon): the composer gets the start of the request, with a screenshot of the slide, for the
+   * user to finish and send.
+   */
+  askForInsert: (kind: AgentInsert) => Promise<void>;
   /** Like `tidyLayout`, but has the agent give only `element` a place in the layout. */
   tidyElement: (element: EditElement) => Promise<void>;
 }
+
+/** The popovers of the edit toolbar that can be asked for from outside it. */
+export type EditPanel = "link" | "background";
+
+/** Where `editSnap` is remembered. */
+const SNAP_KEY = "slopslides.editSnap";
+
+/** How each request to the agent from the Insert section starts; the user says the rest. */
+export const INSERT_PROMPTS: Record<AgentInsert, string> = {
+  table: "Add a table to this slide: ",
+  chart: "Add a chart to this slide: ",
+  icon: "Add an icon to this slide: ",
+};
 
 /** No edit session's edits. */
 export const NO_EDIT_STATE = { editBase: null, editedSlides: [], editSaved: {} as Record<string, string> };
@@ -92,23 +143,38 @@ export function editingSlide(state: Pick<AppState, "editing" | "deck" | "selecte
   return state.editing && !selectedSlide(state)?.locked;
 }
 
-/** The slides edited since edit mode started that are not as they were then any more. */
+const NO_SLIDES: string[] = [];
+
+/** Those of `edited` whose slide in `slides` is not as `hashes` has it. */
+const changedSince = memoizeLast((slides: Deck["slides"], hashes: Record<string, string>, edited: string[]) => {
+  const now = new Map(slides.map((slide) => [slide.id, slide.hash]));
+  return edited.filter((id) => now.has(id) && now.get(id) !== hashes[id]);
+});
+
+/**
+ * The slides edited since edit mode started that are not as they were then any more. The same
+ * list until the deck's slides or the session's edits change: it is asked for on every update
+ * of the store.
+ */
 export function editedSlidesOf(state: Pick<AppState, "deck" | "editBase" | "editedSlides">): string[] {
   const { deck, editBase, editedSlides } = state;
-  if (!deck || !editBase) return [];
-  return editedSlides.filter((id) => {
-    const hash = deck.slides.find((s) => s.id === id)?.hash;
-    return hash !== undefined && hash !== editBase.hashes[id];
-  });
+  if (!deck || !editBase || editedSlides.length === 0) return NO_SLIDES;
+  return changedSince(deck.slides, editBase.hashes, editedSlides);
 }
 
-/** Shows the deck a slide edit saved, and counts the slide as edited in this session. */
+/**
+ * Shows the deck a slide edit saved, and counts the slide as edited in this session. What the
+ * session notes of the edit goes into the store in one update, and only when there is something
+ * new to note: every update asks everything that reads the store, and a drag saves many times.
+ */
 function showEdited(app: AppStore, slide: string, next: Deck, fromEditor = false) {
   const hash = next.slides.find((s) => s.id === slide)?.hash;
+  const { editSaved, editedSlides } = app.getState();
+  const saved = fromEditor && hash && editSaved[slide] !== hash ? { ...editSaved, [slide]: hash } : editSaved;
+  const edited = editedSlides.includes(slide) ? editedSlides : [...editedSlides, slide];
   // Before the deck, so the stage never sees the new version without knowing whose it is.
-  if (fromEditor && hash) app.setState((s) => ({ editSaved: { ...s.editSaved, [slide]: hash } }));
+  if (saved !== editSaved || edited !== editedSlides) app.setState({ editSaved: saved, editedSlides: edited });
   app.getState().setDeck(next);
-  app.setState((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));
 }
 
 /** Hands the composer `text` about `element`, with a screenshot once any edit still being saved has landed. */
@@ -131,6 +197,25 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   editBase: null,
   editedSlides: [],
   editSaved: {},
+  editSnap: loadFlag(SNAP_KEY, true),
+  recentColors: [],
+  copiedStyle: null,
+  editPanelAsk: null,
+
+  setEditSnap: (editSnap) => {
+    set({ editSnap });
+    try {
+      saveFlag(SNAP_KEY, editSnap);
+    } catch {
+      // Only the remembered choice is lost.
+    }
+  },
+
+  noteColor: (color) => set((s) => ({ recentColors: withRecentColor(s.recentColors, color) })),
+
+  setCopiedStyle: (copiedStyle) => set({ copiedStyle }),
+
+  askForEditPanel: (panel) => set((s) => ({ editPanelAsk: { panel, rev: (s.editPanelAsk?.rev ?? 0) + 1 } })),
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
@@ -173,16 +258,17 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
       }
     }),
 
-  saveSlideEdit: (slide, markup) =>
+  saveSlideEdit: (slide, markup, group) =>
     queueEdit(async () => {
       const { deck } = get();
       const base = deck?.slides.find((s) => s.id === slide)?.hash;
       if (!deck || !base) return;
       try {
-        const next = await api.updateSlide(deck.id, slide, markup, base);
+        const next = await api.updateSlide(deck.id, slide, markup, base, group);
         if (get().deck?.id === deck.id) showEdited(app, slide, next, true);
       } catch (error) {
-        set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
+        showErrorIn(app, error);
+        set((s) => ({ editReload: s.editReload + 1 }));
       }
     }),
 
@@ -216,6 +302,20 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   },
 
   askAboutElement: (element) => promptAboutElement(app, "", element),
+
+  askAboutElements: async (elements) => {
+    const element = combineElements(elements);
+    if (element) await promptAboutElement(app, "", element);
+  },
+
+  askForInsert: async (kind) => {
+    const { deck } = get();
+    if (!deck || selectedSlide(get())?.locked) return;
+    await editsSaved();
+    const screenshot = await captureSlide(deck.id);
+    if (get().deck?.id !== deck.id) return;
+    promptAgent(app, INSERT_PROMPTS[kind], { screenshot });
+  },
 
   tidyElement: async (element) => {
     await promptAboutElement(app, TIDY_ELEMENT_PROMPT, element, { leaveEditing: true });

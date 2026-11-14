@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ask, invoke } from "../test/tauri";
+import { ask, invoke, listen } from "../test/tauri";
+import { lastError } from "./errors";
 import type { AssistantMessage, ChatMessage } from "./messages";
 import {
   assistantMessage,
@@ -83,6 +84,72 @@ describe("agent events", () => {
     expect(calls("open_workspace")).toHaveLength(1);
   });
 
+  it("is booted only once the folder from Finder is open, so the start screen never shows before it", async () => {
+    const store = await freshModule(false);
+    let open = (_path: string | null) => {};
+    backend({
+      take_pending_folder: () => new Promise((resolve) => (open = resolve)),
+      open_workspace: ({ path }) => ({ path, name: "a" }),
+    });
+    /** What the window would have shown, at every change of the store. */
+    const screens: string[] = [];
+    const screen = () => {
+      const { workspace, booted } = store.useApp.getState();
+      return workspace ? "folder" : booted ? "start screen" : "nothing";
+    };
+    store.useApp.subscribe(() => screens.at(-1) !== screen() && screens.push(screen()));
+    const bridge = store.initEventBridge();
+    await vi.waitFor(() => expect(calls("take_pending_folder")).toHaveLength(1));
+    expect(screen()).toBe("nothing");
+    open("/decks/a");
+    await bridge;
+    expect(store.useApp.getState()).toMatchObject({ booted: true, workspace: { path: "/decks/a" } });
+    expect(screens.at(-1)).toBe("folder");
+    expect(screens).not.toContain("start screen");
+  });
+
+  it("is booted on the start screen when no folder was waiting, or the check failed", async () => {
+    const store = await freshModule(false);
+    backend({ take_pending_folder: () => null });
+    expect(store.useApp.getState().booted).toBe(false);
+    await store.initEventBridge();
+    expect(store.useApp.getState()).toMatchObject({ booted: true, workspace: null });
+
+    const failing = await freshModule(false);
+    backend({
+      take_pending_folder: () => {
+        throw "no such window";
+      },
+    });
+    await failing.initEventBridge();
+    expect(failing.useApp.getState().booted).toBe(true);
+  });
+
+  it("registers its listeners together, not one after the other", async () => {
+    const store = await freshModule(false);
+    backend({});
+    const registered: string[] = [];
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const listening = listen.getMockImplementation()!;
+    listen.mockImplementation(async (name: string, handler: unknown) => {
+      registered.push(name);
+      await held;
+      return listening(name, handler);
+    });
+    try {
+      const bridge = store.initEventBridge();
+      // All three are asked for before the first has answered.
+      await vi.waitFor(() => expect(registered).toEqual(["agent-event", "workspace-changed", "folder-pending"]));
+      expect(calls("take_pending_folder")).toEqual([]);
+      release();
+      await bridge;
+      expect(calls("take_pending_folder")).toHaveLength(1);
+    } finally {
+      listen.mockImplementation(listening);
+    }
+  });
+
   it("reports a folder from Finder that cannot be opened", async () => {
     const store = await freshModule(false);
     backend({
@@ -91,7 +158,7 @@ describe("agent events", () => {
       },
     });
     await store.initEventBridge();
-    expect(store.useApp.getState().error).toBe("no such window");
+    expect(lastError(store.useApp.getState())).toBe("no such window");
   });
 
   it.each([
@@ -266,6 +333,48 @@ describe("deck file changes", () => {
     expect(calls("load_deck")).toEqual([]);
   });
 
+  it("leaves the previews alone when the asset is one the app just wrote itself", async () => {
+    const { useApp, changed } = await watching(() => DECK);
+    // The module the fresh store uses, not the one loaded with this file.
+    const { noteAssetsWritten } = await import("../lib/ownAssets");
+    noteAssetsWritten(DECK.id, ["assets/pasted.png"]);
+    // Made, then written: the watcher may tell of both.
+    changed(["assets/pasted.png"]);
+    changed(["assets/pasted.png"]);
+    expect(useApp.getState().assetsRev).toBe(0);
+    // Another file changing with it still counts.
+    changed(["assets/pasted.png", "assets/photo.png"]);
+    expect(useApp.getState().assetsRev).toBe(1);
+    // Later, a change to the same file is somebody else's.
+    await vi.advanceTimersByTimeAsync(5000);
+    changed(["assets/pasted.png"]);
+    expect(useApp.getState().assetsRev).toBe(2);
+  });
+
+  it("changes nothing, and asks no history, when the file is as the app has it: its own save told back", async () => {
+    const { useApp, changed } = await watching(() => structuredClone(DECK));
+    const before = useApp.getState();
+    const told = vi.fn();
+    changed(["deck.html"]);
+    useApp.subscribe(told);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls("load_deck")).toHaveLength(1);
+    expect(useApp.getState().deck).toBe(before.deck);
+    expect(told).not.toHaveBeenCalled();
+    expect(calls("deck_history")).toEqual([]);
+  });
+
+  it("asks the deck's history once for a save and the watcher's word of it", async () => {
+    const saved = deckFor(DECK_HTML, "2");
+    const { useApp, changed } = await watching(() => structuredClone(saved));
+    backend({ update_slide: () => structuredClone(saved), load_deck: () => structuredClone(saved) });
+    await useApp.getState().saveSlideEdit("intro", "<section></section>");
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls("load_deck")).toHaveLength(1);
+    expect(calls("deck_history")).toHaveLength(1);
+  });
+
   it("reloads the deck once a burst of edits settles", async () => {
     const edited = deckFor(DECK_HTML, "2");
     const { useApp, changed } = await watching(() => edited);
@@ -316,7 +425,7 @@ describe("deck file changes", () => {
     changed(["deck.html"]);
     await vi.advanceTimersByTimeAsync(120);
     expect(useApp.getState().deck).toEqual(DECK);
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("does nothing when the deck was closed meanwhile", async () => {
@@ -440,7 +549,7 @@ describe("the agent showing a deck it made", () => {
     emitTo("/decks/talk", { type: "openFile", path: "new/deck.html" });
     await vi.waitFor(() => expect(useApp.getState().deck).toEqual(MADE));
     emitTo("/decks/talk", { type: "finished", interrupted: false });
-    await vi.waitFor(() => expect(useApp.getState().error).toBe("The agent is still working in this chat."));
+    await vi.waitFor(() => expect(lastError(useApp.getState())).toBe("The agent is still working in this chat."));
     expect(useApp.getState().chatKey).toBe("/decks/talk");
   });
 
@@ -455,14 +564,23 @@ describe("the agent showing a deck it made", () => {
     await Promise.resolve();
     expect(calls("open_file")).toEqual([]);
     expect(calls("open_deck")).toEqual([]);
-    expect(useApp.getState().error).toBe(
-      "The agent made new/deck.html. Open it from the Files tab: this chat stays with deck.html.",
-    );
+    // Something to know, not a failure, with a button that goes to the file.
+    expect(lastError(useApp.getState())).toBeNull();
+    const [toast] = useApp.getState().toasts;
+    expect(toast).toMatchObject({
+      kind: "info",
+      text: "The agent made new/deck.html. This chat stays with deck.html.",
+      action: { label: "Open" },
+    });
     expect(useApp.getState()).toMatchObject({ deck: DECK, chatKey: DECK.id, running: true });
+    const openPath = vi.fn(async () => {});
+    useApp.setState({ openPath });
+    toast!.action!.run();
+    expect(openPath).toHaveBeenCalledWith("new/deck.html");
     // Its own deck, shown again, is nothing to say.
-    useApp.setState({ error: null });
+    useApp.setState({ toasts: [] });
     emitTo(DECK.id, { type: "openFile", path: "deck.html" });
-    expect(useApp.getState().error).toBeNull();
+    expect(useApp.getState().toasts).toEqual([]);
   });
 });
 

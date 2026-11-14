@@ -6,7 +6,9 @@ import { useChanges } from "../changesStore";
 import type { DeckChanges, SlideChange, SlideStatus } from "../lib/api";
 import { DEFAULT_DIVIDER } from "../lib/compare";
 import { deckMode, useApp } from "../store";
+import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { placeElements } from "../test/intersection";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
 const row = (
@@ -31,6 +33,8 @@ const LIST = [row("modified", "intro"), row("removed", "gone"), row("unchanged",
 
 const changes = (overrides: Partial<DeckChanges> = {}): DeckChanges => ({
   tracking: "committed",
+  branch: "main",
+  detached: false,
   commit: { hash: "abc123", subject: "First draft" },
   stylesChanged: false,
   oldSize: null,
@@ -83,9 +87,18 @@ beforeEach(() => {
     selected: "intro",
     editing: false,
     slideMode: "view",
+    toasts: [],
+  });
+  useChanges.setState({
+    changes: null,
+    deck: null,
+    picked: null,
+    onlyChanges: false,
+    divider: DEFAULT_DIVIDER,
+    view: "split",
+    loading: false,
     error: null,
   });
-  useChanges.setState({ changes: null, deck: null, picked: null, onlyChanges: false, divider: DEFAULT_DIVIDER });
 });
 
 describe("Git mode", () => {
@@ -112,6 +125,20 @@ describe("ChangesRail", () => {
     for (const name of ["Slide 1, modified", "Slide, removed", "Slide 2", "Slide 3, added"]) {
       expect(screen.getByRole("button", { name }).classList).toContain("shadow-thumbnail");
     }
+  });
+
+  it("loads a row's thumbnail only when the list shows it, and changes its ring without a transition", async () => {
+    const inRow = (element: Element) => element.closest("[data-testid=change-row]") !== null;
+    placeElements((element) => (inRow(element) ? 6 : 0));
+    await show();
+    const thumbnails = () => screen.getAllByTestId("change-row").flatMap((r) => [...r.querySelectorAll("iframe")]);
+    expect(thumbnails()).toEqual([]);
+    // The picked slide beside the list is not one of a list: it loads whatever the list does.
+    expect(frames().length).toBeGreaterThan(0);
+    for (const frame of document.querySelectorAll("iframe")) fireEvent.load(frame);
+    act(() => placeElements(() => 0));
+    expect(thumbnails().length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Slide 1, modified" }).className).not.toMatch(/transition/);
   });
 
   it("shows a removed slide from the commit, with its runtime brought up to date", async () => {
@@ -206,14 +233,37 @@ describe("staging", () => {
   const sent = (cmd: string) => vi.mocked(invoke).mock.calls.filter(([name]) => name === cmd);
   const group = (name: string) => within(screen.getByRole("group", { name }));
 
-  it("puts stage on the left of the status icon and restore on its right", async () => {
+  it("puts the buttons of a change in a row under the picture, which they leave in view", async () => {
     await show();
-    const parts = [...screen.getByRole("group", { name: "Modified" }).children];
-    expect(parts.map((part) => part.getAttribute("aria-label") ?? part.getAttribute("title"))).toEqual([
-      "Stage",
-      "Modified",
-      "Restore",
-    ]);
+    const buttons = screen.getByRole("group", { name: "Modified" });
+    expect([...buttons.children].map((part) => part.textContent)).toEqual(["Stage", "Discard changes"]);
+    const picture = screen.getByRole("button", { name: "Slide 1, modified" });
+    // Not over the thumbnail: after the box that holds it.
+    expect(picture.parentElement!.contains(buttons)).toBe(false);
+    expect(picture.parentElement!.nextElementSibling).toBe(buttons);
+    // The mark itself sits in a corner of the picture.
+    const mark = within(picture.parentElement!).getByTestId("change-mark");
+    expect(mark.className).toContain("right-1");
+    expect(mark.className).toContain("top-1");
+  });
+
+  it("names putting a change back by what it does to it, in red where work goes with it", async () => {
+    await show(
+      changes({
+        stylesChanged: true,
+        slides: [...LIST, row("moved", "moved", [], { moved: true, oldNumber: 1 })],
+      }),
+    );
+    const undo = (name: string, label: string) => group(name).getByRole("button", { name: label });
+    expect(undo("Modified", "Discard changes").className).toContain("text-destructive");
+    expect(undo("Added", "Discard new slide").className).toContain("text-destructive");
+    expect(undo("Removed", "Bring back").className).not.toContain("text-destructive");
+    expect(undo("Moved", "Undo move").className).not.toContain("text-destructive");
+    expect(undo("Styles", "Discard changes").className).toContain("text-destructive");
+    expect(undo("Added", "Discard new slide").title).toBe(
+      "Take this slide out: the last commit does not have it (Ctrl+Z undoes it)",
+    );
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   });
 
   it("gives an edit and a move their own buttons", async () => {
@@ -244,7 +294,7 @@ describe("staging", () => {
       cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
     );
     await act(async () => {
-      fireEvent.click(group("Modified").getByRole("button", { name: "Restore" }));
+      fireEvent.click(group("Modified").getByRole("button", { name: "Discard changes" }));
     });
     expect(sent("restore_change")).toHaveLength(1);
     expect(sent("deck_history").length).toBeGreaterThan(0);
@@ -288,7 +338,7 @@ describe("staging", () => {
       cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
     );
     await act(async () => {
-      fireEvent.click(styles.getByRole("button", { name: "Restore" }));
+      fireEvent.click(styles.getByRole("button", { name: "Discard changes" }));
     });
     expect(sent("restore_change")[0]?.[1]).toMatchObject({ change: { kind: "styles" } });
   });
@@ -314,13 +364,15 @@ describe("staging", () => {
     const deck = deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked'));
     useApp.setState({ deck });
     await show();
-    expect((group("Modified").getByRole("button", { name: "Restore" }) as HTMLButtonElement).disabled).toBe(true);
+    const discard = group("Modified").getByRole("button", { name: "Discard changes" }) as HTMLButtonElement;
+    expect(discard.disabled).toBe(true);
+    expect(discard.title).toBe("This slide is locked; unlock it first");
   });
 
   it("stages and restores slide by slide before a first commit too", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
-    expect((screen.getByTitle("Stage everything in this deck") as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Stage all" }) as HTMLButtonElement).disabled).toBe(false);
     await act(async () => {
       fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
     });
@@ -329,7 +381,7 @@ describe("staging", () => {
       cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
     );
     await act(async () => {
-      fireEvent.click(group("Added").getByRole("button", { name: "Restore" }));
+      fireEvent.click(group("Added").getByRole("button", { name: "Discard new slide" }));
     });
     expect(sent("restore_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: null } });
   });
@@ -344,16 +396,98 @@ describe("committing", () => {
   const button = () => screen.getByRole("button", { name: /^Commit/ }) as HTMLButtonElement;
   const message = () => screen.getByRole("textbox", { name: "Commit message" }) as HTMLTextAreaElement;
 
-  it("needs something staged and a message", async () => {
-    await show();
-    fireEvent.change(message(), { target: { value: "Fix" } });
-    expect(button().disabled).toBe(true);
-    cleanup();
+  it("needs a message, and says so", async () => {
     await show(changes({ stagedFiles: 2 }));
     expect(button().textContent).toBe("Commit 2 files");
     expect(button().disabled).toBe(true);
+    expect(button().title).toBe("Write a message to commit");
     fireEvent.change(message(), { target: { value: "Fix" } });
     expect(button().disabled).toBe(false);
+    expect(button().title).toBe("Commit what is staged (Ctrl+Enter)");
+    cleanup();
+    await show(changes({ stagedFiles: 1 }));
+    expect(button().textContent).toBe("Commit 1 file");
+  });
+
+  it("commits everything when nothing is staged", async () => {
+    await show();
+    expect(button().textContent).toBe("Commit all");
+    expect(button().disabled).toBe(true);
+    expect(button().title).toBe("Write a message to commit");
+    fireEvent.change(message(), { target: { value: "Fix" } });
+    expect(button().title).toBe("Stage everything in this deck and commit it (Ctrl+Enter)");
+    await act(async () => {
+      fireEvent.click(button());
+    });
+    const sent = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+    expect(sent.indexOf("stage_all")).toBeGreaterThan(-1);
+    expect(sent.indexOf("stage_all")).toBeLessThan(sent.indexOf("commit_changes"));
+    expect(message().value).toBe("");
+  });
+
+  it("says that it committed, and which commit", async () => {
+    await show(changes({ stagedFiles: 1 }));
+    vi.mocked(invoke).mockResolvedValue(changes({ commit: { hash: "def456", subject: "Reword" } }));
+    fireEvent.change(message(), { target: { value: "Reword" } });
+    await act(async () => {
+      fireEvent.click(button());
+    });
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Committed def456"]);
+  });
+
+  it("stages and unstages everything with buttons that say so", async () => {
+    await show(changes({ stagedFiles: 1 }));
+    const stageAll = screen.getByRole("button", { name: "Stage all" });
+    const unstageAll = screen.getByRole("button", { name: "Unstage all" });
+    expect(stageAll.textContent).toBe("Stage all");
+    expect(unstageAll.textContent).toBe("Unstage all");
+    await act(async () => {
+      fireEvent.click(stageAll);
+      fireEvent.click(unstageAll);
+    });
+    const calls = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+    expect(calls).toContain("stage_all");
+    expect(calls).toContain("unstage_all");
+    cleanup();
+    await show(changes({ hasUnstaged: false, stagedFiles: 2, stagedElsewhere: 2 }));
+    expect((screen.getByRole("button", { name: "Stage all" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Unstage all" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("discards every change at once, after asking", async () => {
+    await show();
+    fireEvent.click(screen.getByRole("button", { name: "Discard all…" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Discard all changes" }));
+    expect(dialog.getByText(/abc123/)).toBeTruthy();
+    expect(dialog.getByText(/Ctrl\+Z brings the changes back/)).toBeTruthy();
+    // Cancel has the focus: Enter does not discard by accident.
+    expect(document.activeElement).toBe(dialog.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "restore_all_changes")).toBe(false);
+
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_all_changes"
+        ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] }
+        : changes(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Discard all…" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard all changes" }));
+    });
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "restore_all_changes")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not discard everything while a changed slide is locked, or before a first commit", async () => {
+    useApp.setState({ deck: deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked')) });
+    await show();
+    const discard = screen.getByRole("button", { name: "Discard all…" }) as HTMLButtonElement;
+    expect(discard.disabled).toBe(true);
+    expect(discard.title).toBe("Slide 1 is locked; unlock it to discard its changes");
+    cleanup();
+    await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
+    expect(screen.queryByRole("button", { name: "Discard all…" })).toBeNull();
   });
 
   it("commits and clears the message", async () => {
@@ -378,23 +512,95 @@ describe("committing", () => {
       fireEvent.keyDown(message(), { key: "Enter", metaKey: true });
     });
     expect(message().value).toBe("Fix");
-    expect(useApp.getState().error).toContain("hook said no");
+    expect(lastError(useApp.getState())).toContain("hook said no");
   });
 
   it("warns when the commit takes in files from elsewhere", async () => {
     await show(changes({ stagedFiles: 3, stagedElsewhere: 2 }));
     expect(screen.getByText(/Also commits 2 staged files/)).toBeTruthy();
   });
+});
 
-  it("stages and unstages everything", async () => {
-    await show(changes({ stagedFiles: 1 }));
+describe("the branch", () => {
+  it("shows beside the commit compared with and over the commit message", async () => {
+    await show(changes({ branch: "talks/q3" }));
+    const shown = screen.getAllByTestId("branch");
+    expect(shown.map((b) => b.textContent)).toEqual(["talks/q3", "talks/q3"]);
+    expect(shown[0]!.title).toBe("On branch talks/q3: commits go here");
+    expect(shown[0]!.parentElement!.querySelector('[aria-label="Commit message"]')).toBeTruthy();
+    expect(shown[1]!.parentElement!.textContent).toContain("Since abc123");
+  });
+
+  it("warns when a commit is checked out instead of a branch", async () => {
+    await show(changes({ branch: null, detached: true }));
+    const [first] = screen.getAllByTestId("branch");
+    expect(first!.textContent).toBe("Detached HEAD");
+    expect(first!.className).toContain("text-warning");
+    expect(first!.title).toContain("on no branch");
+  });
+
+  it("shows nothing where there is none to name", async () => {
+    await show(changes({ branch: null, detached: false }));
+    expect(screen.queryByTestId("branch")).toBeNull();
+  });
+});
+
+describe("states", () => {
+  it("says that there is nothing to commit, without a commit box", async () => {
+    await show(changes({ slides: [row("unchanged", "intro"), row("unchanged", "#2")], hasUnstaged: false }));
+    expect(screen.getByTestId("no-changes").textContent).toContain("No changes since abc123");
+    expect(within(screen.getByTestId("no-changes")).getByTestId("branch").textContent).toBe("main");
+    expect(screen.queryByRole("textbox", { name: "Commit message" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Commit/ })).toBeNull();
+    // The slides are still there to look at.
+    expect(rows()).toEqual(["unchanged", "unchanged"]);
+  });
+
+  it("keeps the commit box while something waits to be committed", async () => {
+    await show(
+      changes({ slides: [row("unchanged", "intro")], hasUnstaged: false, stagedFiles: 1, stagedElsewhere: 1 }),
+    );
+    expect(screen.queryByTestId("no-changes")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
+  });
+
+  it("says that it is reading the changes until they are there", async () => {
+    let finish!: (value: DeckChanges) => void;
+    vi.mocked(invoke).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
     await act(async () => {
-      fireEvent.click(screen.getByTitle("Stage everything in this deck"));
-      fireEvent.click(screen.getByTitle("Unstage everything in this deck's folder"));
+      render(
+        <>
+          <ChangesRail />
+          <ChangesView />
+        </>,
+      );
     });
-    const calls = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
-    expect(calls).toContain("stage_all");
-    expect(calls).toContain("unstage_all");
+    expect(screen.getAllByRole("status").map((s) => s.textContent)).toEqual(["Reading changes…", "Reading changes…"]);
+    expect(screen.queryByRole("textbox", { name: "Commit message" })).toBeNull();
+    await act(async () => finish(changes()));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(isComparing()).toBe(true);
+  });
+
+  it("says what went wrong reading them, and tries again when asked", async () => {
+    vi.mocked(invoke).mockRejectedValue("fatal: not a git repository");
+    await act(async () => {
+      render(<ChangesView />);
+    });
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Could not read the changes");
+    expect(alert.textContent).toContain("fatal: not a git repository");
+    expect(lastError(useApp.getState())).toBeNull();
+    vi.mocked(invoke).mockResolvedValue(changes());
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(isComparing()).toBe(true);
   });
 });
 
@@ -417,7 +623,53 @@ describe("ChangesView", () => {
     fireEvent.click(screen.getByRole("button", { name }));
     expect(isComparing()).toBe(false);
     expect(screen.getByText(text)).toBeTruthy();
-    expect((screen.getByRole("slider", { name: "Feather" }) as HTMLInputElement).disabled).toBe(true);
+    // One version only: nothing to switch between, and no divider to set.
+    for (const name of ["Split", "Before", "After", "Divider"]) {
+      expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("shows one version at a time when asked: before, or after", async () => {
+    await show();
+    const view = (name: string) => within(screen.getByRole("group", { name: "Show" })).getByRole("button", { name });
+    expect(view("Split").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(view("Before"));
+    expect(isComparing()).toBe(false);
+    expect(view("Before").getAttribute("aria-pressed")).toBe("true");
+    const shown = () => [...screen.getByTestId("single-version").querySelectorAll("iframe")].map((f) => f.src);
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0]).toContain(".head");
+    expect(screen.getByText("Before (abc123).")).toBeTruthy();
+    // The divider belongs to the split view.
+    expect((screen.getByRole("button", { name: "Divider" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(view("After"));
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0]).toContain(".file");
+    expect(screen.getByText("After (now).")).toBeTruthy();
+    fireEvent.click(view("Split"));
+    expect(isComparing()).toBe(true);
+    expect(screen.queryByText("After (now).")).toBeNull();
+  });
+
+  it("keeps the view going from slide to slide", async () => {
+    await show(changes({ slides: [row("modified", "intro"), row("modified", "#2")] }));
+    fireEvent.click(screen.getByRole("button", { name: "Before" }));
+    fireEvent.click(screen.getByRole("button", { name: "Slide 2, modified" }));
+    expect(useChanges.getState().view).toBe("before");
+    expect(isComparing()).toBe(false);
+  });
+
+  it("keeps the divider's settings out of the bar, behind a button", async () => {
+    await show();
+    expect(screen.queryByRole("slider", { name: "Angle" })).toBeNull();
+    const divider = screen.getByRole("button", { name: "Divider" });
+    fireEvent.click(divider);
+    expect(divider.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      within(screen.getByRole("dialog", { name: "Divider" })).getByRole("slider", { name: "Feather" }),
+    ).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Divider" })).toBeNull();
   });
 
   it("compares every slide once the shared styles changed", async () => {
@@ -430,6 +682,7 @@ describe("ChangesView", () => {
 
   it("sets the angle and the feather, by slider and by number", async () => {
     await show();
+    fireEvent.click(screen.getByRole("button", { name: "Divider" }));
     fireEvent.change(screen.getByRole("slider", { name: "Angle" }), { target: { value: "30" } });
     expect(useChanges.getState().divider.angle).toBe(30);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Feather in pixels" }), { target: { value: "50" } });
@@ -443,9 +696,14 @@ describe("ChangesView", () => {
 
   it("goes through the list with the arrow keys, but not while typing a value", async () => {
     await show();
+    fireEvent.click(screen.getByRole("button", { name: "Divider" }));
+    const feather = screen.getByRole("spinbutton", { name: "Feather in pixels" });
+    fireEvent.keyDown(feather, { key: "ArrowDown" });
+    expect(useChanges.getState().picked).toBe("intro");
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Commit message" }), { key: "ArrowDown" });
+    expect(useChanges.getState().picked).toBe("intro");
+    fireEvent.keyDown(document, { key: "Escape" });
     fireEvent.keyDown(window, { key: "ArrowDown" });
-    expect(useChanges.getState().picked).toBe("removed:gone");
-    fireEvent.keyDown(screen.getByRole("spinbutton", { name: "Feather in pixels" }), { key: "ArrowDown" });
     expect(useChanges.getState().picked).toBe("removed:gone");
     fireEvent.keyDown(window, { key: "ArrowUp" });
     expect(useChanges.getState().picked).toBe("intro");
@@ -460,7 +718,7 @@ describe("ChangesView", () => {
     });
     expect(calls()).toBe(2);
     await act(async () => {
-      fireEvent.click(screen.getByTitle("Compare again"));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     });
     expect(calls()).toBe(3);
     await act(async () => {
@@ -478,7 +736,7 @@ describe("ChangesView", () => {
   it("shows a deck never committed as all new", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByText("Not committed yet")).toBeTruthy();
-    expect(screen.getByText("Not committed yet, so every slide is new; restoring takes it out.")).toBeTruthy();
+    expect(screen.getByText("Not committed yet, so every slide is new; discarding one takes it out.")).toBeTruthy();
     expect(isComparing()).toBe(false);
   });
 });

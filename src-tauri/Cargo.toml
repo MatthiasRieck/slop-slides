@@ -19,7 +19,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# raw_value: a saved chat goes to the frontend as the JSON text it is (see src/sessions.rs).
+serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["process", "io-util", "rt", "sync", "macros", "time"] }
 notify = "8"
 notify-debouncer-mini = "0.7"
@@ -85,6 +86,21 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 [dev-dependencies]
 ctor = "1.0.13"
 jsonschema = { version = "0.33.0", default-features = false }
+
+# The app as it ships: optimized across crates, in one unit, which makes the HTML scanning, the
+# hashing and the JSON handling measurably faster and the binary smaller. Panics unwind as they
+# do by default: the code recovers from a lock a panicking thread held (`into_inner` on a
+# poisoned lock), which aborting on panic would turn into a crash.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Dev builds run the same hot paths on real decks: unoptimized, hashing a deck (sha2), reading
+# its JSON (serde_json) and watching the folder (notify) are many times slower than in the app
+# as shipped. Dependencies are built once, so optimizing them costs no time on a rebuild. The
+# overrides below ask for more where a crate needs it.
+[profile.dev.package."*"]
+opt-level = 2
 
 # The AV1 encoder is unusably slow unoptimized; optimize it in dev builds and tests too.
 # The app also processes every captured pixel (scaling and RGB-to-YUV conversion).

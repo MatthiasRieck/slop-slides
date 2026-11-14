@@ -14,7 +14,7 @@ export function CleanUpAll({ deck }: { deck: Deck }) {
       <Button
         size="md"
         onClick={() => useApp.getState().cleanNarration(null)}
-        title="Ask the agent to turn the recorded words of all slides into clean, fluent sentences"
+        title="Puts a request in the chat, for the agent to turn the recorded words of all slides into clean, fluent sentences. It opens the chat; you send it."
       >
         <Sparkles />
         Clean up all narration
@@ -39,7 +39,7 @@ export function DeckAudio({ deck }: { deck: Deck }) {
         <span className="flex min-w-0 items-center gap-1">
           <Loader2 className="size-3.5 shrink-0 animate-spin" />
           <span className="truncate">
-            Speaking slide {render.done + 1} of {render.total}…
+            Generating audio for slide {render.done + 1} of {render.total}…
           </span>
         </span>
         <Button size="md" onClick={() => void useNarration.getState().cancelRender()}>
@@ -68,8 +68,9 @@ export function DeckAudio({ deck }: { deck: Deck }) {
 }
 
 /**
- * Hearing the deck's narration audio again with the speech-to-text model, to know when each
- * word is said: what timing animations and slide changes to the narration goes by.
+ * Syncing the words to the audio: hearing the deck's narration audio again with the
+ * speech-to-text model, to know when each word is said. That is what timing animations and slide
+ * changes to the narration goes by.
  */
 export function WordTiming({ deck }: { deck: Deck }) {
   const audio = useDeckAudio(deck.id);
@@ -79,8 +80,8 @@ export function WordTiming({ deck }: { deck: Deck }) {
     const label = timing.downloading
       ? "Downloading the speech model…"
       : timing.total > 0
-        ? `Timing words of slide ${timing.done + 1} of ${timing.total}…`
-        : "Timing words…";
+        ? `Syncing words of slide ${timing.done + 1} of ${timing.total}…`
+        : "Syncing words to audio…";
     return (
       <div className="flex min-w-0 items-center gap-1 border-t p-3 text-xs" role="status">
         <Loader2 className="size-3.5 shrink-0 animate-spin" />
@@ -93,16 +94,16 @@ export function WordTiming({ deck }: { deck: Deck }) {
   return (
     <div className="flex items-center justify-between gap-2 border-t p-3 text-xs">
       <span className="text-muted-foreground">
-        {untimed} {untimed === 1 ? "slide's words" : "slides' words"} not timed
+        {untimed} {untimed === 1 ? "slide's words are" : "slides' words are"} not synced to the audio
       </span>
       <Button
         size="md"
         disabled={timing !== null || render !== null}
         onClick={() => void useNarration.getState().timeWords(deck.id, null)}
-        title="Listen to the narration audio with the speech-to-text model to find when each word is said"
+        title="Find when each word is said in the audio, by listening to it with the speech-to-text model on this computer. Animations and slide changes can then follow the words."
       >
         <Timer />
-        Time words
+        Sync words to audio
       </Button>
     </div>
   );

@@ -44,7 +44,11 @@ export interface ModelsSlice {
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
   setContextWindow: (contextWindow: string) => void;
-  refreshProviders: () => Promise<void>;
+  /**
+   * Looks for the installed agent CLIs and their models again. `quiet` keeps the list known so
+   * far on show meanwhile, for a check nobody should have to watch.
+   */
+  refreshProviders: (options?: { quiet?: boolean }) => Promise<void>;
   toggleFavoriteModel: (key: string) => void;
 }
 
@@ -195,9 +199,11 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
 
   setContextWindow: (contextWindow) => saveSelection(app, { ...get().selection, contextWindow }),
 
-  refreshProviders: async () => {
-    set({ providers: undefined });
+  refreshProviders: async ({ quiet = false } = {}) => {
+    if (!quiet) set({ providers: undefined });
     const result = await api.listProviders().catch(() => null);
+    // A quiet check that failed leaves what was known.
+    if (quiet && !Array.isArray(result)) return;
     const providers = Array.isArray(result) ? result : [];
     set({ providers });
     if (providers.length > 0)

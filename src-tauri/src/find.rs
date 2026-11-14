@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::html::{self, find_ci, parse_tag, VOID_ELEMENTS};
+use crate::html::{self, parse_tag, VOID_ELEMENTS};
 
 /// How the query matches.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -61,14 +61,27 @@ const OFF_SLIDE: &[&str] = &[html::NOTES_CLASS, html::NARRATION_CLASS];
 /// The slide's text as characters, each with the source bytes it came from.
 type Chars = Vec<(char, Range<usize>)>;
 
-/// Every match of `query` in the deck's slides, in deck order.
+/// Every match of `query` in the deck's slides, in deck order: [`find_in`] of a deck given
+/// as its source alone, for tests.
+#[cfg(test)]
 pub fn find(source: &str, query: &str, options: Options) -> Vec<Match> {
+    find_in(source, &html::find_slides(source), query, options)
+}
+
+/// Every match of `query` in `slides`, the slides of `source` (see [`html::find_slides`]), in
+/// deck order.
+pub fn find_in(
+    source: &str,
+    slides: &[html::SlideSpan],
+    query: &str,
+    options: Options,
+) -> Vec<Match> {
     let needle = normalize_query(query, options);
     if needle.is_empty() {
         return Vec::new();
     }
     let mut found = Vec::new();
-    for (index, slide) in html::find_slides(source).iter().enumerate() {
+    for (index, slide) in slides.iter().enumerate() {
         let Some(id) = slide.id.clone() else { continue };
         let locked = slide.locked.is_some();
         let off_slide = off_slide_ranges(source, slide.range.clone());
@@ -105,6 +118,34 @@ pub fn replace(
     options: Options,
     only: Option<&[String]>,
 ) -> Replaced {
+    replace_where(source, query, replacement, options, only, None)
+}
+
+/// Replaces one match of `query` with `replacement` (plain text): the `nth` on slide `slide`,
+/// counting from 0 in the order [`find`] gives that slide's matches. A locked slide is left
+/// alone, and so is the deck when the slide has no such match.
+pub fn replace_nth(
+    source: &str,
+    query: &str,
+    replacement: &str,
+    options: Options,
+    slide: &str,
+    nth: usize,
+) -> Replaced {
+    let only = [slide.to_string()];
+    replace_where(source, query, replacement, options, Some(&only), Some(nth))
+}
+
+/// Replaces the matches of `query` in the slides `only` names (all without it): every match
+/// on them, or with `nth` just that one of each slide's.
+fn replace_where(
+    source: &str,
+    query: &str,
+    replacement: &str,
+    options: Options,
+    only: Option<&[String]>,
+    nth: Option<usize>,
+) -> Replaced {
     let needle = normalize_query(query, options);
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut slides = Vec::new();
@@ -122,6 +163,9 @@ pub fn replace(
                 for at in matches(&chars, &needle, options) {
                     hits.push(chars[at.start].1.start..chars[at.end - 1].1.end);
                 }
+            }
+            if let Some(nth) = nth {
+                hits = hits.into_iter().skip(nth).take(1).collect();
             }
             if hits.is_empty() {
                 continue;
@@ -181,11 +225,10 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
         }
         if bytes[i] == b'<' {
             if let Some(tag) = parse_tag(source, i) {
-                let void =
-                    VOID_ELEMENTS.contains(&tag.name.as_str()) || source[..tag.end].ends_with("/>");
-                if !tag.closing && RAW_TEXT.contains(&tag.name.as_str()) {
-                    let close = find_ci(source, tag.end, &format!("</{}", tag.name));
-                    i = close
+                let void = tag.is_any(VOID_ELEMENTS) || source[..tag.end].ends_with("/>");
+                if !tag.closing && tag.is_any(RAW_TEXT) {
+                    i = tag
+                        .end_tag()
                         .and_then(|c| source[c..].find('>').map(|e| c + e + 1))
                         .unwrap_or(range.end);
                     continue;
@@ -199,9 +242,8 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
                 } else if !tag.closing
                     && !void
                     && tag
-                        .attrs
-                        .iter()
-                        .any(|(n, ..)| PLACEHOLDERS.contains(&n.as_str()))
+                        .attrs()
+                        .any(|a| PLACEHOLDERS.iter().any(|name| a.is(name)))
                 {
                     skipping = 1;
                 }
@@ -232,9 +274,9 @@ fn off_slide_ranges(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
             continue;
         };
         i = tag.end;
-        let off_slide = tag.attrs.iter().any(|(name, value, ..)| {
-            name == "class" && value.split_whitespace().any(|c| OFF_SLIDE.contains(&c))
-        });
+        let off_slide = tag
+            .attrs()
+            .any(|a| a.is("class") && a.value.split_whitespace().any(|c| OFF_SLIDE.contains(&c)));
         if tag.closing || !off_slide {
             continue;
         }
@@ -248,7 +290,7 @@ fn off_slide_ranges(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
             i = next + 1;
             if let Some(inner) = parse_tag(source, next) {
                 i = inner.end;
-                if inner.name == tag.name {
+                if inner.is(tag.raw_name()) {
                     depth = if inner.closing { depth - 1 } else { depth + 1 };
                 }
             }
@@ -518,6 +560,41 @@ mod tests {
 
         let none = replace(&source, "nowhere", "x", CASE, None);
         assert_eq!((none.count, none.html), (0, source));
+    }
+
+    #[test]
+    fn replaces_one_match_of_a_slide_counted_as_find_lists_them() {
+        let source = deck(
+            r#"<section class="slide" id="a"><h1>Acme</h1><p>Acme and acme</p><aside class="notes">Say acme</aside></section>
+<section class="slide" id="b" data-locked><p>Acme</p></section>
+<section class="slide" id="c"><p>Acme</p></section>"#,
+        );
+        let second = replace_nth(&source, "acme", "Initech", CASE, "a", 1);
+        assert_eq!((second.count, second.slides.clone()), (1, vec!["a".into()]));
+        assert!(second.html.contains(
+            r#"<h1>Acme</h1><p>Initech and acme</p><aside class="notes">Say acme</aside>"#
+        ));
+        assert!(second.html.contains(r#"id="c"><p>Acme</p>"#));
+        // The one after it takes its place among the slide's matches.
+        assert_eq!(find(&second.html, "acme", CASE).len(), 5);
+        assert_eq!(find(&second.html, "acme", CASE)[1].before, "Initech and ");
+
+        // A match in the notes counts too, after those the slide shows.
+        let notes = replace_nth(&source, "acme", "Initech", CASE, "a", 3);
+        assert!(notes
+            .html
+            .contains(r#"<aside class="notes">Say Initech</aside>"#));
+
+        // Past the slide's last match, on a locked slide, or on one that is not there: nothing.
+        let past = replace_nth(&source, "acme", "x", CASE, "a", 4);
+        assert_eq!((past.count, past.html), (0, source.clone()));
+        let locked = replace_nth(&source, "acme", "x", CASE, "b", 0);
+        assert_eq!(
+            (locked.count, locked.skipped.clone()),
+            (0, vec!["b".into()])
+        );
+        assert_eq!(locked.html, source);
+        assert_eq!(replace_nth(&source, "acme", "x", CASE, "gone", 0).count, 0);
     }
 
     #[test]

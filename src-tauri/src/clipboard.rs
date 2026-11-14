@@ -2,7 +2,7 @@
 //! and text from anywhere. The slide preview cannot reach the clipboard itself (it has no
 //! editable focus to paste into), so the app does it here.
 //!
-//! A copied element goes onto the clipboard as HTML behind [`ELEMENT_MARKER`], a copied slide
+//! A copied element goes onto the clipboard as HTML behind [`ELEMENT_MARKER`], copied slides
 //! behind [`SLIDE_MARKER`], each with its text as plain text for other apps. Their headers name
 //! the deck they came from, so pasting them into another deck (in another window, say) brings
 //! the `assets/…` files they show along. Pasted images are saved into the deck's `assets/`.
@@ -22,8 +22,9 @@ use crate::html;
 /// follows, with the deck it came from added (see [`with_source`]).
 pub const ELEMENT_MARKER: &str = "<!--slopslides:";
 
-/// Starts the HTML of a slide copied from the slide rail; a JSON header follows naming the
-/// deck it came from (`{"deck": <deck file>, "slide": <id>}`), then the slide's markup.
+/// Starts the HTML of the slides copied from the slide rail; a JSON header follows naming the
+/// deck they came from (`{"deck": <deck file>, "slides": [<id>, …]}`), then the slides' markup,
+/// one after the other in deck order.
 pub const SLIDE_MARKER: &str = "<!--slopslides-slide:";
 
 /// Image files that can go on a slide.
@@ -44,17 +45,18 @@ pub enum Pasted {
     Text {
         text: String,
     },
-    /// A slide copied from the slide rail; it goes in as a new slide (see [`read_slide`]).
+    /// Slides copied from the slide rail; they go in as new slides (see [`read_slides`]).
     Slide,
     Nothing,
 }
 
-/// A slide copied from the slide rail.
+/// The slides copied from the slide rail.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CopiedSlide {
-    /// The deck file it came from, if the header names one.
+pub struct CopiedSlides {
+    /// The deck file they came from, if the header names one.
     pub deck: Option<PathBuf>,
-    pub markup: String,
+    /// The markup of each slide, in the order they were in the deck.
+    pub slides: Vec<String>,
 }
 
 /// What the clipboard holds, in the forms a paste can use.
@@ -70,7 +72,7 @@ pub struct Contents {
 }
 
 /// Turns the clipboard's contents into what goes on the slide, saving images into the assets
-/// next to `target` (a deck file or folder). An element or slide copied here wins, then image
+/// next to `target` (a deck file or folder). An element or slides copied here win, then image
 /// files, then an image, then text. An element from another deck brings its assets along.
 pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
     let html = contents.html.as_deref();
@@ -175,24 +177,41 @@ fn localized_element(element: &str, target: &Path) -> Result<String> {
     Ok(format!("{}{markup}", &element[..at]))
 }
 
-/// Slide `slide` of the deck `file` (whose source is `source`) as it goes on the clipboard:
-/// its HTML behind [`SLIDE_MARKER`] and its text.
-pub fn slide_clip(file: &Path, source: &str, slide: &str) -> Result<(String, String)> {
-    let markup = html::slide_markup(source, slide).map_err(Error::Message)?;
-    let header = serde_json::json!({ "deck": file.to_string_lossy(), "slide": slide });
+/// The `slides` of the deck `file` (whose source is `source`) as they go on the clipboard:
+/// their HTML behind [`SLIDE_MARKER`], in the order given, and their text, a blank line
+/// between one slide's and the next's.
+pub fn slides_clip(file: &Path, source: &str, slides: &[String]) -> Result<(String, String)> {
+    if slides.is_empty() {
+        return Err(Error::msg("There is no slide to copy."));
+    }
+    let markup = slides
+        .iter()
+        .map(|slide| html::slide_markup(source, slide).map_err(Error::Message))
+        .collect::<Result<Vec<_>>>()?;
+    let header = serde_json::json!({ "deck": file.to_string_lossy(), "slides": slides });
+    let text: Vec<String> = markup.iter().map(|m| find::plain_text(m)).collect();
     Ok((
-        format!("{SLIDE_MARKER}{}-->{markup}", header_json(&header)),
-        find::plain_text(markup),
+        format!(
+            "{SLIDE_MARKER}{}-->{}",
+            header_json(&header),
+            markup.join("\n")
+        ),
+        text.join("\n\n"),
     ))
 }
 
-/// The slide copied from the slide rail in the clipboard's HTML, if it holds one.
-pub fn copied_slide(html: &str) -> Option<CopiedSlide> {
+/// The slides copied from the slide rail in the clipboard's HTML, if it holds any: what is
+/// behind the marker, one entry per slide found in it.
+pub fn copied_slides(html: &str) -> Option<CopiedSlides> {
     let clip = copied(html, SLIDE_MARKER)?;
     let (header, at) = split_header(clip, SLIDE_MARKER)?;
-    Some(CopiedSlide {
+    let markup = &clip[at..];
+    Some(CopiedSlides {
         deck: source_deck(&header),
-        markup: clip[at..].to_string(),
+        slides: html::find_slides(markup)
+            .into_iter()
+            .map(|slide| markup[slide.range].to_string())
+            .collect(),
     })
 }
 
@@ -231,17 +250,17 @@ pub fn write(html: &str, text: &str) -> Result<()> {
         .map_err(|e| Error::msg(format!("could not copy: {e}")))
 }
 
-/// Puts slide `slide` of the deck `file` on the system clipboard.
-pub fn copy_slide(file: &Path, slide: &str) -> Result<()> {
-    let (html, text) = slide_clip(file, &deck::read_html(file)?, slide)?;
+/// Puts the `slides` of the deck `file` on the system clipboard, in the order given.
+pub fn copy_slides(file: &Path, slides: &[String]) -> Result<()> {
+    let (html, text) = slides_clip(file, &deck::read_html(file)?, slides)?;
     write(&html, &text)
 }
 
-/// The slide copied from the slide rail on the system clipboard, if it holds one.
-pub fn read_slide() -> Result<Option<CopiedSlide>> {
+/// The slides copied from the slide rail on the system clipboard, if it holds any.
+pub fn read_slides() -> Result<Option<CopiedSlides>> {
     Ok(with_clipboard(|c| c.get().html().ok())?
         .as_deref()
-        .and_then(copied_slide))
+        .and_then(copied_slides))
 }
 
 /// The system clipboard's plain text; empty when it holds none.
@@ -398,18 +417,19 @@ mod tests {
         let dir = workspace();
         let deck = dir.join("talk/deck.html");
         let source = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\"><h1>Hi &gt; there</h1></section>\n</main>";
-        let (html, text) = slide_clip(&deck, source, "a").unwrap();
+        let (html, text) = slides_clip(&deck, source, &["a".into()]).unwrap();
         assert!(html.starts_with(SLIDE_MARKER));
         assert_eq!(text, "Hi > there");
         let markup = "<section class=\"slide\" id=\"a\"><h1>Hi &gt; there</h1></section>";
-        let expected = CopiedSlide {
+        let expected = CopiedSlides {
             deck: Some(deck.clone()),
-            markup: markup.into(),
+            slides: vec![markup.into()],
         };
-        assert_eq!(copied_slide(&html), Some(expected.clone()));
+        assert_eq!(copied_slides(&html), Some(expected.clone()));
         let wrapped = format!("<html><head></head><body>{html}</body></html>");
-        assert_eq!(copied_slide(&wrapped), Some(expected));
-        assert!(slide_clip(&deck, source, "missing").is_err());
+        assert_eq!(copied_slides(&wrapped), Some(expected));
+        assert!(slides_clip(&deck, source, &["missing".into()]).is_err());
+        assert!(slides_clip(&deck, source, &[]).is_err());
 
         // Pasting it while editing a slide leaves it to the slide rail.
         let pasted = paste(
@@ -425,19 +445,57 @@ mod tests {
     }
 
     #[test]
+    fn several_copied_slides_stay_apart_and_in_the_order_given() {
+        let dir = workspace();
+        let deck = dir.join("talk/deck.html");
+        let source = concat!(
+            "<main class=\"deck\">\n",
+            "  <section class=\"slide\" id=\"a\"><h1>One</h1></section>\n",
+            "  <section class=\"slide\" id=\"b\"><section><p>Nested</p></section></section>\n",
+            "  <section class=\"slide\" id=\"c\"><h1>Three</h1></section>\n",
+            "</main>"
+        );
+        let picked = ["a".to_string(), "c".to_string(), "b".to_string()];
+        let (html, text) = slides_clip(&deck, source, &picked).unwrap();
+        assert_eq!(text, "One\n\nThree\n\nNested");
+        let (header, _) = split_header(&html, SLIDE_MARKER).unwrap();
+        assert_eq!(header["slides"], serde_json::json!(["a", "c", "b"]));
+        let copied = copied_slides(&format!("<html><body>{html}</body></html>")).unwrap();
+        assert_eq!(copied.deck, Some(deck.clone()));
+        assert_eq!(
+            copied.slides,
+            [
+                "<section class=\"slide\" id=\"a\"><h1>One</h1></section>",
+                "<section class=\"slide\" id=\"c\"><h1>Three</h1></section>",
+                "<section class=\"slide\" id=\"b\"><section><p>Nested</p></section></section>",
+            ]
+        );
+        // One missing slide copies none of them.
+        assert!(slides_clip(&deck, source, &["a".into(), "gone".into()]).is_err());
+    }
+
+    #[test]
     fn a_copied_slide_from_a_gone_deck_has_no_source() {
         let html = format!("{SLIDE_MARKER}{{\"deck\":\"/nowhere/deck.html\"}}--><section class=\"slide\"></section>");
         assert_eq!(
-            copied_slide(&html),
-            Some(CopiedSlide {
+            copied_slides(&html),
+            Some(CopiedSlides {
                 deck: None,
-                markup: "<section class=\"slide\"></section>".into()
+                slides: vec!["<section class=\"slide\"></section>".into()]
             })
         );
-        assert_eq!(copied_slide("<p>Hi</p>"), None);
+        assert_eq!(copied_slides("<p>Hi</p>"), None);
         assert_eq!(
-            copied_slide(&format!("{SLIDE_MARKER}not json--><p></p>")),
+            copied_slides(&format!("{SLIDE_MARKER}not json--><p></p>")),
             None
+        );
+        // Behind the marker but no slide: nothing to paste, which the paste says.
+        assert_eq!(
+            copied_slides(&format!("{SLIDE_MARKER}{{}}--><p>x</p>")),
+            Some(CopiedSlides {
+                deck: None,
+                slides: Vec::new()
+            })
         );
     }
 

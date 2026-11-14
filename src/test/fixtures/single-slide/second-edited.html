@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Single slide</title>
+<style>
+.slide { counter-increment: slide; }
+.slide::after { content: counter(slide); }
+.slide:nth-child(odd) { background: url(assets/odd.png); } /* <section class="slide" id="in-style"> */
+</style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide cover" id="intro" ><i id="el-1"></i><i ID='logo'></i></section>
+    <!-- <section class="slide" id="ghost"><img src="assets/ghost.png"></section> -->
+    <div class="deck-section" data-title="Part one"></div>
+    <section class='slide' data-hidden><p>No id</p><section class="inner"><img src="assets/second.png"></section></section>
+    <section class="slide" id="plan" style="color: red"><i id=clip></i></section>
+    <SECTION CLASS="slide" ID="end"></section>
+  </main>
+  <script>const fake = '<section class="slide" id="in-script">';</script>
+</body>
+</html>

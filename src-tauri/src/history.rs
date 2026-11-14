@@ -14,15 +14,24 @@
 //!
 //! Only the deck's HTML is kept, not its assets. Changes made outside the app are noticed
 //! lazily, when the history is next looked at ([`checkpoint`]), as one "Outside change".
+//!
+//! The deck is read through the deck cache ([`crate::deck_cache`]): what the app itself just
+//! wrote is neither read back nor hashed twice, and a deck that did not change since the
+//! history last looked is not read at all. Whenever the file's stamp cannot tell, the cache
+//! reads the file, so an outside change is never taken for the version the history is at.
 
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::deck_cache::{self, Cached};
+use crate::deck_lock;
 use crate::error::{Error, Result};
 
 const HISTORY_DIR: &str = "history";
@@ -31,10 +40,6 @@ const JOURNAL_FILE: &str = "journal.json";
 const ENTRIES_KEPT: usize = 100;
 /// Grouped changes (typing notes, drawing review marks) this close together are one entry.
 const COALESCE_MS: u64 = 3_000;
-
-/// One process-wide lock: a change, its checkpoint and its record must not interleave with
-/// another history operation, or an app write would be recorded as an outside change.
-static LOCK: Mutex<()> = Mutex::new(());
 
 /// What made a change, for its label in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,8 +166,29 @@ fn now() -> u64 {
         .as_millis() as u64
 }
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+/// The deck file as it is on disk.
+enum Contents {
+    /// From the deck cache, which also keeps its hash.
+    Text(Arc<Cached>),
+    /// A file that is not UTF-8, which the cache does not hold.
+    Bytes(Vec<u8>),
+}
+
+impl Contents {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Contents::Text(cached) => cached.source().as_bytes(),
+            Contents::Bytes(bytes) => bytes,
+        }
+    }
+
+    /// SHA-256 of the file, in hex.
+    fn hash(&self) -> Cow<'_, str> {
+        match self {
+            Contents::Text(cached) => Cow::Borrowed(cached.sha256()),
+            Contents::Bytes(bytes) => Cow::Owned(format!("{:x}", Sha256::digest(bytes))),
+        }
+    }
 }
 
 /// The history of one deck file, loaded.
@@ -170,6 +196,8 @@ struct History {
     dir: PathBuf,
     file: PathBuf,
     journal: Journal,
+    /// Hashes of versions dropped since it was loaded, whose files go when it is saved.
+    dropped: Vec<String>,
 }
 
 impl History {
@@ -187,30 +215,36 @@ impl History {
             dir,
             file: file.into(),
             journal,
+            dropped: Vec::new(),
         })
     }
 
     fn save(&mut self) -> Result<()> {
-        self.prune()?;
+        self.trim();
         fs::create_dir_all(&self.dir)?;
         let json =
             serde_json::to_vec_pretty(&self.journal).map_err(|e| Error::msg(e.to_string()))?;
-        crate::files::atomic_write(&self.dir.join(JOURNAL_FILE), &json)
+        crate::files::atomic_write(&self.dir.join(JOURNAL_FILE), &json)?;
+        self.remove_dropped();
+        Ok(())
     }
 
     fn head(&self) -> Option<&Entry> {
         self.journal.entries.get(self.journal.cursor)
     }
 
-    /// The deck file's contents and hash; None when it is gone.
-    fn read(&self) -> Result<Option<(Vec<u8>, String)>> {
-        match fs::read(&self.file) {
-            Ok(bytes) => {
-                let hash = format!("{:x}", Sha256::digest(&bytes));
-                Ok(Some((bytes, hash)))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
+    /// The deck file as it is now; None when it is gone.
+    fn read(&self) -> Result<Option<Contents>> {
+        use std::io::ErrorKind;
+        match deck_cache::get(&self.file) {
+            Ok(cached) => Ok(Some(Contents::Text(cached))),
+            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(Error::Io(e)) if e.kind() == ErrorKind::InvalidData => match fs::read(&self.file) {
+                Ok(bytes) => Ok(Some(Contents::Bytes(bytes))),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.into()),
+            },
+            Err(e) => Err(e),
         }
     }
 
@@ -220,16 +254,17 @@ impl History {
 
     /// Adds the deck as it is now, made by `change`. Nothing when it did not change.
     fn record(&mut self, change: &Change) -> Result<bool> {
-        let Some((bytes, hash)) = self.read()? else {
+        let Some(contents) = self.read()? else {
             return Ok(false);
         };
+        let hash = contents.hash().into_owned();
         if self.head().is_some_and(|head| head.hash == hash) {
             return Ok(false);
         }
         fs::create_dir_all(&self.dir)?;
         let blob = self.blob(&hash);
         if !blob.exists() {
-            crate::files::atomic_write(&blob, &bytes)?;
+            crate::files::atomic_write(&blob, contents.bytes())?;
         }
         let time = now();
         let last = self.journal.entries.len().saturating_sub(1);
@@ -242,12 +277,14 @@ impl History {
                 && head.source == change.source
                 && time.saturating_sub(head.time) <= COALESCE_MS;
             if joins {
-                head.hash = hash;
+                self.dropped.push(std::mem::replace(&mut head.hash, hash));
                 head.time = time;
                 return Ok(true);
             }
         }
-        self.journal.entries.truncate(cursor + 1);
+        let kept = (cursor + 1).min(self.journal.entries.len());
+        let redone = self.journal.entries.drain(kept..);
+        self.dropped.extend(redone.map(|entry| entry.hash));
         self.journal.entries.push(Entry {
             id: uuid::Uuid::new_v4().simple().to_string(),
             hash,
@@ -277,7 +314,11 @@ impl History {
         let hash = self.journal.entries[index].hash.clone();
         let bytes = fs::read(self.blob(&hash))
             .map_err(|_| Error::msg("That version of the deck is no longer available."))?;
-        crate::files::atomic_write(&self.file, &bytes)?;
+        match std::str::from_utf8(&bytes) {
+            // Through the deck, so the cache holds what was written.
+            Ok(text) => crate::deck::write_html(&self.file, text)?,
+            Err(_) => crate::files::atomic_write(&self.file, &bytes)?,
+        }
         self.journal.cursor = index;
         Ok(())
     }
@@ -292,17 +333,37 @@ impl History {
         }
     }
 
-    /// Drops the oldest versions beyond [`ENTRIES_KEPT`] and the files no version uses.
-    fn prune(&mut self) -> Result<()> {
+    /// Drops the oldest versions beyond [`ENTRIES_KEPT`].
+    fn trim(&mut self) {
         let excess = self.journal.entries.len().saturating_sub(ENTRIES_KEPT);
         if excess > 0 {
-            self.journal.entries.drain(..excess);
+            let oldest = self.journal.entries.drain(..excess);
+            self.dropped.extend(oldest.map(|entry| entry.hash));
             self.journal.cursor = self.journal.cursor.saturating_sub(excess);
         }
+    }
+
+    /// Removes the files of the versions dropped, unless a version left still uses one. Only
+    /// they are looked at: a save that dropped nothing touches no file but the journal.
+    fn remove_dropped(&mut self) {
+        if self.dropped.is_empty() {
+            return;
+        }
+        let used: HashSet<&str> = self.journal.entries.iter().map(|e| &*e.hash).collect();
+        for hash in self.dropped.drain(..) {
+            if !used.contains(hash.as_str()) {
+                let _ = fs::remove_file(self.dir.join(format!("{hash}.html")));
+            }
+        }
+    }
+
+    /// Removes every version file no version uses: one left behind when the app quit between
+    /// writing it and the journal.
+    fn sweep(&self) {
         let Ok(files) = fs::read_dir(&self.dir) else {
-            return Ok(());
+            return;
         };
-        let used: std::collections::HashSet<_> = self
+        let used: HashSet<_> = self
             .journal
             .entries
             .iter()
@@ -314,43 +375,47 @@ impl History {
                 let _ = fs::remove_file(file.path());
             }
         }
-        Ok(())
     }
 }
 
 /// Notices a change made to `file` outside the app since the history last saw it, starting the
-/// history if it has none.
+/// history if it has none. Called when a deck is opened and around agent turns, not on every
+/// save, so this is also where version files nothing uses are cleared out.
 pub fn checkpoint(home: &Path, file: &Path) -> Result<()> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let mut history = History::load(home, file)?;
     if history.checkpoint()? {
         history.save()?;
     }
+    history.sweep();
     Ok(())
 }
 
-/// Runs `f`, which changes `file`, and adds what it did to the history as `change`.
+/// Runs `f`, which changes `file`, and adds what it did to the history as `change`. The deck's
+/// lock is held throughout, so the deck's write, the version kept of it and the journal entry
+/// stay together, in this order, whatever else is changing the deck; `f` must not take the
+/// lock again (see [`deck_lock::hold`]).
 pub fn change<T>(
     home: &Path,
     file: &Path,
     change: Change,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let mut history = History::load(home, file)?;
-    history.checkpoint()?;
+    let noticed = history.checkpoint()?;
     let value = f();
-    if value.is_ok() {
-        history.record(&change)?;
+    let recorded = value.is_ok() && history.record(&change)?;
+    // Also when `f` failed: the checkpoint may have recorded an outside change.
+    if noticed || recorded {
+        history.save()?;
     }
-    // Saved even when `f` failed: the checkpoint may have recorded an outside change.
-    history.save()?;
     value
 }
 
 /// Adds `file` as it is now to the history as `change`; its history starts here if it has none.
 pub fn record(home: &Path, file: &Path, change: &Change) -> Result<()> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let mut history = History::load(home, file)?;
     if history.record(change)? {
         history.save()?;
@@ -361,7 +426,7 @@ pub fn record(home: &Path, file: &Path, change: &Change) -> Result<()> {
 /// What undo and redo would do. With `look`, an outside change is noticed first; leave it off
 /// while the agent is working, or its unfinished edits would become an entry.
 pub fn status(home: &Path, file: &Path, look: bool) -> Result<Status> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let mut history = History::load(home, file)?;
     if look && history.checkpoint()? {
         history.save()?;
@@ -401,7 +466,7 @@ fn step(
     target: impl Fn(usize, usize) -> Option<usize>,
     at: usize,
 ) -> Result<Step> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let mut history = History::load(home, file)?;
     history.checkpoint()?;
     let from = history.journal.cursor;
@@ -421,7 +486,7 @@ fn step(
 
 /// The deck as it was at version `id`.
 pub fn version(home: &Path, file: &Path, id: &str) -> Result<String> {
-    let _lock = lock();
+    let _held = deck_lock::hold(file);
     let history = History::load(home, file)?;
     let entry = history
         .journal
@@ -495,13 +560,13 @@ mod tests {
         );
         let temp = crate::test_support::TempDir::new("history-hex");
         let file = temp.write("deck.html", "abc");
-        let (_, hash) = History::load(&temp.join("home"), &file)
+        let contents = History::load(&temp.join("home"), &file)
             .unwrap()
             .read()
             .unwrap()
             .unwrap();
         assert_eq!(
-            hash,
+            contents.hash(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
@@ -733,5 +798,212 @@ mod tests {
     fn sources_serialize_in_camel_case() {
         assert_eq!(serde_json::to_value(Source::External).unwrap(), "external");
         assert_eq!(serde_json::to_value(Source::Chat).unwrap(), "chat");
+    }
+
+    /// Sets the deck file's modification time a minute back, so that its stamp alone tells
+    /// whether it changed (see [`crate::stamp::Stamp::settled`]).
+    fn age(file: &Path) {
+        let modified = SystemTime::now() - std::time::Duration::from_secs(60);
+        let file = fs::File::options().write(true).open(file).unwrap();
+        file.set_modified(modified).unwrap();
+    }
+
+    #[test]
+    fn a_deck_that_did_not_change_is_read_and_hashed_once() {
+        let deck = Deck::new("v1");
+        age(&deck.file());
+        let before = deck_cache::reads();
+        assert!(deck.status().undo.is_none());
+        let first = deck_cache::get(&deck.file()).unwrap();
+        for _ in 0..3 {
+            deck.status();
+            checkpoint(&deck.home(), &deck.file()).unwrap();
+        }
+        assert_eq!(deck_cache::reads() - before, 1);
+        // The same entry, with the hash it worked out the first time.
+        assert!(Arc::ptr_eq(&first, &deck_cache::get(&deck.file()).unwrap()));
+        assert_eq!(deck.journal().entries.len(), 1);
+        // An outside change is still seen, and read once.
+        deck.write("outside");
+        age(&deck.file());
+        assert_eq!(deck.status().undo.unwrap().source, Source::External);
+        deck.status();
+        assert_eq!(deck_cache::reads() - before, 2);
+    }
+
+    #[test]
+    fn a_change_reads_the_deck_once_at_most() {
+        let deck = Deck::new("v1");
+        age(&deck.file());
+        deck.status();
+        let before = deck_cache::reads();
+        change_ok(&deck.home(), &deck.file(), edit("first"), || {
+            crate::deck::write_html(&deck.file(), "v2")
+        });
+        // The deck before the change is the one the history last saw: not read. What the app
+        // wrote is not read back to keep it, only compared once, as its stamp is too young
+        // to tell a write by someone else right after it.
+        assert_eq!(deck_cache::reads() - before, 1);
+        assert_eq!(deck.status().undo.unwrap().label, "first");
+        assert_eq!(deck.journal().entries.len(), 2);
+    }
+
+    #[test]
+    fn an_outside_change_right_after_the_apps_write_is_never_taken_for_the_apps() {
+        let deck = Deck::new("v1");
+        change_ok(&deck.home(), &deck.file(), edit("first"), || {
+            crate::deck::write_html(&deck.file(), "v2")
+        });
+        // Of the same length and within the same tick of a coarse clock: the stamp the app
+        // kept with its own write cannot tell the two apart.
+        let stamped = fs::metadata(deck.file()).unwrap().modified().unwrap();
+        deck.write("v3");
+        let file = fs::File::options().write(true).open(deck.file()).unwrap();
+        file.set_modified(stamped).unwrap();
+        drop(file);
+        let status = deck.status();
+        assert_eq!(status.undo.unwrap().source, Source::External);
+        let labels: Vec<_> = deck
+            .journal()
+            .entries
+            .into_iter()
+            .map(|e| e.label)
+            .collect();
+        assert_eq!(labels, ["Opened", "first", "Outside change"]);
+        assert_eq!(deck.undo().unwrap().source, Source::External);
+        assert_eq!(deck.read(), "v2");
+    }
+
+    fn version_files(deck: &Deck) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(dir(&deck.home(), &deck.file()))
+            .unwrap()
+            .map(|f| f.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".html"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_save_removes_the_files_of_the_versions_it_dropped_and_no_others() {
+        let deck = Deck::new("v1");
+        deck.change(edit("first"), "v2");
+        // A file no version uses, left by a write the journal never heard of.
+        let stray = dir(&deck.home(), &deck.file()).join("stray.html");
+        fs::write(&stray, "x").unwrap();
+
+        // Joining a group replaces the head's version; an undone one goes with the next change.
+        let notes = || Change::new(Source::Notes, "Notes").grouped("notes:a");
+        deck.change(notes(), "n1");
+        deck.change(notes(), "n2");
+        deck.undo();
+        deck.change(edit("other"), "v3");
+        let hashes: Vec<_> = deck.journal().entries.into_iter().map(|e| e.hash).collect();
+        assert_eq!(hashes.len(), 3);
+        let mut expected: Vec<_> = hashes.iter().map(|h| format!("{h}.html")).collect();
+        expected.push("stray.html".into());
+        expected.sort();
+        assert_eq!(
+            version_files(&deck),
+            expected,
+            "saves look at no other file"
+        );
+
+        // A version another entry still uses keeps its file.
+        deck.change(edit("back"), "v1");
+        deck.undo();
+        deck.change(edit("again"), "v4");
+        assert!(version_files(&deck).contains(&format!("{}.html", hashes[0])));
+
+        // Opening the deck clears out what nothing uses.
+        checkpoint(&deck.home(), &deck.file()).unwrap();
+        assert!(!stray.exists());
+        assert_eq!(version_files(&deck).len(), deck.journal().entries.len());
+    }
+
+    #[test]
+    fn a_change_that_changes_nothing_writes_no_journal() {
+        let deck = Deck::new("v1");
+        deck.status();
+        let journal = dir(&deck.home(), &deck.file()).join(JOURNAL_FILE);
+        let written = fs::metadata(&journal).unwrap().modified().unwrap();
+        let before = fs::read(&journal).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        deck.change(edit("noop"), "v1");
+        assert_eq!(fs::read(&journal).unwrap(), before);
+        assert_eq!(fs::metadata(&journal).unwrap().modified().unwrap(), written);
+    }
+
+    #[test]
+    fn changes_to_one_deck_from_two_threads_apply_one_after_the_other() {
+        const TWO: &str = "<main class=\"deck\">\n<section class=\"slide\" id=\"a\">A</section>\n<section class=\"slide\" id=\"b\">B</section>\n</main>";
+        for round in 0..12 {
+            let deck = Deck::new(TWO);
+            checkpoint(&deck.home(), &deck.file()).unwrap();
+            let (home, file) = (deck.home(), deck.file());
+            let start = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                for slide in ["a", "b"] {
+                    let (home, file, start) = (&home, &file, &start);
+                    scope.spawn(move || {
+                        start.wait();
+                        let notes = Change::new(Source::Notes, format!("Notes of {slide}"));
+                        change(home, file, notes, || {
+                            crate::deck::set_slide_notes(file, slide, &format!("Said on {slide}"))
+                                .map(drop)
+                        })
+                        .unwrap();
+                    });
+                }
+            });
+            // Neither overwrote the other: the deck holds both.
+            let html = deck.read();
+            assert!(
+                html.contains("Said on a") && html.contains("Said on b"),
+                "round {round}: {html}"
+            );
+            // Two entries, each the deck as its change left it: the first with one of the
+            // notes, the second with both.
+            let entries = deck.journal().entries;
+            let labels: Vec<_> = entries.iter().map(|e| e.source).collect();
+            assert_eq!(labels, [Source::Open, Source::Notes, Source::Notes]);
+            let first = version(&home, &file, &entries[1].id).unwrap();
+            let second = version(&home, &file, &entries[2].id).unwrap();
+            assert_eq!(second, html);
+            assert_eq!(
+                first.matches("Said on").count(),
+                1,
+                "round {round}: {first}"
+            );
+            assert_eq!(deck.undo().unwrap().id, entries[2].id);
+            assert_eq!(deck.read(), first);
+            assert_eq!(deck.undo().unwrap().id, entries[1].id);
+            assert_eq!(deck.read(), TWO);
+        }
+    }
+
+    #[test]
+    fn decks_are_changed_at_the_same_time() {
+        // A change to one deck does not wait for a change to another that is under way.
+        let deck = Deck::new("v1");
+        let other = Deck::new("o1");
+        let (entered, wait) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let deck = &deck;
+            scope.spawn(move || {
+                change_ok(&deck.home(), &deck.file(), edit("slow"), || {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                    deck.write("v2");
+                    Ok(())
+                });
+            });
+            wait.recv().unwrap();
+            other.change(edit("meanwhile"), "o2");
+            assert_eq!(other.status().undo.unwrap().label, "meanwhile");
+            release.send(()).unwrap();
+        });
+        assert_eq!(deck.status().undo.unwrap().label, "slow");
     }
 }

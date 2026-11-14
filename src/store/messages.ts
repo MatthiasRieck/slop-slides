@@ -1,11 +1,12 @@
 // The chat's messages as the chat shows them, the helpers that settle them, and saving them.
 import { api } from "../lib/api";
 import type { PlacedComment } from "../lib/comments";
-import type { ContextUsage } from "../lib/context";
+import { type ContextUsage, latestContext } from "../lib/context";
 import type { EditElement } from "../lib/editTools";
+import { memoizeLast } from "../lib/memo";
 import type { Provider } from "../lib/models";
 import type { Approval } from "../lib/permissions";
-import type { AppStore } from "./types";
+import type { AppState, AppStore } from "./types";
 
 export type ChatPart =
   | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
@@ -143,6 +144,46 @@ export function settleInterrupted(message: ChatMessage): ChatMessage {
     ...(message.status === "streaming" ? { status: "interrupted" as const, thinking: false, compacting: false } : {}),
     parts: expireApprovals(message.parts),
   };
+}
+
+/**
+ * The user's message a retry sends again: the one the chat's last reply answered, when that reply
+ * failed or was stopped. Null when there is nothing to retry.
+ */
+export function retryTarget(messages: readonly ChatMessage[]): UserMessage | null {
+  const reply = messages.at(-1);
+  const asked = messages.at(-2);
+  if (reply?.role !== "assistant" || asked?.role !== "user") return null;
+  return reply.status === "error" || reply.status === "interrupted" ? asked : null;
+}
+
+/** What went along with `message`, to send it again as it was. */
+export function sendOptionsOf(message: UserMessage): SendOptions {
+  return {
+    includeSlide: message.slide !== null,
+    slide: message.slide,
+    attachments: message.attachments,
+    ...(message.screenshot && { screenshot: message.screenshot }),
+    ...(message.element && { element: message.element }),
+  };
+}
+
+/** The text of the user's newest message that was not a command; null when there is none. */
+export function lastSentText(messages: readonly ChatMessage[]): string | null {
+  const last = messages.findLast((m) => m.role === "user" && !m.command);
+  return last?.role === "user" ? last.text : null;
+}
+
+const contextIn = memoizeLast(latestContext);
+
+/**
+ * How full the selected provider's context is, as its newest reply in the chat says; null until
+ * it reports. A selector: asked on every update of the store, it looks through the messages
+ * only when they or the provider changed, as a provider that reports nothing has it look at
+ * every one of them.
+ */
+export function chatContext(state: Pick<AppState, "messages" | "selection">): ContextUsage | null {
+  return contextIn(state.messages, state.selection.provider);
 }
 
 /** Saves the chat as it is now to its session. */

@@ -18,6 +18,70 @@ export const TOOL_KEYS: Record<string, Tool> = { l: "laser", p: "pen", h: "highl
 export const INK_COLORS = [SWATCHES.red, SWATCHES.yellow, SWATCHES.green, SWATCHES.blue, SWATCHES.white];
 export const DEFAULT_COLORS: Record<InkTool, string> = { pen: SWATCHES.red, highlighter: SWATCHES.yellow };
 
+/** What an ink color is called, for its swatch: "Red". A color that is none of the swatches is named by its value. */
+export function inkColorName(color: string): string {
+  const name = Object.entries(SWATCHES).find(([, value]) => value === color)?.[0];
+  return name ? name[0]!.toUpperCase() + name.slice(1) : color;
+}
+
+/**
+ * The ink of one slide as it was and as it was again: the states before each change (`past`,
+ * oldest first) and those undone (`future`, the next to redo last). `at` is the strokes they
+ * belong to: ink that changed some other way (sketches sent off, say) has no history.
+ */
+export interface InkHistory {
+  past: readonly Stroke[][];
+  future: readonly Stroke[][];
+  at: readonly Stroke[];
+}
+
+/** How many changes of a slide's ink can be undone. */
+export const INK_HISTORY = 100;
+
+const historyOf = (history: InkHistory | undefined, strokes: readonly Stroke[]): InkHistory =>
+  history && history.at === strokes ? history : { past: [], future: [], at: strokes };
+
+/** The history once `before` became `after` by drawing, erasing or clearing: that can be undone, and nothing redone. */
+export function inkChanged(history: InkHistory | undefined, before: Stroke[], after: Stroke[]): InkHistory {
+  const { past } = historyOf(history, before);
+  return { past: [...past, before].slice(-INK_HISTORY), future: [], at: after };
+}
+
+/** Whether a slide's `strokes` have a change to undo: one in their history, or else a stroke to drop. */
+export function canUndoInk(history: InkHistory | undefined, strokes: readonly Stroke[]): boolean {
+  return historyOf(history, strokes).past.length > 0 || strokes.length > 0;
+}
+
+/** Whether a slide's `strokes` have an undone change to redo. */
+export function canRedoInk(history: InkHistory | undefined, strokes: readonly Stroke[]): boolean {
+  return historyOf(history, strokes).future.length > 0;
+}
+
+/**
+ * The strokes as they were before the last change, with the history after going back; null with
+ * nothing to undo. Ink without a history (drawn before it was kept) loses its last stroke.
+ */
+export function undoInk(
+  history: InkHistory | undefined,
+  strokes: Stroke[],
+): { strokes: Stroke[]; history: InkHistory } | null {
+  const { past, future } = historyOf(history, strokes);
+  const before = past.at(-1) ?? (strokes.length > 0 ? strokes.slice(0, -1) : null);
+  if (!before) return null;
+  return { strokes: before, history: { past: past.slice(0, -1), future: [...future, strokes], at: before } };
+}
+
+/** The strokes with the change undone last made again, and the history after; null with nothing to redo. */
+export function redoInk(
+  history: InkHistory | undefined,
+  strokes: Stroke[],
+): { strokes: Stroke[]; history: InkHistory } | null {
+  const { past, future } = historyOf(history, strokes);
+  const again = future.at(-1);
+  if (!again) return null;
+  return { strokes: again, history: { past: [...past, strokes], future: future.slice(0, -1), at: again } };
+}
+
 /** Stroke width in screen pixels, and opacity, per tool. */
 export const INK_STYLE: Record<InkTool, { width: number; opacity: number }> = {
   pen: { width: 4, opacity: 1 },
@@ -52,6 +116,46 @@ export function strokePath(points: readonly [number, number][]): string {
     d += `Q${x} ${y} ${i === points.length - 2 ? `${xn} ${yn}` : halfway(i)}`;
   }
   return d;
+}
+
+/**
+ * A stroke's path as it is drawn: the pixel positions so far, the start of the path data that no
+ * later point changes, and the path data (`d`) for all of them, which is `strokePath` of `points`.
+ */
+export interface GrowingPath {
+  points: [number, number][];
+  settled: string;
+  d: string;
+}
+
+/** The path of a stroke with no points yet. */
+export function growingPath(): GrowingPath {
+  return { points: [], settled: "", d: "" };
+}
+
+/**
+ * Adds pixel positions to the stroke `path` is of, in place, and gives its path data. Only the
+ * last curve of a stroke depends on its last point (see `strokePath`), so each point costs the
+ * same however long the stroke has become, where drawing the whole path again costs its length.
+ */
+export function appendStrokePath(path: GrowingPath, added: readonly [number, number][]): string {
+  const { points } = path;
+  const halfway = (i: number) =>
+    `${px((points[i]![0] + points[i + 1]![0]) / 2)} ${px((points[i]![1] + points[i + 1]![1]) / 2)}`;
+  for (const point of added) {
+    points.push(point);
+    const count = points.length;
+    // With a point after it, the curve around the point before last ends halfway between the two, for good.
+    if (count === 3) path.settled = `M${points[0]![0]} ${points[0]![1]}L${halfway(0)}`;
+    else if (count > 3) path.settled += `Q${points[count - 3]![0]} ${points[count - 3]![1]} ${halfway(count - 3)}`;
+  }
+  const count = points.length;
+  if (count < 3) path.d = strokePath(points);
+  else {
+    const [[x, y], [xn, yn]] = [points[count - 2]!, points[count - 1]!];
+    path.d = `${path.settled}Q${x} ${y} ${xn} ${yn}`;
+  }
+  return path.d;
 }
 
 /**
@@ -212,6 +316,58 @@ export function visibleArea(
   const right = Math.min(rect.width, Math.ceil(viewport.width - rect.left));
   const bottom = Math.min(rect.height, Math.ceil(viewport.height - rect.top));
   return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+}
+
+/** How far a laser trail's glow reaches past the middle of its line, in CSS px. */
+export const TRAIL_GLOW = LASER_SIZE / 2 + Math.max(...LASER_GLOW.map((g) => g.blur + g.spread));
+
+/** The steps a trail's canvas grows in (CSS px), so that it is not made anew with every move of the laser. */
+const TRAIL_STEP = 64;
+
+/**
+ * The part of a layer `width` by `height` CSS px that laser trails and their glow reach, in the
+ * layer's pixels, widened to whole steps and kept inside the layer; null with no trail. A canvas
+ * this size is all that painting them takes, where one the size of the layer has every pixel
+ * of it blurred for each halo, each frame.
+ */
+export function trailBounds(
+  trails: readonly TrailPoint[][],
+  width: number,
+  height: number,
+): { x: number; y: number; width: number; height: number } | null {
+  let [left, top, right, bottom] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const trail of trails) {
+    for (const point of trail) {
+      left = Math.min(left, point.x * width);
+      right = Math.max(right, point.x * width);
+      top = Math.min(top, point.y * height);
+      bottom = Math.max(bottom, point.y * height);
+    }
+  }
+  if (left === Infinity) return null;
+  const down = (n: number) => Math.max(0, Math.floor((n - TRAIL_GLOW) / TRAIL_STEP) * TRAIL_STEP);
+  const up = (n: number, max: number) =>
+    Math.min(Math.ceil(max), Math.ceil((n + TRAIL_GLOW) / TRAIL_STEP) * TRAIL_STEP);
+  const [x, y] = [down(left), down(top)];
+  return { x, y, width: Math.max(0, up(right, width) - x), height: Math.max(0, up(bottom, height) - y) };
+}
+
+/** The part of `area` that lies inside `within`, both in the same pixels; empty when they do not meet. */
+export function clipArea(
+  area: { x: number; y: number; width: number; height: number },
+  within: { x: number; y: number; width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  const x = Math.max(area.x, within.x);
+  const y = Math.max(area.y, within.y);
+  const right = Math.min(area.x + area.width, within.x + within.width);
+  const bottom = Math.min(area.y + area.height, within.y + within.height);
+  return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+}
+
+/** Whether any piece of laser trails is thinning away at `now`: while none is, they look the same each frame. */
+export function trailsFading(trails: readonly TrailPoint[][], now: number): boolean {
+  // A trail's oldest piece goes by its second point (see `trailSegments`).
+  return trails.some((trail) => trail.length > 0 && now - trail[Math.min(1, trail.length - 1)]!.t > TRAIL_HOLD_MS);
 }
 
 /** The 2D canvas calls the trail painter makes, so tests can stand in for a canvas. */

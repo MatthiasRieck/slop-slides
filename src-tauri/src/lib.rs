@@ -9,6 +9,8 @@ mod commands;
 mod comments;
 mod copilot;
 mod deck;
+mod deck_cache;
+mod deck_lock;
 mod env;
 mod error;
 mod export;
@@ -40,6 +42,7 @@ mod screens;
 mod sessions;
 mod size;
 mod sound;
+mod stamp;
 mod templates;
 #[cfg(test)]
 mod test_support;
@@ -74,11 +77,15 @@ pub fn run() {
     if args.get(1).map(String::as_str) == Some(export_smoke::FLAG) {
         std::process::exit(export_smoke::run(context, &args[2..]));
     }
+    // Asked on a thread of its own: the window does not wait for the user's shell profile.
     env::adopt_login_shell_env();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(windows::menu).setup(|app| {
         windows::dock::add_menu(app.handle());
+        for window in app.webview_windows().values() {
+            windows::paint(window);
+        }
         Ok(())
     });
     builder
@@ -103,8 +110,13 @@ pub fn run() {
                 window.state::<voice::Voice>().window_closed(window.label());
             }
         })
-        .register_uri_scheme_protocol("slop", |ctx, request| {
-            protocol::handle(ctx.app_handle(), request)
+        // Answered off the main thread, which routes input: a request reads files and may
+        // start `git`, and a deck's previews ask for dozens at once.
+        .register_asynchronous_uri_scheme_protocol("slop", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(protocol::handle(&app, request));
+            });
         })
         .invoke_handler(tauri::generate_handler![
             commands::workspace::new_window,
@@ -118,6 +130,8 @@ pub fn run() {
             commands::workspace::close_workspace,
             commands::workspace::recent_workspaces,
             commands::workspace::forget_workspace,
+            commands::workspace::recent_decks,
+            commands::workspace::forget_deck,
             commands::workspace::library_folder,
             commands::workspace::list_dir,
             commands::workspace::open_file,
@@ -133,6 +147,7 @@ pub fn run() {
             commands::deck::duplicate_slides,
             commands::deck::set_slides_hidden,
             commands::deck::set_slide_locked,
+            commands::deck::set_slides_locked,
             commands::deck::set_slide_narration,
             commands::deck::set_slide_notes,
             commands::deck::set_slide_time,
@@ -153,18 +168,20 @@ pub fn run() {
             commands::deck::import_assets,
             commands::deck::save_asset,
             commands::clipboard::copy_to_clipboard,
-            commands::clipboard::copy_slide,
-            commands::clipboard::paste_slide,
+            commands::clipboard::copy_slides,
+            commands::clipboard::paste_slides,
             commands::clipboard::paste_from_clipboard,
             commands::clipboard::read_clipboard_text,
             commands::deck::find_in_deck,
             commands::deck::replace_in_deck,
+            commands::deck::replace_match_in_deck,
             commands::export::export_deck,
             commands::git::deck_in_repository,
             commands::git::deck_changes,
             commands::git::stage_change,
             commands::git::unstage_change,
             commands::git::restore_change,
+            commands::git::restore_all_changes,
             commands::git::stage_all,
             commands::git::unstage_all,
             commands::git::commit_changes,
@@ -251,6 +268,44 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod build_profile_tests {
+    /// The lines of the `[name]` table of Cargo.toml.
+    fn table(name: &str) -> Vec<&'static str> {
+        let manifest = include_str!("../Cargo.toml");
+        let (_, after) = manifest
+            .split_once(&format!("\n[{name}]\n"))
+            .unwrap_or_else(|| panic!("no [{name}] in Cargo.toml"));
+        after
+            .lines()
+            .take_while(|line| !line.starts_with('['))
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect()
+    }
+
+    #[test]
+    fn the_app_ships_optimized_across_crates_and_still_unwinds() {
+        let release = table("profile.release");
+        assert!(release.contains(&"lto = \"thin\""), "{release:?}");
+        assert!(release.contains(&"codegen-units = 1"), "{release:?}");
+        // Locks are taken back from a thread that panicked while holding them
+        // (`unwrap_or_else(|e| e.into_inner())`): with `panic = "abort"` there is no taking back.
+        assert!(
+            !release.iter().any(|line| line.starts_with("panic")),
+            "{release:?}"
+        );
+    }
+
+    #[test]
+    fn dev_builds_optimize_their_dependencies() {
+        assert_eq!(table("profile.dev.package.\"*\""), ["opt-level = 2"]);
+        // The ones that need more keep asking for it.
+        assert_eq!(table("profile.dev.package.rav1e"), ["opt-level = 3"]);
+        assert_eq!(table("profile.dev.package.slopslide"), ["opt-level = 2"]);
+    }
 }
 
 #[cfg(test)]

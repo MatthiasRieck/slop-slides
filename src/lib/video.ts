@@ -1,4 +1,4 @@
-import { loadJson, saveJson } from "./storage";
+import { loadText, saveJson } from "./storage";
 
 /** How a video export is made (src-tauri/src/video.rs reads the same fields). */
 export interface VideoOptions {
@@ -21,6 +21,28 @@ export interface VideoProgress {
   phase: "narration" | "video";
   frame: number;
   frames: number;
+}
+
+/** How far along its phase a video export is, in whole percent. */
+export function videoPercent(progress: VideoProgress): number {
+  if (!(progress.frames > 0)) return 0;
+  return Math.min(100, Math.max(0, Math.floor((progress.frame / progress.frames) * 100)));
+}
+
+/** What a video export is doing, in full: "Generating narration 2 of 4", "Rendering video 42%". */
+export function videoPhase(progress: VideoProgress): string {
+  if (progress.phase === "narration") {
+    return `Generating narration ${Math.min(progress.frame + 1, progress.frames)} of ${progress.frames}`;
+  }
+  return `Rendering video ${videoPercent(progress)}%`;
+}
+
+/** The same in the room of a button: "Narration 2/4", "42%". */
+export function videoPhaseShort(progress: VideoProgress): string {
+  if (progress.phase === "narration") {
+    return `Narration ${Math.min(progress.frame + 1, progress.frames)}/${progress.frames}`;
+  }
+  return `${videoPercent(progress)}%`;
 }
 
 /** The frame rates the backend encodes. */
@@ -72,9 +94,35 @@ export function slideFrames(options: VideoOptions, narration: number | null): nu
   return Math.max(least, Math.ceil((options.pauseBefore + narration + options.pauseAfter) * options.fps));
 }
 
-/** The options last used, or the defaults. */
+/** What is stored, and the options read from it: the same options for as long as what is stored stays. */
+let read: { raw: string | null; options: VideoOptions } | null = null;
+const listeners = new Set<() => void>();
+
+/**
+ * The options last set, or the defaults. Besides a video export, the timeline under the slide and
+ * the show's Play lay the deck out with the times in them (how long a slide without narration
+ * shows, and the pauses around narration), whatever `narration` says. The same object comes back
+ * until they change.
+ */
 export function loadVideoOptions(): VideoOptions {
-  return loadJson(STORAGE_KEY, DEFAULT_VIDEO_OPTIONS, readVideoOptions);
+  const raw = loadText(STORAGE_KEY);
+  if (!read || read.raw !== raw) read = { raw, options: parseVideoOptions(raw) };
+  return read.options;
+}
+
+function parseVideoOptions(raw: string | null): VideoOptions {
+  if (raw === null) return DEFAULT_VIDEO_OPTIONS;
+  try {
+    return readVideoOptions(JSON.parse(raw));
+  } catch {
+    return DEFAULT_VIDEO_OPTIONS;
+  }
+}
+
+/** Calls `listener` whenever the options are saved; gives back how to stop. */
+export function onVideoOptions(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 /** Saved options, each one that is missing or out of range replaced by its default. */
@@ -101,6 +149,8 @@ function readVideoOptions(stored: unknown): VideoOptions {
   };
 }
 
+/** Remembers `options`, and tells whoever lays the deck out with them (see `onVideoOptions`). */
 export function saveVideoOptions(options: VideoOptions) {
   saveJson(STORAGE_KEY, options);
+  for (const listener of listeners) listener();
 }

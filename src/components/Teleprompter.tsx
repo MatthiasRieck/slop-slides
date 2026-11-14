@@ -4,6 +4,7 @@ import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
 import { markdownText, rehypePieces } from "../lib/markdown";
+import { scrollBehavior } from "../lib/motion";
 import { follow, type Piece, pieces, startTrack, toScript } from "../lib/teleprompter";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
@@ -19,7 +20,8 @@ const pieceClass = (piece: Piece) => (piece.said ? "text-foreground/40" : "");
 /**
  * Turns the teleprompter on and off: the microphone is on only while it is following, and the
  * first use offers to download the speech model, which then runs locally. Lasts as long as the
- * component using it, so the microphone goes off with it.
+ * component using it (the show, see `useShowSession`, not the presenter view that displays it),
+ * so the microphone goes off with the show.
  */
 export function useTeleprompter() {
   const model = useSpeechModel<"following">("voice-follow-failed", () => void api.cancelRecording());
@@ -138,7 +140,7 @@ export function FollowedScript({ text, className }: { text: string; className?: 
     const el = box.current;
     const line = el?.querySelector<HTMLElement>("[data-current]");
     if (!el || !line) return;
-    el.scrollTo?.({ top: line.offsetTop - el.clientHeight * LINE_AT, behavior: "smooth" });
+    el.scrollTo?.({ top: line.offsetTop - el.clientHeight * LINE_AT, behavior: scrollBehavior() });
   }, [track.position]);
 
   return (

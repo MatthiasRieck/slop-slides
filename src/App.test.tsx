@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The panels have their own tests; here only the layout matters.
 vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /> }));
@@ -14,13 +14,21 @@ vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="st
 
 import { invoke } from "@tauri-apps/api/core";
 import { App, SIDEBAR_MAX_SIZE } from "./App";
-import { useApp } from "./store";
+import { preloadLazyParts } from "./components/lazy";
+import { TOAST_EXIT_MS } from "./components/Toasts";
+import { openShortcutHelp, showError, useApp } from "./store";
+import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
+import { appWindow, ask, requestClose } from "./test/tauri";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 
+// The parts loaded on first use are there, as they are in the app once it has been idle.
+beforeAll(preloadLazyParts);
+
 beforeEach(() => {
   useApp.setState({
+    booted: true,
     workspace: null,
     openedFile: null,
     deck: null,
@@ -28,7 +36,7 @@ beforeEach(() => {
     sidebarOpen: true,
     railOpen: true,
     presenting: false,
-    error: null,
+    toasts: [],
   });
 });
 
@@ -167,27 +175,91 @@ describe("App", () => {
     expect(shown("stage")).toBe(true);
   });
 
+  it("offers the keyboard shortcuts in any mode of an open workspace, not on the start screen", () => {
+    const help = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
+    const { unmount } = render(<App />);
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(help()).toBeNull();
+    unmount();
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(help()).toBeNull();
+    act(() => useApp.getState().setMode("git"));
+    fireEvent.keyDown(document.body, { key: "/", ctrlKey: true });
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    // Without a deck too.
+    act(() => useApp.setState({ deck: null }));
+    act(() => openShortcutHelp());
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+  });
+
+  it("names its window after what is open, and asks before the window closes over unsaved edits", async () => {
+    render(<App />);
+    expect(appWindow.setTitle).toHaveBeenLastCalledWith("SlopSlide");
+    act(() => useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) }));
+    expect(appWindow.setTitle).toHaveBeenLastCalledWith("Talk — decks");
+    await act(async () => {});
+    expect(await requestClose()).toBe(true);
+    act(() => useApp.setState({ codeDirty: true }));
+    // The question is the app's own dialog: save, don't save, or stay.
+    const closing = requestClose();
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
+    expect(dialog.textContent).toContain("Save the changes to deck.html?");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await closing).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Unsaved changes" })).toBeNull();
+    expect(ask).not.toHaveBeenCalled();
+    act(() => useApp.setState({ codeDirty: false }));
+  });
+
   it("shows errors in a dismissible toast", () => {
     render(<App />);
     expect(screen.queryByText("deck not found: x")).toBeNull();
-    act(() => useApp.getState().setError("deck not found: x"));
-    expect(screen.getByText("deck not found: x")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button"));
-    expect(useApp.getState().error).toBeNull();
+    act(() => showError("deck not found: x"));
+    expect(screen.getByRole("alert").textContent).toContain("deck not found: x");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(lastError(useApp.getState())).toBeNull();
+    // It takes a moment to leave.
+    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
+    vi.useRealTimers();
     expect(screen.queryByText("deck not found: x")).toBeNull();
+  });
+
+  it("shows neither the start screen nor a folder until it knows what it starts with", () => {
+    useApp.setState({ booted: false });
+    render(<App />);
+    expect(["home", "top-bar"].map(shown)).toEqual([false, false]);
+    // A folder that was waiting shows as soon as it is open, without the start screen before it.
+    act(() => useApp.setState({ workspace: WORKSPACE }));
+    expect(["home", "top-bar"].map(shown)).toEqual([false, true]);
+  });
+
+  it("shows the start screen once it knows that no folder was waiting", () => {
+    useApp.setState({ booted: false });
+    render(<App />);
+    act(() => useApp.setState({ booted: true }));
+    expect(shown("home")).toBe(true);
   });
 });
 
 describe("lint status", () => {
-  it("re-lints the open deck whenever the deck file changes", async () => {
+  it("lints the deck as it opens, and again once a change to its file has settled", async () => {
     const refreshLint = vi.fn(async () => {});
-    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), refreshLint });
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), lint: null, lintError: null, refreshLint });
     render(<App />);
     expect(refreshLint).toHaveBeenCalledTimes(1);
-    act(() => useApp.setState({ deck: deckFor(DECK_HTML) }));
+    // The same deck read again is no change.
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML), lint: [] }));
     expect(refreshLint).toHaveBeenCalledTimes(1);
     act(() => useApp.setState({ deck: deckFor(DECK_HTML, "2") }));
-    expect(refreshLint).toHaveBeenCalledTimes(2);
+    expect(refreshLint).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(refreshLint).toHaveBeenCalledTimes(2));
   });
 
   it("does not lint without an open deck", () => {

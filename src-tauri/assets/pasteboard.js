@@ -4,15 +4,22 @@
    The preview fills the whole stage area and the slide sits in its middle, at the size it has on
    the stage. The surroundings are an endless pasteboard: drag with the middle button (pressed
    mouse wheel), swipe on a trackpad or hold Space and drag to pan; turn the mouse wheel, pinch or
-   Ctrl/⌘+scroll to zoom; 0 returns to the start. Without the slide editor, dragging with the
+   Ctrl/⌘+scroll to zoom, or press Ctrl/⌘ with + or -; 0, with Ctrl/⌘ or without, returns to the
+   start. Without the slide editor, dragging with the
    primary button pans too, except from text, which it selects instead (even text under an
    invisible layer the deck spreads over the slide), and from links and other controls. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
-   with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
+   with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app's zoom
+   buttons send { type: "slop:camera", zoomBy: factor } and { type: "slop:camera", zoomTo: k },
+   which zoom around the middle of the view, keeping what is there in place. The app also
    sends { type: "slop:canvas", color, accent, ... }: the color of the panel around the slide and
    the palette's colors (src/index.css) as `--slop-*`, for what the preview and the editor draw.
    A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
-   app focuses the preview.
+   app focuses the preview. Every press posts { type: "slop:press" }: it never reaches the app's
+   window, but whatever is open there (a menu, a popover) closes on a press outside it, which this
+   is. While something is open there, the app says so with { type: "slop:layer", open }, and
+   Escape pressed here goes to the app as { type: "slop:dismiss" }, to close that first, instead
+   of to the editor or the player.
 
    { type: "slop:search", query, matchCase, wholeWord, active } marks what the search in the app's
    toolbar finds on the slide, with the `active`th hit stronger. It reads the text as find.rs does,
@@ -25,7 +32,13 @@
    }. Each is looked up on the slide, then and whenever an animation ends, and the app gets where
    their pins go as { type: "slop:comment-spots", slide, spots: [{ id, x, y, found }] }.
 
-   The slide editor (assets/editor/) runs after this and builds on window.slopPasteboard.
+   The slide editor (assets/editor/) runs after this and builds on window.slopPasteboard, which
+   also tells it where the slide is on screen (`origin()`, `scale()`), so it need not measure.
+
+   A wheel turn, a pinch and a drag move the view once a frame, however many events a frame
+   brings. While such a gesture lasts, the slide keeps the zoom it is laid out at and is scaled
+   the rest of the way, which costs no layout; once it ends, the slide is laid out at the zoom it
+   reached, in the same place. Keys, the app's buttons and a restored view move it at once.
 
    With ?show, the presenter plays the whole deck and this zooms and pans the slide being shown
    instead: the view starts with the slide fit to the window, as the player has it, and returns
@@ -93,6 +106,17 @@
 
   // The view: pan in px away from the slide being centered, and zoom.
   var cam = { x: 0, y: 0, k: 1 };
+  // Where the view last put the slide on screen: its top-left corner and its scale. The view may
+  // be a frame ahead of it during a gesture.
+  var placed = { x: 0, y: 0, k: 1 };
+  // The zoom the deck is laid out at, once it is placed; a gesture leaves it as it is.
+  var laidOut = 0;
+  // A wheel turn, a pinch or a drag is moving the view.
+  var gesture = false;
+  var cameraFrame = 0;
+  var settleTimer = 0;
+  // Where and at which scale the frame's box was last written.
+  var frameBox = null;
   var reportedView = "0,0,1";
   var spaceDown = false;
   var pan = null;
@@ -103,7 +127,19 @@
     view: function () {
       return { x: cam.x, y: cam.y, k: cam.k };
     },
+    /** How many screen pixels one pixel of the slide takes up right now. */
+    scale: function () {
+      return placed.k;
+    },
+    /** Where the slide's top-left corner is on screen right now, as { x, y }. */
+    origin: function () {
+      return { x: placed.x, y: placed.y };
+    },
     startPan: startPan,
+    /** Moves the slide now if a gesture's move still waits for its frame. */
+    flush: function () {
+      if (cameraFrame) applyCamera();
+    },
     /** Calls `fn` whenever the view moves. */
     onChange: function (fn) {
       listeners.push(fn);
@@ -128,8 +164,28 @@
     return show ? { x: x, y: y, s: s } : { x: Math.max(0, x), y: Math.max(0, y), s: 1 };
   }
 
+  /**
+   * Puts the frame where the slide is. Writing its box repaints its shadows, so a gesture that
+   * leaves the scale alone (a pan) moves the box as it is instead.
+   */
+  function placeFrame(x, y, k) {
+    if (!frame) return;
+    if (gesture && frameBox && frameBox.k === k) {
+      frame.style.transform = "translate(" + (x - frameBox.x) + "px," + (y - frameBox.y) + "px)";
+      return;
+    }
+    frameBox = { x: x, y: y, k: k };
+    frame.style.left = x + "px";
+    frame.style.top = y + "px";
+    frame.style.width = STAGE_W * k + "px";
+    frame.style.height = STAGE_H * k + "px";
+    frame.style.transform = "";
+  }
+
   /** Puts the slide (and its frame) where the view says. */
   function applyCamera() {
+    if (cameraFrame) window.cancelAnimationFrame(cameraFrame);
+    cameraFrame = 0;
     var h = home();
     var x = h.x + cam.x;
     var y = h.y + cam.y;
@@ -140,11 +196,17 @@
     // Shrunk with `scale()`, though: laid out at a fraction of its size, text no longer measures
     // in proportion (tiny fonts round their glyphs and hit the minimum font size), so lines wrap
     // differently and the slide overflows; shrinking what was painted at full size stays sharp.
+    // That is how the slide rests. A new zoom lays out the whole slide again, though, so a gesture
+    // keeps the zoom it began with and scales the rest of the way, until it ends (see `settle`).
     // Lengths on a zoomed element are zoomed too, so the pan is given in unzoomed px.
-    var z = Math.max(1, k);
-    deck.style.zoom = String(z);
-    deck.style.transform = "translate(" + x / z + "px," + y / z + "px)" + (k < 1 ? " scale(" + k + ")" : "");
-    if (frame) frame.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + STAGE_W * k + "px;height:" + STAGE_H * k + "px";
+    var z = gesture ? laidOut : Math.max(1, k);
+    if (z !== laidOut) {
+      laidOut = z;
+      deck.style.zoom = String(z);
+    }
+    deck.style.transform = "translate(" + x / z + "px," + y / z + "px)" + (k === z ? "" : " scale(" + k / z + ")");
+    placeFrame(x, y, k);
+    placed = { x: x, y: y, k: k };
     listeners.forEach(function (fn) {
       fn();
     });
@@ -158,18 +220,63 @@
     window.parent.postMessage(view, "*");
   }
 
-  function setCamera(x, y, k) {
-    cam = { x: x, y: y, k: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k)) };
+  function clampZoom(k) {
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
+  }
+
+  /** Has the compositor move the slide and its frame, or no longer. */
+  function promote(on) {
+    [deck, frame].forEach(function (el) {
+      if (!el) return;
+      if (on) el.style.setProperty("will-change", "transform");
+      else el.style.removeProperty("will-change");
+    });
+  }
+
+  /**
+   * Ends a gesture, if one is on, and puts the slide where the view says: laid out at the zoom
+   * it reached, so sharp again, and in the same place.
+   */
+  function settle() {
+    clearTimeout(settleTimer);
+    if (gesture) promote(false);
+    gesture = false;
     applyCamera();
   }
 
-  /** Zooms by `factor` keeping the slide point under the screen point (px, py) in place. */
-  function zoomAt(px, py, factor) {
-    var h = home();
-    var k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, cam.k * factor));
-    var f = k / cam.k;
-    setCamera(px - (px - h.x - cam.x) * f - h.x, py - (py - h.y - cam.y) * f - h.y, k);
+  /** Moves the view at once, as keys, the app's buttons and a restored view do. */
+  function setCamera(x, y, k) {
+    cam = { x: x, y: y, k: clampZoom(k) };
+    settle();
   }
+
+  /**
+   * Moves the view as part of a gesture: the slide follows on the next frame, once for all the
+   * events that frame brings.
+   */
+  function moveCamera(x, y, k) {
+    cam = { x: x, y: y, k: clampZoom(k) };
+    if (!gesture) promote(true);
+    gesture = true;
+    if (!cameraFrame) cameraFrame = window.requestAnimationFrame(applyCamera);
+  }
+
+  /** The view zoomed by `factor` with the slide point under the screen point (px, py) kept in place. */
+  function zoomedAt(px, py, factor) {
+    var h = home();
+    var k = clampZoom(cam.k * factor);
+    var f = k / cam.k;
+    return { x: px - (px - h.x - cam.x) * f - h.x, y: py - (py - h.y - cam.y) * f - h.y, k: k };
+  }
+
+  /** Zooms by `factor` around the middle of the view, as the zoom buttons and keys do. */
+  function zoomBy(factor) {
+    var to = zoomedAt(window.innerWidth / 2, window.innerHeight / 2, factor);
+    setCamera(to.x, to.y, to.k);
+  }
+
+  // How much one press of a zoom key or button zooms.
+  var ZOOM_STEP = 1.25;
 
   function setPanning(on) {
     spaceDown = on;
@@ -276,6 +383,29 @@
     restore(selecting.covers);
     selecting = null;
   }
+
+  // Whatever is open in the app closes on a press outside it, which a press here is.
+  window.addEventListener(
+    "pointerdown",
+    function () {
+      window.parent.postMessage({ type: "slop:press" }, "*");
+    },
+    true,
+  );
+
+  // Something is open in the app over the preview (see { type: "slop:layer" }): Escape closes
+  // that first. Capture phase, and before the editor adds its keys, so nothing here acts on it.
+  var layerOpen = false;
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      if (!layerOpen || event.key !== "Escape" || event.isComposing) return;
+      window.parent.postMessage({ type: "slop:dismiss" }, "*");
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
 
   // Panning and the editor cancel the press, so it never moves keyboard focus here by itself and
   // keys would stay with whatever had it in the app (the chat composer, say). The app focuses
@@ -430,6 +560,7 @@
   // slides.
   document.addEventListener("pointerdown", function (event) {
     // A press always ends an earlier pan or selection, even one whose release never arrived.
+    if (pan && gesture) settle();
     pan = null;
     endSelecting();
     var primary = event.button === 0;
@@ -473,13 +604,14 @@
     var dy = event.clientY - pan.y;
     if (!pan.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
     pan.moved = true;
-    setCamera(pan.from.x + dx, pan.from.y + dy, cam.k);
+    moveCamera(pan.from.x + dx, pan.from.y + dy, cam.k);
     event.stopImmediatePropagation();
   });
   function endPan(event) {
     endSelecting();
     if (!pan) return;
     pan = null;
+    if (gesture) settle();
     root.style.cursor = spaceDown ? "grab" : "";
     event.stopImmediatePropagation();
   }
@@ -509,7 +641,8 @@
 
   // Pinching (reported as Ctrl+wheel) and the mouse wheel zoom the pasteboard around the pointer;
   // with a mouse, panning is the middle button. Swiping on a trackpad pans. A gesture is
-  // classified by its first event, so a swipe never turns into a zoom halfway through.
+  // classified by its first event, so a swipe never turns into a zoom halfway through. It ends
+  // when no event has come for as long as tells two gestures apart.
   window.addEventListener(
     "wheel",
     function (event) {
@@ -521,20 +654,43 @@
       if (now - wheelGesture.at > WHEEL_GESTURE_MS) wheelGesture.mouse = fromMouseWheel(event);
       wheelGesture.at = now;
       if (event.ctrlKey || event.metaKey || (wheelGesture.mouse && dy)) {
-        zoomAt(event.clientX, event.clientY, Math.exp(-Math.max(-60, Math.min(60, dy)) * WHEEL_ZOOM));
+        var to = zoomedAt(event.clientX, event.clientY, Math.exp(-Math.max(-60, Math.min(60, dy)) * WHEEL_ZOOM));
+        moveCamera(to.x, to.y, to.k);
       } else {
-        setCamera(cam.x - dx, cam.y - dy, cam.k);
+        moveCamera(cam.x - dx, cam.y - dy, cam.k);
       }
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(settle, WHEEL_GESTURE_MS);
     },
     { passive: false },
   );
 
-  // Capture phase, so the player never forwards these keys to the app. In a show, Space advances.
+  // Ctrl/⌘ with + (or =, the same key unshifted), - and 0 zoom in, out and back to the start,
+  // also while text is edited: with the modifier they are no text. Capture phase, so neither the
+  // player forwards them to the app nor the webview zooms the whole page.
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      var key = event.key;
+      if (key === "=" || key === "+") zoomBy(ZOOM_STEP);
+      else if (key === "-" || key === "_") zoomBy(1 / ZOOM_STEP);
+      else if (key === "0") setCamera(0, 0, 1);
+      else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+
+  // Capture phase, so the player never forwards these keys to the app. In a show, Space advances,
+  // and 0 with the slide already fitted is a digit of the slide number being typed.
   window.addEventListener(
     "keydown",
     function (event) {
       if (api.busy() || event.metaKey || event.ctrlKey || event.altKey) return;
       if ((event.key !== " " || show) && event.key !== "0") return;
+      if (event.key === "0" && show && cam.x === 0 && cam.y === 0 && cam.k === 1) return;
       if (event.key === "0") setCamera(0, 0, 1);
       else setPanning(true);
       event.preventDefault();
@@ -649,6 +805,7 @@
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
+    if (data.type === "slop:layer") layerOpen = !!data.open;
     if (data.type === "slop:search") highlight(data);
     if (data.type === "slop:comment-tool" && !show) setCommenting(data.on);
     if (data.type === "slop:comment-locate" && Array.isArray(data.comments)) {
@@ -657,6 +814,8 @@
     }
     if (data.type === "slop:camera") {
       if (data.home) setCamera(0, 0, 1);
+      else if (Number.isFinite(data.zoomBy) && data.zoomBy > 0) zoomBy(data.zoomBy);
+      else if (Number.isFinite(data.zoomTo) && data.zoomTo > 0) zoomBy(data.zoomTo / cam.k);
       else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);
     } else if (data.type === "slop:canvas") {
       if (typeof data.color === "string") root.style.setProperty("--slop-canvas", data.color);

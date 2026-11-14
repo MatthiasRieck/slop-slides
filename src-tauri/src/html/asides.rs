@@ -5,7 +5,7 @@ use std::ops::Range;
 use super::attrs::{NARRATION_CLASS, NOTES_CLASS};
 use super::edit::indent_before;
 use super::entities::{decode_entities, escape};
-use super::scan::{find_ci, has_class, parse_tag, tags};
+use super::scan::{find_ci, has_class, parse_tag, rfind_ci, tags, Tag};
 use super::spans::{find_slides, slide_span};
 
 /// A narration or notes element inside one slide's markup.
@@ -24,30 +24,37 @@ pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
 
 /// Every `<aside>` of `class` in `slide`, in document order.
 fn aside_spans(slide: &str, class: &str) -> Vec<NarrationSpan> {
-    // An element never closed runs to the slide's end tag, not past it.
-    let limit = slide
-        .to_ascii_lowercase()
-        .rfind("</section")
-        .unwrap_or(slide.len());
+    let limit = aside_limit(slide);
     let mut spans: Vec<NarrationSpan> = Vec::new();
     for (start, tag) in tags(slide) {
-        if tag.closing || tag.name != "aside" || !has_class(&tag, class) {
+        if tag.closing || !tag.is("aside") || !has_class(&tag, class) {
             continue;
         }
         if start >= limit || spans.last().is_some_and(|s| s.range.contains(&start)) {
             continue;
         }
-        let close = find_ci(slide, tag.end, "</aside").filter(|&c| c < limit);
-        let inner = tag.end..close.unwrap_or(limit);
-        let end = close
-            .and_then(|c| slide[c..].find('>').map(|e| c + e + 1))
-            .unwrap_or(limit);
-        spans.push(NarrationSpan {
-            range: start..end,
-            inner,
-        });
+        spans.push(aside_span(slide, start, &tag, limit));
     }
     spans
+}
+
+/// Where the asides of `slide` end at the latest: an element never closed runs to the slide's
+/// end tag, not past it.
+pub(super) fn aside_limit(slide: &str) -> usize {
+    rfind_ci(slide, "</section").unwrap_or(slide.len())
+}
+
+/// The `<aside>` that `tag` opens at `start` in `slide`, ending by `limit` (see [`aside_limit`]).
+pub(super) fn aside_span(slide: &str, start: usize, tag: &Tag, limit: usize) -> NarrationSpan {
+    let close = find_ci(slide, tag.end, "</aside").filter(|&c| c < limit);
+    let inner = tag.end..close.unwrap_or(limit);
+    let end = close
+        .and_then(|c| slide[c..].find('>').map(|e| c + e + 1))
+        .unwrap_or(limit);
+    NarrationSpan {
+        range: start..end,
+        inner,
+    }
 }
 
 /// The slide's narration as text: tags dropped, entities decoded, no space at the ends of lines
@@ -82,7 +89,11 @@ fn aside_text(slide: &str, class: &str) -> String {
     let Some(span) = aside_spans(slide, class).into_iter().next() else {
         return String::new();
     };
-    let inner = &slide[span.inner];
+    text_of(&slide[span.inner])
+}
+
+/// What is between an aside's tags, as the text the app shows (see [`narration`]).
+pub(super) fn text_of(inner: &str) -> String {
     let indent = markup_indent(inner);
     let mut text = String::new();
     let mut rest = inner;
@@ -90,7 +101,7 @@ fn aside_text(slide: &str, class: &str) -> String {
         text.push_str(&rest[..open]);
         match parse_tag(rest, open) {
             Some(tag) => {
-                if !tag.closing && tag.name == "br" {
+                if !tag.closing && tag.is("br") {
                     text.push('\n');
                 }
                 rest = &rest[tag.end..];
@@ -183,10 +194,7 @@ fn set_aside(html: &str, id: &str, class: &str, text: &str) -> Result<String, St
         }
         (None, true) => {}
         (None, false) => {
-            let close = slide
-                .to_ascii_lowercase()
-                .rfind("</section")
-                .unwrap_or(slide.len());
+            let close = rfind_ci(slide, "</section").unwrap_or(slide.len());
             let at = offset + slide[..close].trim_end().len();
             let indent = indent_before(html, span.range.start);
             out.insert_str(

@@ -3,6 +3,8 @@
  * slide editor (src-tauri/assets/editor/) moves the elements in the slide's preview.
  */
 
+import type { EditStyle } from "./editTools";
+
 export type AlignTo = "left" | "center" | "right" | "top" | "middle" | "bottom";
 export type DistributeAxis = "h" | "v";
 /** What aligning lines the selection up with: the slide (each element on its own), or the selection's bounds. */
@@ -64,8 +66,17 @@ export function parseLayers(value: unknown): EditLayer[] {
   });
 }
 
-/** What the arrange controls ask the slide editor to do. */
+/** What the edit toolbar's controls ask the slide editor to do, beyond restyling the selection for good. */
 export type ArrangeMessage =
+  /** Shows a restyle while a slider is dragged, without saving it; `slop:edit-style-cancel` takes it back. */
+  | { type: "slop:edit-style"; style: EditStyle; preview: true }
+  | { type: "slop:edit-style-cancel" }
+  /** Mirrors every selected element that can flip, each in its own place. */
+  | { type: "slop:edit-flip"; axis: "x" | "y" }
+  | { type: "slop:edit-duplicate" }
+  | { type: "slop:edit-clear-formatting" }
+  /** Dragging and resizing snap to the guides, or not. */
+  | { type: "slop:edit-snap"; on: boolean }
   | { type: "slop:edit-align"; to: AlignTo; target: AlignTarget }
   | { type: "slop:edit-match"; axis: MatchAxis }
   | { type: "slop:edit-distribute"; axis: DistributeAxis }
@@ -85,6 +96,14 @@ export type ArrangeMessage =
 export function quarterTurn(rotation: number, step: 1 | -1): number {
   const turned = (((Math.round(rotation) + step * 90) % 360) + 360) % 360;
   return turned > 180 ? turned - 360 : turned;
+}
+
+/**
+ * The value an arrow key takes a typed number to: one up or down, ten with Shift, from the
+ * whole number nearest to it.
+ */
+export function stepNumber(value: number, direction: 1 | -1, large: boolean): number {
+  return Math.round(value) + direction * (large ? 10 : 1);
 }
 
 /** A geometry report from the slide editor, or null when it is malformed (or nothing is selected). */

@@ -142,16 +142,16 @@
       var other = points[n ? 0 : last];
       var target = el ? stuckTo(el, end) : null;
       if (!target) return { dir: axisOf([other[0] - tip[0], other[1] - tip[1]]), stuck: false };
-      return { dir: sideOut(target, parseAnchor(el.getAttribute(end.at)).at), stuck: true };
+      return { dir: sideOut(angleOf(target), parseAnchor(el.getAttribute(end.at)).at), stuck: true };
     });
   }
 
-  /** The way out of `el` through the side of its box closest to the spot `at` (fractions of its box), turned with it. */
-  function sideOut(el, at) {
+  /** The way out of a box turned by `angle` degrees, through its side closest to the spot `at` (fractions of the box), turned with it. */
+  function sideOut(angle, at) {
     var sides = [[at[0], [-1, 0]], [1 - at[0], [1, 0]], [at[1], [0, -1]], [1 - at[1], [0, 1]]].sort(function (a, b) {
       return a[0] - b[0];
     });
-    var out = turn(sides[0][1][0], sides[0][1][1], angleOf(el));
+    var out = turn(sides[0][1][0], sides[0][1][1], angle);
     return [out.x, out.y];
   }
 
@@ -165,7 +165,7 @@
     var tip = points[n ? last : 0];
     var other = points[n ? 0 : last];
     dirs[n] = hit
-      ? { dir: sideOut(hit.el, anchorOf(hit.el, hit.at)), stuck: true }
+      ? { dir: sideOut(hit.frame.angle, frameAnchor(hit.frame, hit.at)), stuck: true }
       : { dir: axisOf([other[0] - tip[0], other[1] - tip[1]]), stuck: false };
     return dirs;
   }

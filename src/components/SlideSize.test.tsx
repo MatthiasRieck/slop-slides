@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck } from "../lib/api";
-import { useApp } from "../store";
+import { type DesignChange, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { SlideSizeSettings } from "./SlideSize";
@@ -15,11 +15,11 @@ const sizedDeck = (
   size: { ...size, pixelWidth: pixels[0], pixelHeight: pixels[1] },
 });
 
-const resizeSlides = vi.fn(async () => {});
+const resizeSlides = vi.fn<() => Promise<DesignChange | null>>(async () => null);
 
 beforeEach(() => {
   invoke.mockReset();
-  resizeSlides.mockClear();
+  resizeSlides.mockReset().mockResolvedValue(null);
   useApp.setState({ deck: DECK, running: false, resizeSlides });
 });
 
@@ -131,7 +131,46 @@ describe("slide size", () => {
     fireEvent.click(screen.getByRole("button", { name: "Portrait" }));
     expect(apply().disabled).toBe(true);
     expect(apply().title).toContain("Wait for the agent");
+    // Said beside the button too, not only in its tooltip.
+    expect(screen.getByText("Wait for the agent to finish to change the slide size.")).toBeTruthy();
     fireEvent.submit(apply().closest("form")!);
     expect(resizeSlides).not.toHaveBeenCalled();
+  });
+
+  it("says that the layout request waits in the chat, also once the panel shows the new size", async () => {
+    resizeSlides.mockImplementation(async () => {
+      useApp.setState({ deck: sizedDeck({ width: 1080, height: 1080, unit: "px" }, [1080, 1080]) });
+      return "requested";
+    });
+    render(<SlideSizeSettings />);
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Square" }));
+    await act(async () => fireEvent.click(apply()));
+    expect(field("Width").value).toBe("1080");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Slides resized. Request added to the chat. Send it to lay the slides out again.",
+    );
+  });
+
+  it("says that an empty deck's size changed, and nothing when it did not", async () => {
+    resizeSlides.mockResolvedValueOnce("applied");
+    render(<SlideSizeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Square" }));
+    await act(async () => fireEvent.click(apply()));
+    expect(screen.getByRole("status").textContent).toBe("Slide size changed.");
+    // A refusal is the toast's to report.
+    fireEvent.click(screen.getByRole("button", { name: "Portrait" }));
+    await act(async () => fireEvent.click(apply()));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps the last deck's status to itself", async () => {
+    resizeSlides.mockResolvedValueOnce("applied");
+    render(<SlideSizeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Square" }));
+    await act(async () => fireEvent.click(apply()));
+    expect(screen.getByRole("status")).toBeTruthy();
+    act(() => useApp.setState({ deck: { ...DECK, id: "/other/deck.html" } }));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

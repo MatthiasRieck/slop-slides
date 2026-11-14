@@ -1,5 +1,6 @@
-import { type RefObject, useState } from "react";
+import { type RefObject, useEffect, useMemo, useState } from "react";
 
+import { perFrame } from "../../lib/perFrame";
 import { insertTranscript } from "../../lib/voice";
 import type { DictationHandlers } from "../VoiceInput";
 
@@ -7,6 +8,9 @@ import type { DictationHandlers } from "../VoiceInput";
  * Dictation into the composer's `draft`. It goes in at the caret (or in place of the selection),
  * which the textarea keeps while the microphone button has focus. While it runs, the text so far
  * shows in place (`shownDraft`); once it ends it is kept, or sent with `send` when asked to.
+ *
+ * What is said so far shows once per frame at most: each showing lays the input out again, and
+ * more of them than the screen draws would only be in the way of the frames.
  */
 export function useDictation(props: {
   draft: string;
@@ -16,6 +20,9 @@ export function useDictation(props: {
 }) {
   const { draft, setDraft, textarea, send } = props;
   const [dictation, setDictation] = useState<{ start: number; end: number; text: string } | null>(null);
+  const partials = useMemo(() => perFrame((text: string) => setDictation((d) => d && { ...d, text })), []);
+  useEffect(() => partials.cancel, [partials]);
+
   const dictated = (text: string) =>
     dictation ? insertTranscript(draft, text, dictation.start, dictation.end) : { draft, caret: draft.length };
   const shownDraft = dictation?.text ? dictated(dictation.text).draft : draft;
@@ -24,8 +31,9 @@ export function useDictation(props: {
       const el = textarea.current;
       setDictation({ start: el?.selectionStart ?? draft.length, end: el?.selectionEnd ?? draft.length, text: "" });
     },
-    onPartial: (text: string) => setDictation((d) => d && { ...d, text }),
+    onPartial: partials.push,
     onEnd: (text: string, sendNow: boolean) => {
+      partials.cancel();
       setDictation(null);
       const result = text && dictation ? dictated(text) : null;
       if (!result && !sendNow) return;

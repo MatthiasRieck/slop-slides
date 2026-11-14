@@ -1,5 +1,5 @@
 import { api, type DeckHistory } from "../lib/api";
-import { queueEdit } from "./editQueue";
+import { editsSaved, queueEdit } from "./editQueue";
 import { showErrorIn } from "./errors";
 import { adoptReview, flushReview } from "./review";
 import { turnRedone, turnUndone } from "./rewind";
@@ -57,8 +57,11 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       app.getState().setDeck(done.deck);
       adoptReview(app, done.deck);
       historyRun++;
-      app.setState((s) => ({ history: done.status, editReload: s.editReload + 1 }));
       const { selected } = app.getState();
+      // The slide editor starts again only when what it shows changed under it: the slide on the
+      // stage, or the deck's styles. A change to another slide leaves it running.
+      const reloads = done.deck.shellHash !== deck.shellHash || (selected !== null && changed.includes(selected));
+      app.setState((s) => ({ history: done.status, editReload: reloads ? s.editReload + 1 : s.editReload }));
       if (changed[0] && !(selected && changed.includes(selected))) app.getState().select(changed[0]);
       const entry = done.entry;
       if (entry?.source === "chat" && entry.message) {
@@ -69,6 +72,25 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       showErrorIn(app, error);
     }
   });
+}
+
+/**
+ * Takes back the change the deck's history labels `label`, for the Undo offered right after it
+ * (in a toast, say), as long as it still is the deck's newest change: undoing whatever came after
+ * it instead would not be what the button said. `what` names the change in the message shown when
+ * it cannot. Resolves to whether it was undone.
+ */
+export async function undoNewest(app: AppStore, label: string, what: string): Promise<boolean> {
+  await editsSaved();
+  await refreshHistory(app);
+  const { deck, history } = app.getState();
+  if (!deck) return false;
+  if (history?.undo?.label !== label) {
+    showErrorIn(app, `The ${what} cannot be undone: the deck changed since.`);
+    return false;
+  }
+  await app.getState().undo();
+  return true;
 }
 
 export const createHistorySlice: Slice<HistorySlice> = (_set, _get, app) => ({

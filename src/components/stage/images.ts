@@ -1,5 +1,6 @@
 import { api } from "../../lib/api";
 import { imageSize } from "../../lib/drop";
+import { noteAssetsWritten } from "../../lib/ownAssets";
 import { deckFileUrl } from "../../lib/utils";
 
 /** An image of the deck's, as the editor puts it on the slide: its source and its natural size. */
@@ -16,5 +17,5 @@ export function measureImages(deckId: string, sources: string[]): Promise<SizedI
 
 /** Copies the image files at `paths` into the deck's assets, measured for the editor. */
 export async function importImages(deckId: string, paths: string[]): Promise<SizedImage[]> {
-  return measureImages(deckId, await api.importAssets(deckId, paths));
+  return measureImages(deckId, noteAssetsWritten(deckId, await api.importAssets(deckId, paths)));
 }

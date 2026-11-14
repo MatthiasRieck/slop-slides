@@ -108,6 +108,39 @@ describe("sidebar", () => {
   });
 });
 
+describe("the deck's settings", () => {
+  it("open over the mode the deck is in, and close back to it", async () => {
+    const useApp = await freshStore();
+    useApp.getState().setMode("edit");
+    useApp.getState().openDeckSettings();
+    expect(useApp.getState()).toMatchObject({ slideMode: "settings", editing: false, settingsReturn: "edit" });
+    useApp.getState().closeDeckSettings();
+    expect(useApp.getState()).toMatchObject({ slideMode: "view", editing: true });
+
+    useApp.getState().setMode("git");
+    useApp.getState().openDeckSettings();
+    useApp.getState().closeDeckSettings();
+    expect(useApp.getState()).toMatchObject({ slideMode: "git", editing: false });
+  });
+
+  it("keep the mode to go back to when opened again while open", async () => {
+    const useApp = await freshStore();
+    useApp.getState().setMode("edit");
+    useApp.getState().openDeckSettings();
+    useApp.getState().openDeckSettings();
+    expect(useApp.getState().settingsReturn).toBe("edit");
+  });
+
+  it("stay closed when closed from another mode", async () => {
+    const useApp = await freshStore();
+    useApp.getState().openDeckSettings();
+    // The user went on to another mode by its tab.
+    useApp.getState().setMode("edit");
+    useApp.getState().closeDeckSettings();
+    expect(useApp.getState()).toMatchObject({ slideMode: "view", editing: true });
+  });
+});
+
 describe("flags kept across launches", () => {
   it.each([
     ["sidebarOpen", "setSidebarOpen", "slopslide.sidebarOpen", true],

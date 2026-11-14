@@ -108,6 +108,84 @@ html[data-slop-player] .deck > .slide.active {
 html[data-slop-review] .slide > .slop-review {
   display: block;
 }
+/* B (or .) and W blank the screen to black or white; the slide stays as it is underneath. */
+html[data-slop-blank],
+html[data-slop-blank] body {
+  background: #000 !important;
+}
+html[data-slop-blank="white"],
+html[data-slop-blank="white"] body {
+  background: #fff !important;
+}
+html[data-slop-blank] .deck {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* In the app's show the cursor goes with the show's controls, once the pointer rests. */
+html[data-slop-idle],
+html[data-slop-idle] * {
+  cursor: none !important;
+}
+/* The control strip of a deck opened in a browser (the player adds it, never in the app's frames
+   or in a capture). Hidden, it takes no press and no focus; it is only as wide as its buttons,
+   so pressing the slide beside it still advances. */
+.slop-controls {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(17, 17, 17, 0.8);
+  color: #fff;
+  font: 500 13px/1 system-ui, sans-serif;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0s linear 0.2s;
+}
+html[data-slop-controls] .slop-controls {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.2s ease;
+}
+.slop-controls button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+}
+.slop-controls button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.slop-controls button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+.slop-controls svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.slop-controls-count {
+  min-width: 56px;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .slide img,
 .slide video,
 .slide canvas,
@@ -155,6 +233,10 @@ html[data-slop-static] *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  .slop-controls,
+  html[data-slop-controls] .slop-controls {
+    transition: none !important;
+  }
 }
 /* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
    shown, backgrounds and all, rather than in the browser's ink-saving colors. */
@@ -191,6 +273,12 @@ html[data-slop-static] *::after {
   .slide .reveal {
     opacity: 1 !important;
     animation: none !important;
+  }
+  .slop-controls {
+    display: none !important;
+  }
+  html[data-slop-blank] .deck {
+    opacity: 1 !important;
   }
 }
 

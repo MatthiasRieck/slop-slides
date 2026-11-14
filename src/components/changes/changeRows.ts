@@ -26,12 +26,60 @@ export const STYLES: Mark = {
   ring: MARKS.modified.ring,
 };
 
-/** A change to stage or restore, what the buttons' tooltips call it, and whether it is staged. */
+/**
+ * What putting a change back as committed is called, since it is not the same thing for each: it
+ * brings a removed slide back, but takes a new one away. `destructive` when work goes with it.
+ */
+export interface RestoreAction {
+  label: string;
+  /** What it does, as the button's tooltip says it. */
+  title: string;
+  destructive: boolean;
+}
+
+/** What restoring a change with `mark` does. */
+export function restoreActionOf(mark: Mark): RestoreAction {
+  switch (mark) {
+    case MARKS.added:
+      return {
+        label: "Discard new slide",
+        title: "Take this slide out: the last commit does not have it",
+        destructive: true,
+      };
+    case MARKS.removed:
+      return { label: "Bring back", title: "Put this slide back in the deck, as it was committed", destructive: false };
+    case MARKS.moved:
+      return { label: "Undo move", title: "Put this slide back where it was at the last commit", destructive: false };
+    case STYLES:
+      return {
+        label: "Discard changes",
+        title: "Put the shared styles back as committed, losing what changed since",
+        destructive: true,
+      };
+    default:
+      return {
+        label: "Discard changes",
+        title: "Put this slide back as committed, losing what changed since",
+        destructive: true,
+      };
+  }
+}
+
+/** A change to stage or restore, what the buttons' tooltips call it, whether it is staged, and what restoring it does. */
 export interface MarkActions {
   change: Change;
   noun: string;
   staged: boolean;
+  restore: RestoreAction;
 }
+
+/** The actions of what the slides share. */
+export const stylesActions = (staged: boolean): MarkActions => ({
+  change: { kind: "styles" },
+  noun: "the shared styles",
+  staged,
+  restore: restoreActionOf(STYLES),
+});
 
 /** The marks of a row: a slide can have changed and moved. */
 export function marksOf(row: SlideChange): Mark[] {
@@ -47,8 +95,12 @@ export function contentMarkOf(row: SlideChange): Mark | null {
 /** The change a mark of a row stands for, to stage or restore it. */
 export function actionsOf(row: SlideChange, mark: Mark): MarkActions | null {
   const { id, oldId } = row;
-  if (mark !== MARKS.moved) return { change: { kind: "slide", id, oldId }, noun: "this slide", staged: row.staged };
-  return id && oldId ? { change: { kind: "move", id, oldId }, noun: "this move", staged: row.moveStaged } : null;
+  const restore = restoreActionOf(mark);
+  if (mark !== MARKS.moved)
+    return { change: { kind: "slide", id, oldId }, noun: "this slide", staged: row.staged, restore };
+  return id && oldId
+    ? { change: { kind: "move", id, oldId }, noun: "this move", staged: row.moveStaged, restore }
+    : null;
 }
 
 /** What changed about a row, in words: "modified and moved". */
@@ -90,7 +142,7 @@ export function caption(row: SlideChange, changes: DeckChanges): string {
   const styles = changes.stylesChanged ? " The deck's shared styles changed, so it may still look different." : "";
   const also = row.details.length > 0 ? ` Changed: ${row.details.join(", ")}.` : "";
   if (changes.tracking === "notCommitted")
-    return `Not committed yet, so every slide is new; restoring takes it out.${styles}`;
+    return `Not committed yet, so every slide is new; discarding one takes it out.${styles}`;
   switch (row.status) {
     case "added":
       return "New since the last commit.";
@@ -103,4 +155,30 @@ export function caption(row: SlideChange, changes: DeckChanges): string {
     case "unchanged":
       return `No changes to this slide.${styles}`;
   }
+}
+
+/**
+ * Whether the deck is as its last commit has it, with nothing staged or left to stage: there is
+ * nothing to commit then.
+ */
+export function isClean(changes: DeckChanges): boolean {
+  return (
+    changes.tracking === "committed" &&
+    !changes.stylesChanged &&
+    changes.stagedFiles === 0 &&
+    !changes.hasUnstaged &&
+    changes.slides.every((row) => row.status === "unchanged" && !row.moved)
+  );
+}
+
+/** Whether the deck differs from its last commit in a way that can be discarded all at once. */
+export function canDiscardAll(changes: DeckChanges): boolean {
+  if (changes.tracking !== "committed") return false;
+  return changes.stylesChanged || changes.slides.some((row) => row.status !== "unchanged" || row.moved);
+}
+
+/** Where the next commit goes: the branch's name, or that it goes to none. */
+export function branchLabel(changes: Pick<DeckChanges, "branch" | "detached">): string | null {
+  if (changes.detached) return "Detached HEAD";
+  return changes.branch;
 }

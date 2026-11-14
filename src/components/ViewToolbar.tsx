@@ -2,29 +2,33 @@ import {
   Check,
   ChevronDown,
   CircleDashed,
+  Delete,
   Eraser,
   Eye,
-  EyeOff,
   Highlighter,
   Lasso,
   type LucideIcon,
   MessageSquarePlus,
   MessageSquareText,
+  MessagesSquare,
   PenLine,
   Play,
+  RotateCw,
   Search,
   SkipForward,
   SquareDashed,
   Trash2,
-  Undo2,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
+
+import { useMenuKeys } from "../hooks/useMenuKeys";
 
 import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
-import { useApp } from "../store";
-import { ToolButton } from "./Button";
+import { deckComments, hasReview, useApp } from "../store";
+import { ToolButton, toolButtonClass } from "./Button";
+import { CommentsOverview } from "./Comments";
 import { SlideSearch } from "./FindReplace";
 import { Popover } from "./Popover";
 import type { Annotations } from "./PresenterTools";
@@ -40,16 +44,19 @@ const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
 /**
  * View mode's tools, in a ribbon like the edit tools': pen, highlighter and eraser for marking up
  * the slide, comments on its elements or on an area outlined with a rectangle, an ellipse or a
- * lasso, whether the slide plays its animations or shows its final state, the deck's timeline,
- * and the search. Marks
+ * lasso, the list of the deck's comments, whether the slide plays its animations or shows its
+ * final state (and playing them again), the deck's timeline, and the search. Marks
  * and comments are saved in the deck file as a review, which can be shown and hidden, and go to
  * the agent with the next chat message: the marks as a screenshot, the comments as the composer
  * says, and each new area comment's screenshot of its area as an image in the composer.
  *
  * Every tool is always there, off when it has nothing to work on, so the sections keep their
  * widths and the ribbon knows what fits.
+ *
+ * It renders when a tool or the review changes, not with the stage around it: `annotations` and
+ * the callbacks stay the same until then.
  */
-export function ViewToolbar(props: {
+export const ViewToolbar = memo(function ViewToolbar(props: {
   annotations: Annotations;
   commenting: boolean;
   onCommenting: (on: boolean) => void;
@@ -63,9 +70,7 @@ export function ViewToolbar(props: {
   const reviewVisible = useApp((s) => s.reviewVisible);
   const commentTexts = useApp((s) => s.commentTexts);
   const finalState = useApp((s) => s.finalState);
-  const hasReview = useApp((s) =>
-    [...Object.values(s.sketches), ...Object.values(s.comments)].some((items) => items.length > 0),
-  );
+  const reviewed = useApp(hasReview);
   const ribbon = useRibbonFit();
   const { collapsedFrom } = ribbon;
   const toggleReview = () => {
@@ -116,8 +121,9 @@ export function ViewToolbar(props: {
             <Eraser />
           </ToolButton>
           <div className="mx-0.5 h-4 w-px bg-border" />
-          <ToolButton label="Undo mark" disabled={noMarks} onClick={undo}>
-            <Undo2 />
+          {/* Not the deck's undo: it only takes the newest mark off this slide. */}
+          <ToolButton label="Remove last mark" disabled={noMarks} onClick={undo}>
+            <Delete />
           </ToolButton>
           <ToolButton label="Clear marks on this slide" disabled={noMarks} onClick={clear}>
             <Trash2 />
@@ -165,15 +171,17 @@ export function ViewToolbar(props: {
               outline(true);
             }}
           />
+          <CommentsButton />
         </RibbonRow>
         <RibbonRow>
           <RibbonToggle
-            label={reviewVisible ? "Hide review marks and comments" : "Show review marks and comments"}
-            disabled={!hasReview}
+            label="Show review marks and comments on the slides"
+            active={reviewVisible}
+            disabled={!reviewed}
             onClick={toggleReview}
           >
-            {reviewVisible ? <Eye /> : <EyeOff />}
-            {reviewVisible ? "Shown" : "Hidden"}
+            <Eye />
+            Review marks
           </RibbonToggle>
           <ToolButton
             label={
@@ -191,23 +199,38 @@ export function ViewToolbar(props: {
       </RibbonSection>
       <RibbonSection title="Animations" icon={<Play />} collapsed={collapsedFrom <= 2} closeOn={finalState}>
         <RibbonRow>
-          <RibbonToggle
-            label="Play the slide's animations when it is shown"
-            active={!finalState}
-            onClick={() => useApp.getState().setFinalState(false)}
+          {/* One choice of two: a slide either plays its animations as it shows, or shows how it ends. */}
+          {/* biome-ignore lint/a11y/useSemanticElements: two pressed buttons read better here than a fieldset. */}
+          <div
+            role="group"
+            aria-label="When a slide is shown"
+            className="flex flex-1 items-center rounded-md border p-px"
           >
-            <Play />
-            Play
-          </RibbonToggle>
+            <Segment
+              label="Play the slide's animations when it is shown"
+              active={!finalState}
+              onClick={() => useApp.getState().setFinalState(false)}
+            >
+              <Play />
+              Play
+            </Segment>
+            <Segment
+              label="Show the slide's final state, with no animations, as the slide list does"
+              active={finalState}
+              onClick={() => useApp.getState().setFinalState(true)}
+            >
+              <SkipForward />
+              Final
+            </Segment>
+          </div>
         </RibbonRow>
         <RibbonRow>
           <RibbonToggle
-            label="Show the slide's final state, with no animations, as the slide list does"
-            active={finalState}
-            onClick={() => useApp.getState().setFinalState(true)}
+            label="Play this slide's animations again, from their start"
+            onClick={() => useApp.getState().replaySlide()}
           >
-            <SkipForward />
-            Final state
+            <RotateCw />
+            Replay
           </RibbonToggle>
         </RibbonRow>
       </RibbonSection>
@@ -216,6 +239,50 @@ export function ViewToolbar(props: {
         <SlideSearch />
       </RibbonSection>
     </div>
+  );
+});
+
+/** One half of a two-way choice in the ribbon; `active` is the half chosen. */
+function Segment(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      title={props.label}
+      aria-pressed={props.active}
+      onClick={props.onClick}
+      className={cn(
+        toolButtonClass("toolbar", "xs", props.active),
+        "flex flex-1 items-center justify-center gap-1 px-1.5 text-xs [&_svg]:!size-3.5",
+      )}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+/** How many comments the deck has, opening the list of them (see `CommentsOverview`). */
+function CommentsButton() {
+  const count = useApp((s) => deckComments(s).length);
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        aria-label={`Comments (${count})`}
+        title="All comments of the deck, by slide"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(toolButtonClass("toolbar", "sm", open), "flex items-center gap-1 px-1.5 text-xs tabular-nums")}
+      >
+        <MessagesSquare />
+        {count}
+      </button>
+      {open && <CommentsOverview anchor={anchor} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -227,6 +294,7 @@ function AreaTool(props: {
   onShape: (shape: AreaShape) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useMenuKeys();
   const anchor = useRef<HTMLDivElement>(null);
   const current = AREA_SHAPES.find((s) => s.shape === props.shape) ?? AREA_SHAPES[0]!;
   const Icon = current.icon;
@@ -251,7 +319,7 @@ function AreaTool(props: {
       </ToolButton>
       {menuOpen && (
         <Popover anchor={anchor} onClose={() => setMenuOpen(false)} width={180} variant="menu" portal className="p-1">
-          <div role="menu" aria-label="Area shape">
+          <div role="menu" aria-label="Area shape" {...menu} className="outline-none">
             {AREA_SHAPES.map(({ shape, label, icon: ShapeIcon }) => (
               <button
                 key={shape}
@@ -262,7 +330,7 @@ function AreaTool(props: {
                   setMenuOpen(false);
                   props.onShape(shape);
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent [&_svg]:size-3.5"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5"
               >
                 <ShapeIcon />
                 <span className="flex-1 text-left">{label}</span>

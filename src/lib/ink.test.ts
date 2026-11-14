@@ -1,23 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import {
+  appendStrokePath,
+  canRedoInk,
+  canUndoInk,
+  clipArea,
+  growingPath,
+  INK_COLORS,
+  INK_HISTORY,
   INK_STYLE,
+  type InkHistory,
   inkBounds,
+  inkChanged,
+  inkColorName,
   isDot,
   LASER_GLOW,
   LASER_SIZE,
   paintTrails,
   pruneTrails,
+  redoInk,
   SLIDE_SIZE,
   type Stroke,
   strokePath,
   TRAIL_FADE_MS,
+  TRAIL_GLOW,
   TRAIL_HOLD_MS,
   type TrailPoint,
   toFraction,
   toPixels,
+  trailBounds,
   trailFade,
   trailSegments,
+  trailsFading,
+  undoInk,
   visibleArea,
   zoomBox,
 } from "./ink";
@@ -56,6 +71,52 @@ describe("strokePath", () => {
 
   it("draws nothing without points", () => {
     expect(strokePath([])).toBe("");
+  });
+});
+
+describe("appendStrokePath", () => {
+  /** A wandering stroke of `count` points, at tenths of a pixel as `toPixels` gives them. */
+  const wander = (count: number): [number, number][] =>
+    Array.from({ length: count }, (_, i) => [
+      Math.round((10 + i * 7.3 + Math.sin(i) * 20) * 10) / 10,
+      Math.round((40 + Math.cos(i * 0.7) * 30) * 10) / 10,
+    ]);
+
+  it("gives the path of all the points so far, a point at a time", () => {
+    const points = wander(40);
+    const path = growingPath();
+    for (let count = 1; count <= points.length; count++) {
+      expect(appendStrokePath(path, [points[count - 1]!])).toBe(strokePath(points.slice(0, count)));
+    }
+    expect(path.d).toBe(strokePath(points));
+    expect(path.points).toEqual(points);
+  });
+
+  it("gives the same path however the points arrive: one by one, in handfuls, or all at once", () => {
+    const points = wander(25);
+    const whole = growingPath();
+    expect(appendStrokePath(whole, points)).toBe(strokePath(points));
+    const handfuls = growingPath();
+    appendStrokePath(handfuls, points.slice(0, 2));
+    appendStrokePath(handfuls, points.slice(2, 9));
+    appendStrokePath(handfuls, []);
+    expect(appendStrokePath(handfuls, points.slice(9))).toBe(strokePath(points));
+  });
+
+  it("has no path before the first point", () => {
+    const path = growingPath();
+    expect(appendStrokePath(path, [])).toBe("");
+    expect(appendStrokePath(path, [[3, 4]])).toBe("M3 4");
+  });
+
+  it("adds to what is settled without going over the stroke again", () => {
+    const path = growingPath();
+    appendStrokePath(path, wander(500));
+    const settled = path.settled;
+    appendStrokePath(path, [[1, 2]]);
+    // Only the curve around the point before last is new.
+    expect(path.settled.startsWith(settled)).toBe(true);
+    expect(path.settled.slice(settled.length).match(/Q/g)).toHaveLength(1);
   });
 });
 
@@ -269,6 +330,78 @@ describe("paintTrails", () => {
   });
 });
 
+describe("trailBounds", () => {
+  const point = (x: number, y: number): TrailPoint => ({ x, y, t: 0 });
+
+  it("is null with no trail", () => {
+    expect(trailBounds([], 1000, 500)).toBeNull();
+    expect(trailBounds([[]], 1000, 500)).toBeNull();
+  });
+
+  it("reaches around every trail by its glow, and no further than a step past it", () => {
+    const trails = [[point(0.4, 0.4), point(0.5, 0.5)], [point(0.45, 0.6)]];
+    const bounds = trailBounds(trails, 2000, 1000)!;
+    // The trails span 800..1000 across and 400..600 down, in the layer's pixels.
+    expect(bounds.x).toBeLessThanOrEqual(800 - TRAIL_GLOW);
+    expect(bounds.y).toBeLessThanOrEqual(400 - TRAIL_GLOW);
+    expect(bounds.x + bounds.width).toBeGreaterThanOrEqual(1000 + TRAIL_GLOW);
+    expect(bounds.y + bounds.height).toBeGreaterThanOrEqual(600 + TRAIL_GLOW);
+    expect(bounds.width).toBeLessThanOrEqual(200 + 2 * (TRAIL_GLOW + 64));
+    expect(bounds.height).toBeLessThanOrEqual(200 + 2 * (TRAIL_GLOW + 64));
+    expect(bounds.width).toBeLessThan(2000);
+  });
+
+  it("stays the same while the laser moves within a step, so the canvas is not made anew", () => {
+    const from = trailBounds([[point(0.5, 0.5)]], 2000, 1000);
+    const nudged = trailBounds([[point(0.5, 0.5), point(0.502, 0.503)]], 2000, 1000);
+    expect(nudged).toEqual(from);
+  });
+
+  it("stays inside the layer", () => {
+    expect(trailBounds([[point(0, 0), point(1, 1)]], 300, 200)).toEqual({ x: 0, y: 0, width: 300, height: 200 });
+    expect(trailBounds([[point(-0.2, 0.5)]], 300, 200)).toMatchObject({ x: 0 });
+  });
+});
+
+describe("clipArea", () => {
+  it("keeps the part of an area inside another", () => {
+    const area = { x: 100, y: 100, width: 400, height: 300 };
+    expect(clipArea(area, { x: 0, y: 0, width: 1000, height: 1000 })).toEqual(area);
+    expect(clipArea(area, { x: 200, y: 50, width: 100, height: 200 })).toEqual({
+      x: 200,
+      y: 100,
+      width: 100,
+      height: 150,
+    });
+  });
+
+  it("is empty where they do not meet", () => {
+    const apart = clipArea({ x: 0, y: 0, width: 10, height: 10 }, { x: 50, y: 50, width: 10, height: 10 });
+    expect([apart.width, apart.height]).toEqual([0, 0]);
+  });
+});
+
+describe("trailsFading", () => {
+  const trail = (...times: number[]): TrailPoint[] => times.map((t) => ({ x: 0, y: 0, t }));
+
+  it("is false while every piece is still held, and true once the oldest thins", () => {
+    expect(trailsFading([], 5000)).toBe(false);
+    expect(trailsFading([trail(0, 100, 200)], 100 + TRAIL_HOLD_MS)).toBe(false);
+    expect(trailsFading([trail(0, 100, 200)], 101 + TRAIL_HOLD_MS)).toBe(true);
+    // A lone point goes by its own time.
+    expect(trailsFading([trail(50)], 51 + TRAIL_HOLD_MS)).toBe(true);
+    expect(trailsFading([trail(5000, 5100), trail(0, 100)], 101 + TRAIL_HOLD_MS)).toBe(true);
+  });
+
+  it("agrees with how the pieces are drawn", () => {
+    const points = trail(0, 100, 200);
+    for (const now of [0, 500, 1100, 1101, 1400]) {
+      const thinning = trailSegments(points, now, 100, 100).some((piece) => piece.fade < 1);
+      expect(trailsFading([points], now), String(now)).toBe(thinning);
+    }
+  });
+});
+
 describe("visibleArea", () => {
   const viewport = { width: 800, height: 600 };
 
@@ -303,5 +436,108 @@ describe("visibleArea", () => {
   it("is empty for a layer off screen", () => {
     expect(visibleArea({ left: 900, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
     expect(visibleArea({ left: -500, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
+  });
+});
+
+describe("ink colors", () => {
+  it("are called by their names, not their values", () => {
+    expect(INK_COLORS.map(inkColorName)).toEqual(["Red", "Yellow", "Green", "Blue", "White"]);
+    expect(inkColorName("#123456")).toBe("#123456");
+  });
+});
+
+describe("ink history", () => {
+  const stroke = (x: number): Stroke => ({ tool: "pen", color: "#000", points: [[x, x]] });
+  const [a, b, c] = [stroke(1), stroke(2), stroke(3)];
+
+  /** Applies `changes` to no ink, one after the other, keeping the history. */
+  function inkAfter(...changes: Stroke[][]) {
+    let strokes: Stroke[] = [];
+    let history: InkHistory | undefined;
+    for (const next of changes) {
+      history = inkChanged(history, strokes, next);
+      strokes = next;
+    }
+    return { strokes, history };
+  }
+
+  it("undoes a stroke drawn, and redoes it", () => {
+    const drawn = inkAfter([a], [a, b]);
+    expect(canUndoInk(drawn.history, drawn.strokes)).toBe(true);
+    expect(canRedoInk(drawn.history, drawn.strokes)).toBe(false);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    expect(back.strokes).toEqual([a]);
+    expect(canRedoInk(back.history, back.strokes)).toBe(true);
+    expect(redoInk(back.history, back.strokes)!.strokes).toEqual([a, b]);
+  });
+
+  it("brings back what clear removed", () => {
+    const cleared = inkAfter([a], [a, b], []);
+    expect(canUndoInk(cleared.history, cleared.strokes)).toBe(true);
+    const back = undoInk(cleared.history, cleared.strokes)!;
+    expect(back.strokes).toEqual([a, b]);
+    expect(redoInk(back.history, back.strokes)!.strokes).toEqual([]);
+  });
+
+  it("brings back a stroke the eraser took, where it was", () => {
+    const erased = inkAfter([a], [a, b], [a, b, c], [a, c]);
+    expect(undoInk(erased.history, erased.strokes)!.strokes).toEqual([a, b, c]);
+  });
+
+  it("goes back all the way, one change at a time, and forward again", () => {
+    let { strokes, history } = inkAfter([a], [a, b], []);
+    const seen: number[] = [];
+    for (let back = undoInk(history, strokes); back; back = undoInk(history, strokes)) {
+      ({ strokes, history } = back);
+      seen.push(strokes.length);
+    }
+    expect(seen).toEqual([2, 1, 0]);
+    expect(canUndoInk(history, strokes)).toBe(false);
+    for (let again = redoInk(history, strokes); again; again = redoInk(history, strokes)) {
+      ({ strokes, history } = again);
+      seen.push(strokes.length);
+    }
+    expect(seen).toEqual([2, 1, 0, 1, 2, 0]);
+  });
+
+  it("forgets what was undone once something else is drawn", () => {
+    const drawn = inkAfter([a], [a, b]);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    const next = [a, c];
+    const history = inkChanged(back.history, back.strokes, next);
+    expect(canRedoInk(history, next)).toBe(false);
+    expect(redoInk(history, next)).toBeNull();
+    expect(undoInk(history, next)!.strokes).toEqual([a]);
+  });
+
+  it("drops the last stroke of ink that has no history, as redoing puts back", () => {
+    const strokes = [a, b];
+    expect(canUndoInk(undefined, strokes)).toBe(true);
+    const back = undoInk(undefined, strokes)!;
+    expect(back.strokes).toEqual([a]);
+    expect(redoInk(back.history, back.strokes)!.strokes).toBe(strokes);
+    expect(undoInk(undefined, [])).toBeNull();
+    expect(canUndoInk(undefined, [])).toBe(false);
+  });
+
+  it("does not apply to ink that changed some other way", () => {
+    const drawn = inkAfter([a], [a, b]);
+    // The same strokes in another array: sent off and drawn again, say.
+    const other = [a, b];
+    expect(canRedoInk(drawn.history, other)).toBe(false);
+    expect(undoInk(drawn.history, other)!.strokes).toEqual([a]);
+    const back = undoInk(drawn.history, drawn.strokes)!;
+    expect(redoInk(back.history, [a])).toBeNull();
+  });
+
+  it("keeps a limited number of changes", () => {
+    let strokes: Stroke[] = [];
+    let history: InkHistory | undefined;
+    for (let i = 0; i < INK_HISTORY + 20; i++) {
+      const next = [...strokes, stroke(i)];
+      history = inkChanged(history, strokes, next);
+      strokes = next;
+    }
+    expect(history!.past).toHaveLength(INK_HISTORY);
   });
 });

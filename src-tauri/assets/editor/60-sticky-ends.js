@@ -8,9 +8,14 @@
   /** What `line`'s `end` is stuck to on this slide (a copied slide may repeat ids), or null. */
   function stuckTo(line, end) {
     var id = line.getAttribute(end.attr);
-    var target = id ? Array.prototype.find.call(slide.querySelectorAll("[id]"), function (el) {
-      return el.id === id;
-    }) : null;
+    if (!id) return null;
+    // Mostly the document's one element with that id; only when another slide's comes first is this one searched.
+    var target = document.getElementById(id);
+    if (target && !slide.contains(target)) {
+      target = Array.prototype.find.call(slide.querySelectorAll("[id]"), function (el) {
+        return el.id === id;
+      });
+    }
     return target && !target.contains(line) ? target : null;
   }
 
@@ -31,16 +36,19 @@
     };
   }
 
-  /** The spot `at` ([x, y] as fractions of its box, in its turned frame) on `el`, in slide pixels. */
-  function anchorPoint(el, at) {
-    var f = anchorFrame(el);
+  /** The spot `at` ([x, y] as fractions of the box, in its turned frame) on the box with frame `f` (see anchorFrame), in slide pixels. */
+  function framePoint(f, at) {
     var off = turn((at[0] - 0.5) * f.w, (at[1] - 0.5) * f.h, f.angle);
     return [roundTenth(f.x + off.x), roundTenth(f.y + off.y)];
   }
 
   /** Where slide point `p` lies on `el`'s box, as fractions of it, kept on the box. */
   function anchorOf(el, p) {
-    var f = anchorFrame(el);
+    return frameAnchor(anchorFrame(el), p);
+  }
+
+  /** anchorOf for a box whose frame `f` (see anchorFrame) is known. */
+  function frameAnchor(f, p) {
     var local = turn(p.x - f.x, p.y - f.y, -f.angle);
     var keep = function (n) {
       return Math.min(1, Math.max(0, n));
@@ -389,9 +397,8 @@
     return [{ points: ring, closed: true }];
   }
 
-  /** `el`'s outline in slide pixels, as rings of [x, y] that are closed or not. */
-  function slideOutline(el) {
-    var f = anchorFrame(el);
+  /** `el`'s outline in slide pixels, as rings of [x, y] that are closed or not; `f` is its frame (see anchorFrame). */
+  function slideOutline(el, f) {
     return outlineOf(el).map(function (ring) {
       return {
         closed: ring.closed,
@@ -468,13 +475,12 @@
   }
 
   /**
-   * Where an end stuck to the edge of `el` at slide point `spot` goes, its line coming from
-   * slide point `from`: where the way toward the spot first meets the outline, so the line still
-   * points at the spot. From inside the element, or when the way misses it, the outline's spot
-   * nearest the spot.
+   * Where an end stuck to the edge of an element at slide point `spot` goes, its line coming
+   * from slide point `from`: where the way toward the spot first meets the outline `rings` (see
+   * slideOutline), so the line still points at the spot. From inside the element, or when the
+   * way misses it, the outline's spot nearest the spot.
    */
-  function edgePoint(el, from, spot) {
-    var rings = slideOutline(el);
+  function edgePoint(rings, from, spot) {
     var p = { x: spot[0], y: spot[1] };
     var hit = null;
     if (from && distance(from, spot) > 0 && !insideOutline(rings, { x: from[0], y: from[1] })) hit = firstCrossing(rings, from, spot);
@@ -483,55 +489,77 @@
   }
 
   /**
-   * What an end at slide point `p` sticks to: the smallest element it is on, or close to the
-   * outline of. Never `line` itself, what holds it, or another line. `edge` says it is close to
-   * the outline, then `at` is the spot on it; otherwise `at` is `p`.
+   * What a line's end can stick to: every element on the slide but `line` itself, what holds it
+   * and other lines, each with its frame (see anchorFrame) as measured now. Its outline and
+   * connection sites are worked out when an end first comes near it. While only the line
+   * changes (its end dragged, or the line drawn), one list serves every pointer move.
    */
-  function stickTarget(p, line) {
-    var tolerance = EDGE_PX / zoom();
-    var best = null;
-    var area = Infinity;
+  function stickCandidates(line) {
+    var list = [];
     walkContent(slide, function (el) {
       if (el === line || el.contains(line) || !arrangeable(el) || lineOf(el)) return false;
       var f = anchorFrame(el);
-      if (!(f.w > 0 && f.h > 0)) return false;
+      if (f.w > 0 && f.h > 0) list.push({ el: el, frame: f, rings: null, sites: null });
+      return false;
+    });
+    return list;
+  }
+
+  /**
+   * What an end at slide point `p` sticks to: the smallest of `candidates` (see stickCandidates;
+   * without them, of what `line` can stick to now) it is on, or close to the outline of. `edge`
+   * says it is close to the outline, then `at` is the spot on it; otherwise `at` is `p`. It
+   * comes with the element's `frame`, outline (`rings`) and connection `sites`.
+   */
+  function stickTarget(p, line, candidates) {
+    var tolerance = EDGE_PX / zoom();
+    var best = null;
+    var area = Infinity;
+    (candidates || stickCandidates(line)).forEach(function (candidate) {
+      var f = candidate.frame;
       var local = turn(p.x - f.x, p.y - f.y, -f.angle);
-      if (Math.abs(local.x) > f.w / 2 + tolerance || Math.abs(local.y) > f.h / 2 + tolerance) return false;
-      var rings = slideOutline(el);
+      if (Math.abs(local.x) > f.w / 2 + tolerance || Math.abs(local.y) > f.h / 2 + tolerance) return;
+      if (!candidate.rings) candidate.rings = slideOutline(candidate.el, f);
+      var rings = candidate.rings;
       var near = nearestOnOutline(rings, p);
       var edge = near.distance <= tolerance;
       var closed = rings.some(function (ring) {
         return ring.closed;
       });
       var on = closed ? insideOutline(rings, p) : Math.abs(local.x) <= f.w / 2 && Math.abs(local.y) <= f.h / 2;
-      if (!edge && !on) return false;
-      if (f.w * f.h < area) {
-        best = { el: el, edge: edge, at: edge ? { x: roundTenth(near.point[0]), y: roundTenth(near.point[1]) } : p };
-        area = f.w * f.h;
-      }
-      return false;
+      if ((!edge && !on) || f.w * f.h >= area) return;
+      area = f.w * f.h;
+      best = { candidate: candidate, edge: edge, at: edge ? { x: roundTenth(near.point[0]), y: roundTenth(near.point[1]) } : p };
     });
+    if (!best) return null;
+    var found = best.candidate;
+    if (!found.sites) found.sites = connectionSites(found.frame, found.rings);
+    var hit = { el: found.el, edge: best.edge, at: best.at, frame: found.frame, rings: found.rings, sites: found.sites };
     // Close to one of its connection sites, the end goes right onto it, a spot like one inside it.
-    var site = best && connectionSites(best.el).filter(function (q) {
+    var site = found.sites.filter(function (q) {
       return distance(q, [p.x, p.y]) <= tolerance * SITE_REACH;
     }).sort(function (a, b) {
       return distance(a, [p.x, p.y]) - distance(b, [p.x, p.y]);
     })[0];
-    if (site) best = { el: best.el, edge: false, site: true, at: toPoint(site) };
-    return best;
+    if (site) {
+      hit.edge = false;
+      hit.site = true;
+      hit.at = toPoint(site);
+    }
+    return hit;
   }
 
   // How much further than its outline a connection site pulls an end in.
   var SITE_REACH = 1.6;
 
   /**
-   * Where lines connect to `el`, in slide pixels: the middle of each side of its box, turned
-   * with it, or of its outline where the shape (an ellipse, a triangle) does not reach the side.
+   * Where lines connect to the element with frame `f` and outline `rings`, in slide pixels: the
+   * middle of each side of its box, turned with it, or of its outline where the shape (an
+   * ellipse, a triangle) does not reach the side.
    */
-  function connectionSites(el) {
-    var rings = slideOutline(el);
+  function connectionSites(f, rings) {
     return [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]].map(function (at) {
-      var p = anchorPoint(el, at);
+      var p = framePoint(f, at);
       var near = nearestOnOutline(rings, toPoint(p)).point || p;
       return [roundTenth(near[0]), roundTenth(near[1])];
     });
@@ -541,40 +569,63 @@
     return { x: xy[0], y: xy[1] };
   }
 
-  /** Shows what an end would stick to: the element's box, or its outline and the spot on it for its edge. */
+  // What the stick preview shows, to tell when it has to be drawn anew: the element, whether
+  // its outline shows, and the view (see camera) it was drawn in.
+  var shownStick = null;
+
+  /**
+   * Shows what an end would stick to (`hit`, from stickTarget): the element's box, or its outline
+   * and the spot on it for its edge. Drawn when the element (or the view) changes; while the end
+   * moves over the same one, only the spot and the site it is on follow.
+   */
   function previewStick(hit) {
     hover(hit && !hit.edge ? hit.el : null);
-    edgeUi.textContent = "";
-    if (!hit) return;
-    var origin = slide.getBoundingClientRect();
-    var k = zoom();
+    if (!hit) {
+      if (shownStick) edgeUi.textContent = "";
+      shownStick = null;
+      return;
+    }
+    var view = camera();
     var screen = function (p) {
-      return roundTenth(origin.left + p[0] * k) + " " + roundTenth(origin.top + p[1] * k);
+      return [roundTenth(view.left + p[0] * view.k), roundTenth(view.top + p[1] * view.k)];
     };
+    var was = shownStick;
+    if (!was || was.el !== hit.el || was.edge !== hit.edge || was.k !== view.k || was.left !== view.left || was.top !== view.top) {
+      edgeUi.textContent = "";
+      hit.sites.forEach(function (q) {
+        var site = document.createElementNS(SVG_NS, "circle");
+        var at = screen(q);
+        site.setAttribute("data-site", "");
+        site.setAttribute("cx", at[0]);
+        site.setAttribute("cy", at[1]);
+        site.setAttribute("r", "4");
+        edgeUi.appendChild(site);
+      });
+      if (hit.edge) {
+        var path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", hit.rings.map(function (ring) {
+          return ring.points.map(function (p, i) {
+            return (i ? "L" : "M") + screen(p).join(" ");
+          }).join(" ") + (ring.closed ? " Z" : "");
+        }).join(" "));
+        edgeUi.appendChild(path);
+        var spot = document.createElementNS(SVG_NS, "circle");
+        spot.setAttribute("r", "5");
+        edgeUi.appendChild(spot);
+      }
+      shownStick = { el: hit.el, edge: hit.edge, k: view.k, left: view.left, top: view.top };
+    }
     // Its connection sites, the one the end is on filled.
-    connectionSites(hit.el).forEach(function (q) {
-      var dot = document.createElementNS(SVG_NS, "circle");
-      var at = screen(q).split(" ");
-      dot.setAttribute("data-site", hit.site && q[0] === hit.at.x && q[1] === hit.at.y ? "on" : "");
-      dot.setAttribute("cx", at[0]);
-      dot.setAttribute("cy", at[1]);
-      dot.setAttribute("r", "4");
-      edgeUi.appendChild(dot);
+    hit.sites.forEach(function (q, i) {
+      var on = hit.site && q[0] === hit.at.x && q[1] === hit.at.y ? "on" : "";
+      var site = edgeUi.childNodes[i];
+      if (site.getAttribute("data-site") !== on) site.setAttribute("data-site", on);
     });
     if (!hit.edge) return;
-    var path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", slideOutline(hit.el).map(function (ring) {
-      return ring.points.map(function (p, i) {
-        return (i ? "L" : "M") + screen(p);
-      }).join(" ") + (ring.closed ? " Z" : "");
-    }).join(" "));
-    edgeUi.appendChild(path);
-    var dot = document.createElementNS(SVG_NS, "circle");
-    var at = screen([hit.at.x, hit.at.y]).split(" ");
+    var dot = edgeUi.lastChild;
+    var at = screen([hit.at.x, hit.at.y]);
     dot.setAttribute("cx", at[0]);
     dot.setAttribute("cy", at[1]);
-    dot.setAttribute("r", "5");
-    edgeUi.appendChild(dot);
   }
 
   /** An id no element has, nor any of `taken`. */
@@ -590,55 +641,112 @@
     var target = hit.el;
     if (!target.id) target.id = freshId();
     line.setAttribute(end.attr, target.id);
-    line.setAttribute(end.at, formatAnchor(anchorOf(target, hit.at), hit.edge));
+    line.setAttribute(end.at, formatAnchor(frameAnchor(hit.frame, hit.at), hit.edge));
   }
 
   var following = false;
-  /** Moves the stuck ends of every line, but those in `skip`, to where their elements are now. */
+  /**
+   * Moves the stuck ends of every line, but those in `skip`, to where their elements are now; an
+   * end whose element is gone lets go. It measures every line and what it is stuck to, so it is
+   * for when a change is saved: while elements are dragged or nudged, only the lines that go
+   * with them follow (see linesFollowing).
+   */
   function followLines(skip) {
     if (following) return;
     following = true;
     Array.prototype.forEach.call(slide.querySelectorAll("[data-from], [data-to]"), function (el) {
-      if (skip.indexOf(el) >= 0) return;
-      var line = lineOf(el);
-      var tilt = line ? tiltOf(el) : null;
-      if (!line || tilt.x || tilt.y) return;
-      var points = slidePoints(el, line);
-      var changed = false;
-      var spots = ENDS.map(function (end) {
-        if (!el.hasAttribute(end.attr)) return null;
-        var target = stuckTo(el, end);
-        if (!target) {
-          unstick(el, end);
-          return null;
-        }
-        var f = anchorFrame(target);
-        // A hidden element keeps its lines where they are.
-        if (!(f.w > 0 && f.h > 0)) return null;
-        var anchor = parseAnchor(el.getAttribute(end.at));
-        return { target: target, edge: anchor.edge, at: anchorPoint(target, anchor.at) };
-      });
-      ENDS.forEach(function (end, n) {
-        var spot = spots[n];
-        if (!spot) return;
-        var i = end.first ? 0 : points.length - 1;
-        var to = spot.at;
-        if (spot.edge && !line.route) {
-          // The line comes toward the spot from the point before the end: on a straight line,
-          // the other end, or the spot that end is stuck to.
-          var other = spots[1 - n];
-          var from = points.length === 2 && other ? other.at : points[end.first ? 1 : points.length - 2];
-          to = edgePoint(spot.target, from, spot.at);
-        }
-        if (Math.abs(points[i][0] - to[0]) > 0.5 || Math.abs(points[i][1] - to[1]) > 0.5) {
-          points[i] = to;
-          changed = true;
-        }
-      });
-      // Both ends on one spot would leave no line.
-      if (changed && (points.length > 2 || distance(points[0], points[1]) > 0)) writeLine(el, points, line.heads);
+      if (skip.indexOf(el) < 0) followLine(el, null);
     });
     following = false;
+  }
+
+  /**
+   * The lines that change when the elements `moving` do, but those in `skip`: each one with an
+   * end stuck to one of them (or to something in it), and each one in them stuck to anything,
+   * as { el, targets }, `targets` being what its ends are stuck to (null for a free end).
+   */
+  function linesFollowing(moving, skip) {
+    var within = function (node) {
+      return moving.some(function (el) {
+        return el.contains(node);
+      });
+    };
+    var found = [];
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-from], [data-to]"), function (el) {
+      if (skip.indexOf(el) >= 0) return;
+      var targets = ENDS.map(function (end) {
+        return stuckTo(el, end);
+      });
+      var follows = within(el) || targets.some(function (target) {
+        return !!target && within(target);
+      });
+      if (follows) found.push({ el: el, targets: targets });
+    });
+    return found;
+  }
+
+  /** Moves the stuck ends of `followers` (see linesFollowing) to where their elements are now. */
+  function followStuck(followers) {
+    if (following) return;
+    following = true;
+    followers.forEach(function (follower) {
+      followLine(follower.el, follower.targets);
+    });
+    following = false;
+  }
+
+  /** The lines that follow the elements `moving` as they are nudged, found once for a run of nudges. */
+  function nudgeFollowers(moving) {
+    var same = !!nudgeLines && nudgeLines.moving.length === moving.length && moving.every(function (el, i) {
+      return el === nudgeLines.moving[i];
+    });
+    if (!same) nudgeLines = { moving: moving, lines: linesFollowing(moving, moving) };
+    return nudgeLines.lines;
+  }
+
+  /**
+   * Moves the stuck ends of line `el` to where the elements they are stuck to are now: `targets`
+   * (one per end, null for a free one), or without them, whatever they are stuck to now, an end
+   * whose element is gone letting go.
+   */
+  function followLine(el, targets) {
+    var line = lineOf(el);
+    var tilt = line ? tiltOf(el) : null;
+    if (!line || tilt.x || tilt.y) return;
+    var points = slidePoints(el, line);
+    var changed = false;
+    var spots = ENDS.map(function (end, n) {
+      if (!el.hasAttribute(end.attr)) return null;
+      var target = targets ? targets[n] : stuckTo(el, end);
+      if (!target) {
+        if (!targets) unstick(el, end);
+        return null;
+      }
+      var f = anchorFrame(target);
+      // A hidden element keeps its lines where they are.
+      if (!(f.w > 0 && f.h > 0)) return null;
+      var anchor = parseAnchor(el.getAttribute(end.at));
+      return { target: target, frame: f, edge: anchor.edge, at: framePoint(f, anchor.at) };
+    });
+    ENDS.forEach(function (end, n) {
+      var spot = spots[n];
+      if (!spot) return;
+      var i = end.first ? 0 : points.length - 1;
+      var to = spot.at;
+      if (spot.edge && !line.route) {
+        // The line comes toward the spot from the point before the end: on a straight line,
+        // the other end, or the spot that end is stuck to.
+        var other = spots[1 - n];
+        var from = points.length === 2 && other ? other.at : points[end.first ? 1 : points.length - 2];
+        to = edgePoint(slideOutline(spot.target, spot.frame), from, spot.at);
+      }
+      if (Math.abs(points[i][0] - to[0]) > 0.5 || Math.abs(points[i][1] - to[1]) > 0.5) {
+        points[i] = to;
+        changed = true;
+      }
+    });
+    // Both ends on one spot would leave no line.
+    if (changed && (points.length > 2 || distance(points[0], points[1]) > 0)) writeLine(el, points, line.heads);
   }
 
   /**
@@ -683,37 +791,46 @@
 
   /** Puts the handles on the selected line's points; false when no line is selected to show them. */
   function placePoints() {
-    pointUi.textContent = "";
     var el = selected;
     var line = el && !editing && !extras.length && slide.contains(el) && !isLocked(el) ? lineOf(el) : null;
     var tilt = line ? tiltOf(el) : null;
     // A tilted line keeps its box: its points are not where the handles would go.
-    if (!line || tilt.x || tilt.y) return false;
-    var origin = slide.getBoundingClientRect();
-    var k = zoom();
+    if (!line || tilt.x || tilt.y) {
+      fitChildren(pointUi, 0, newDiv);
+      return false;
+    }
+    var view = camera();
     var points = slidePoints(el, line).map(function (p) {
-      return [origin.left + p[0] * k, origin.top + p[1] * k];
+      return [view.left + p[0] * view.k, view.top + p[1] * view.k];
     });
-    var handle = function (kind, index, at, title) {
-      var node = document.createElement("div");
-      node.setAttribute("data-point", kind);
-      node.setAttribute("data-index", String(index));
-      node.title = title;
-      node.style.left = at[0] + "px";
-      node.style.top = at[1] + "px";
-      pointUi.appendChild(node);
-    };
+    var handles = [];
     var dragging = drag && drag.mode === "point";
     // A connector routes itself between its ends.
     if (!dragging && !line.route) {
       curveThrough(points).forEach(function (segment, i) {
-        handle("add", i + 1, curveAt(segment, 0.5), "Drag to bend the line here");
+        handles.push({ kind: "add", index: i + 1, at: curveAt(segment, 0.5), title: "Drag to bend the line here", bound: false });
       });
     }
     points.forEach(function (p, i) {
       var end = endAt(i, points.length);
-      handle("point", i, p, "Drag to move (Shift snaps to 45°, ⌘ moves freely)" + (end ? ", drop on an element to stick to it" : ", double-click to remove"));
-      if (end && el.hasAttribute(end.attr)) pointUi.lastChild.setAttribute("data-bound", "");
+      handles.push({
+        kind: "point",
+        index: i,
+        at: p,
+        title: "Drag to move (Shift snaps to 45°, ⌘ moves freely)" + (end ? ", drop on an element to stick to it" : ", double-click to remove"),
+        bound: !!end && el.hasAttribute(end.attr),
+      });
+    });
+    // The handles there are stay, each taking the next one's place, so a drag redraws none.
+    var nodes = fitChildren(pointUi, handles.length, newDiv);
+    handles.forEach(function (handle, i) {
+      var node = nodes[i];
+      node.setAttribute("data-point", handle.kind);
+      node.setAttribute("data-index", String(handle.index));
+      node.title = handle.title;
+      mark(node, "data-bound", handle.bound);
+      node.style.left = handle.at[0] + "px";
+      node.style.top = handle.at[1] + "px";
     });
     return true;
   }
@@ -724,7 +841,7 @@
     if (event.button !== 0 || !kind || !line) return;
     event.preventDefault();
     event.stopPropagation();
-    if (nudgeTimer) commit();
+    saveNudges();
     var index = Number(event.target.getAttribute("data-index"));
     var points = slidePoints(selected, line);
     var now = Date.now();
@@ -768,26 +885,30 @@
       if (Math.abs(event.clientX - drag.x) < DRAG_THRESHOLD && Math.abs(event.clientY - drag.y) < DRAG_THRESHOLD) return;
       drag.moved = true;
       lastPoint = { index: -1, at: 0 };
-      hover(null);
+      dropHover();
       drag.targets = snapTargets([drag.el]);
+      // Only the line changes while its point is dragged: what an end can stick to is measured once.
+      drag.sticks = stickCandidates(drag.el);
       if (drag.insert) drag.points.splice(drag.index, 0, null);
     }
     var points = drag.points;
     var other = points[drag.index ? drag.index - 1 : 1];
     var at = slidePoint(event.clientX, event.clientY);
-    guides.textContent = "";
     if (event.shiftKey) {
       at = snapLine({ x: other[0], y: other[1] }, at);
-    } else if (!event.metaKey && !event.ctrlKey) {
+      clearGuides();
+    } else if (snaps(event)) {
       var tolerance = SNAP_PX / drag.zoom;
       var sx = snapAxis([at.x], drag.targets.x, tolerance);
       var sy = snapAxis([at.y], drag.targets.y, tolerance);
       at = { x: at.x + sx.by, y: at.y + sy.by };
       drawGuides(sx.hits, sy.hits, { left: at.x, top: at.y, right: at.x, bottom: at.y });
+    } else {
+      clearGuides();
     }
     var hit = null;
     if (!drag.insert && endAt(drag.index, points.length)) {
-      hit = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el);
+      hit = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el, drag.sticks);
       if (hit && (hit.edge || hit.site) && !event.shiftKey) at = endSpot(hit, other, drag.el);
     }
     // Both ends on one spot would leave no line.
@@ -801,16 +922,20 @@
     var end = !drag.insert && endAt(drag.index, points.length);
     var dirs = end && routeOf(drag.el) ? draggedDirections(drag.el, points, end.first ? 0 : 1, hit) : null;
     writeLine(drag.el, points, drag.heads, false, dirs);
-    placeHandles();
+    scheduleHandles();
     showReadout(event);
   }
 
   /** Redraws the line being added so it ends at `to`, where `hit` (see stickTarget) may stick it. */
   function drawLine(line, to, hit) {
     line.points = [[line.at.x, line.at.y], [to.x, to.y]];
-    var start = routeOf(line.el) ? stickTarget(line.at, line.el) : null;
-    var dirs = routeOf(line.el) ? draggedDirections(line.el, line.points, 1, hit || null) : null;
-    if (start) dirs[0] = { dir: sideOut(start.el, anchorOf(start.el, start.at)), stuck: true };
+    var dirs = null;
+    if (routeOf(line.el)) {
+      // What a connector starts on, which it leaves straight out of, stays the same as it is drawn.
+      if (line.start === undefined) line.start = stickTarget(line.at, line.el, line.sticks);
+      dirs = draggedDirections(line.el, line.points, 1, hit || null);
+      if (line.start) dirs[0] = { dir: sideOut(line.start.frame.angle, frameAnchor(line.start.frame, line.start.at)), stuck: true };
+    }
     writeLine(line.el, line.points, line.heads, true, dirs);
   }
 
@@ -821,7 +946,7 @@
    * connection site, any end goes right onto it.
    */
   function endSpot(hit, from, line) {
-    return hit.site || routeOf(line) ? { x: hit.at.x, y: hit.at.y } : toPoint(edgePoint(hit.el, from, [hit.at.x, hit.at.y]));
+    return hit.site || routeOf(line) ? { x: hit.at.x, y: hit.at.y } : toPoint(edgePoint(hit.rings, from, [hit.at.x, hit.at.y]));
   }
 
   /** `to`, turned around `from` to the nearest 45°. */

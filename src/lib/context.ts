@@ -10,7 +10,7 @@ export interface ContextUsage {
 }
 
 /** Context use above this share of the window offers to compact the conversation. */
-export const COMPACT_THRESHOLD = 30;
+export const COMPACT_THRESHOLD = 70;
 
 const WINDOW_SIZES: Record<string, number> = { "200k": 200_000, "1m": 1_000_000 };
 

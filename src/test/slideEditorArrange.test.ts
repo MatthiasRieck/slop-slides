@@ -29,8 +29,8 @@ const BOXES: Record<string, number[]> = {
   wrap: [50, 50, 1800, 980],
 };
 
-function editor() {
-  const page = editorPage({ markup: DECK });
+function editor({ markup = DECK, beforeEditor = "" } = {}) {
+  const page = editorPage({ markup, beforeEditor });
   const { window, $ } = page;
   const lay = (el: HTMLElement, x: number, y: number, w: number, h: number) => {
     Object.defineProperty(el, "offsetWidth", { get: () => Number.parseFloat(el.style.width) || w, configurable: true });
@@ -52,9 +52,20 @@ function editor() {
   };
   lay($("#intro"), 0, 0, 1920, 1080);
   for (const [id, box] of Object.entries(BOXES)) lay($(`#${id}`), box[0]!, box[1]!, box[2]!, box[3]!);
+  /** Counts how often `el` is measured from now on; `count()` says how often so far. */
+  const measured = (el: HTMLElement) => {
+    const measure = el.getBoundingClientRect;
+    let calls = 0;
+    el.getBoundingClientRect = () => {
+      calls++;
+      return measure.call(el);
+    };
+    return { count: () => calls };
+  };
   const e = {
     ...page,
     lay,
+    measured,
     pick(...selectors: string[]) {
       selectors.forEach((s, i) => {
         page.click($(s), i ? { shiftKey: true } : {});
@@ -193,14 +204,19 @@ describe("several selected elements", () => {
     const [a, b] = e.selected() as HTMLElement[];
     expect([a!.textContent, b!.textContent]).toEqual(["A", "B"]);
     expect(a!.id).toBe("");
-    // Centered in the view, as one: 500 × 300 around (960, 540).
-    expect([a!.style.left, a!.style.top]).toEqual(["710px", "390px"]);
-    expect([b!.style.left, b!.style.top]).toEqual(["1010px", "590px"]);
-    // Again at the same spot, the whole group steps aside.
+    // Where they were, a step away from the originals, as one.
+    expect([a!.style.left, a!.style.top, a!.style.translate]).toEqual(["100px", "100px", "40px 40px"]);
+    expect([b!.style.left, b!.style.top, b!.style.translate]).toEqual(["400px", "300px", "40px 40px"]);
+    // Again at the same spot, the whole group steps further aside.
     e.fromParent({ type: "slop:edit-paste", html });
     const [a2, b2] = e.selected() as HTMLElement[];
-    expect(a2!.style.translate).toBe("40px 40px");
-    expect(b2!.style.translate).toBe("40px 40px");
+    expect(a2!.style.translate).toBe("80px 80px");
+    expect(b2!.style.translate).toBe("80px 80px");
+    // From the context menu, centered on its point as one: 500 × 300 around (960, 540).
+    e.fromParent({ type: "slop:edit-paste", html, x: 960, y: 540 });
+    const [a3, b3] = e.selected() as HTMLElement[];
+    expect([a3!.style.left, a3!.style.top]).toEqual(["710px", "390px"]);
+    expect([b3!.style.left, b3!.style.top]).toEqual(["1010px", "590px"]);
     e.pick("#a", "#b");
     e.key("x", { metaKey: true });
     expect(e.doc.querySelector("#a")).toBeNull();
@@ -430,12 +446,14 @@ describe("smart guides", () => {
     expect(resize({ metaKey: true }).size).toBe("296px");
   });
 
-  it("shows the position and size while dragging, and the turn while rotating", () => {
+  it("shows the position and size while dragging, and the turn while rotating", async () => {
     const e = editor();
     const a = e.$("#a");
     const readout = e.$("[data-slop-readout]");
     e.down(a);
     e.move(a, 150, 100, { metaKey: true });
+    // The readout is filled in with the frame's geometry report.
+    await e.frame();
     expect(readout.textContent).toBe("X 150  Y 100  W 200  H 100");
     expect(readout.style.display).toBe("");
     e.up(a, 150, 100);
@@ -767,7 +785,7 @@ describe("groups, locks and layers", () => {
     expect(e.commits()).toEqual([]);
   });
 
-  it("keeps a locked element from being picked, moved or deleted, but lets it be unlocked", () => {
+  it("keeps a locked element from being moved, deleted or picked with the others, but lets it be unlocked", () => {
     const e = editor();
     e.click(e.$("#a"));
     e.fromParent({ type: "slop:edit-lock", locked: true });
@@ -782,8 +800,15 @@ describe("groups, locks and layers", () => {
     e.fromParent({ type: "slop:edit-geometry", x: 500 });
     expect(e.$("#a").style.translate).toBe("");
     e.key("Escape");
-    e.click(e.$("#a"));
     expect(e.ids()).toEqual([]);
+    // A click brings it back, to unlock it: with its frame, and nothing to drag it by.
+    e.click(e.$("#a"));
+    expect(e.ids()).toEqual(["a"]);
+    expect(e.$("[data-slop-ui]").hasAttribute("data-locked")).toBe(true);
+    e.down(e.$("#a"), 10, 10);
+    e.move(e.$("#a"), 90, 60);
+    e.up(e.$("#a"), 90, 60);
+    expect(e.$("#a").style.translate).toBe("");
     e.fromParent({ type: "slop:edit-select-all" });
     expect(e.ids()).toEqual(["b", "c", "d"]);
     e.fromParent({ type: "slop:edit-lock", locked: false, path: [0] });
@@ -822,5 +847,260 @@ describe("the layer list on load", () => {
     await vi.waitFor(() => expect(e.posted().some((m) => m.type === "slop:edit-layers")).toBe(true));
     const rows = e.posted().find((m) => m.type === "slop:edit-layers")!.layers as { name: string }[];
     expect(rows.map((r) => r.name)).toEqual(["Box: D", "Box: C", "Box: B", "Box: A"]);
+  });
+});
+
+describe("keeping up with the pointer", () => {
+  const finder = (e: ReturnType<typeof editor>) =>
+    vi.spyOn((e.window as unknown as { __slopOverflow: { find: () => unknown[] } }).__slopOverflow, "find");
+  const wires = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("[data-slop-overflow] > *")];
+
+  it("does not look for overflow while a drag is under way, and does once it ends", async () => {
+    const e = editor();
+    await e.frame();
+    const find = finder(e);
+    const a = e.$("#a");
+    e.down(a);
+    await e.frame();
+    find.mockClear();
+    for (let i = 1; i <= 20; i++) {
+      e.move(a, 100 + i * 10, 100);
+      if (i % 5 === 0) await e.frame();
+    }
+    expect(find).not.toHaveBeenCalled();
+    e.up(a, 300, 100);
+    await e.frame();
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not look for overflow while a handle resizes, turns or tilts an element", async () => {
+    const e = editor();
+    e.click(e.$("#a"));
+    await e.frame();
+    const find = finder(e);
+    for (const kind of ['[data-dir="1 1"]', "[data-handle=rotate]", "[data-handle=tilt]"]) {
+      const handle = e.$(`[data-slop-ui] ${kind}`);
+      e.down(handle, 300, 200);
+      for (let i = 1; i <= 5; i++) e.move(handle, 300 + i * 8, 200 + i * 8);
+      await e.frame();
+      expect(find).not.toHaveBeenCalled();
+      e.up(handle, 340, 240);
+      await e.frame();
+      expect(find).toHaveBeenCalledTimes(1);
+      find.mockClear();
+    }
+  });
+
+  it("does not list the layers while a marquee grows, and does once it ends", async () => {
+    const e = editor();
+    await e.frame();
+    const layers = () => e.messages("slop:edit-layers").length;
+    const before = layers();
+    const find = finder(e);
+    e.down(e.$("#intro"), 50, 50);
+    for (let i = 1; i <= 6; i++) e.move(e.$("#intro"), 50 + i * 100, 50 + i * 60);
+    await e.frame();
+    expect(e.ids()).toEqual(["a", "b"]);
+    expect(layers()).toBe(before);
+    expect(find).not.toHaveBeenCalled();
+    e.up(e.$("#intro"), 650, 410);
+    await e.frame();
+    // The layers say what is selected.
+    expect(layers()).toBe(before + 1);
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not look for overflow while an element is dragged out with a tool", async () => {
+    const e = editor();
+    await e.frame();
+    const find = finder(e);
+    e.fromParent({ type: "slop:edit-tool", tool: "rect", style: {} });
+    e.down(e.$("#intro"), 100, 600);
+    for (let i = 1; i <= 10; i++) e.move(e.$("#intro"), 100 + i * 20, 600 + i * 10);
+    await e.frame();
+    expect(find).not.toHaveBeenCalled();
+    e.up(e.$("#intro"), 300, 700);
+    await e.frame();
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves the overflow wires with the view without measuring the slide again", async () => {
+    const e = editor();
+    e.lay(e.$("#c"), 1800, 500, 200, 100);
+    e.click(e.$("#a"));
+    await e.frame();
+    const [wire] = wires(e);
+    expect([wire!.style.left, wire!.style.top, wire!.style.width]).toEqual(["1800px", "500px", "120px"]);
+    const find = finder(e);
+    e.fromParent({ type: "slop:camera", x: -100, y: 30, k: 1 });
+    await e.frame();
+    expect(find).not.toHaveBeenCalled();
+    // The same wire, where the element shows now.
+    expect(wires(e)).toEqual([wire]);
+    expect([wire!.style.left, wire!.style.top, wire!.style.width]).toEqual(["1700px", "530px", "200px"]);
+    expect(e.messages("slop:edit-overflow")).toHaveLength(1);
+  });
+
+  it("places the handles once per frame however many elements move, keeping each frame's node", async () => {
+    const e = editor();
+    e.pick("#a", "#b", "#c");
+    const frames = [...e.$("[data-slop-multi]").children] as HTMLElement[];
+    expect(frames.map((f) => f.style.left)).toEqual(["100px", "400px", "800px"]);
+    const a = e.$("#a");
+    e.down(a);
+    e.move(a, 110, 100, { metaKey: true });
+    await e.frame();
+    const counts = ["#a", "#b", "#c"].map((id) => e.measured(e.$(id)));
+    for (let i = 2; i <= 12; i++) e.move(a, 100 + i * 10, 100, { metaKey: true });
+    // Every element moved with every event, and none was measured for it.
+    expect(e.$("#c").style.translate).toBe("120px 0px");
+    expect(counts.map((c) => c.count())).toEqual([0, 0, 0]);
+    expect(frames.map((f) => f.style.left)).toEqual(["110px", "410px", "810px"]);
+    await e.frame();
+    expect(counts.map((c) => c.count())).toEqual([1, 1, 1]);
+    expect([...e.$("[data-slop-multi]").children]).toEqual(frames);
+    expect(frames.map((f) => f.style.left)).toEqual(["220px", "520px", "920px"]);
+    e.up(a, 220, 100);
+  });
+
+  it("has the handles in place as soon as a drag ends", () => {
+    const e = editor();
+    const a = e.$("#a");
+    const ui = e.$("[data-slop-ui]");
+    e.down(a);
+    expect(ui.style.left).toBe("100px");
+    e.move(a, 150, 100, { metaKey: true });
+    e.up(a, 150, 100);
+    expect(ui.style.left).toBe("150px");
+  });
+
+  it("fills the drag's readout from where the move started, without measuring", async () => {
+    const e = editor();
+    const a = e.$("#a");
+    const readout = e.$("[data-slop-readout]");
+    e.down(a);
+    e.move(a, 110, 100, { metaKey: true });
+    await e.frame();
+    const count = e.measured(a);
+    e.move(a, 150, 130, { metaKey: true });
+    e.move(a, 170, 140, { metaKey: true });
+    expect(count.count()).toBe(0);
+    await e.frame();
+    expect(readout.textContent).toBe("X 170  Y 140  W 200  H 100");
+    expect([readout.style.left, readout.style.top]).toEqual(["184px", "158px"]);
+    // Once for the handles; the readout and the report to the app took nothing.
+    expect(count.count()).toBe(1);
+    expect(e.messages<{ geometry: object }>("slop:edit-geometry").at(-1)!.geometry).toMatchObject({ x: 170, y: 140 });
+    e.up(a, 170, 140);
+    await e.frame();
+    expect(e.messages<{ geometry: object }>("slop:edit-geometry").at(-1)!.geometry).toMatchObject({ x: 170, y: 140 });
+  });
+
+  it("does not measure the slide to know the zoom: the pasteboard tells", async () => {
+    const e = editor();
+    await e.frame();
+    const slide = e.measured(e.$("#intro"));
+    const a = e.$("#a");
+    e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
+    e.down(a);
+    for (let i = 1; i <= 10; i++) e.move(a, 100 + i * 10, 100, { metaKey: true });
+    // Ten screen pixels are twenty of the slide's at half size.
+    expect(a.style.translate).toBe("200px 0px");
+    e.move(e.$("#b"), 500, 350);
+    e.fromParent({ type: "slop:edit-geometry", x: 300 });
+    expect(slide.count()).toBe(0);
+    e.up(a, 200, 100);
+  });
+
+  it("measures the slide for the zoom when the pasteboard does not tell", () => {
+    const e = editor({ beforeEditor: "delete window.slopPasteboard.scale; delete window.slopPasteboard.origin;" });
+    const slide = e.$("#intro");
+    slide.getBoundingClientRect = () => new e.window.DOMRect(0, 0, 960, 540);
+    Object.defineProperty(slide, "offsetWidth", { value: 1920, configurable: true });
+    e.down(e.$("#a"));
+    e.move(e.$("#a"), 200, 50, { metaKey: true });
+    e.up(e.$("#a"), 200, 50);
+    expect(e.$("#a").style.translate).toBe("200px -100px");
+  });
+
+  it("measures the slide's elements once per marquee, and reports the selection once per frame", async () => {
+    const e = editor();
+    await e.frame();
+    const counts = ["#a", "#b", "#c", "#d"].map((id) => e.measured(e.$(id)));
+    const reports = () => e.messages("slop:edit-selection").length;
+    const before = reports();
+    e.down(e.$("#intro"), 50, 50);
+    for (let i = 1; i <= 6; i++) e.move(e.$("#intro"), 50 + i * 100, 50 + i * 60);
+    // What is inside is marked with every move.
+    expect(e.ids()).toEqual(["a", "b"]);
+    expect(reports()).toBe(before);
+    await e.frame();
+    expect(reports()).toBe(before + 1);
+    // Once each to know where it is; the two selected once more for their frames, and once for
+    // the bounds the app is told.
+    expect(counts.map((c) => c.count())).toEqual([3, 3, 1, 1]);
+    e.move(e.$("#intro"), 1100, 700);
+    e.up(e.$("#intro"), 1100, 700);
+    // The last of it is reported at once.
+    expect(e.ids()).toEqual(["a", "b", "c"]);
+    expect(e.messages<{ selected: boolean }>("slop:edit-selection").at(-1)!.selected).toBe(true);
+    expect(reports()).toBe(before + 2);
+    expect(e.$("[data-slop-multi]").children).toHaveLength(3);
+  });
+
+  it("leaves the guides as they are while a move keeps to the same ones", () => {
+    const e = editor();
+    const a = e.$("#a");
+    const layer = e.$("[data-slop-guides]");
+    e.down(a);
+    // a's left edge snaps to b's (400) from anywhere close.
+    e.move(a, 396, 100);
+    const drawn = [...layer.children];
+    expect(drawn.length).toBeGreaterThan(0);
+    const changes: MutationRecord[] = [];
+    const observer = new e.window.MutationObserver((records) => changes.push(...records));
+    observer.observe(layer, { childList: true, subtree: true, attributes: true });
+    e.move(a, 398, 100);
+    e.move(a, 402, 100);
+    changes.push(...observer.takeRecords());
+    expect(a.style.translate).toBe("300px 0px");
+    expect(changes).toEqual([]);
+    // Other guides reuse the lines that are there.
+    e.move(a, 396, 396);
+    expect([...layer.children].slice(0, drawn.length)).toEqual(drawn);
+    e.up(a, 396, 396);
+    observer.disconnect();
+    expect(layer.children).toHaveLength(0);
+  });
+
+  it("names the nudges of the same elements as one group for the app to undo together", () => {
+    vi.useFakeTimers();
+    const e = editor();
+    e.pick("#a", "#b");
+    e.key("ArrowRight");
+    e.key("ArrowRight");
+    vi.advanceTimersByTime(600);
+    e.key("ArrowDown");
+    vi.advanceTimersByTime(600);
+    expect(e.commits()).toHaveLength(2);
+    expect(e.commits().map((c) => c.group)).toEqual(["nudge:0,1", "nudge:0,1"]);
+    // Another selection is another group, and saved by something else, a nudge still has its name.
+    e.click(e.$("#c"));
+    e.key("ArrowDown");
+    e.key("z", { metaKey: true });
+    expect(e.commits().at(-1)!.group).toBe("nudge:2");
+    // Anything else saves without one.
+    e.fromParent({ type: "slop:edit-align", to: "left" });
+    expect(e.commits()).toHaveLength(4);
+    expect("group" in e.commits().at(-1)!).toBe(false);
+    e.fromParent({ type: "slop:edit-tilt", x: 15, y: 0 });
+    vi.advanceTimersByTime(600);
+    expect("group" in e.commits().at(-1)!).toBe(false);
+    // Nudges saved together with a tilt step are not only nudges.
+    e.fromParent({ type: "slop:edit-tilt", x: 15, y: 0 });
+    e.key("ArrowDown");
+    vi.advanceTimersByTime(600);
+    expect(e.commits()).toHaveLength(6);
+    expect("group" in e.commits().at(-1)!).toBe(false);
   });
 });

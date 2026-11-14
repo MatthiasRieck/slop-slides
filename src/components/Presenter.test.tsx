@@ -12,13 +12,20 @@ listen.mockImplementation(async (name: string, handler: (event: { payload: unkno
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 const playNarration = vi.fn();
 vi.mock("../lib/narrationAudio", () => ({ playNarration: (...args: unknown[]) => playNarration(...args) }));
+// Counted, to tell when the show's bar renders: its buttons are these.
+vi.mock("./Button", async (original) => {
+  const actual = await original<typeof import("./Button")>();
+  return { ...actual, ToolButton: vi.fn(actual.ToolButton) };
+});
 
-import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_GLOW, TRAIL_HOLD_MS } from "../lib/ink";
 import { saveVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { ToolButton } from "./Button";
 import { Presenter } from "./Presenter";
 import { fitWidth } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
@@ -30,8 +37,17 @@ beforeEach(() => {
   listeners.clear();
   localStorage.removeItem("slopslide.presenterBudget");
   localStorage.removeItem("slopslide.presenterPanel");
+  localStorage.removeItem("slopslide.presenterNotesSize");
   setFullscreen.mockClear();
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true, screens: null, revealRev: 0 });
+  useApp.setState({
+    deck: deckFor(DECK_HTML),
+    selected: "outro",
+    presenting: true,
+    screens: null,
+    presentFrom: "current",
+    revealRev: 0,
+    toasts: [],
+  });
 });
 
 const frame = () => screen.getByTitle("Presentation") as HTMLIFrameElement;
@@ -59,11 +75,70 @@ describe("Presenter", () => {
     expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show");
   });
 
-  it("does not restart when the editor selection follows the show", () => {
+  it("starts on the first slide shown when presenting from the beginning", () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ presentFrom: "start" });
+    const { unmount } = render(<Presenter />);
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#intro");
+    expect(screen.getByTestId("show-position").textContent).toBe("1 / 3");
+    unmount();
+    // A hidden first slide is not where the show begins.
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s, i) => ({ ...s, hidden: i === 0 })) } });
     render(<Presenter />);
-    fromFrame({ type: "slop:slide", id: "intro" });
-    expect(useApp.getState().selected).toBe("intro");
-    expect(frame().getAttribute("src")).toContain("#outro");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#%232");
+  });
+
+  it("leaves the editor's selection alone while it runs, and lands the editor on the slide it ended on", () => {
+    const select = vi.fn(useApp.getState().select);
+    const real = useApp.getState().select;
+    useApp.setState({ select });
+    try {
+      const { unmount } = render(<Presenter />);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fromFrame({ type: "slop:slide", id: "#2", index: 1 });
+      // The show knows its slide; the editor under it is not told, and loads and scrolls nothing.
+      expect(screen.getByTestId("show-position").textContent).toBe("2 / 3");
+      expect(useApp.getState().selected).toBe("outro");
+      expect(useApp.getState().revealRev).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+      expect(frame().getAttribute("src")).toContain("#outro");
+      unmount();
+      expect(select.mock.calls).toEqual([["#2"]]);
+      expect(useApp.getState().selected).toBe("#2");
+    } finally {
+      useApp.setState({ select: real });
+    }
+  });
+
+  it("selects nothing when it ends on the slide it started from, or before the player said one", () => {
+    const first = render(<Presenter />);
+    first.unmount();
+    const second = render(<Presenter />);
+    fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+    fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+    second.unmount();
+    expect(useApp.getState().selected).toBe("outro");
+    expect(useApp.getState().revealRev).toBe(0);
+  });
+
+  it("renders its bar neither for a zoom or pan of the slide nor as the time passes", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      fireEvent.keyDown(document.body, { key: "n" });
+      // The bar goes once the pointer rests; after that nothing of the show changes by itself.
+      act(() => void vi.advanceTimersByTime(3000));
+      vi.mocked(ToolButton).mockClear();
+      for (let k = 1; k <= 30; k++) fromFrame({ type: "slop:zoom", x: -k, y: -k, k: 1 + k / 10 });
+      expect(screen.getByTestId("annotation-zoom").style.width).toBe("400%");
+      expect(screen.getByTitle(/fit to the screen/).textContent).toBe("400%");
+      act(() => void vi.advanceTimersByTime(30_000));
+      // The presenter view's clocks ran on meanwhile.
+      expect(screen.getByRole("timer").textContent).toBe("0:33");
+      expect(ToolButton).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("goes full screen for the show and back afterwards", () => {
@@ -82,35 +157,146 @@ describe("Presenter", () => {
     expect(useApp.getState().presenting).toBe(false);
   });
 
-  it("has an exit button at the top that ends the show without stealing focus", () => {
-    render(<Presenter />);
-    const exit = screen.getByRole("button", { name: /^Exit presentation/ });
-    expect(screen.getByTestId("exit-zone").contains(exit)).toBe(true);
-    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
-    exit.dispatchEvent(down);
-    expect(down.defaultPrevented).toBe(true);
-    fireEvent.click(exit);
-    expect(useApp.getState().presenting).toBe(false);
-  });
+  describe("the bar at the bottom", () => {
+    const bar = () => screen.getByRole("toolbar", { name: "Show controls" });
+    const shown = () => bar().dataset.visible === "true";
 
-  it("the exit button shows at the start, on hover and briefly after shortcuts", () => {
-    vi.useFakeTimers();
-    try {
+    it("holds everything that operates the show, in one place", () => {
       render(<Presenter />);
-      const exit = screen.getByRole("button", { name: /^Exit presentation/ });
-      const zone = screen.getByTestId("exit-zone");
-      expect(exit.dataset.visible).toBe("true");
-      act(() => void vi.advanceTimersByTime(2000));
-      expect(exit.dataset.visible).toBe("false");
-      fireEvent.mouseEnter(zone);
-      expect(exit.dataset.visible).toBe("true");
-      fireEvent.mouseLeave(zone);
-      expect(exit.dataset.visible).toBe("false");
-      fireEvent.keyDown(document.body, { key: "p" });
-      expect(exit.dataset.visible).toBe("true");
-    } finally {
-      vi.useRealTimers();
-    }
+      const names = [...bar().querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent);
+      expect(names).toEqual([
+        "Pointer (Esc)",
+        "Laser pointer (L)",
+        "Pen (P)",
+        "Highlighter (H)",
+        "Eraser (E)",
+        "Undo",
+        "Redo",
+        "Clear slide (C)",
+        "Previous slide",
+        "Next slide",
+        "Play",
+        "Presenter view",
+        "End show",
+      ]);
+      expect(screen.getAllByRole("toolbar")).toHaveLength(1);
+    });
+
+    it("has one way out, called End show, that leaves the focus where it was", () => {
+      render(<Presenter />);
+      expect(screen.queryByText(/Exit presentation/)).toBeNull();
+      const exits = screen.getAllByRole("button", { name: /End show|Exit/ });
+      expect(exits).toHaveLength(1);
+      expect(exits[0]!.title).toBe("End show (Esc)");
+      const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      exits[0]!.dispatchEvent(down);
+      expect(down.defaultPrevented).toBe(true);
+      fireEvent.click(exits[0]!);
+      expect(useApp.getState().presenting).toBe(false);
+    });
+
+    it("says which slide is on screen, of the slides shown", () => {
+      const deck = deckFor(DECK_HTML);
+      useApp.setState({ deck: { ...deck, slides: deck.slides.map((s, i) => ({ ...s, hidden: i === 1 })) } });
+      render(<Presenter />);
+      expect(screen.getByTestId("show-position").textContent).toBe("2 / 2");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      expect(screen.getByTestId("show-position").textContent).toBe("1 / 2");
+    });
+
+    it("names the keys of its buttons in their tooltips", () => {
+      render(<Presenter />);
+      expect(screen.getByLabelText("Previous slide").title).toBe("Previous slide (←)");
+      expect(screen.getByLabelText("Next slide").title).toBe("Next slide (→)");
+      expect(screen.getByLabelText("Undo").title).toBe("Nothing to undo on this slide");
+      expect(screen.getByLabelText("Presenter view").title).toMatch(/\(N\)$/);
+    });
+
+    describe("coming and going", () => {
+      beforeEach(() => vi.useFakeTimers());
+      afterEach(() => vi.useRealTimers());
+      const idles = (post: { mock: { calls: unknown[][] } }) =>
+        post.mock.calls
+          .map(([m]) => m as { type: string; idle?: boolean })
+          .filter((m) => m.type === "slop:idle")
+          .map((m) => m.idle);
+
+      it("shows at the start and goes once the pointer rests, out of reach of pointer and keyboard", () => {
+        render(<Presenter />);
+        expect(shown()).toBe(true);
+        expect(bar().hasAttribute("inert")).toBe(false);
+        act(() => void vi.advanceTimersByTime(2400));
+        expect(shown()).toBe(true);
+        act(() => void vi.advanceTimersByTime(100));
+        expect(shown()).toBe(false);
+        expect(bar().hasAttribute("inert")).toBe(true);
+        expect(bar().className).toContain("pointer-events-none");
+        expect(bar().className).toContain("opacity-0");
+        expect(bar().className).toContain("motion-reduce:transition-none");
+      });
+
+      it("comes back with any move of the pointer, over the slide or beside it", () => {
+        render(<Presenter />);
+        act(() => void vi.advanceTimersByTime(3000));
+        expect(shown()).toBe(false);
+        fromFrame({ type: "slop:pointer" });
+        expect(shown()).toBe(true);
+        act(() => void vi.advanceTimersByTime(2000));
+        fireEvent.mouseMove(document.body);
+        act(() => void vi.advanceTimersByTime(2000));
+        expect(shown()).toBe(true);
+        act(() => void vi.advanceTimersByTime(500));
+        expect(shown()).toBe(false);
+        // Not for a move reported by something that is not the show.
+        fromFrame({ type: "slop:pointer" }, window);
+        expect(shown()).toBe(false);
+      });
+
+      it("stays while the pointer is on it", () => {
+        render(<Presenter />);
+        fireEvent.mouseEnter(bar());
+        act(() => void vi.advanceTimersByTime(10_000));
+        expect(shown()).toBe(true);
+        fireEvent.mouseLeave(bar());
+        expect(shown()).toBe(false);
+      });
+
+      it("stays while a tool is picked", () => {
+        render(<Presenter />);
+        fireEvent.keyDown(document.body, { key: "l" });
+        act(() => void vi.advanceTimersByTime(10_000));
+        expect(shown()).toBe(true);
+        fireEvent.keyDown(document.body, { key: "Escape" });
+        expect(shown()).toBe(true);
+        act(() => void vi.advanceTimersByTime(2500));
+        expect(shown()).toBe(false);
+      });
+
+      it("shows briefly when a key changes something on it", () => {
+        render(<Presenter />);
+        act(() => void vi.advanceTimersByTime(3000));
+        fireEvent.keyDown(document.body, { key: "c" });
+        expect(shown()).toBe(true);
+        act(() => void vi.advanceTimersByTime(2500));
+        expect(shown()).toBe(false);
+        fromFrame({ type: "slop:key", key: "c", mod: false });
+        expect(shown()).toBe(true);
+      });
+
+      it("takes the cursor over the slide along with it", () => {
+        render(<Presenter />);
+        const post = vi.spyOn(frame().contentWindow!, "postMessage");
+        act(() => void vi.advanceTimersByTime(2500));
+        expect(idles(post)).toEqual([true]);
+        fromFrame({ type: "slop:pointer" });
+        expect(idles(post)).toEqual([true, false]);
+        // A page that loads meanwhile is told where things stand.
+        act(() => void vi.advanceTimersByTime(2500));
+        post.mockClear();
+        fireEvent.load(frame());
+        expect(idles(post)).toEqual([true]);
+      });
+    });
   });
 
   it("hands other keys to the player", () => {
@@ -121,6 +307,97 @@ describe("Presenter", () => {
     expect(focus).toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
     expect(useApp.getState().presenting).toBe(true);
+  });
+
+  it("hands on the keys presenters expect, with Shift where it means something", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const sent = () => post.mock.calls.map(([m]) => m).filter((m) => (m as { type: string }).type === "slop:go");
+    for (const key of ["Enter", "Backspace", "b", "w", ".", "3"]) fireEvent.keyDown(document.body, { key });
+    fireEvent.keyDown(document.body, { key: " ", shiftKey: true });
+    expect(sent()).toEqual([
+      { type: "slop:go", key: "Enter" },
+      { type: "slop:go", key: "Backspace" },
+      { type: "slop:go", key: "b" },
+      { type: "slop:go", key: "w" },
+      { type: "slop:go", key: "." },
+      { type: "slop:go", key: "3" },
+      { type: "slop:go", key: " ", shift: true },
+    ]);
+  });
+
+  it("leaves keys with a modifier to the system, and does not take them from the page", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const focus = vi.spyOn(frame(), "focus");
+    for (const held of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }]) {
+      const event = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true, ...held });
+      act(() => void document.body.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+    }
+    fireEvent.keyDown(document.body, { key: "f", metaKey: true });
+    // Alt with a tool's letter picks no tool either, here or in the slide's page.
+    fireEvent.keyDown(document.body, { key: "p", altKey: true });
+    fromFrame({ type: "slop:key", key: "p", mod: false, shift: false, alt: true });
+    expect(screen.getByRole("button", { name: /^Pointer/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("leaves Tab, and Enter and Space on a button, to the bar's own buttons", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const focus = vi.spyOn(frame(), "focus");
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    const next = screen.getByLabelText("Next slide");
+    fireEvent.keyDown(next, { key: "Enter" });
+    fireEvent.keyDown(next, { key: " " });
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+    expect(focus).not.toHaveBeenCalled();
+    // The arrows still move the slides from there.
+    fireEvent.keyDown(next, { key: "ArrowLeft" });
+    expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowLeft" }, "*");
+  });
+
+  describe("the show's keys, listed", () => {
+    const list = () => screen.queryByRole("dialog", { name: "Keys while presenting" });
+
+    it("? opens them, from the app or from inside the slide, and Escape closes them, not the show", () => {
+      render(<Presenter />);
+      expect(list()).toBeNull();
+      fireEvent.keyDown(document.body, { key: "?", shiftKey: true });
+      expect(list()!.textContent).toContain("Next slide");
+      expect(list()!.textContent).toContain("Blank the screen");
+      // Only the show's keys, not the editor's.
+      expect(list()!.textContent).not.toContain("Duplicate");
+      fireEvent.keyDown(list()!, { key: "Escape" });
+      expect(list()).toBeNull();
+      expect(useApp.getState().presenting).toBe(true);
+      fromFrame({ type: "slop:key", key: "?", mod: false, shift: true });
+      expect(list()).toBeTruthy();
+      fromFrame({ type: "slop:key", key: "Escape" });
+      expect(list()).toBeNull();
+      expect(useApp.getState().presenting).toBe(true);
+    });
+
+    it("keeps the keys to itself while open", () => {
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fireEvent.keyDown(document.body, { key: "?" });
+      post.mockClear();
+      fireEvent.keyDown(document.body, { key: "ArrowRight" });
+      fireEvent.keyDown(document.body, { key: "p" });
+      expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.getByRole("button", { name: /^Pointer/ }).getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("opens from the presenter view too", () => {
+      localStorage.setItem("slopslide.presenterPanel", "true");
+      render(<Presenter />);
+      fireEvent.click(screen.getByRole("button", { name: "Keys while presenting (?)" }));
+      expect(list()).toBeTruthy();
+    });
   });
 
   it("has previous and next buttons that drive the player", () => {
@@ -271,7 +548,36 @@ describe("Presenter", () => {
       expect(nexts(post)).toBe(0);
     });
 
-    it("leaves out-of-date audio and narration the settings turned off unspoken", async () => {
+    it("speaks the narration whatever the video export was last set to", async () => {
+      // A video exported without narration leaves that choice stored; it is the video's, not the show's.
+      saveVideoOptions({
+        secondsPerSlide: 3,
+        fps: 30,
+        animate: true,
+        narration: false,
+        pauseBefore: 0.5,
+        pauseAfter: 1,
+      });
+      playNarration.mockImplementation(async () => ({ ended: new Promise<void>(() => {}), stop: vi.fn() }));
+      useNarration.setState({
+        audioDeck: deckFor(DECK_HTML).id,
+        audio: { intro: { slide: "intro", state: "ready", seconds: 10 } },
+      });
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      expect(screen.getByLabelText("Play").title).toMatch(/speak each slide's narration/);
+      fireEvent.click(screen.getByLabelText("Play"));
+      await act(async () => vi.advanceTimersByTime(500));
+      expect(playNarration).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", expect.any(Function));
+      // The slide waits for its narration, as the timeline has it.
+      await act(async () => vi.advanceTimersByTime(10_900));
+      expect(nexts(post)).toBe(0);
+      await act(async () => vi.advanceTimersByTime(100));
+      expect(nexts(post)).toBe(1);
+    });
+
+    it("leaves out-of-date audio unspoken", async () => {
       useNarration.setState({
         audioDeck: deckFor(DECK_HTML).id,
         audio: { intro: { slide: "intro", state: "stale", seconds: 10 } },
@@ -549,17 +855,26 @@ describe("Presenter tools", () => {
 
   it("colors apply to the active ink tool", () => {
     render(<Presenter />);
-    expect(screen.queryByRole("button", { name: /^Color/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Red$/ })).toBeNull();
     fireEvent.click(tool(/^Pen/));
-    fireEvent.click(tool(/Color #3b82f6/));
-    expect(tool(/Color #3b82f6/).getAttribute("aria-pressed")).toBe("true");
+    // Named, not numbered, for those who hear or hover them.
+    expect(["Red", "Yellow", "Green", "Blue", "White"].map((name) => tool(new RegExp(`^${name}$`)).title)).toEqual([
+      "Red",
+      "Yellow",
+      "Green",
+      "Blue",
+      "White",
+    ]);
+    expect(screen.queryByRole("button", { name: /#/ })).toBeNull();
+    fireEvent.click(tool(/^Blue$/));
+    expect(tool(/^Blue$/).getAttribute("aria-pressed")).toBe("true");
     draw([
       [10, 10],
       [20, 20],
     ]);
     expect(strokes()[0]!.getAttribute("stroke")).toBe("#3b82f6");
     fireEvent.click(tool(/^Highlighter/));
-    expect(tool(/Color #facc15/).getAttribute("aria-pressed")).toBe("true");
+    expect(tool(/^Yellow$/).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("ignores right clicks and moves without a press", () => {
@@ -591,6 +906,91 @@ describe("Presenter tools", () => {
     draw([[10, 10]]);
     fireEvent.click(tool(/^Clear slide/));
     expect(strokes()).toHaveLength(0);
+  });
+
+  it("undo brings back what clear removed, and redo clears again", () => {
+    render(<Presenter />);
+    const disabled = (name: RegExp) => (tool(name) as HTMLButtonElement).disabled;
+    fireEvent.click(tool(/^Pen/));
+    draw([[10, 10]]);
+    draw([[20, 20]]);
+    expect(disabled(/^Redo/)).toBe(true);
+    fireEvent.keyDown(document.body, { key: "c" });
+    expect(strokes()).toHaveLength(0);
+    // An empty slide still has its clearing to undo.
+    expect(disabled(/^Undo/)).toBe(false);
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    expect(strokes()).toHaveLength(2);
+    expect(disabled(/^Redo/)).toBe(false);
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true, shiftKey: true });
+    expect(strokes()).toHaveLength(0);
+    fromFrame({ type: "slop:key", key: "z", mod: true, shift: false });
+    expect(strokes()).toHaveLength(2);
+    fromFrame({ type: "slop:key", key: "Z", mod: true, shift: true });
+    expect(strokes()).toHaveLength(0);
+    fireEvent.click(tool(/^Undo/));
+    expect(strokes()).toHaveLength(2);
+    fireEvent.click(tool(/^Redo/));
+    expect(strokes()).toHaveLength(0);
+    expect(tool(/^Redo/).title).toBe("Nothing to redo on this slide");
+  });
+
+  it("undo brings back a stroke the eraser took, where it was", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    draw([[10, 10]]);
+    draw([[20, 20]]);
+    draw([[30, 30]]);
+    const middle = strokes()[1]!.getAttribute("cx");
+    fireEvent.click(tool(/^Eraser/));
+    fireEvent.pointerDown(strokes()[1]!, { button: 0, buttons: 1 });
+    expect(strokes()).toHaveLength(2);
+    fireEvent.click(tool(/^Undo/));
+    expect(strokes()).toHaveLength(3);
+    expect(strokes()[1]!.getAttribute("cx")).toBe(middle);
+  });
+
+  it("the eraser dragged over several strokes takes each, and each comes back in turn", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    draw([[10, 10]]);
+    draw([[20, 20]]);
+    draw([[30, 30]]);
+    fireEvent.click(tool(/^Eraser/));
+    // Two moves before the next render: the second builds on the first.
+    act(() => {
+      fireEvent.pointerMove(strokes()[0]!, { buttons: 1 });
+      fireEvent.pointerMove(strokes()[0]!, { buttons: 1 });
+    });
+    expect(strokes()).toHaveLength(1);
+    fireEvent.click(tool(/^Undo/));
+    expect(strokes()).toHaveLength(2);
+    fireEvent.click(tool(/^Undo/));
+    expect(strokes()).toHaveLength(3);
+  });
+
+  it("keeps each slide's ink history to that slide", () => {
+    render(<Presenter />);
+    fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+    fireEvent.click(tool(/^Pen/));
+    draw([[10, 10]]);
+    fireEvent.keyDown(document.body, { key: "c" });
+    fromFrame({ type: "slop:slide", id: null, index: 1 });
+    expect((tool(/^Undo/) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    expect(strokes()).toHaveLength(0);
+    fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    expect(strokes()).toHaveLength(1);
+  });
+
+  it("the laser has a pointer's icon, not the wand that means the agent elsewhere", () => {
+    render(<Presenter />);
+    expect(
+      tool(/^Laser/)
+        .querySelector("svg")!
+        .getAttribute("class"),
+    ).toContain("lucide-circle-dot");
   });
 
   it("modifier shortcuts other than undo are left alone", () => {
@@ -638,8 +1038,11 @@ describe("Presenter tools", () => {
     expect(screen.queryByTestId("laser")).toBeNull();
     fireEvent.pointerMove(layer(), { clientX: 120, clientY: 80 });
     const dot = screen.getByTestId("laser");
-    expect(dot.style.left).toBe("120px");
-    expect(dot.style.top).toBe("80px");
+    // Moved, not laid out again: the layer does not render as the pointer goes.
+    expect(dot.style.transform).toBe("translate(120px, 80px)");
+    fireEvent.pointerMove(layer(), { clientX: 300, clientY: 40 });
+    expect(screen.getByTestId("laser")).toBe(dot);
+    expect(dot.style.transform).toBe("translate(300px, 40px)");
     fireEvent.pointerDown(layer(), { button: 0, clientX: 120, clientY: 80 });
     fireEvent.pointerUp(layer());
     expect(strokes()).toHaveLength(0);
@@ -731,7 +1134,7 @@ describe("Presenter tools", () => {
     expect(new Set(glow)).toEqual(new Set(colors(dot.style.boxShadow)));
   });
 
-  it("a zoomed-in laser trail only gets a canvas the size of the screen", () => {
+  it("a zoomed-in laser trail only gets a canvas around the trail, inside the screen", () => {
     paintedTrail();
     const zoomed = { left: -1000, top: -500, width: window.innerWidth * 4, height: window.innerHeight * 4 };
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
@@ -744,10 +1147,22 @@ describe("Presenter tools", () => {
     render(<Presenter />);
     dragLaser();
     const canvas = screen.getByTestId("laser-trail") as HTMLCanvasElement;
-    expect([canvas.style.left, canvas.style.top]).toEqual(["1000px", "500px"]);
-    expect([canvas.style.width, canvas.style.height]).toEqual([`${window.innerWidth}px`, `${window.innerHeight}px`]);
+    const box = ["left", "top", "width", "height"].map((side) =>
+      Number.parseFloat(canvas.style.getPropertyValue(side)),
+    );
+    const [left, top, width, height] = box as [number, number, number, number];
+    // The trail runs from (100, 100) to (300, 150) on screen, which is (1100, 600) to (1300, 650)
+    // on the layer: the canvas reaches around it by the glow, and no further than the screen.
+    expect(left).toBeGreaterThanOrEqual(1000);
+    expect(top).toBeGreaterThanOrEqual(500);
+    expect(left).toBeLessThanOrEqual(1100 - TRAIL_GLOW);
+    expect(top).toBeLessThanOrEqual(600 - TRAIL_GLOW);
+    expect(left + width).toBeGreaterThanOrEqual(1300 + TRAIL_GLOW);
+    expect(top + height).toBeGreaterThanOrEqual(650 + TRAIL_GLOW);
+    expect(width).toBeLessThan(window.innerWidth);
+    expect(height).toBeLessThan(window.innerHeight);
     const scale = window.devicePixelRatio || 1;
-    expect([canvas.width, canvas.height]).toEqual([window.innerWidth * scale, window.innerHeight * scale]);
+    expect([canvas.width, canvas.height]).toEqual([width * scale, height * scale]);
   });
 
   it("putting the laser away clears its trail", () => {
@@ -758,49 +1173,6 @@ describe("Presenter tools", () => {
     expect(screen.queryByTestId("laser-trail")).not.toBeNull();
     fireEvent.keyDown(document.body, { key: "l" });
     expect(screen.queryByTestId("laser-trail")).toBeNull();
-  });
-
-  it("the toolbar shows on hover and briefly after shortcuts", () => {
-    vi.useFakeTimers();
-    try {
-      render(<Presenter />);
-      const bar = screen.getByRole("toolbar");
-      expect(bar.dataset.visible).toBe("true");
-      act(() => void vi.advanceTimersByTime(2000));
-      expect(bar.dataset.visible).toBe("false");
-      fireEvent.mouseEnter(screen.getByTestId("presenter-toolbar-zone"));
-      expect(bar.dataset.visible).toBe("true");
-      fireEvent.mouseLeave(screen.getByTestId("presenter-toolbar-zone"));
-      expect(bar.dataset.visible).toBe("false");
-      fireEvent.keyDown(document.body, { key: "p" });
-      expect(bar.dataset.visible).toBe("true");
-      act(() => void vi.advanceTimersByTime(2000));
-      expect(bar.dataset.visible).toBe("false");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("the arrow buttons show at the start, on hover and briefly after shortcuts", () => {
-    vi.useFakeTimers();
-    try {
-      render(<Presenter />);
-      const next = screen.getByLabelText("Next slide");
-      const zone = screen.getByTestId("nav-zone");
-      expect(next.dataset.visible).toBe("true");
-      act(() => void vi.advanceTimersByTime(2000));
-      expect(next.dataset.visible).toBe("false");
-      fireEvent.mouseEnter(zone);
-      expect(next.dataset.visible).toBe("true");
-      fireEvent.mouseLeave(zone);
-      expect(next.dataset.visible).toBe("false");
-      fireEvent.keyDown(document.body, { key: "p" });
-      expect(next.dataset.visible).toBe("true");
-      act(() => void vi.advanceTimersByTime(2000));
-      expect(next.dataset.visible).toBe("false");
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("toolbar buttons do not steal focus from the slide", () => {
@@ -827,6 +1199,10 @@ describe("presenter view", () => {
     fireEvent.keyDown(document.body, { key: "n" });
     return view;
   };
+  /** Opens the timer's settings, where the times to count down are set. */
+  const openTimerSettings = () => fireEvent.click(screen.getByRole("button", { name: "Timer settings" }));
+  const totalField = () => screen.getByLabelText("Total time in minutes") as HTMLInputElement;
+  const perSlideField = () => screen.getByLabelText("Per slide in minutes") as HTMLInputElement;
   beforeEach(() => useApp.setState({ deck: deck(), selected: "intro" }));
   afterEach(() => vi.useRealTimers());
 
@@ -888,8 +1264,9 @@ describe("presenter view", () => {
   it("shows the time left against the total time and the time on the slide against its own", () => {
     vi.useFakeTimers();
     showPanel();
-    fireEvent.change(screen.getByLabelText("Total time in minutes"), { target: { value: "1" } });
-    fireEvent.change(screen.getByLabelText("Per slide in minutes"), { target: { value: "0.5" } });
+    openTimerSettings();
+    fireEvent.change(totalField(), { target: { value: "1" } });
+    fireEvent.change(perSlideField(), { target: { value: "0.5" } });
     act(() => void vi.advanceTimersByTime(20_000));
     expect(screen.getByTestId("total-left").textContent).toBe("0:40 left");
     expect(screen.getByTestId("slide-time").textContent).toBe("slide0:20 / 0:30");
@@ -905,9 +1282,143 @@ describe("presenter view", () => {
   it("remembers the times and shows no budget without one", () => {
     localStorage.setItem("slopslide.presenterBudget", JSON.stringify({ total: 20, perSlide: -3 }));
     showPanel();
-    expect((screen.getByLabelText("Total time in minutes") as HTMLInputElement).value).toBe("20");
-    expect((screen.getByLabelText("Per slide in minutes") as HTMLInputElement).value).toBe("");
     expect(screen.getByTestId("total-left").textContent).toBe("20:00 left");
+    openTimerSettings();
+    expect(totalField().value).toBe("20");
+    expect(perSlideField().value).toBe("");
+  });
+
+  it("keeps the times to count down behind a button, not in a row of their own", () => {
+    showPanel();
+    const settings = screen.getByRole("button", { name: "Timer settings" });
+    expect(screen.queryByLabelText("Total time in minutes")).toBeNull();
+    expect(settings.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(settings);
+    expect(settings.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("dialog", { name: "Timer settings" }).contains(totalField())).toBe(true);
+    // Escape closes the settings, not the show.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Timer settings" })).toBeNull();
+    expect(useApp.getState().presenting).toBe(true);
+  });
+
+  it("typing a time moves no slide and picks no tool", () => {
+    showPanel();
+    openTimerSettings();
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    for (const key of ["1", "p", "ArrowRight", " "]) fireEvent.keyDown(totalField(), { key });
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+    expect(screen.getByRole("button", { name: /^Pointer/ }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("says where a countdown comes from when its field is empty", () => {
+    const base = deckFor(DECK_HTML);
+    const slides = base.slides.map((s) => ({ ...s, time: s.id === "intro" ? 90 : s.id === "outro" ? 660 : 0 }));
+    useApp.setState({ deck: { ...base, slides }, selected: "intro" });
+    showPanel();
+    // 12:30 left shows with both fields empty: they say why.
+    expect(screen.getByTestId("total-left").textContent).toBe("12:30 left");
+    openTimerSettings();
+    expect(totalField().placeholder).toBe("12:30 from slide times");
+    expect(perSlideField().placeholder).toBe("1:30 from this slide's time");
+    // The presenter's own total replaces the slides'.
+    fireEvent.change(totalField(), { target: { value: "20" } });
+    expect(screen.getByTestId("total-left").textContent).toBe("20:00 left");
+    // A time per slide does not replace a slide's own, and that is said.
+    fireEvent.change(perSlideField(), { target: { value: "5" } });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 1:30");
+    expect(screen.getByRole("dialog", { name: "Timer settings" }).textContent).toContain(
+      "This slide counts down its own time instead: 1:30 from this slide's time.",
+    );
+  });
+
+  it("has plain placeholders without times on the slides", () => {
+    showPanel();
+    openTimerSettings();
+    expect(totalField().placeholder).toBe("min");
+    expect(perSlideField().placeholder).toBe("min");
+  });
+
+  it("pauses the timer and runs it on from where it stopped", () => {
+    vi.useFakeTimers();
+    showPanel();
+    act(() => void vi.advanceTimersByTime(10_000));
+    fireEvent.click(screen.getByRole("button", { name: "Pause the timer" }));
+    expect(screen.getByTestId("timer-paused").textContent).toBe("Paused");
+    act(() => void vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole("timer").textContent).toBe("0:10");
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:10");
+    // A slide that comes on while paused waits at zero.
+    fromFrame({ type: "slop:slide", index: 2, id: "outro" });
+    act(() => void vi.advanceTimersByTime(5_000));
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00");
+    fireEvent.click(screen.getByRole("button", { name: "Resume the timer" }));
+    expect(screen.queryByTestId("timer-paused")).toBeNull();
+    act(() => void vi.advanceTimersByTime(5_000));
+    expect(screen.getByRole("timer").textContent).toBe("0:15");
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:05");
+    // Restarting a paused timer sets it running.
+    fireEvent.click(screen.getByRole("button", { name: "Pause the timer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart the timer" }));
+    act(() => void vi.advanceTimersByTime(2_000));
+    expect(screen.getByRole("timer").textContent).toBe("0:02");
+  });
+
+  it("keeps the time on the slide while the presenter view is closed", () => {
+    vi.useFakeTimers();
+    showPanel();
+    act(() => void vi.advanceTimersByTime(40_000));
+    fireEvent.keyDown(document.body, { key: "n" });
+    act(() => void vi.advanceTimersByTime(5_000));
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:45");
+    expect(screen.getByRole("timer").textContent).toBe("0:45");
+  });
+
+  it("shows the time of day", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 5, 14, 7, 30));
+    showPanel();
+    expect(screen.getByTestId("wall-clock").textContent).toMatch(/^(14|2)[:.]07/);
+    act(() => void vi.advanceTimersByTime(60_000));
+    expect(screen.getByTestId("wall-clock").textContent).toMatch(/^(14|2)[:.]08/);
+  });
+
+  it("makes the notes smaller and larger, and remembers the size", () => {
+    const { unmount } = showPanel();
+    const size = () => screen.getByTestId("presenter-notes").className.match(/text-(sm|base|lg|xl|2xl|3xl|4xl)/)?.[0];
+    const smaller = () => screen.getByRole("button", { name: "Smaller notes" }) as HTMLButtonElement;
+    const larger = () => screen.getByRole("button", { name: "Larger notes" }) as HTMLButtonElement;
+    expect(size()).toBe("text-base");
+    fireEvent.click(larger());
+    fireEvent.click(larger());
+    expect(size()).toBe("text-xl");
+    unmount();
+    // The panel is remembered open, and its notes at the size picked.
+    render(<Presenter />);
+    expect(size()).toBe("text-xl");
+    fireEvent.click(smaller());
+    fireEvent.click(smaller());
+    fireEvent.click(smaller());
+    expect(size()).toBe("text-sm");
+    expect(smaller().disabled).toBe(true);
+    expect(smaller().title).toBe("The notes are as small as they get");
+    for (let i = 0; i < 8; i++) fireEvent.click(larger());
+    expect(size()).toBe("text-4xl");
+    expect(larger().disabled).toBe(true);
+  });
+
+  it("pressing the next slide's picture moves the show on to it", () => {
+    showPanel();
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    const next = screen.getByRole("button", { name: "Go to the next slide" });
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    next.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    fireEvent.click(next);
+    expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+    expect(screen.queryByRole("button", { name: "Go to the next slide" })).toBeNull();
   });
 
   it("counts down the time set on the slide, and the slides' times added up", () => {
@@ -1011,21 +1522,77 @@ describe("presenter view", () => {
       expect(calls("start_narration_recording")).toHaveLength(1);
     });
 
-    it("uses the microphone for one thing at a time", async () => {
+    it("uses the microphone for one thing at a time, and says what to stop first", async () => {
       open();
+      const teleprompter = () => screen.getByRole("button", { name: /teleprompter/i }) as HTMLButtonElement;
       await act(async () => fireEvent.click(text()));
       expect((audio() as HTMLButtonElement).disabled).toBe(true);
-      expect((screen.getByRole("button", { name: /teleprompter/i }) as HTMLButtonElement).disabled).toBe(true);
+      expect(audio().title).toBe("Stop the other recording first");
+      expect(teleprompter().disabled).toBe(true);
+      expect(teleprompter().title).toBe("Stop recording first");
       await act(async () => fireEvent.click(text()));
-      await act(async () => fireEvent.click(screen.getByRole("button", { name: /teleprompter/i })));
+      expect(audio().title).toMatch(/^Record the narration as audio/);
+      await act(async () => fireEvent.click(teleprompter()));
       expect((text() as HTMLButtonElement).disabled).toBe(true);
       expect((audio() as HTMLButtonElement).disabled).toBe(true);
+      expect(text().title).toBe("Stop the teleprompter first");
+      expect(audio().title).toBe("Stop the teleprompter first");
     });
 
-    it("keeps what was recorded when the presenter view closes", async () => {
+    it("is red only while recording; the teleprompter shows in the primary color", async () => {
       open();
+      const teleprompter = () => screen.getByRole("button", { name: /teleprompter/i });
+      await act(async () => fireEvent.click(teleprompter()));
+      expect(teleprompter().getAttribute("aria-pressed")).toBe("true");
+      expect(teleprompter().className).toContain("text-primary");
+      expect(teleprompter().className).not.toContain("destructive");
+      await act(async () => fireEvent.click(teleprompter()));
       await act(async () => fireEvent.click(audio()));
+      expect(audio().className).toContain("text-destructive");
+    });
+
+    it("goes on recording while the presenter view is closed, and says so over the slide", async () => {
+      vi.useFakeTimers();
+      open();
+      expect(screen.queryByTestId("microphone-pill")).toBeNull();
+      await act(async () => fireEvent.click(audio()));
+      // Beside the slide the panel says it; no need to say it twice.
+      expect(screen.queryByTestId("microphone-pill")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(65_000));
       await act(async () => fireEvent.keyDown(document.body, { key: "n" }));
+      expect(calls("stop_narration_recording")).toHaveLength(0);
+      const pill = screen.getByTestId("microphone-pill");
+      expect(pill.getAttribute("role")).toBe("status");
+      expect(pill.textContent).toBe("Recording1:05");
+      expect(pill.className).toContain("text-destructive");
+      // The slides it goes through are still told to the backend.
+      await act(async () => fromFrame({ type: "slop:slide", id: "outro", index: 2 }));
+      expect(calls("narration_recording_slide").at(-1)).toEqual({ slide: "outro" });
+      // Open again, it is still recording, and stops when asked.
+      await act(async () => fireEvent.keyDown(document.body, { key: "n" }));
+      expect(audio().getAttribute("aria-pressed")).toBe("true");
+      expect(screen.queryByTestId("microphone-pill")).toBeNull();
+      await act(async () => fireEvent.click(audio()));
+      expect(calls("stop_narration_recording")).toHaveLength(1);
+    });
+
+    it("shows how long the recording has run", async () => {
+      vi.useFakeTimers();
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect(screen.getByTestId("recording-time").textContent).toBe("0:00");
+      await act(async () => vi.advanceTimersByTime(83_000));
+      expect(screen.getByTestId("recording-time").textContent).toBe("1:23");
+      await act(async () => fireEvent.click(text()));
+      expect(screen.queryByTestId("recording-time")).toBeNull();
+    });
+
+    it("keeps what was recorded when the show ends", async () => {
+      const view = render(<Presenter />);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.keyDown(document.body, { key: "n" });
+      await act(async () => fireEvent.click(audio()));
+      await act(async () => view.unmount());
       expect(calls("stop_narration_recording")).toHaveLength(1);
       expect(invoke.mock.calls.map(([name]) => name)).not.toContain("cancel_recording");
     });
@@ -1151,9 +1718,25 @@ describe("presenter view", () => {
       expect(commands()).not.toContain("cancel_recording");
     });
 
-    it("turns the microphone off with the presenter view", async () => {
+    it("goes on listening while the presenter view is closed, and says so over the slide", async () => {
       await turnOn();
       fireEvent.keyDown(document.body, { key: "n" });
+      expect(commands()).not.toContain("cancel_recording");
+      const pill = screen.getByTestId("microphone-pill");
+      expect(pill.textContent).toBe("Teleprompter listening");
+      expect(pill.className).toContain("text-primary");
+      fireEvent.keyDown(document.body, { key: "n" });
+      expect(button().getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("turns the microphone off when the show ends", async () => {
+      let view!: ReturnType<typeof render>;
+      await act(async () => {
+        view = render(<Presenter />);
+      });
+      fireEvent.keyDown(document.body, { key: "n" });
+      await act(async () => fireEvent.click(button()));
+      await act(async () => view.unmount());
       expect(commands()).toContain("cancel_recording");
     });
 
@@ -1265,10 +1848,59 @@ describe("Presenter on several screens", () => {
     render(<Presenter />);
     await act(async () => {});
     const post = vi.spyOn(frame().contentWindow as Window, "postMessage");
-    listeners.get("presenter:key")?.({ payload: "ArrowRight" });
+    const key = (key: string, shift = false) =>
+      act(() => listeners.get("presenter:key")?.({ payload: { key, shift } }));
+    key("ArrowRight");
     expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    key(" ", true);
+    expect(post).toHaveBeenCalledWith({ type: "slop:go", key: " ", shift: true }, "*");
     act(() => listeners.get("presenter:exit")?.({ payload: null }));
     expect(useApp.getState().presenting).toBe(false);
+  });
+
+  it("acts on the tools' keys pressed in the presenter view as on its own", async () => {
+    useApp.setState({ screens: choice });
+    render(<Presenter />);
+    await act(async () => {});
+    const post = vi.spyOn(frame().contentWindow as Window, "postMessage");
+    const key = (key: string) => act(() => listeners.get("presenter:key")?.({ payload: { key, shift: false } }));
+    const pressed = (name: RegExp) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+    key("l");
+    expect(pressed(/^Laser/)).toBe("true");
+    // Escape puts the tool away before it ends the show.
+    key("Escape");
+    expect(pressed(/^Pointer/)).toBe("true");
+    expect(useApp.getState().presenting).toBe(true);
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+    key("Escape");
+    expect(useApp.getState().presenting).toBe(false);
+  });
+
+  it("plays and pauses when the presenter view asks, and tells it which", async () => {
+    vi.useFakeTimers();
+    try {
+      useApp.setState({ screens: choice });
+      render(<Presenter />);
+      await act(async () => {});
+      fromFrame({ type: "slop:slide", index: 0, id: "intro" });
+      expect(emit).toHaveBeenLastCalledWith("presenter:state", expect.objectContaining({ playing: false }));
+      act(() => listeners.get("presenter:play")?.({ payload: null }));
+      expect(screen.getByLabelText("Pause")).toBeTruthy();
+      expect(emit).toHaveBeenLastCalledWith("presenter:state", expect.objectContaining({ playing: true }));
+      act(() => listeners.get("presenter:play")?.({ payload: null }));
+      expect(emit).toHaveBeenLastCalledWith("presenter:state", expect.objectContaining({ playing: false }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("has no panel to open beside the slides, and its button says where the presenter view is", async () => {
+    useApp.setState({ screens: choice });
+    render(<Presenter />);
+    await act(async () => {});
+    const button = screen.getByRole("button", { name: "Presenter view" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe("The presenter view is in a window of its own");
   });
 
   it("without a presenter view only moves the show", async () => {
@@ -1287,7 +1919,7 @@ describe("Presenter on several screens", () => {
 });
 
 describe("Presenter in windows", () => {
-  beforeEach(() => useApp.setState({ screens: "windows", error: null }));
+  beforeEach(() => useApp.setState({ screens: "windows", toasts: [] }));
 
   it("opens the presenter view in a window and leaves the show's window as it is", async () => {
     localStorage.setItem("slopslide.presenterPanel", "true");
@@ -1309,7 +1941,7 @@ describe("Presenter in windows", () => {
     render(<Presenter />);
     await act(async () => {});
     const post = vi.spyOn(frame().contentWindow as Window, "postMessage");
-    listeners.get("presenter:key")?.({ payload: "ArrowRight" });
+    act(() => listeners.get("presenter:key")?.({ payload: { key: "ArrowRight", shift: false } }));
     expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
     act(() => listeners.get("presenter:exit")?.({ payload: null }));
     expect(useApp.getState().presenting).toBe(false);
@@ -1329,21 +1961,114 @@ describe("Presenter in windows", () => {
     invoke.mockRejectedValueOnce("cannot open the presenter view: no");
     render(<Presenter />);
     await act(async () => {});
-    expect(useApp.getState().error).toContain("cannot open the presenter view");
+    expect(lastError(useApp.getState())).toContain("cannot open the presenter view");
   });
 });
 
 describe("PresenterWindow", () => {
-  it("asks for the show and displays the slide, notes and next slide it is sent", async () => {
+  /** The window with the show's state sent to it: the deck on its first slide unless told otherwise. */
+  async function opened(state: { slide?: string; playing?: boolean } = {}) {
+    const deck = deckFor(DECK_HTML);
     render(<PresenterWindow />);
     await act(async () => {});
+    const send = (next: { slide?: string; playing?: boolean }) =>
+      act(() =>
+        listeners.get("presenter:state")?.({
+          payload: { deck, slide: next.slide ?? deck.slides[0]?.id, playing: next.playing ?? false },
+        }),
+      );
+    send(state);
+    return { deck, send };
+  }
+
+  it("asks for the show and displays the slide, notes and next slide it is sent", async () => {
+    const { deck } = await opened();
     expect(emit).toHaveBeenCalledWith("presenter:ready");
-    const deck = deckFor(DECK_HTML);
-    act(() => listeners.get("presenter:state")?.({ payload: { deck, slide: deck.slides[0]?.id } }));
     expect(screen.getByRole("complementary")).toBeTruthy();
     expect(screen.getByText("Now")).toBeTruthy();
-    expect(screen.getByText("Next")).toBeTruthy();
+    expect(screen.getAllByText("Next").length).toBeGreaterThan(0);
     expect(screen.getByTestId("presenter-notes").textContent).toBe(deck.slides[0]?.notes || "No notes for this slide.");
+  });
+
+  it("has a row that operates the show: previous, next, play and end", async () => {
+    const { send } = await opened();
+    const row = screen.getByRole("toolbar", { name: "Show controls" });
+    expect([...row.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "Previous",
+      "Next",
+      "Play",
+      "End show",
+    ]);
+    emit.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "ArrowLeft", shift: false });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "ArrowRight", shift: false });
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(emit).toHaveBeenLastCalledWith("presenter:play");
+    // The show says it plays; the button turns to Pause.
+    send({ playing: true });
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "End show" }));
+    expect(emit).toHaveBeenLastCalledWith("presenter:exit");
+  });
+
+  it("keeps the next slide's picture as the show moves on to it, loading only the one after", async () => {
+    const { deck, send } = await opened();
+    const [, next] = screen.getAllByTestId("fitted-slide");
+    expect(next?.closest("div.flex-col")?.textContent).toContain("Next");
+    send({ slide: deck.slides[1]?.id });
+    const [now, after] = screen.getAllByTestId("fitted-slide");
+    // The very element that was Next is Now: its page was not loaded again.
+    expect(now).toBe(next);
+    expect(now?.closest("div.flex-col")?.textContent).toContain("Now");
+    expect(now?.querySelector("button")).toBeNull();
+    expect(after).not.toBe(next);
+    expect(after?.querySelector("button")?.getAttribute("aria-label")).toBe("Go to the next slide");
+    // Going back, the slide on screen becomes the next one again, and stays as it is too.
+    send({ slide: deck.slides[0]?.id });
+    expect(screen.getAllByTestId("fitted-slide")[1]).toBe(now);
+    // On the last slide there is no next one.
+    send({ slide: deck.slides.at(-1)?.id });
+    expect(screen.getAllByTestId("fitted-slide")).toHaveLength(1);
+    expect(screen.getByText("The end of the show.")).toBeTruthy();
+  });
+
+  it("moves the show on when the next slide's picture is pressed", async () => {
+    await opened();
+    emit.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Go to the next slide" }));
+    expect(emit).toHaveBeenCalledWith("presenter:key", { key: "ArrowRight", shift: false });
+  });
+
+  it("names its microphone buttons, where there is room for the words", async () => {
+    await opened();
+    expect(screen.getByRole("button", { name: /^Teleprompter/ }).textContent).toBe("Teleprompter");
+    expect(screen.getByRole("button", { name: /narration as text/ }).textContent).toBe("Record text");
+    expect(screen.getByRole("button", { name: /narration as audio/ }).textContent).toBe("Record audio");
+  });
+
+  it("reads the notes larger than the panel beside the slide does, at a size of its own", async () => {
+    await opened();
+    expect(screen.getByTestId("presenter-notes").className).toContain("text-2xl");
+    fireEvent.click(screen.getByRole("button", { name: "Smaller notes" }));
+    expect(screen.getByTestId("presenter-notes").className).toContain("text-xl");
+    expect(JSON.parse(localStorage.getItem("slopslide.presenterNotesSize") ?? "{}")).toEqual({ panel: 1, window: 3 });
+  });
+
+  it("keeps the slide's time when the show moves on, and its clocks to itself", async () => {
+    vi.useFakeTimers();
+    try {
+      const { deck, send } = await opened();
+      act(() => void vi.advanceTimersByTime(30_000));
+      expect(screen.getByRole("timer").textContent).toBe("0:30");
+      send({ slide: deck.slides[1]?.id });
+      act(() => void vi.advanceTimersByTime(5_000));
+      expect(screen.getByTestId("slide-time").textContent).toBe("slide0:05");
+      expect(screen.getByRole("timer").textContent).toBe("0:35");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sizes the slides by the room's height as well as its width", () => {
@@ -1351,12 +2076,55 @@ describe("PresenterWindow", () => {
     expect(fitWidth({ width: 1000, height: 2000 })).toBe("min(100cqw, 50cqh)");
   });
 
-  it("sends the keys pressed in it to the show, and Escape ends the show", async () => {
-    render(<PresenterWindow />);
-    await act(async () => {});
-    fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(emit).toHaveBeenCalledWith("presenter:key", "ArrowRight");
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(emit).toHaveBeenCalledWith("presenter:exit");
+  it("sends the keys pressed in it to the show, Escape among them, and takes only those from the page", async () => {
+    await opened();
+    const press = (init: KeyboardEventInit, target: EventTarget = window) => {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => void target.dispatchEvent(event));
+      return event;
+    };
+    expect(press({ key: "ArrowRight" }).defaultPrevented).toBe(true);
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "ArrowRight", shift: false });
+    press({ key: " ", shiftKey: true });
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: " ", shift: true });
+    // The tools' keys go to the show too, and Escape puts a tool away there before it ends the show.
+    press({ key: "l" });
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "l", shift: false });
+    press({ key: "Escape" });
+    expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "Escape", shift: false });
+    expect(emit).not.toHaveBeenCalledWith("presenter:exit");
+  });
+
+  it("leaves keys with a modifier, and Tab, to the system", async () => {
+    await opened();
+    emit.mockClear();
+    for (const init of [
+      { key: "q", metaKey: true },
+      { key: "w", ctrlKey: true },
+      { key: "ArrowLeft", altKey: true },
+      { key: "Tab" },
+    ]) {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => void window.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the keys typed in its own fields", async () => {
+    await opened();
+    fireEvent.click(screen.getByRole("button", { name: "Timer settings" }));
+    emit.mockClear();
+    fireEvent.keyDown(screen.getByLabelText("Total time in minutes"), { key: "5" });
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("? lists the show's keys here, not on the audience's screen", async () => {
+    await opened();
+    emit.mockClear();
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(screen.getByRole("dialog", { name: "Keys while presenting" })).toBeTruthy();
+    expect(emit).not.toHaveBeenCalled();
   });
 });

@@ -15,14 +15,21 @@
 //! editor (`assets/editor/`), which builds on the pasteboard, so the stage can edit text and
 //! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
 //! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
-//! or an export. With `?print`, a deck is served with its player runtime brought up to date,
-//! as an export has it, for printing to PDF (see pdf.rs).
+//! or an export: the page gets tags that load them from `slop://localhost/.app/<version>/`
+//! (see [`scripts`]). With `?print`, a deck is served with its player runtime brought up to
+//! date, as an export has it, for printing to PDF (see pdf.rs). With `?embed&slide=<id>`, the
+//! previews' query, a deck is served cut down to that slide (see [`html::single_slide`]).
+//!
+//! Responses say how they may be kept (see [`cache`]): the webview asks again by entity tag and
+//! gets a 304 while the file is as it was, and audio and video get the byte ranges they ask for.
 
 use std::borrow::Cow;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-use tauri::http::{header, Request, Response, StatusCode};
+use tauri::http::{header, HeaderMap, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager};
 
 use crate::git;
@@ -30,6 +37,12 @@ use crate::html;
 use crate::sessions::Sessions;
 use crate::templates;
 use crate::workspace::OpenWorkspace;
+
+mod cache;
+mod head;
+mod scripts;
+
+use cache::{cache_policy, Origin, Ranged};
 
 /// First path segment of workspace files, followed by their absolute path.
 const FILE_PREFIX: &str = ".file";
@@ -52,60 +65,245 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
-const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
-/// Overflow detection, then the slide editor that builds on it. The editor's source is the files
-/// of `assets/editor/`, which build.rs joins in the order of their names.
-const EDITOR_JS: &str = concat!(
-    include_str!("../assets/overflow.js"),
-    include_str!(concat!(env!("OUT_DIR"), "/editor.js")),
-);
+/// The files of commits already read (see [`head::HeadFiles`]).
+static HEAD_FILES: LazyLock<head::HeadFiles> = LazyLock::new(head::HeadFiles::default);
 
-pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-    let uri = request.uri();
-    let served = serve(app, uri.path()).map(|(mime, body)| {
-        let (mime, body) = for_print(uri.query(), mime, body);
-        let scripts = stage_scripts(uri.query());
-        if !scripts.is_empty() && mime.starts_with("text/html") {
-            let html = String::from_utf8_lossy(&body);
-            (mime, with_scripts(&html, &scripts).into_bytes())
-        } else {
-            (mime, body)
+type Answer = Response<Cow<'static, [u8]>>;
+
+/// What a request resolves to, before any of it is read.
+#[derive(Debug)]
+struct Found {
+    mime: &'static str,
+    body: Body,
+    origin: Origin,
+    /// The entity tag of this version of it; None when there is nothing to tell versions by.
+    tag: Option<String>,
+}
+
+#[derive(Debug)]
+enum Body {
+    /// A file on disk, read only once the answer needs its bytes.
+    File(PathBuf),
+    /// Bytes kept by the app (a file of a commit, a template with its runtime).
+    Shared(Arc<[u8]>),
+    /// Compiled into the app.
+    Static(&'static [u8]),
+}
+
+impl Found {
+    /// A file on disk, tagged by when it was written and how long it is.
+    fn file(path: PathBuf, mime: &'static str) -> Result<Self, StatusCode> {
+        let meta = std::fs::metadata(&path).map_err(|_| StatusCode::NOT_FOUND)?;
+        if meta.is_dir() {
+            return Err(StatusCode::NOT_FOUND);
         }
-    });
-    match served {
-        Ok((mime, body)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime)
-            .header(header::CACHE_CONTROL, "no-store")
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Cow::Owned(body))
-            .unwrap(),
-        Err(status) => Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body(Cow::Borrowed(&b""[..]))
-            .unwrap(),
+        Ok(Found {
+            mime,
+            tag: cache::file_tag(scripts::version(), &meta),
+            body: Body::File(path),
+            origin: Origin::Live,
+        })
+    }
+
+    fn len(&self) -> Result<u64, StatusCode> {
+        match &self.body {
+            Body::File(path) => std::fs::metadata(path)
+                .map(|meta| meta.len())
+                .map_err(|_| StatusCode::NOT_FOUND),
+            Body::Shared(bytes) => Ok(bytes.len() as u64),
+            Body::Static(bytes) => Ok(bytes.len() as u64),
+        }
+    }
+
+    /// All of it.
+    fn read(self) -> Result<Vec<u8>, StatusCode> {
+        match self.body {
+            Body::File(path) => std::fs::read(path).map_err(|_| StatusCode::NOT_FOUND),
+            Body::Shared(bytes) => Ok(bytes.to_vec()),
+            Body::Static(bytes) => Ok(bytes.to_vec()),
+        }
+    }
+
+    /// The bytes in `range` of it, which lies inside it.
+    fn read_range(&self, range: std::ops::Range<u64>) -> Result<Vec<u8>, StatusCode> {
+        let (start, len) = (range.start as usize, (range.end - range.start) as usize);
+        match &self.body {
+            Body::File(path) => {
+                let mut part = vec![0; len];
+                let mut file = std::fs::File::open(path).map_err(|_| StatusCode::NOT_FOUND)?;
+                file.seek(SeekFrom::Start(range.start))
+                    .and_then(|_| file.read_exact(&mut part))
+                    .map_err(|_| StatusCode::RANGE_NOT_SATISFIABLE)?;
+                Ok(part)
+            }
+            Body::Shared(bytes) => Ok(bytes[start..start + len].to_vec()),
+            Body::Static(bytes) => Ok(bytes[start..start + len].to_vec()),
+        }
     }
 }
 
-fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
+/// Answers a request for a `slop://` address. It reads files and may start `git`, so it is
+/// called off the main thread (see `lib.rs`); nothing in it touches a window.
+pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Answer {
+    let uri = request.uri();
+    match find(app, uri.path()) {
+        Ok(found) => respond(found, uri.query(), request.headers()),
+        Err(status) => refuse(status),
+    }
+}
+
+fn refuse(status: StatusCode) -> Answer {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Cow::Borrowed(&b""[..]))
+        .unwrap()
+}
+
+fn find(app: &AppHandle, raw_path: &str) -> Result<Found, StatusCode> {
     let (prefix, rel) = split_path(raw_path)?;
     if prefix == FILE_PREFIX {
-        return read_in_workspace(&app.state::<OpenWorkspace>(), &rel);
+        return find_in_workspace(&app.state::<OpenWorkspace>(), &rel);
     }
     if prefix == TEMPLATE_PREFIX {
         let (template, rel) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
         let root = templates::user_root().map_err(|_| StatusCode::NOT_FOUND)?;
-        return templates::read_file(&root, template, rel).ok_or(StatusCode::NOT_FOUND);
+        return find_in_template(&root, template, rel);
     }
     if prefix == SESSION_PREFIX {
         let home = crate::files::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
-        return read_in_session(&Sessions::new(&home), &rel);
+        return find_in_session(&Sessions::new(&home), &rel);
     }
     if prefix == HEAD_PREFIX {
-        return read_at_head(&app.state::<OpenWorkspace>(), &rel);
+        return find_at_head(&app.state::<OpenWorkspace>(), &rel);
+    }
+    if prefix == scripts::PREFIX {
+        return find_script(&rel);
     }
     Err(StatusCode::NOT_FOUND)
+}
+
+/// The answer to a request that found `found`: nothing but "still good" when the webview's copy
+/// is, the part of a file a player asked for, or all of it, a deck page made ready for its frame
+/// (see [`page_for`]).
+fn respond(found: Found, query: Option<&str>, asked: &HeaderMap) -> Answer {
+    let policy = cache_policy(found.origin, query, found.tag.is_some());
+    let asked_for =
+        |name: header::HeaderName| asked.get(name).and_then(|value| value.to_str().ok());
+    let mut answer = Response::builder()
+        .header(header::CONTENT_TYPE, found.mime)
+        .header(header::CACHE_CONTROL, policy.header())
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    if let Some(tag) = found.tag.as_deref() {
+        answer = answer.header(header::ETAG, tag);
+        if cache::matches(asked_for(header::IF_NONE_MATCH), tag) {
+            return answer
+                .status(StatusCode::NOT_MODIFIED)
+                .body(Cow::Borrowed(&b""[..]))
+                .unwrap();
+        }
+    }
+    // A part asked for of another version than this one gets the whole of this one.
+    let same_version =
+        asked_for(header::IF_RANGE).map_or(true, |tag| Some(tag) == found.tag.as_deref());
+    let range = asked_for(header::RANGE).filter(|_| same_version);
+    match content(found, query, range) {
+        Ok(content) => {
+            if content.in_parts {
+                answer = answer.header(header::ACCEPT_RANGES, "bytes");
+            }
+            if let Some(range) = content.range {
+                answer = answer.header(header::CONTENT_RANGE, range);
+            }
+            answer
+                .status(content.status)
+                .body(Cow::Owned(content.bytes))
+                .unwrap()
+        }
+        Err(status) => refuse(status),
+    }
+}
+
+/// The body of an answer, and what it says about itself.
+struct Content {
+    status: StatusCode,
+    bytes: Vec<u8>,
+    /// Whether the resource can be asked for in parts.
+    in_parts: bool,
+    /// The `Content-Range` of a part, or of a refusal to give one.
+    range: Option<String>,
+}
+
+/// What of `found` a request gets. A page is made ready for its frame (see [`page_for`]) and
+/// always comes whole; only what is served as it is can be served in parts, which audio and
+/// video ask for.
+fn content(found: Found, query: Option<&str>, range: Option<&str>) -> Result<Content, StatusCode> {
+    if found.mime.starts_with("text/html") {
+        return Ok(Content {
+            status: StatusCode::OK,
+            bytes: page_for(query, found.read()?),
+            in_parts: false,
+            range: None,
+        });
+    }
+    let len = found.len()?;
+    let (status, bytes, range) = match cache::parse_range(range, len) {
+        Ranged::Whole => (StatusCode::OK, found.read()?, None),
+        Ranged::Part(part) => (
+            StatusCode::PARTIAL_CONTENT,
+            found.read_range(part.clone())?,
+            Some(format!("bytes {}-{}/{len}", part.start, part.end - 1)),
+        ),
+        Ranged::Unsatisfiable => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            Vec::new(),
+            Some(format!("bytes */{len}")),
+        ),
+    };
+    Ok(Content {
+        status,
+        bytes,
+        in_parts: true,
+        range,
+    })
+}
+
+/// A page as its frame asked for it: cut down to the one slide a preview shows (`embed` with
+/// `slide`), with its player runtime current for `print`, and with the tags of the app's scripts
+/// for the stage and the show. Without any of those it is the file as it is.
+fn page_for(query: Option<&str>, bytes: Vec<u8>) -> Vec<u8> {
+    let slide = param(query, "slide").filter(|_| has_param(query, "embed"));
+    let print = has_param(query, "print");
+    let added = scripts::for_query(query);
+    if slide.is_none() && !print && added.is_empty() {
+        return bytes;
+    }
+    let source = String::from_utf8_lossy(&bytes);
+    // The slide editor asks the page whether an id is taken anywhere in the deck.
+    let others = match has_param(query, "edit") {
+        true => html::Others::Ids,
+        false => html::Others::Empty,
+    };
+    let mut page = match &slide {
+        Some(slide) => html::single_slide(&source, slide, others),
+        None => Cow::Borrowed(source.as_ref()),
+    };
+    if print {
+        page = Cow::Owned(html::ensure_runtime(&page));
+    }
+    if !added.is_empty() {
+        page = Cow::Owned(with_scripts(&page, &scripts::tags(&added, origin())));
+    }
+    page.into_owned().into_bytes()
+}
+
+/// Scheme and host of every address the app serves. WebView2 (Windows) exposes custom schemes
+/// as `http://<scheme>.localhost`.
+fn origin() -> &'static str {
+    match cfg!(windows) {
+        true => "http://slop.localhost",
+        false => "slop://localhost",
+    }
 }
 
 /// URL of a workspace file, by its absolute path, as the frontend's `fileUrl` makes it.
@@ -133,21 +331,7 @@ pub fn file_url(file: &Path, query: &str) -> String {
         .chain(path.split('/'))
         .map(|segment| utf8_percent_encode(segment, URI_COMPONENT).to_string())
         .collect();
-    // WebView2 (Windows) exposes custom schemes as http://<scheme>.localhost.
-    let base = match cfg!(windows) {
-        true => "http://slop.localhost",
-        false => "slop://localhost",
-    };
-    format!("{base}/{}?{query}", encoded.join("/"))
-}
-
-/// A deck asked for `?print` with its runtime current, so it prints as an export would.
-fn for_print(query: Option<&str>, mime: &'static str, body: Vec<u8>) -> (&'static str, Vec<u8>) {
-    if !has_param(query, "print") || !mime.starts_with("text/html") {
-        return (mime, body);
-    }
-    let html = html::ensure_runtime(&String::from_utf8_lossy(&body));
-    (mime, html.into_bytes())
+    format!("{}/{}?{query}", origin(), encoded.join("/"))
 }
 
 /// `/<prefix>/<path>`, percent-decoded.
@@ -170,31 +354,34 @@ fn has_param(query: Option<&str>, name: &str) -> bool {
     })
 }
 
-/// The scripts the stage or the show asked for, in the order they run: the editor needs the
-/// pasteboard.
-fn stage_scripts(query: Option<&str>) -> Vec<&'static str> {
-    let editor = has_param(query, "edit");
-    let mut scripts = Vec::new();
-    if editor || has_param(query, "pan") || has_param(query, "show") {
-        scripts.push(PASTEBOARD_JS);
-    }
-    if editor {
-        scripts.push(EDITOR_JS);
-    }
-    scripts
+/// The value of the query string's first parameter `name`, decoded as the page's own
+/// `URLSearchParams` decodes it (percent escapes, and `+` for a space); empty for one without
+/// a value.
+fn param(query: Option<&str>, name: &str) -> Option<String> {
+    let value = query?
+        .split('&')
+        .find_map(|p| match p.strip_prefix(name)? {
+            "" => Some(""),
+            rest => rest.strip_prefix('='),
+        })?;
+    let spaced = value.replace('+', " ");
+    Some(percent_decode_str(&spaced).decode_utf8_lossy().into_owned())
 }
 
-/// Adds `scripts` after everything else in `<body>`, so they run after the player.
-fn with_scripts(html: &str, scripts: &[&str]) -> String {
-    let tags: String = scripts
-        .iter()
-        .map(|js| format!("<script>\n{js}</script>\n"))
-        .collect();
+/// `html` with `tags` after everything else in `<body>`, so the scripts they load run after the
+/// player. The end of the body is found in place: the page is copied once, into the answer.
+fn with_scripts(html: &str, tags: &str) -> String {
+    const BODY_END: &[u8] = b"</body";
     let at = html
-        .to_ascii_lowercase()
-        .rfind("</body")
+        .as_bytes()
+        .windows(BODY_END.len())
+        .rposition(|window| window.eq_ignore_ascii_case(BODY_END))
         .unwrap_or(html.len());
-    format!("{}{tags}{}", &html[..at], &html[at..])
+    let mut out = String::with_capacity(html.len() + tags.len());
+    out.push_str(&html[..at]);
+    out.push_str(tags);
+    out.push_str(&html[at..]);
+    out
 }
 
 /// An absolute path sent without its leading `/` (`C:/…` on Windows).
@@ -206,29 +393,57 @@ fn absolute(path: &str) -> PathBuf {
 }
 
 /// A file of the open workspace, by its absolute path without the leading `/`.
-fn read_in_workspace(
-    workspace: &OpenWorkspace,
-    path: &str,
-) -> Result<(&'static str, Vec<u8>), StatusCode> {
+fn find_in_workspace(workspace: &OpenWorkspace, path: &str) -> Result<Found, StatusCode> {
     let file = absolute(path);
     if !workspace.contains(&file) {
         return Err(StatusCode::FORBIDDEN);
     }
-    if file.is_dir() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((crate::assets::mime_for(path), bytes))
+    Found::file(file, crate::assets::mime_for(path))
 }
 
 /// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
-fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
+fn find_in_session(sessions: &Sessions, path: &str) -> Result<Found, StatusCode> {
     let file = absolute(path);
     if !sessions.contains(&file) {
         return Err(StatusCode::FORBIDDEN);
     }
-    let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((crate::assets::mime_for(path), bytes))
+    Found::file(file, crate::assets::mime_for(path))
+}
+
+/// A file of template `id` for the editor's previews: its deck.html with the player runtime, or
+/// one of a user template's assets.
+fn find_in_template(root: &Path, id: &str, rel: &str) -> Result<Found, StatusCode> {
+    let mime = crate::assets::mime_for(rel);
+    match templates::preview(root, id, rel).ok_or(StatusCode::NOT_FOUND)? {
+        templates::Preview::Asset(file) => Found::file(file, mime),
+        templates::Preview::Deck { html, file } => {
+            let build = scripts::version();
+            // A built-in template changes with the app only; the user's own with its file.
+            let tag = match file {
+                Some(file) => std::fs::metadata(file)
+                    .ok()
+                    .and_then(|meta| cache::file_tag(build, &meta)),
+                None => Some(cache::version_tag(build, "builtin")),
+            };
+            Ok(Found {
+                mime,
+                body: Body::Shared(html),
+                origin: Origin::Live,
+                tag,
+            })
+        }
+    }
+}
+
+/// One of the app's own scripts, at `<version>/<name>`.
+fn find_script(rel: &str) -> Result<Found, StatusCode> {
+    let source = scripts::read(rel).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Found {
+        mime: crate::assets::mime_for(rel),
+        body: Body::Static(source.as_bytes()),
+        origin: Origin::App,
+        tag: Some(cache::version_tag(scripts::version(), "app")),
+    })
 }
 
 /// Whether `file` stays where it says, without a `..`.
@@ -238,379 +453,27 @@ fn is_plain_path(file: &Path) -> bool {
 
 /// A file of the open workspace as of the last commit, by its absolute path without the leading
 /// `/`. It may be gone from the disk, so its closest remaining folder must be inside instead.
-fn read_at_head(
-    workspace: &OpenWorkspace,
-    path: &str,
-) -> Result<(&'static str, Vec<u8>), StatusCode> {
+/// What the commit holds is read once (see [`head::HeadFiles`]).
+fn find_at_head(workspace: &OpenWorkspace, path: &str) -> Result<Found, StatusCode> {
     let file = absolute(path);
-    let inside = git::existing_folder(&file).is_some_and(|dir| workspace.contains(dir));
-    if !is_plain_path(&file) || !inside {
+    let folder = git::existing_folder(&file).filter(|dir| workspace.contains(dir));
+    let Some(folder) = folder.filter(|_| is_plain_path(&file)) else {
         return Err(StatusCode::FORBIDDEN);
-    }
-    match git::read_at_head(&file) {
-        Some(bytes) => Ok((crate::assets::mime_for(path), bytes)),
-        None => read_in_workspace(workspace, path),
+    };
+    let committed = git::head_oid(folder).and_then(|commit| {
+        let bytes = HEAD_FILES.get(&commit, &file, || git::read_at_head(&file))?;
+        Some((commit, bytes))
+    });
+    match committed {
+        Some((commit, bytes)) => Ok(Found {
+            mime: crate::assets::mime_for(path),
+            body: Body::Shared(bytes),
+            origin: Origin::Commit,
+            tag: Some(cache::version_tag(scripts::version(), &commit)),
+        }),
+        None => find_in_workspace(workspace, path),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::TempDir;
-
-    #[test]
-    fn plain_paths_have_no_way_up() {
-        assert!(is_plain_path(Path::new("/a/b/deck.html")));
-        assert!(!is_plain_path(Path::new("/a/../b/deck.html")));
-    }
-
-    fn split(raw: &str) -> Result<(String, String), StatusCode> {
-        split_path(raw)
-    }
-
-    #[test]
-    fn file_urls_match_the_frontend_and_round_trip() {
-        let url = file_url(
-            Path::new("/Users/me/my talks/café/deck.html"),
-            "static&print",
-        );
-        let expected = match cfg!(windows) {
-            true => "http://slop.localhost",
-            false => "slop://localhost",
-        };
-        assert_eq!(
-            url,
-            format!("{expected}/.file/Users/me/my%20talks/caf%C3%A9/deck.html?static&print")
-        );
-        let path = url
-            .split_once("localhost")
-            .unwrap()
-            .1
-            .split('?')
-            .next()
-            .unwrap();
-        assert_eq!(
-            split(path),
-            Ok((".file".into(), "Users/me/my talks/café/deck.html".into()))
-        );
-    }
-
-    #[test]
-    fn file_urls_take_windows_paths() {
-        let url = file_url(Path::new(r"C:\Users\me\deck (1).html"), "print");
-        assert!(
-            url.ends_with("/.file/C%3A/Users/me/deck%20(1).html?print"),
-            "{url}"
-        );
-    }
-
-    #[test]
-    fn file_urls_take_canonical_windows_paths() {
-        let url = file_url(Path::new(r"\\?\C:\my talks\café\deck.html"), "static&print");
-        assert!(
-            url.ends_with("/.file/C%3A/my%20talks/caf%C3%A9/deck.html?static&print"),
-            "{url}"
-        );
-    }
-
-    #[test]
-    fn file_urls_preserve_windows_network_roots() {
-        for path in [
-            r"\\server\share\my talk\deck.html",
-            r"\\?\UNC\server\share\my talk\deck.html",
-        ] {
-            let url = file_url(Path::new(path), "print");
-            let raw = url
-                .split_once("localhost")
-                .unwrap()
-                .1
-                .split('?')
-                .next()
-                .unwrap();
-            assert_eq!(
-                split(raw),
-                Ok((".file".into(), "//server/share/my talk/deck.html".into())),
-                "{url}"
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn serves_a_file_url_from_a_canonical_windows_workspace() {
-        let root = TempDir::new("canonical");
-        std::fs::create_dir_all(root.join("my talk")).unwrap();
-        let file = root.join("my talk/deck.html");
-        std::fs::write(&file, "<html>canonical deck</html>").unwrap();
-        let open = OpenWorkspace::default();
-        open.set("main", Some(root.canonicalize().unwrap()));
-        let url = file_url(&file.canonicalize().unwrap(), "static&print");
-        let raw = url
-            .split_once("localhost")
-            .unwrap()
-            .1
-            .split('?')
-            .next()
-            .unwrap();
-        let (_, path) = split(raw).unwrap();
-        let served = read_in_workspace(&open, &path);
-        assert_eq!(
-            served,
-            Ok((
-                "text/html; charset=utf-8",
-                b"<html>canonical deck</html>".to_vec()
-            ))
-        );
-    }
-
-    #[test]
-    fn print_brings_a_deck_runtime_up_to_date() {
-        let bare = b"<html><head></head><body><main class=\"deck\"></main></body></html>".to_vec();
-        let (mime, printed) = for_print(
-            Some("static&print"),
-            "text/html; charset=utf-8",
-            bare.clone(),
-        );
-        assert_eq!(mime, "text/html; charset=utf-8");
-        let printed = String::from_utf8(printed).unwrap();
-        assert!(printed.contains("slopslide:runtime-css"));
-        assert!(printed.contains("print-color-adjust: exact"));
-        assert!(printed.contains("slopslide:runtime-js"));
-
-        let (_, untouched) = for_print(Some("static"), "text/html", bare.clone());
-        assert_eq!(untouched, bare);
-        let (_, image) = for_print(Some("print"), "image/png", vec![1, 2, 3]);
-        assert_eq!(image, [1, 2, 3]);
-    }
-
-    #[test]
-    fn splits_prefix_and_path() {
-        assert_eq!(
-            split("/.file/Users/me/talk/deck.html"),
-            Ok((".file".into(), "Users/me/talk/deck.html".into()))
-        );
-        assert_eq!(
-            split("/.template/swiss/assets/a.png"),
-            Ok((".template".into(), "swiss/assets/a.png".into()))
-        );
-        assert_eq!(
-            split(".session/x/1.png"),
-            Ok((".session".into(), "x/1.png".into()))
-        );
-    }
-
-    #[test]
-    fn percent_decodes_like_the_frontend_encodes() {
-        // src/lib/utils.ts encodes each segment with encodeURIComponent.
-        assert_eq!(
-            split("/.file/my%20talks/assets/caf%C3%A9%20photo.png"),
-            Ok((".file".into(), "my talks/assets/café photo.png".into()))
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_paths() {
-        assert_eq!(split("/talk"), Err(StatusCode::NOT_FOUND));
-        assert_eq!(split("/"), Err(StatusCode::NOT_FOUND));
-        assert_eq!(split(""), Err(StatusCode::NOT_FOUND));
-        assert_eq!(split("/talk/%FF"), Err(StatusCode::BAD_REQUEST));
-    }
-
-    #[test]
-    fn scripts_only_on_request() {
-        assert_eq!(
-            stage_scripts(Some("embed&slide=a&edit=abc")),
-            [PASTEBOARD_JS, EDITOR_JS],
-            "the editor builds on the pasteboard"
-        );
-        assert_eq!(stage_scripts(Some("edit&pan")), [PASTEBOARD_JS, EDITOR_JS]);
-        assert_eq!(stage_scripts(Some("embed&slide=a&pan")), [PASTEBOARD_JS]);
-        assert_eq!(stage_scripts(Some("v=1&show")), [PASTEBOARD_JS]);
-        assert!(stage_scripts(Some("v=1&shown")).is_empty());
-        assert_eq!(stage_scripts(Some("pan=1")), [PASTEBOARD_JS]);
-        assert!(stage_scripts(Some("embed&slide=edit&static")).is_empty());
-        assert!(stage_scripts(Some("embed&slide=pan")).is_empty());
-        assert!(stage_scripts(Some("editor&panel")).is_empty());
-        assert!(stage_scripts(None).is_empty());
-    }
-
-    #[test]
-    fn adds_the_scripts_at_the_end_of_the_body_in_order() {
-        let html = "<html><body><main class=\"deck\"></main><script>player</script></BODY></html>";
-        let out = with_scripts(html, &[PASTEBOARD_JS, EDITOR_JS]);
-        let pasteboard = out.find(PASTEBOARD_JS).expect("pasteboard inlined");
-        let editor = out.find(EDITOR_JS).expect("editor inlined");
-        assert!(out.find("player").unwrap() < pasteboard);
-        assert!(pasteboard < editor);
-        assert!(editor < out.find("</BODY>").unwrap());
-        assert!(with_scripts("<p>no body", &[EDITOR_JS]).starts_with("<p>no body<script>"));
-    }
-
-    #[test]
-    fn embeds_the_editor_parts_after_overflow_in_the_order_of_their_names() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/editor");
-        let mut parts: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
-            .collect();
-        parts.sort();
-        assert!(parts.len() > 1, "the editor comes in parts");
-        let joined: String = parts
-            .iter()
-            .map(|p| std::fs::read_to_string(p).unwrap())
-            .collect();
-        let editor = EDITOR_JS
-            .strip_prefix(include_str!("../assets/overflow.js"))
-            .expect("overflow detection comes first");
-        assert_eq!(editor, joined);
-        let first = std::fs::read_to_string(&parts[0]).unwrap();
-        let last = std::fs::read_to_string(parts.last().unwrap()).unwrap();
-        assert!(first.starts_with("/* SlopSlide slide editor."));
-        assert!(
-            first.trim_end().ends_with("(function () {"),
-            "the first part opens the closure"
-        );
-        assert!(
-            last.trim_end().ends_with("})();"),
-            "the last part closes it"
-        );
-        assert!(editor.starts_with(&first) && editor.ends_with(&last));
-    }
-
-    /// As the frontend sends it: the absolute path without its leading slash.
-    fn url_path(path: &Path) -> String {
-        let path = path.to_string_lossy().replace('\\', "/");
-        path.trim_start_matches('/').to_string()
-    }
-
-    #[test]
-    fn serves_files_inside_the_open_workspace_only() {
-        let root = TempDir::new("proto");
-        let ws = root.join("ws");
-        std::fs::create_dir_all(ws.join("talk/assets")).unwrap();
-        std::fs::write(ws.join("talk/q3.html"), "<html>").unwrap();
-        std::fs::write(ws.join("talk/assets/a.svg"), "<svg/>").unwrap();
-        std::fs::write(root.join("secret.txt"), "x").unwrap();
-        let open = OpenWorkspace::default();
-        let read = |path: PathBuf| read_in_workspace(&open, &url_path(&path));
-
-        assert_eq!(
-            read(ws.join("talk/q3.html")),
-            Err(StatusCode::FORBIDDEN),
-            "nothing is served without a workspace"
-        );
-        open.set("main", Some(ws.clone()));
-        assert_eq!(
-            read(ws.join("talk/q3.html")),
-            Ok(("text/html; charset=utf-8", b"<html>".to_vec()))
-        );
-        assert_eq!(
-            read(ws.join("talk/assets/a.svg")),
-            Ok(("image/svg+xml", b"<svg/>".to_vec()))
-        );
-        assert_eq!(read(ws.join("talk/assets")), Err(StatusCode::NOT_FOUND));
-        assert_eq!(
-            read(ws.join("talk/missing.png")),
-            Err(StatusCode::FORBIDDEN),
-            "a missing file is not known to be inside"
-        );
-        assert_eq!(read(root.join("secret.txt")), Err(StatusCode::FORBIDDEN));
-        assert_eq!(
-            read(ws.join("talk/../../secret.txt")),
-            Err(StatusCode::FORBIDDEN)
-        );
-    }
-
-    #[test]
-    fn serves_committed_files_inside_the_open_workspace_only() {
-        let root = TempDir::new("proto");
-        let ws = root.join("ws");
-        std::fs::create_dir_all(ws.join("assets")).unwrap();
-        std::fs::write(ws.join("deck.html"), "old").unwrap();
-        std::fs::write(ws.join("assets/gone.png"), "image").unwrap();
-        std::fs::write(root.join("secret.txt"), "secret").unwrap();
-        // The repository takes in more than the workspace: its commit has a file next to it.
-        for args in [
-            &["init", "-q"][..],
-            &["add", "-A"],
-            &[
-                "-c",
-                "user.name=T",
-                "-c",
-                "user.email=t@x.y",
-                "commit",
-                "-qm",
-                "1",
-            ],
-        ] {
-            let status = std::process::Command::new("git")
-                .args(args)
-                .current_dir(&root)
-                .output()
-                .unwrap()
-                .status;
-            assert!(status.success());
-        }
-        std::fs::write(ws.join("deck.html"), "new").unwrap();
-        std::fs::write(ws.join("ignored.png"), "here only").unwrap();
-        std::fs::remove_dir_all(ws.join("assets")).unwrap();
-        let open = OpenWorkspace::default();
-        let read = |path: PathBuf| read_at_head(&open, &url_path(&path));
-
-        assert_eq!(read(ws.join("deck.html")), Err(StatusCode::FORBIDDEN));
-        open.set("main", Some(ws.clone()));
-        assert_eq!(
-            read(ws.join("deck.html")),
-            Ok(("text/html; charset=utf-8", b"old".to_vec()))
-        );
-        assert_eq!(
-            read(ws.join("assets/gone.png")),
-            Ok(("image/png", b"image".to_vec())),
-            "a file deleted since the commit still shows"
-        );
-        assert_eq!(
-            read(ws.join("ignored.png")),
-            Ok(("image/png", b"here only".to_vec())),
-            "what the commit does not have comes from the workspace"
-        );
-        assert_eq!(read(ws.join("missing.png")), Err(StatusCode::FORBIDDEN));
-        assert_eq!(read(root.join("secret.txt")), Err(StatusCode::FORBIDDEN));
-        assert_eq!(
-            read(ws.join("../secret.txt")),
-            Err(StatusCode::FORBIDDEN),
-            "the commit has it, but it is outside the workspace"
-        );
-    }
-
-    #[test]
-    fn serves_files_inside_sessions_only() {
-        let root = TempDir::new("proto");
-        let deck = root.join("deck");
-        std::fs::create_dir_all(&deck).unwrap();
-        std::fs::write(deck.join("deck.html"), "<html>").unwrap();
-        let sessions = Sessions::new(&root.join("home"));
-        let session = sessions.start(&deck.join("deck.html")).unwrap();
-        std::fs::create_dir_all(session.join("sketches")).unwrap();
-        std::fs::write(session.join("sketches/1.png"), "png").unwrap();
-
-        assert_eq!(
-            read_in_session(&sessions, &url_path(&session.join("sketches/1.png"))),
-            Ok(("image/png", b"png".to_vec()))
-        );
-        assert_eq!(
-            read_in_session(&sessions, &url_path(&deck.join("deck.html"))),
-            Err(StatusCode::FORBIDDEN),
-            "only session files"
-        );
-        assert_eq!(
-            read_in_session(&sessions, &url_path(&session.join("../../deck/deck.html"))),
-            Err(StatusCode::FORBIDDEN)
-        );
-        assert_eq!(
-            read_in_session(&sessions, &url_path(&session.join("sketches/missing.png"))),
-            Err(StatusCode::FORBIDDEN),
-            "a missing file is not known to be inside"
-        );
-    }
-}
+mod tests;

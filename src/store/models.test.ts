@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderInfo } from "../lib/models";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -158,6 +159,35 @@ describe("model choice", () => {
     });
   });
 
+  it("looks again quietly: what is known stays on show meanwhile, and stays when the look fails", async () => {
+    const useApp = await freshStore();
+    const missing = PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p));
+    useApp.setState({ providers: missing });
+    let answer!: (providers: unknown) => void;
+    backend({
+      list_providers: () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    });
+    const looking = useApp.getState().refreshProviders({ quiet: true });
+    expect(useApp.getState().providers).toBe(missing);
+    answer(PROVIDERS);
+    await looking;
+    expect(useApp.getState().providers).toEqual(PROVIDERS);
+
+    backend({
+      list_providers: () => {
+        throw new Error("offline");
+      },
+    });
+    await useApp.getState().refreshProviders({ quiet: true });
+    expect(useApp.getState().providers).toEqual(PROVIDERS);
+    // Asked for outright, the list is looked up from nothing, and a failure leaves none.
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().providers).toEqual([]);
+  });
+
   it("keeps the saved model when its provider could not list models", async () => {
     const saved = { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" };
     localStorage.setItem("slopslide.selection", JSON.stringify(saved));
@@ -251,7 +281,7 @@ describe("permissions", () => {
       if (command === "set_permission_mode") throw "turn gone";
     });
     store.getState().setPermissionMode("fullAccess");
-    await vi.waitFor(() => expect(store.getState().error).toBe("turn gone"));
+    await vi.waitFor(() => expect(lastError(store.getState())).toBe("turn gone"));
   });
 
   it("sends each provider its own mode", async () => {

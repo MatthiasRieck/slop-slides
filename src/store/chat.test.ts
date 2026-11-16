@@ -502,6 +502,34 @@ describe("sending a message", () => {
     expect(useApp.getState().messages).toEqual([]);
     expect(useApp.getState().running).toBe(false);
   });
+
+  it("resetChat starts the conversation over but keeps the composer", async () => {
+    const useApp = await freshStore(false);
+    const fill = { text: "Fix the lint errors", rev: 1 };
+    useApp.setState({
+      workspace: { path: "/decks/talk", name: "talk" },
+      chatKey: "/decks/talk",
+      messages: [userMessage("x")],
+      running: false,
+      composerFill: fill,
+    });
+    const { chatRevision, composerRevision, composerFocus } = useApp.getState();
+    await useApp.getState().resetChat();
+    expect(useApp.getState().chatRevision).toBe(chatRevision + 1);
+    // What the chat panel keys the composer on (see ChatPanel.tsx): the draft stays.
+    expect(useApp.getState().composerRevision).toBe(composerRevision);
+    expect(useApp.getState().composerFill).toEqual(fill);
+    expect(useApp.getState().composerFocus).toBe(composerFocus + 1);
+  });
+
+  it("selecting another chat starts the composer over", async () => {
+    const useApp = await freshStore(false);
+    backend({ select_chat_thread: () => ({ chat: [userMessage("Earlier")], provider: null }) });
+    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, chatKey: "/decks/talk", running: false });
+    const { composerRevision } = useApp.getState();
+    await useApp.getState().selectChatThread("old-thread");
+    expect(useApp.getState().composerRevision).toBe(composerRevision + 1);
+  });
 });
 
 describe("composer", () => {

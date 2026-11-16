@@ -1984,8 +1984,25 @@ describe("ChatPanel: the draft belongs to the conversation", () => {
   it("starts empty in another conversation", () => {
     render(<ChatPanel />);
     type("For this chat only");
-    act(() => useApp.setState((s) => ({ chatKey: "/decks/other/deck.html", chatRevision: s.chatRevision + 1 })));
+    act(() =>
+      useApp.setState((s) => ({
+        chatKey: "/decks/other/deck.html",
+        chatRevision: s.chatRevision + 1,
+        composerRevision: s.composerRevision + 1,
+      })),
+    );
     expect(textarea().value).toBe("");
+  });
+
+  it("keeps what is written when a new chat starts", () => {
+    showMessages(said("u", "Make it blue"), reply({}));
+    type("For the next chat");
+    const input = textarea();
+    // What `resetChat` does: the conversation starts over, the composer does not.
+    act(() => useApp.setState((s) => ({ messages: [], chatRevision: s.chatRevision + 1 })));
+    expect(screen.queryByText("Make it blue")).toBeNull();
+    expect(textarea()).toBe(input);
+    expect(textarea().value).toBe("For the next chat");
   });
 });
 

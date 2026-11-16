@@ -95,6 +95,7 @@ async function applyRewind(app: AppStore, entry: HistoryEntry, choice: RewindCho
     messages: s.messages.slice(0, index),
     revertNotes: s.revertNotes.filter((n) => kept.has(n.message)),
     chatRevision: s.chatRevision + 1,
+    composerRevision: s.composerRevision + 1,
   }));
   app.getState().fillComposer(message.text);
   persistChat(app);

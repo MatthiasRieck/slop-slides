@@ -46,7 +46,8 @@ export function ChatPanel({ active = true }: { active?: boolean }) {
 /**
  * The chat's header, the conversation and the composer. The draft belongs to the conversation:
  * it starts empty in another one, and stays when the folder's chat becomes the chat of the deck
- * it made (the same conversation under another key).
+ * it made (the same conversation under another key). A new chat keeps it too: what is being
+ * written is for the chat about to start.
  *
  * It knows of the conversation only whether there is one yet: the messages are the list's to
  * take, and the draft the composer's, so neither a key pressed nor an event of the agent's
@@ -58,6 +59,8 @@ function Chat() {
   const cliMissing = useApp((s) => s.providers?.find((p) => p.id === s.selection.provider)?.installed === false);
   // Goes up with every other conversation shown (see `loadChat`), not when the chat follows its deck.
   const revision = useApp((s) => s.chatRevision);
+  // Goes up with it, but for a new chat, which keeps the composer and what is written in it.
+  const composerRevision = useApp((s) => s.composerRevision);
   const [switching, setSwitching] = useState(false);
 
   return (
@@ -70,7 +73,7 @@ function Chat() {
       >
         {cliMissing && <MissingCli provider={provider} />}
         <MessageList key={revision}>{empty ? EMPTY_CHAT : null}</MessageList>
-        <Composer key={`composer-${revision}`} />
+        <Composer key={`composer-${composerRevision}`} />
       </div>
     </div>
   );

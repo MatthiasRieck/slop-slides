@@ -229,10 +229,12 @@
     });
   }
 
-  /** Starts a marquee at the pointer if it is on the slide; `picked` is what a click there selects. */
+  /**
+   * Starts a marquee at the pointer, on the slide or on the empty space around it, unless the
+   * slide is not laid out; `picked` is what a click there selects.
+   */
   function startMarquee(event, picked, add) {
     var rect = slide.getBoundingClientRect();
-    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return false;
     if (!rect.width || !rect.height) return false;
     event.preventDefault();
     dropHover();

@@ -53,7 +53,13 @@ export interface ChatSlice {
   queue: QueuedMessage[];
   sessionProvider: Provider | null;
   running: boolean;
+  /** Goes up with every other conversation shown: the message list starts over with it. */
   chatRevision: number;
+  /**
+   * Goes up when the composer starts over (its draft and what goes along with it): with another
+   * conversation, but not with a new chat, which keeps what is being written.
+   */
+  composerRevision: number;
 
   /** Sends a message to the agent; while it works, the message waits in `queue`. */
   send: (text: string, options: SendOptions) => Promise<void>;
@@ -92,6 +98,7 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   sessionProvider: null,
   running: false,
   chatRevision: 0,
+  composerRevision: 0,
 
   send: async (text, options) => {
     const { chatKey: chat, running, selection } = get();
@@ -186,7 +193,13 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     const { chat, provider } = await api.selectChatThread(key, thread);
     if (get().chatKey !== key) return;
     restoreChat(app, key, chat, false, provider);
-    set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null, rewindAsk: null, revertNotes: [] }));
+    set((s) => ({
+      chatRevision: s.chatRevision + 1,
+      composerRevision: s.composerRevision + 1,
+      composerFill: null,
+      rewindAsk: null,
+      revertNotes: [],
+    }));
   },
 
   resetChat: async () => {
@@ -194,16 +207,18 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     if (!key || running) return;
     await api.resetChat(key);
     if (get().chatKey !== key) return;
+    // What is being written goes into the new chat: the composer stays (`composerRevision`), with
+    // its draft, its attachments and a message prepared for it.
     set((s) => ({
       messages: [],
       queue: [],
       running: false,
       sessionProvider: null,
-      composerFill: null,
       rewindAsk: null,
       revertNotes: [],
       chatRevision: s.chatRevision + 1,
     }));
+    get().focusComposer();
   },
 });
 
@@ -224,6 +239,7 @@ export async function loadChat(app: AppStore, key: string) {
       rewindAsk: null,
       revertNotes: [],
       chatRevision: s.chatRevision + 1,
+      composerRevision: s.composerRevision + 1,
     }));
   }
   const [chat, running, provider] = await Promise.all([
@@ -272,7 +288,7 @@ async function followDeck(app: AppStore) {
     return;
   }
   if (app.getState().chatKey === folder && app.getState().deck?.id === deck.id) {
-    // The same conversation under another key: `chatRevision` stays, and with it the composer's
+    // The same conversation under another key: the revisions stay, and with them the composer's
     // draft and attachments (see ChatPanel.tsx).
     app.setState({ chatKey: deck.id, chatFollowsDeck: false });
   }

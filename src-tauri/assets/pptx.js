@@ -51,7 +51,7 @@
 
   /** The slides the file holds, in order: those the player shows. */
   function slides() {
-    return Array.prototype.slice.call(document.querySelectorAll(".deck > .slide:not([data-hidden])"));
+    return Array.prototype.slice.call(document.querySelectorAll(".deck > .slide:not([data-hidden]):not([data-archived])"));
   }
 
   function num(text, fallback) {

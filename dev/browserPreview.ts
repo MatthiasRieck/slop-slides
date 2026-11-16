@@ -305,10 +305,11 @@ function readDeck(file: string) {
   const slideTags = [...html.matchAll(/<section\b[^>]*\bclass=["'][^"']*\bslide\b[^"']*["'][^>]*>/gi)];
   const slides = slideTags.map((match, index) => {
     const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
-    const hidden = /\sdata-hidden\b/i.test(match[0]);
+    const archived = /\sdata-archived\b/i.test(match[0]);
+    const hidden = archived || /\sdata-hidden\b/i.test(match[0]);
     const locked = /\sdata-locked\b/i.test(match[0]);
     const source = html.slice(match.index, html.indexOf("</section>", match.index));
-    return { id, hash: hash(source), hidden, locked, moved: /<[^>]*\sdata-(moved|added)\b/i.test(source) };
+    return { id, hash: hash(source), hidden, archived, locked, moved: /<[^>]*\sdata-(moved|added)\b/i.test(source) };
   });
   const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => ({

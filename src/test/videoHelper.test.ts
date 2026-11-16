@@ -14,6 +14,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide active" id="intro"><h1 id="title">Title</h1><div id="logo-a" data-morph="logo"></div><div data-morph="solo"></div></section>
   <section class="slide" data-hidden><p>Hidden</p></section>
   <section class="slide" id="end"><p id="body">End</p><div id="logo-b" data-morph="logo"></div></section>
+  <section class="slide" data-archived><p>Archived</p></section>
 </main></body></html>`;
 
 interface Helper {

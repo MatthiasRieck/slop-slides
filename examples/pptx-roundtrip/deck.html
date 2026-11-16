@@ -67,7 +67,8 @@ html:not([data-slop-player]) .deck > .slide {
   visibility: visible !important;
   opacity: 1 !important;
 }
-html:not([data-slop-player]) .deck > .slide[data-hidden] {
+html:not([data-slop-player]) .deck > .slide[data-hidden],
+html:not([data-slop-player]) .deck > .slide[data-archived] {
   display: none !important;
 }
 html:not([data-slop-player]) .slide .reveal {
@@ -272,7 +273,8 @@ html[data-slop-static] *::after {
     opacity: 1 !important;
     break-after: page;
   }
-  .deck > .slide[data-hidden] {
+  .deck > .slide[data-hidden],
+  .deck > .slide[data-archived] {
     display: none !important;
   }
   .slide .reveal {
@@ -564,11 +566,12 @@ html:active-view-transition .deck > .slide {
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
     return !el.parentElement || !el.parentElement.closest(".slide");
   });
-  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  // Hidden slides (data-hidden) and the archived ones (data-archived) are skipped by the show;
+  // the editor still embeds them.
   var slides = embed
     ? all
     : all.filter(function (el) {
-        return !el.hasAttribute("data-hidden");
+        return !el.hasAttribute("data-hidden") && !el.hasAttribute("data-archived");
       });
   if (!deck || slides.length === 0) return;
   var current = -1;

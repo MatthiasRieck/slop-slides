@@ -48,6 +48,12 @@ const CASES = [
     { id: "talk", slides: ["a"], hidden: true },
   ],
   [
+    "setSlidesArchived",
+    () => api.setSlidesArchived("talk", ["a"], true),
+    "set_slides_archived",
+    { id: "talk", slides: ["a"], archived: true },
+  ],
+  [
     "setSlideLocked",
     () => api.setSlideLocked("talk", "a", true),
     "set_slide_locked",

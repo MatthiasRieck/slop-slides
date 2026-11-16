@@ -13,6 +13,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" id="intro"><h1 class="clip">Title</h1><p>Body</p></section>
   <section class="slide" data-hidden><p>Hidden</p></section>
   <section class="slide" id="end"><p>End</p></section>
+  <section class="slide" data-archived><p>Archived</p></section>
 </main></body></html>`;
 
 interface Helper {
@@ -96,7 +97,8 @@ describe("PDF helper", () => {
     api.show(1);
     await settle();
     const slides = [...doc.querySelectorAll(".deck > .slide")];
-    expect(slides.map((s) => s.classList.contains("active"))).toEqual([false, false, true]);
+    // The archived slide after it is no page either.
+    expect(slides.map((s) => s.classList.contains("active"))).toEqual([false, false, true, false]);
     expect(resized).toHaveBeenCalled();
     const answer = new URLSearchParams(answers.at(-1));
     expect(answer.get("shown")).toBe("1");

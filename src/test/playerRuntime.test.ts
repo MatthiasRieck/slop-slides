@@ -853,6 +853,15 @@ describe("player: hidden slides", () => {
     return { ...p, activeId: () => p.doc.querySelector(".slide.active")?.id };
   };
 
+  it("skips archived slides as it does hidden ones", () => {
+    const p = player({
+      at: "#a",
+      html: HIDDEN.replace("data-hidden></section>\n  <section", "data-archived></section>\n  <section"),
+    });
+    p.key("ArrowRight");
+    expect(p.doc.querySelector(".slide.active")?.id).toBe("c");
+  });
+
   it("skips hidden slides when navigating", () => {
     const p = play("#a");
     expect(p.activeId()).toBe("a");

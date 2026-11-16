@@ -14,10 +14,24 @@ import {
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  Copy,
+  Eye,
+  EyeOff,
+  Plus,
+  SquareSplitVertical,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Deck } from "../lib/api";
 import {
+  archivedSlides,
   dropRows,
   dropSection,
   foldedSlides,
@@ -30,7 +44,7 @@ import {
   sectionStarts,
   startsSection,
 } from "../lib/sections";
-import { plural } from "../lib/utils";
+import { cn, plural } from "../lib/utils";
 import { railSelection, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { Popover } from "./Popover";
@@ -199,6 +213,7 @@ export function SlideRail() {
           paste: () => void app().pasteSlides(),
           remove: (slides) => void app().deleteSlides(slides),
           setHidden: (slides, hidden) => void app().setSlidesHidden(slides, hidden),
+          setArchived: (slides, archived) => void app().setSlidesArchived(slides, archived),
           setLocked: (slides, locked) => void app().setSlidesLocked(slides, locked),
           move: (delta) => void app().moveSlides(delta),
           startSection: (at) => void startSection(at),
@@ -230,7 +245,9 @@ export function SlideRail() {
 
   const keys = useSameKeys(moving ? blockKeys : itemKeys);
   if (!deck) return null;
-  const hiddenCount = deck.slides.filter((s) => s.hidden).length;
+  // The archive is counted by its own header.
+  const live = deck.slides.filter((s) => !s.archived);
+  const hiddenCount = live.filter((s) => s.hidden).length;
 
   const onDragStart = ({ active }: DragStartEvent) => {
     holdIframes();
@@ -285,7 +302,7 @@ export function SlideRail() {
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <SectionLabel>{railTitle(deck.slides.length, found?.size, hiddenCount)}</SectionLabel>
+        <SectionLabel>{railTitle(live.length, found?.size, hiddenCount)}</SectionLabel>
         <div className="flex items-center gap-0.5">
           <StartSectionButton deck={deck} onStart={startSection} />
           <ToolButton
@@ -369,6 +386,14 @@ export function SlideRail() {
                     />
                   ),
                 )}
+                <ArchiveRows
+                  deck={deck}
+                  editing={editing}
+                  found={found}
+                  folded={!!moving}
+                  still={!!moving || settling}
+                  onMenu={openSlideMenu}
+                />
               </ol>
             </SortableContext>
             {/* Follows the pointer on its own: the rail scrolls and moves under it as the slides fold. */}
@@ -404,6 +429,68 @@ export function SlideRail() {
   );
 }
 
+/**
+ * The deck's archive, after its rows: a header to fold it by, then the slides set aside in it,
+ * which are picked, restored and deleted like the others but have no place in the deck's order.
+ * Folded until the user opens it or goes to one of its slides; a search lists what it found in it
+ * with the rest.
+ */
+function ArchiveRows(props: {
+  deck: Deck;
+  editing: boolean;
+  found: Map<string, number> | null;
+  folded: boolean;
+  still: boolean;
+  onMenu: (event: React.MouseEvent, slide: string) => void;
+}) {
+  const { deck, found } = props;
+  const slides = useMemo(() => archivedSlides(deck), [deck]);
+  const [open, setOpen] = useState(false);
+  const selectedHere = useApp((s) => slides.some((slide) => slide.id === s.selected));
+  useEffect(() => {
+    if (selectedHere) setOpen(true);
+  }, [selectedHere]);
+  if (slides.length === 0) return null;
+  return (
+    <>
+      <li data-testid="archive-header" className={found || props.folded ? "hidden" : "flex pt-1"}>
+        <button
+          type="button"
+          aria-expanded={open}
+          title="Slides set aside for later. Presenting and exporting leave them out."
+          onClick={() => setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className="flex w-4 shrink-0 justify-end">
+            <ChevronRight className={cn("size-3 transition-transform duration-200", open && "rotate-90")} />
+          </span>
+          <Archive className="size-3 shrink-0" />
+          <SectionLabel className="text-inherit">Archive</SectionLabel>
+          <span className="h-px flex-1 bg-border" />
+          <span data-testid="archive-count" className="shrink-0 text-2xs text-muted-foreground">
+            {plural(slides.length, "slide")}
+          </span>
+        </button>
+      </li>
+      {slides.map((slide, index) => (
+        <Thumbnail
+          key={slide.id}
+          deckId={deck.id}
+          slide={slide}
+          index={index}
+          editing={props.editing}
+          filteredOut={found ? !found.has(slide.id) : !open}
+          folded={props.folded}
+          still={props.still}
+          draggedAlong={false}
+          matches={found?.get(slide.id)}
+          onMenu={props.onMenu}
+        />
+      ))}
+    </>
+  );
+}
+
 /** Going to a slide folded away, with the keys or from the stage, opens its section to show it. */
 function OpenSelectedFold() {
   const selected = useApp((s) => s.selected);
@@ -421,13 +508,20 @@ function StartSectionButton(props: { deck: Deck; onStart: (slide: string) => voi
   const { deck } = props;
   const selected = useApp((s) => s.selected);
   const index = deck.slides.findIndex((s) => s.id === selected);
+  const archived = !!deck.slides[index]?.archived;
   return (
     <ToolButton
       variant="panel"
       label="Start a section at this slide"
       onClick={() => selected && props.onStart(selected)}
-      disabled={index < 0 || startsSection(deck, index)}
-      disabledReason={index < 0 ? "Select a slide to start a section" : "This slide already starts a section"}
+      disabled={index < 0 || archived || startsSection(deck, index)}
+      disabledReason={
+        index < 0
+          ? "Select a slide to start a section"
+          : archived
+            ? "An archived slide starts no section"
+            : "This slide already starts a section"
+      }
     >
       <SquareSplitVertical className="size-4" />
     </ToolButton>
@@ -436,7 +530,7 @@ function StartSectionButton(props: { deck: Deck; onStart: (slide: string) => voi
 
 /**
  * What can be done to the slides picked with ⇧/⌘-click, in every mode. Locked ones are not
- * deleted or hidden.
+ * deleted, hidden or archived. Slides picked in the archive are restored or deleted.
  */
 function BulkActions({ deck }: { deck: Deck }) {
   const count = useApp((s) => s.railSelected.length);
@@ -449,6 +543,8 @@ function BulkActions({ deck }: { deck: Deck }) {
   const show = free.length > 0 && free.every((s) => s.hidden);
   const locked = picked.length - free.length;
   const skips = locked > 0 ? ` (not the ${locked} locked)` : "";
+  const restore = free.length > 0 && free.every((s) => s.archived);
+  const inArchive = deck.slides.some((s) => picked.includes(s.id) && s.archived);
   return (
     <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
       <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
@@ -456,8 +552,8 @@ function BulkActions({ deck }: { deck: Deck }) {
         variant="panel"
         label="Move up"
         shortcut="mod+up"
-        disabledReason={SEARCH_REORDER}
-        disabled={searching}
+        disabledReason={inArchive ? ARCHIVE_ORDER : SEARCH_REORDER}
+        disabled={searching || inArchive}
         onClick={() => void app.moveSlides(-1)}
       >
         <ArrowUp className="size-3.5" />
@@ -466,29 +562,42 @@ function BulkActions({ deck }: { deck: Deck }) {
         variant="panel"
         label="Move down"
         shortcut="mod+down"
-        disabledReason={SEARCH_REORDER}
-        disabled={searching}
+        disabledReason={inArchive ? ARCHIVE_ORDER : SEARCH_REORDER}
+        disabled={searching || inArchive}
         onClick={() => void app.moveSlides(1)}
       >
         <ArrowDown className="size-3.5" />
       </ToolButton>
+      {!inArchive && (
+        <ToolButton
+          variant="panel"
+          aria-label={`${show ? "Show" : "Hide"} slides`}
+          title={`${show ? "Show" : "Hide"} slides${skips}`}
+          disabled={free.length === 0}
+          onClick={() => void app.setSlidesHidden(ids, !show)}
+        >
+          {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+        </ToolButton>
+      )}
       <ToolButton
         variant="panel"
-        aria-label={`${show ? "Show" : "Hide"} slides`}
-        title={`${show ? "Show" : "Hide"} slides${skips}`}
+        aria-label={restore ? "Restore slides from archive" : "Send slides to archive"}
+        title={`${restore ? "Restore slides from archive" : "Send slides to archive"}${skips}`}
         disabled={free.length === 0}
-        onClick={() => void app.setSlidesHidden(ids, !show)}
+        onClick={() => void app.setSlidesArchived(ids, !restore)}
       >
-        {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+        {restore ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
       </ToolButton>
-      <ToolButton
-        variant="panel"
-        aria-label="Duplicate slides"
-        title="Duplicate slides"
-        onClick={() => void app.duplicateSlides(picked)}
-      >
-        <Copy className="size-3.5" />
-      </ToolButton>
+      {!inArchive && (
+        <ToolButton
+          variant="panel"
+          aria-label="Duplicate slides"
+          title="Duplicate slides"
+          onClick={() => void app.duplicateSlides(picked)}
+        >
+          <Copy className="size-3.5" />
+        </ToolButton>
+      )}
       <ToolButton
         variant="panel"
         aria-label="Delete slides"
@@ -504,6 +613,9 @@ function BulkActions({ deck }: { deck: Deck }) {
     </div>
   );
 }
+
+/** Why the archive's slides are not moved up or down. */
+const ARCHIVE_ORDER = "Archived slides have no place in the deck's order";
 
 /** What the rail is headed with: how many slides, how many of them a search found, how many are hidden. */
 export function railTitle(slides: number, found: number | undefined, hidden: number): string {

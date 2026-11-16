@@ -146,6 +146,7 @@ pub fn run() {
             commands::deck::add_slide,
             commands::deck::duplicate_slides,
             commands::deck::set_slides_hidden,
+            commands::deck::set_slides_archived,
             commands::deck::set_slide_locked,
             commands::deck::set_slides_locked,
             commands::deck::set_slide_narration,

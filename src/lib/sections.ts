@@ -8,7 +8,21 @@ export type RailItem =
 /** Sortable key of a section marker; mirrors `section_key` in src-tauri/src/html.rs. */
 export const sectionKey = (index: number) => `section:${index}`;
 
-/** The deck's slides and section markers in document order. */
+/** The slides set aside in the deck's archive, in document order. The rail lists them after the deck's rows. */
+export function archivedSlides(deck: Pick<Deck, "slides">): Slide[] {
+  return deck.slides.filter((slide) => slide.archived);
+}
+
+/** The ids of the deck's slides that are not archived, in document order. */
+export function liveSlides(deck: Pick<Deck, "slides">): Slide[] {
+  return deck.slides.filter((slide) => !slide.archived);
+}
+
+/**
+ * The deck's slides and section markers in document order, without the archived slides (see
+ * `archivedSlides`): they are no rows to sort. A slide's `index` is its place among the slides
+ * listed, which is the number the rail gives it.
+ */
 export function railItems(deck: Pick<Deck, "slides" | "sections">): RailItem[] {
   const sections = [...deck.sections].sort((a, b) => a.before - b.before || a.index - b.index);
   const items: RailItem[] = [];
@@ -19,15 +33,16 @@ export function railItems(deck: Pick<Deck, "slides" | "sections">): RailItem[] {
       items.push({ kind: "section", key: sectionKey(section.index), section });
     }
   };
+  let listed = 0;
   deck.slides.forEach((slide, index) => {
     flushSections(index);
-    items.push({ kind: "slide", key: slide.id, slide, index });
+    if (!slide.archived) items.push({ kind: "slide", key: slide.id, slide, index: listed++ });
   });
   flushSections(Infinity);
   return items;
 }
 
-/** The deck as it will be after the rail's rows are put into `keys` order. */
+/** The deck as it will be after the rail's rows are put into `keys` order. Archived slides, which are no rows, come last. */
 export function applyOrder(deck: Deck, keys: string[]): Deck {
   const slides = new Map(deck.slides.map((s) => [s.id, s]));
   const sections = new Map(deck.sections.map((s) => [sectionKey(s.index), s]));
@@ -39,7 +54,7 @@ export function applyOrder(deck: Deck, keys: string[]): Deck {
     if (slide) nextSlides.push(slide);
     else if (section) nextSections.push({ ...section, index: nextSections.length, before: nextSlides.length });
   }
-  return { ...deck, slides: nextSlides, sections: nextSections };
+  return { ...deck, slides: [...nextSlides, ...archivedSlides(deck)], sections: nextSections };
 }
 
 /**

@@ -12,7 +12,7 @@ fn section_span(sections: &[SectionSpan], index: usize) -> Result<&SectionSpan, 
 }
 
 /// Starts a new section with `title` right before slide `before`, or after the last slide
-/// when `before` is `None`.
+/// when `before` is `None`: the last one that is not archived, as the archive comes last.
 pub fn add_section(html: &str, before: Option<&str>, title: &str) -> Result<String, String> {
     let slides = find_slides(html);
     let marker = format!(
@@ -27,12 +27,21 @@ pub fn add_section(html: &str, before: Option<&str>, title: &str) -> Result<Stri
             Ok(format!("{}{marker}\n{indent}{}", &html[..at], &html[at..]))
         }
         None => {
-            let (at, indent) = match slides.last() {
-                Some(last) => (
+            let (at, indent) = match (
+                slides.iter().rfind(|s| s.archived.is_none()),
+                slides.first(),
+            ) {
+                (Some(last), _) => (
                     last.range.end,
                     indent_before(html, last.range.start).to_string(),
                 ),
-                None => (end_of_deck(html)?, "    ".to_string()),
+                // Every slide is archived: the section comes before them.
+                (None, Some(first)) => {
+                    let at = first.range.start;
+                    let indent = indent_before(html, at);
+                    return Ok(format!("{}{marker}\n{indent}{}", &html[..at], &html[at..]));
+                }
+                (None, None) => (end_of_deck(html)?, "    ".to_string()),
             };
             Ok(format!("{}\n{indent}{marker}{}", &html[..at], &html[at..]))
         }
@@ -92,6 +101,19 @@ mod tests {
         assert_eq!(section_titles(&out), [("Only".to_string(), 0)]);
         assert!(add_section("<p>x</p>", None, "x").is_err());
         assert!(add_section(THREE_SLIDES, Some("nope"), "x").is_err());
+    }
+
+    #[test]
+    fn a_section_added_at_the_end_comes_before_the_archive() {
+        let deck = THREE_SLIDES.replace("id=\"c\"", "id=\"c\" data-archived");
+        let out = add_section(&deck, None, "End").unwrap();
+        assert_eq!(section_titles(&out), [("End".to_string(), 2)]);
+        let all = deck
+            .replace("id=\"a\"", "id=\"a\" data-archived")
+            .replace("id=\"b\"", "id=\"b\" data-archived");
+        let out = add_section(&all, None, "Only").unwrap();
+        assert_eq!(section_titles(&out), [("Only".to_string(), 0)]);
+        assert!(out.contains("  <div class=\"deck-section\" data-title=\"Only\"></div>\n  <section class=\"slide\" id=\"a\""));
     }
 
     #[test]

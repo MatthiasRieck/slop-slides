@@ -1130,6 +1130,103 @@ describe("a slide's row, for the keyboard and a screen reader", () => {
   });
 });
 
+describe("the archive", () => {
+  const ARCHIVED_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-archived`);
+  const header = () => screen.getByTestId("archive-header");
+  const toggle = () => within(header()).getByRole("button");
+  const archivedRow = () => screen.getByRole("button", { name: /^Archived slide 1\b/ }).closest("li")!;
+  beforeEach(() => {
+    useApp.setState({ deck: deckFor(ARCHIVED_HTML), railSelected: [] });
+    useApp.getState().clearSearch();
+  });
+
+  it("has no header in a deck without archived slides", () => {
+    useApp.setState({ deck: DECK });
+    render(<SlideRail />);
+    expect(screen.queryByTestId("archive-header")).toBeNull();
+  });
+
+  it("lists the archived slides after the deck's, folded under a header that counts them", () => {
+    render(<SlideRail />);
+    expect(screen.getByText("Slides · 2")).toBeTruthy();
+    expect(screen.getByTestId("archive-count").textContent).toBe("1 slide");
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(items().at(-2)).toBe(header());
+    expect(archivedRow().classList.contains("hidden")).toBe(true);
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(archivedRow().classList.contains("hidden")).toBe(false);
+    // Neither numbered nor marked as hidden: where it is listed says what it is.
+    expect(number(archivedRow())).toBe("");
+    expect(markShown(within(archivedRow()).getByTestId("hidden-mark"))).toBe(false);
+    expect(archivedRow().getAttribute("data-draggable")).toBe("false");
+  });
+
+  it("opens when one of its slides is gone to", () => {
+    render(<SlideRail />);
+    act(() => useApp.getState().select("outro"));
+    expect(archivedRow().classList.contains("hidden")).toBe(false);
+  });
+
+  it("sends a slide to the archive from its menu", async () => {
+    useApp.setState({ deck: DECK });
+    invoke.mockResolvedValue(edited(deckFor(ARCHIVED_HTML)));
+    render(<SlideRail />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Slide 3\b/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Send to archive" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_slides_archived", { id: DECK.id, slides: ["outro"], archived: true }),
+    );
+    await waitFor(() => expect(screen.getByTestId("archive-count").textContent).toBe("1 slide"));
+  });
+
+  it("gives an archived slide a menu of its own, which restores it", async () => {
+    invoke.mockResolvedValue(edited(DECK));
+    render(<SlideRail />);
+    fireEvent.click(toggle());
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Archived slide 1\b/ }));
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.getAllByRole("menuitem").map((b) => b.textContent)).toEqual([
+      "Restore from archive",
+      "CopyCtrl+C",
+      "DeleteBackspace",
+      "Lock",
+    ]);
+    fireEvent.click(menu.getByRole("menuitem", { name: "Restore from archive" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_slides_archived", { id: DECK.id, slides: ["outro"], archived: false }),
+    );
+  });
+
+  it("restores an archived slide from the button over it, and starts no section at it", async () => {
+    invoke.mockResolvedValue(edited(DECK));
+    render(<SlideRail />);
+    act(() => useApp.getState().select("outro"));
+    expect((screen.getByRole("button", { name: "Start a section at this slide" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    const row = within(archivedRow());
+    expect(row.queryByRole("button", { name: "Hide slide" })).toBeNull();
+    expect(row.queryByRole("button", { name: "Duplicate" })).toBeNull();
+    fireEvent.click(row.getByRole("button", { name: "Restore from archive" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_slides_archived", expect.anything()));
+  });
+
+  it("archives the picked slides from the bar over the rail", async () => {
+    useApp.setState({ deck: DECK, railSelected: ["intro", "outro"] });
+    invoke.mockResolvedValue(edited(deckFor(ARCHIVED_HTML)));
+    render(<SlideRail />);
+    fireEvent.click(screen.getByRole("button", { name: "Send slides to archive" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_slides_archived", {
+        id: DECK.id,
+        slides: ["intro", "outro"],
+        archived: true,
+      }),
+    );
+  });
+});
+
 describe("the menu of a right-click", () => {
   beforeEach(() => {
     useApp.setState({ railSelected: [] });
@@ -1158,6 +1255,7 @@ describe("the menu of a right-click", () => {
       "Paste afterCtrl+V",
       "DeleteBackspace",
       "Hide",
+      "Send to archive",
       "Lock",
       "Move upCtrl+↑",
       "Move downCtrl+↓",

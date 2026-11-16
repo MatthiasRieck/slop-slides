@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArchiveRestore,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -94,7 +95,19 @@ export const StageFooter = memo(function StageFooter(props: {
             Overflow
           </span>
         )}
-        {slide?.hidden && (
+        {slide?.archived && (
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Archived: set aside for later, and left out when presenting and exporting. Click to restore it to the end of the deck."
+            onClick={() => void useApp.getState().setSlidesArchived([slide.id], false)}
+            className="mr-1"
+          >
+            <ArchiveRestore />
+            Archived
+          </Button>
+        )}
+        {slide?.hidden && !slide.archived && (
           <Button
             variant="ghost"
             size="sm"

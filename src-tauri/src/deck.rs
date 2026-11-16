@@ -51,8 +51,12 @@ pub struct Slide {
     pub id: String,
     /// Changes whenever this slide's markup changes, so only its preview reloads.
     pub hash: String,
-    /// Skipped by the player (presenting, exported file); still shown in the editor.
+    /// Skipped by the player (presenting, exported file); still shown in the editor. An
+    /// archived slide is, too.
     pub hidden: bool,
+    /// Set aside in the deck's archive (see [`html::ARCHIVED_ATTR`]): no part of the show or of
+    /// an export, and listed after the deck's slides in the editor.
+    pub archived: bool,
     /// Has elements the user moved by hand, waiting for the agent to tidy the layout.
     pub moved: bool,
     /// Can be changed by neither the user nor the agent until it is unlocked.
@@ -244,7 +248,8 @@ impl Parsed {
                 // the turn ends and `normalize` assigns one.
                 id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
                 hash: hash.clone(),
-                hidden: span.hidden.is_some(),
+                hidden: span.hidden.is_some() || span.archived.is_some(),
+                archived: span.archived.is_some(),
                 locked: span.locked.is_some(),
                 moved: content.moved,
                 narration: content.narration.clone(),
@@ -534,6 +539,26 @@ pub fn set_slides_hidden(
         let ids = slides.iter().map(String::as_str);
         let out = html::edit_slides(s, ids, |_, slide| slide.set_hidden(hidden))?;
         Ok((out, Vec::new()))
+    })?;
+    for slide in slides {
+        refresh_guard(file, session, slide)?;
+    }
+    Ok(done)
+}
+
+/// Sends `slides` to the deck's archive or takes them back out (see [`html::set_archived`]),
+/// all in one write. Locked slides stay as they are.
+pub fn set_slides_archived(
+    file: &Path,
+    session: Option<&Path>,
+    slides: &[String],
+    archived: bool,
+) -> Result<RailEdit> {
+    let done = rail_edit(file, |s| {
+        if let Some(locked) = slides.iter().find(|slide| html::is_locked(s, slide)) {
+            return Err(locked_message(locked));
+        }
+        Ok((html::set_archived(s, slides, archived)?, Vec::new()))
     })?;
     for slide in slides {
         refresh_guard(file, session, slide)?;
@@ -1248,6 +1273,39 @@ mod tests {
         let loaded = load(&deck.file()).unwrap();
         let hidden: Vec<_> = loaded.slides.iter().map(|s| s.hidden).collect();
         assert_eq!(hidden, [false, true]);
+    }
+
+    #[test]
+    fn slides_are_sent_to_the_archive_and_taken_back_out() {
+        let deck = TempDeck::new(THREE);
+        let state = |d: &Deck| {
+            d.slides
+                .iter()
+                .map(|s| (s.id.clone(), s.archived, s.hidden))
+                .collect::<Vec<_>>()
+        };
+        let slide = |id: &str, archived: bool| (id.to_string(), archived, archived);
+        let sent = set_slides_archived(&deck.file(), None, &ids(&["a"]), true).unwrap();
+        // The show skips an archived slide as it does a hidden one.
+        assert_eq!(
+            state(&sent.deck),
+            [slide("b", false), slide("c", false), slide("a", true)]
+        );
+        assert_eq!(state(&load(&deck.file()).unwrap()), state(&sent.deck));
+        let (added, _) = add_blank(&deck.file(), None).unwrap();
+        assert_eq!(slide_ids(&added)[2..], ["slide", "a"]);
+
+        let back = set_slides_archived(&deck.file(), None, &ids(&["a"]), false).unwrap();
+        assert_eq!(slide_ids(&back.deck), ["b", "c", "slide", "a"]);
+        assert!(back.deck.slides.iter().all(|s| !s.archived && !s.hidden));
+
+        // A locked slide stays as it is, and so does everything asked for with it.
+        set_slide_locked(&deck.file(), None, "b", true).unwrap();
+        let before = deck.html();
+        let err = set_slides_archived(&deck.file(), None, &ids(&["a", "b"]), true).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert!(set_slides_archived(&deck.file(), None, &ids(&["nope"]), true).is_err());
+        assert_eq!(deck.html(), before);
     }
 
     #[test]

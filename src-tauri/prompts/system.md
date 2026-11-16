@@ -284,6 +284,15 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
+- A slide with the `data-archived` attribute is in the user's archive: a slide they set aside
+  to deal with later. The player and the exports leave it out, and the editor lists it under
+  "Archive", after the deck's slides. Archived slides sit at the end of the deck, after every
+  other slide and section marker: add new slides before them, and keep them last when
+  reordering (the `archived-not-last` lint warning lists slides that come after one). They are
+  not part of the presentation: leave their content alone unless asked, and do not count them
+  when the user speaks of the deck's slides. Never add or remove `data-archived` unless asked
+  to archive or restore a slide; to restore one, remove the attribute and move the slide to
+  where it belongs.
 - A slide with the `data-locked` attribute is locked: the user froze it. Never change,
   restyle, rename, delete, or unlock a locked slide, not even when restyling the whole deck
   or when asked to (tell the user to unlock it in the slide list first). Leave its whole
@@ -370,7 +379,7 @@ When the user changes the slide size in the editor, the app rewrites the `slopsl
 meta (and the runtime) and asks you to adapt the deck. Then re-lay out every slide that is
 not locked for the new canvas: rework each layout for the new shape and scale type, spacing,
 and fixed pixel sizes and positions so everything fits with no clipping or overflow. Keep all
-content, slide ids, sections, hidden slides, speaker notes, narration, and the design system. Elements
+content, slide ids, sections, hidden and archived slides, speaker notes, narration, and the design system. Elements
 the user moved by hand (`data-moved`) keep their inline styles, but move or scale them so they
 still sit where the user meant them on the new canvas.
 

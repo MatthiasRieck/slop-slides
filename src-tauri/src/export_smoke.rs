@@ -672,7 +672,7 @@ pub fn is_blank(image: &Image) -> bool {
 pub fn check_html_export(source: &str, shown: &[String]) -> Result<()> {
     let slides: Vec<String> = html::find_slides(source)
         .iter()
-        .filter(|s| s.hidden.is_none())
+        .filter(|s| s.hidden.is_none() && s.archived.is_none())
         .map(|s| s.id.clone().unwrap_or_default())
         .collect();
     if slides != shown {

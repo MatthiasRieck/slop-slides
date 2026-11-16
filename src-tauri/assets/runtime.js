@@ -23,11 +23,12 @@
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
     return !el.parentElement || !el.parentElement.closest(".slide");
   });
-  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  // Hidden slides (data-hidden) and the archived ones (data-archived) are skipped by the show;
+  // the editor still embeds them.
   var slides = embed
     ? all
     : all.filter(function (el) {
-        return !el.hasAttribute("data-hidden");
+        return !el.hasAttribute("data-hidden") && !el.hasAttribute("data-archived");
       });
   if (!deck || slides.length === 0) return;
   var current = -1;

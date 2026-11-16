@@ -51,6 +51,72 @@ describe("slide selection", () => {
   });
 });
 
+describe("the archive", () => {
+  const ARCHIVED_HTML = DECK_HTML.replace(` id="outro"`, ` id="outro" data-archived`);
+  const edit = (deck: Deck) => ({ deck, created: [] });
+
+  it("sends the slide on the stage to the archive, goes to one that stays, and offers to take it back", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const archived = deckFor(
+      DECK_HTML.replace(/<section class="slide" id="intro">[\s\S]*?<\/section>\n/, "").replace(
+        "</main>",
+        `<section class="slide" id="intro" data-archived></section>\n</main>`,
+      ),
+    );
+    backend({ set_slides_archived: () => edit(archived), deck_history: () => historyStatus(null) });
+    await useApp.getState().setSlidesArchived(["intro"], true);
+    expect(calls("set_slides_archived")).toEqual([{ id: archived.id, slides: ["intro"], archived: true }]);
+    expect(useApp.getState().deck?.slides.at(-1)).toMatchObject({ id: "intro", archived: true, hidden: true });
+    expect(useApp.getState().selected).toBe("#2");
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Archived 1 slide"]);
+    expect(useApp.getState().toasts.at(-1)?.action?.label).toBe("Undo");
+  });
+
+  it("restores slides from the archive and picks them, leaving alone those not in it and the locked", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(ARCHIVED_HTML);
+    useApp.setState({ deck, selected: "intro" });
+    backend({ set_slides_archived: () => edit(deckFor(DECK_HTML, "2")), deck_history: () => historyStatus(null) });
+    await useApp.getState().setSlidesArchived(["intro", "outro"], false);
+    expect(calls("set_slides_archived")[0]).toMatchObject({ slides: ["outro"], archived: false });
+    expect(useApp.getState().selected).toBe("outro");
+    expect(toastTexts(useApp.getState(), "success")).toEqual([]);
+
+    resetBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML.replace(` id="intro"`, ` id="intro" data-locked`)) });
+    await useApp.getState().setSlidesArchived(["intro"], true);
+    expect(calls("set_slides_archived")).toEqual([]);
+  });
+
+  it("steps through the deck's slides, or the archive's with one of those on the stage", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(ARCHIVED_HTML), selected: "#2" });
+    useApp.getState().selectRelative(1);
+    expect(useApp.getState().selected).toBe("#2");
+    useApp.getState().selectAllSlides();
+    expect(useApp.getState().railSelected).toEqual(["intro", "#2"]);
+    useApp.getState().select("outro");
+    useApp.getState().selectRelative(-1);
+    expect(useApp.getState().selected).toBe("outro");
+  });
+
+  it("names the archived slides last when the rail's rows are put in another order", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(ARCHIVED_HTML), selected: "intro" });
+    backend({ reorder_slides: () => edit(deckFor(ARCHIVED_HTML, "2")), deck_history: () => historyStatus(null) });
+    await useApp.getState().reorderRail(["#2", "intro"]);
+    expect(calls("reorder_slides")[0]).toMatchObject({ slides: ["#2", "intro", "outro"] });
+  });
+
+  it("leaves the archived slides out of an image export", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(ARCHIVED_HTML) });
+    useApp.getState().startImageExport("/out/Talk");
+    expect(useApp.getState().imageExport?.slides).toEqual(["intro", "#2"]);
+  });
+});
+
 describe("slide image export", () => {
   it("remembers the folder and which slides to save", async () => {
     const useApp = await freshStore();

@@ -58,8 +58,13 @@ export interface Slide {
   id: string;
   /** Changes when the slide's markup changes. */
   hash: string;
-  /** Has `data-hidden`: skipped when presenting, shown muted in the editor. */
+  /** Skipped when presenting: has `data-hidden` (shown muted in the editor), or is archived. */
   hidden: boolean;
+  /**
+   * Has `data-archived`: set aside in the deck's archive, which the rail lists after the deck's
+   * slides. No part of the show or of an export.
+   */
+  archived?: boolean;
   /** Has `data-locked`: neither the user nor the agent can change it until it is unlocked. */
   locked: boolean;
   /** Has elements moved by hand (`data-moved`) that the agent has not tidied up yet. */
@@ -511,6 +516,8 @@ export const api = {
   duplicateSlides: (id: string, slides: string[]) => invoke<RailEdit>("duplicate_slides", { id, slides }),
   setSlidesHidden: (id: string, slides: string[], hidden: boolean) =>
     invoke<RailEdit>("set_slides_hidden", { id, slides, hidden }),
+  setSlidesArchived: (id: string, slides: string[], archived: boolean) =>
+    invoke<RailEdit>("set_slides_archived", { id, slides, archived }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
   /** Locks or unlocks `slides`, as one change to the deck. */

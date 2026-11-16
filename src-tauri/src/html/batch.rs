@@ -5,9 +5,7 @@
 
 use std::collections::HashSet;
 
-use super::attrs::{
-    ARCHIVED_ATTR, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR,
-};
+use super::attrs::{ARCHIVED_ATTR, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR};
 use super::edit::{indent_before, with_indent};
 use super::slide_attrs::{
     check_duration, check_narration_start, flag_edit, set_locked, value_edit, Edit,

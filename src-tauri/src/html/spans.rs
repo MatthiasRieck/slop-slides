@@ -352,6 +352,17 @@ mod tests {
     }
 
     #[test]
+    fn detects_archived_slides() {
+        let html = r#"
+<section class="slide" id="a" data-archived></section>
+<section data-archived="" class="slide" id="b"><section data-archived>nested</section></section>
+<section class="slide" id="c" data-archived-not="x" data-hidden></section>
+"#;
+        assert_eq!(archived(html), [true, true, false]);
+        assert_eq!(hidden(html), [false, false, true]);
+    }
+
+    #[test]
     fn detects_hidden_slides() {
         let html = r#"<main class="deck">
 <section class="slide" id="a" data-hidden></section>

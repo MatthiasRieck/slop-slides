@@ -12,7 +12,8 @@
 //! - [`spans`]: where the slides and section markers are, and hashes of them;
 //! - [`slides`] and [`sections`]: adding, removing, moving and copying them;
 //! - [`single`]: the deck cut down to one slide, for a preview;
-//! - [`slide_attrs`]: a slide's own attributes (hidden, locked, timing);
+//! - [`slide_attrs`]: a slide's own attributes (hidden, locked, timing); the archive, which
+//!   also moves the slide, is [`slides`]';
 //! - [`batch`]: one change to many slides at once;
 //! - [`locked`]: putting locked slides back after the agent changed them;
 //! - [`asides`]: a slide's narration and speaker notes;
@@ -73,7 +74,7 @@ pub use slide_attrs::{is_locked, parse_duration, parse_narration_start, parse_ti
 pub use slide_attrs::{set_duration, set_hidden, set_narration_start};
 pub use slides::{
     copy_slide, insert, normalize_ids, paste_slide, reorder, replace_slide, replace_slide_at,
-    slide_markup, slugify, strip_slides,
+    set_archived, slide_markup, slugify, strip_slides,
 };
 #[cfg(test)]
 pub use slides::{delete, duplicate, has_moved};

@@ -17,6 +17,7 @@ export interface SlideMenuActions {
   paste: () => void;
   remove: (slides: string[]) => void;
   setHidden: (slides: string[], hidden: boolean) => void;
+  setArchived: (slides: string[], archived: boolean) => void;
   setLocked: (slides: string[], locked: boolean) => void;
   move: (delta: -1 | 1) => void;
   startSection: (slide: string) => void;
@@ -25,8 +26,10 @@ export interface SlideMenuActions {
 /**
  * The choices of a right-click on slide `slide`, for the `picked` slides (the one clicked, or all
  * the picked ones when it is among them). They are the same in every mode: the deck's modes are
- * about what is on a slide. Locked slides are neither deleted, cut nor hidden, and nothing moves
- * while a search lists only some of the slides (`searching`).
+ * about what is on a slide. Locked slides are neither deleted, cut, hidden nor archived, and
+ * nothing moves while a search lists only some of the slides (`searching`). Archived slides have
+ * a menu of their own: they are restored, copied, deleted and locked, and nothing else until
+ * they are back in the deck.
  */
 export function slideMenu(
   deck: Deck,
@@ -43,6 +46,22 @@ export function slideMenu(
   const lock = !(slides.length > 0 && slides.every((s) => s.locked));
   const lockedOnly = free.length === 0 ? (several ? "These slides are locked" : "This slide is locked") : undefined;
   const moving = state.searching ? SEARCH_REORDER : undefined;
+  if (slides.length > 0 && slides.every((s) => s.archived)) {
+    return [
+      { label: "Restore from archive", disabledReason: lockedOnly, run: () => actions.setArchived(free, false) },
+      "divider",
+      { label: "Copy", keys: "mod+c", run: actions.copy },
+      {
+        label: "Delete",
+        keys: "backspace",
+        destructive: true,
+        disabledReason: lockedOnly,
+        run: () => actions.remove(free),
+      },
+      "divider",
+      { label: lock ? "Lock" : "Unlock", run: () => actions.setLocked(picked, lock) },
+    ];
+  }
   return [
     {
       label: "New slide",
@@ -67,6 +86,7 @@ export function slideMenu(
       disabledReason: lockedOnly,
       run: () => actions.setHidden(free, hide),
     },
+    { label: "Send to archive", disabledReason: lockedOnly, run: () => actions.setArchived(free, true) },
     { label: lock ? "Lock" : "Unlock", run: () => actions.setLocked(picked, lock) },
     "divider",
     { label: "Move up", keys: "mod+up", disabledReason: moving, run: () => actions.move(-1) },

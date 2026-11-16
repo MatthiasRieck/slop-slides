@@ -166,6 +166,25 @@ pub fn set_slides_hidden(
     })
 }
 
+/// Sends slides to the deck's archive, or takes them back out of it.
+#[tauri::command(async)]
+pub fn set_slides_archived(
+    window: Window,
+    id: String,
+    slides: Vec<String>,
+    archived: bool,
+) -> Result<RailEdit> {
+    let session = current_session(&window)?;
+    let label = if archived {
+        "Archive slides"
+    } else {
+        "Restore slides from the archive"
+    };
+    changing(&id, Change::new(Source::Rail, label), |file| {
+        deck::set_slides_archived(file, session.as_deref(), &slides, archived)
+    })
+}
+
 /// Sets what is said over a slide; empty `text` removes its narration.
 #[tauri::command(async)]
 pub fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {

@@ -54,6 +54,14 @@ jobs:
           "${display[@]}" src-tauri/target/debug/slopslide --export-smoke \
             fixtures/export-smoke/deck.html "$RUNNER_TEMP/export-smoke" \
             "Export smoke test" "Shapes and pictures" "Gradient card" "Badge label"
+      # The checks above build the app unoptimized. The app as it ships is linked differently
+      # (link-time optimization), and on macOS that has failed where the debug build linked: a
+      # symbol whisper.cpp's Metal code needs went missing. Build it here so a release cannot be
+      # the first to find out.
+      - name: Link the app as it ships
+        if: runner.os == 'macOS'
+        timeout-minutes: 30
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin slopslide
       - name: Upload the exported sample deck
         if: always()
         uses: actions/upload-artifact@v4

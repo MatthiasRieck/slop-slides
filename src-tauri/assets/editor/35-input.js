@@ -41,10 +41,9 @@
       }
     }
     if (!isSelected(el)) select(el);
-    if (!el) {
-      pasteboard.startPan(event);
-      return;
-    }
+    // The primary button never pans here, not from the empty space around the slide either: that
+    // is Space+drag, the middle button and the trackpad (see pasteboard.js).
+    if (!el) return;
     if (double && isGroup(el)) {
       // Into the group: what it holds is picked now.
       event.preventDefault();

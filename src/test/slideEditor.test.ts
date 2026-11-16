@@ -1765,7 +1765,7 @@ describe("slide editor", () => {
       expect(h1.style.translate).toBe("200px -100px");
     });
 
-    it("pans by dragging empty space, and deselects", () => {
+    it("does not pan when empty space is dragged with the primary button, and deselects", () => {
       const e = editor();
       e.down(e.$("h1"));
       e.up(e.$("h1"));
@@ -1773,10 +1773,9 @@ describe("slide editor", () => {
       e.down(e.doc.body, 10, 10);
       e.move(e.doc.body, 60, 40);
       expect(e.selected()).toEqual([]);
-      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
       e.up(e.doc.body, 60, 40);
       e.move(e.doc.body, 200, 200);
-      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
       expect(e.commits()).toEqual([]);
     });
 

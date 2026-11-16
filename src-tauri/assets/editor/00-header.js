@@ -46,7 +46,7 @@
    Shift-resizes, and turned elements' resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
    move straight across or straight up and down. Nudges never snap.
    Shift- or ⌘-click adds to the selection or takes out of it, and dragging from empty space on
-   the slide (or from a see-through wrapper that is not selected) draws a marquee around what to
+   the slide or around it (or from a see-through wrapper that is not selected) draws a marquee around what to
    select (with Shift or ⌘, adding to the selection). ⌘A selects everything on the slide and Tab
    / Shift+Tab go through its elements. Several selected elements move, nudge, restyle, restack,
    delete, copy and duplicate together; their handles make way for a frame around each.
@@ -236,8 +236,9 @@
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
    { type: "slop:edit-insert-text", text }.
 
-   It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging the empty
-   space around the slide pans too (on the slide, Space+drag or the middle button). The slide no longer clips, so content that runs past its edge stays visible (dimmed
+   It runs on the pasteboard (pasteboard.js), which pans and zooms the view, with Space+drag, the
+   middle button or a trackpad swipe: the primary button never pans here, as a drag from the
+   empty space around the slide draws the marquee. The slide no longer clips, so content that runs past its edge stays visible (dimmed
    outside the slide, in the color of the panel around it), and the slide's frame turns into the
    app's accent color. Content moved far away can always be panned to and dragged back.
    Anything that runs past the slide's edge or is cut off by its own box is outlined with a red

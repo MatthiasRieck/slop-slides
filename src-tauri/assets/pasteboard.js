@@ -135,7 +135,6 @@
     origin: function () {
       return { x: placed.x, y: placed.y };
     },
-    startPan: startPan,
     /** Moves the slide now if a gesture's move still waits for its frame. */
     flush: function () {
       if (cameraFrame) applyCamera();

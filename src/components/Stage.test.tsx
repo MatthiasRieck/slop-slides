@@ -124,17 +124,16 @@ describe("Stage", () => {
     expect(useApp.getState().selected).toBe("outro");
   });
 
-  it("says that the slide shown is hidden, and shows it again from there in Edit", async () => {
+  it("says that the slide shown is hidden, and shows it again from there, in View as in Edit", async () => {
     const hidden = deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-hidden`));
     useApp.setState({ deck: hidden, editing: false });
     vi.mocked(invoke).mockResolvedValue({ deck: deckFor(DECK_HTML), previous: "", source: "", created: [] });
     render(<Stage />);
     const chip = () => screen.getByRole("button", { name: "Hidden" }) as HTMLButtonElement;
-    expect(chip().disabled).toBe(true);
-    expect(chip().title).toContain("Switch to Edit to change the slides");
-    act(() => useApp.getState().setMode("edit"));
     expect(chip().disabled).toBe(false);
+    expect(chip().title).toBe("Hidden: skipped when presenting. Click to show it again.");
     await act(async () => fireEvent.click(chip()));
+    expect(useApp.getState().editing).toBe(false);
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("set_slides_hidden", { id: hidden.id, slides: ["intro"], hidden: false }),
     );
@@ -317,8 +316,11 @@ describe("Stage", () => {
       useApp.setState({ editing: false, toasts: [] });
     });
 
-    it("copies the selected slide with ⌘C in View, where ⌘V pastes nothing", async () => {
+    it("copies the selected slide with ⌘C and pastes after it with ⌘V in View, staying there", async () => {
       const deck = useApp.getState().deck!;
+      vi.mocked(invoke).mockImplementation(async (command) =>
+        command === "paste_slides" ? { deck, previous: "<old>", source: "<new>", created: [] } : undefined,
+      );
       render(<Stage />);
       const key = (k: string) =>
         new KeyboardEvent("keydown", { key: k, metaKey: true, cancelable: true, bubbles: true });
@@ -327,9 +329,9 @@ describe("Stage", () => {
       expect(copy.defaultPrevented).toBe(true);
       expect(invoke).toHaveBeenCalledWith("copy_slides", { id: deck.id, slides: ["intro"] });
       await act(async () => void document.body.dispatchEvent(paste));
-      expect(paste.defaultPrevented).toBe(false);
-      expect(invoke).not.toHaveBeenCalledWith("paste_slides", expect.anything());
-      expect(useApp.getState().deck).toBe(deck);
+      expect(paste.defaultPrevented).toBe(true);
+      expect(invoke).toHaveBeenCalledWith("paste_slides", { id: deck.id, after: "intro" });
+      expect(useApp.getState().editing).toBe(false);
     });
 
     it("pastes a slide after the selected one with ⌘V in Edit, also on a locked slide", async () => {
@@ -369,8 +371,9 @@ describe("Stage", () => {
       send("c");
       send("v");
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("copy_slides", expect.anything()));
-      // Pasting changes the deck: only in Edit, where on a locked slide the keys are not the editor's.
-      expect(invoke).not.toHaveBeenCalledWith("paste_slides", expect.anything());
+      // Pasting slides works in View, and in Edit on a locked slide, where the keys are not the editor's.
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("paste_slides", expect.anything()));
+      vi.mocked(invoke).mockClear();
       act(() =>
         useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), editing: true }),
       );
@@ -483,16 +486,18 @@ describe("Stage", () => {
       act(() => useApp.getState().setEditing(false));
     });
 
-    it("changes nothing in View: ⌘↑ / ⌘↓ and Delete leave the slides alone, wherever they are pressed", () => {
+    it("moves and deletes the picked slides in View too: ⌘↑ / ⌘↓ and Delete, without going to Edit", () => {
       render(<Stage />);
       const rail = pressRail();
       useApp.setState({ railSelected: ["intro", "outro"] });
       fireEvent.keyDown(document.body, { key: "ArrowDown", metaKey: true });
+      expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
+      fireEvent.keyDown(document.body, { key: "ArrowUp", metaKey: true });
+      expect(actions.moveSlides).toHaveBeenLastCalledWith(-1);
       fireEvent.keyDown(document.body, { key: "Delete" });
-      fireEvent.keyDown(document.body, { key: "Backspace" });
-      expect(actions.moveSlides).not.toHaveBeenCalled();
-      expect(actions.deleteSlides).not.toHaveBeenCalled();
-      // Escape still clears the pick, which changes nothing in the deck.
+      expect(actions.deleteSlides).toHaveBeenLastCalledWith(["intro", "outro"]);
+      expect(useApp.getState().editing).toBe(false);
+      // Escape clears the pick.
       fireEvent.keyDown(document.body, { key: "Escape" });
       expect(useApp.getState().railSelected).toEqual([]);
       rail.remove();
@@ -530,16 +535,17 @@ describe("Stage", () => {
       fireEvent.keyDown(document.body, { key: "Home" });
       expect(useApp.getState().selected).toBe("intro");
 
-      // In View only what changes nothing is left: picking them all.
+      // In View they are the same keys, and the deck stays in View.
       act(() => useApp.getState().setEditing(false));
       for (const fn of Object.values(more)) fn.mockClear();
       fireEvent.pointerDown(rail);
       for (const key of ["a", "d", "x"]) mod(key);
       mod("n", { shiftKey: true });
       expect(more.selectAllSlides).toHaveBeenCalledOnce();
-      expect(more.duplicateSlides).not.toHaveBeenCalled();
-      expect(more.cutSlides).not.toHaveBeenCalled();
-      expect(more.addSlide).not.toHaveBeenCalled();
+      expect(more.duplicateSlides).toHaveBeenCalledExactlyOnceWith(["intro"]);
+      expect(more.cutSlides).toHaveBeenCalledOnce();
+      expect(more.addSlide).toHaveBeenCalledOnce();
+      expect(useApp.getState().editing).toBe(false);
       rail.remove();
       const { selectAllSlides, duplicateSlides, cutSlides, addSlide } = before;
       useApp.setState({ selectAllSlides, duplicateSlides, cutSlides, addSlide });
@@ -582,9 +588,9 @@ describe("Stage", () => {
         act(
           () => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", ...data }, source })),
         );
-      // In View the deck's history is there, but not what moves its slides.
+      // In View the deck's history is there, and so is what moves its slides.
       forward({ key: "ArrowDown", mod: true });
-      expect(actions.moveSlides).not.toHaveBeenCalled();
+      expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
       forward({ key: "z", mod: true });
       expect(actions.undo).toHaveBeenCalledOnce();
       // In Edit on a locked slide, where no editor takes the keys, the moves are too.
@@ -595,8 +601,8 @@ describe("Stage", () => {
           editing: true,
         }),
       );
-      forward({ key: "ArrowDown", mod: true });
-      expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
+      forward({ key: "ArrowUp", mod: true });
+      expect(actions.moveSlides).toHaveBeenLastCalledWith(-1);
       act(() => useApp.setState({ editing: false }));
       frame.remove();
     });

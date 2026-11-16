@@ -17,8 +17,6 @@ import { noLayoutAnimation } from "./Thumbnail";
 export const SectionHeader = memo(function SectionHeader(props: {
   itemKey: string;
   section: Section;
-  /** Edit mode: the section can be renamed, removed and moved. */
-  editable: boolean;
   filteredOut: boolean;
   /** How many slides are folded under the row while sections are being moved. */
   slides?: number;
@@ -105,8 +103,8 @@ export const SectionHeader = memo(function SectionHeader(props: {
         <>
           {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
           <SectionLabel
-            title={props.editable ? "Double-click to rename" : undefined}
-            onDoubleClick={() => props.editable && onEditing(section.index)}
+            title="Double-click to rename"
+            onDoubleClick={() => onEditing(section.index)}
             className={cn("min-w-0 truncate", !section.title && "italic")}
           >
             {section.title || "Untitled section"}
@@ -123,19 +121,17 @@ export const SectionHeader = memo(function SectionHeader(props: {
                   {plural(props.count, "slide")}
                 </span>
               )}
-              {props.editable && (
-                <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-                  <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
-                    <Pencil className="size-3" />
-                  </SectionAction>
-                  <SectionAction
-                    title={REMOVE_SECTION}
-                    onClick={() => void useApp.getState().removeSection(section.index)}
-                  >
-                    <Ungroup className="size-3" />
-                  </SectionAction>
-                </div>
-              )}
+              <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
+                <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
+                  <Pencil className="size-3" />
+                </SectionAction>
+                <SectionAction
+                  title={REMOVE_SECTION}
+                  onClick={() => void useApp.getState().removeSection(section.index)}
+                >
+                  <Ungroup className="size-3" />
+                </SectionAction>
+              </div>
             </>
           )}
         </>

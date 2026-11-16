@@ -18,7 +18,6 @@ import type { Slide } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { Button, ToolButton, withShortcut } from "../Button";
-import { EDIT_ONLY } from "../editOnly";
 import { LintStatus } from "../LintStatus";
 import { Popover } from "../Popover";
 import { LayoutPicker } from "../Templates";
@@ -50,7 +49,6 @@ export const StageFooter = memo(function StageFooter(props: {
   // What runs past the slide or is cut off, as the editor found.
   const overflow = useSlideReport((report) => report.overflow);
   const running = useApp((s) => s.running);
-  const editable = useApp((s) => s.editing);
   const locked = !!slide?.locked;
   return (
     <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
@@ -100,12 +98,7 @@ export const StageFooter = memo(function StageFooter(props: {
           <Button
             variant="ghost"
             size="sm"
-            disabled={!editable}
-            title={
-              editable
-                ? "Hidden: skipped when presenting. Click to show it again."
-                : `Hidden: skipped when presenting. ${EDIT_ONLY}.`
-            }
+            title="Hidden: skipped when presenting. Click to show it again."
             onClick={() => void useApp.getState().setSlidesHidden([slide.id], false)}
             className="mr-1"
           >

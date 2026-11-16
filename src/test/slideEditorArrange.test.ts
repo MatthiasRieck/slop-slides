@@ -283,13 +283,36 @@ describe("marquee", () => {
     expect(e.ids()).toEqual([]);
   });
 
-  it("leaves dragging the space around the slide to the pasteboard, and Space+drag on it", () => {
+  it("is dragged out from the space around the slide too, which the primary button does not pan", () => {
     const e = editor();
+    e.down(e.doc.body, -60, -40);
+    e.move(e.doc.body, 700, 450);
+    expect(e.ids()).toEqual(["a", "b"]);
+    const box = e.$("[data-slop-marquee]");
+    expect([box.style.display, box.style.left, box.style.top]).toEqual(["", "-60px", "-40px"]);
+    e.up(e.doc.body, 700, 450);
+    expect(box.style.display).toBe("none");
+    expect(e.ids()).toEqual(["a", "b"]);
+    // With Shift it adds to the selection from out there as well.
+    e.down(e.doc.body, 2000, 1200, { shiftKey: true });
+    e.move(e.doc.body, 1990, 1190, { shiftKey: true });
+    e.up(e.doc.body, 1990, 1190);
+    expect(e.ids()).toEqual(["a", "b"]);
+    // A click out there selects nothing, as one on the slide's empty space does.
+    e.down(e.doc.body, 2000, 1200);
+    e.up(e.doc.body, 2000, 1200);
+    expect(e.ids()).toEqual([]);
+    expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
+    expect(e.commits()).toEqual([]);
+  });
+
+  it("leaves Space+drag to the pasteboard, on the slide and around it", () => {
+    const e = editor();
+    e.key(" ");
     e.down(e.doc.body, 2000, 1200);
     e.move(e.doc.body, 2050, 1230);
     e.up(e.doc.body, 2050, 1230);
     expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
-    e.key(" ");
     e.down(slide(e), 50, 50);
     e.move(slide(e), 60, 50);
     e.up(slide(e), 60, 50);

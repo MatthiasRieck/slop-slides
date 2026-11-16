@@ -21,9 +21,11 @@ import { selectedSlide } from "./slides";
 import type { AppState, AppStore, Slice } from "./types";
 
 /**
- * What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). View
- * changes nothing in the deck but its review (marks and comments); Edit changes the slides, their
- * order and their timing. A slide's narration and notes and the deck's HTML are not modes: they
+ * What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). The modes
+ * are about what is on a slide: View changes none of it, only its review (marks and comments);
+ * Edit changes the slides' content and their timing. The slides of the deck as a whole (adding,
+ * duplicating, deleting, reordering, hiding and locking them, and the sections) change in every
+ * mode, from the slide list and its keys. A slide's narration and notes and the deck's HTML are not modes: they
  * are tabs of the sidebar, beside the slide. Nor is playing the deck: its timeline opens under
  * the slide in View and in Edit (see `timelineOpen`).
  */

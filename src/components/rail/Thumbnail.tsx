@@ -38,8 +38,9 @@ export function slideLabel(index: number, slide: Slide, comments: number): strin
  * One slide of the rail: its number and its thumbnail, a single button (one tab stop) that picks
  * the slide, is what a drag or the keyboard (Space, then the arrows) moves it by, and takes the
  * right-click for the slide's menu. Over it, what there is to know about the slide (hidden, locked,
- * how many comments, how many matches of the search) and, in Edit, its quick actions, which show
- * under the pointer and while the focus is in the row.
+ * how many comments, how many matches of the search) and its quick actions, which show under the
+ * pointer and while the focus is in the row, in every mode: the modes are about what is on a
+ * slide, not about the slides of the deck.
  *
  * Memoized, and given nothing that changes with the other rows: picking another slide or saving
  * one renders the rows concerned, not the whole rail.
@@ -48,8 +49,8 @@ export const Thumbnail = memo(function Thumbnail(props: {
   deckId: string;
   slide: Slide;
   index: number;
-  /** Edit mode: the slide can be locked, hidden, duplicated and deleted from here. */
-  editable: boolean;
+  /** The deck is in Edit mode already, so a double-click has nowhere to take it. */
+  editing: boolean;
   filteredOut: boolean;
   folded: boolean;
   still: boolean;
@@ -141,7 +142,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
           aria-label={slideLabel(index, slide, comments)}
           aria-current={selected ? "true" : undefined}
           aria-pressed={picked || selected}
-          title={props.editable ? `Slide ${index + 1}` : `Slide ${index + 1} · double-click to edit`}
+          title={props.editing ? `Slide ${index + 1}` : `Slide ${index + 1} · double-click to edit`}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
           onContextMenu={(event) => onMenu(event, slide.id)}
@@ -192,30 +193,28 @@ export const Thumbnail = memo(function Thumbnail(props: {
             </Badge>
           )}
         </div>
-        {props.editable && (
-          <div className="absolute right-1 top-1 hidden gap-0.5 group-focus-within:flex group-hover:flex">
-            <RailAction
-              title={slide.locked ? "Unlock slide" : "Lock slide"}
-              onClick={() => void app().setSlidesLocked([slide.id], !slide.locked)}
-            >
-              {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
+        <div className="absolute right-1 top-1 hidden gap-0.5 group-focus-within:flex group-hover:flex">
+          <RailAction
+            title={slide.locked ? "Unlock slide" : "Lock slide"}
+            onClick={() => void app().setSlidesLocked([slide.id], !slide.locked)}
+          >
+            {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
+          </RailAction>
+          <RailAction
+            title={slide.hidden ? "Show slide" : "Hide slide"}
+            onClick={() => void app().setSlidesHidden([slide.id], !slide.hidden)}
+          >
+            {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+          </RailAction>
+          <RailAction title="Duplicate" onClick={() => void app().duplicateSlides([slide.id])}>
+            <Copy className="size-3" />
+          </RailAction>
+          {!slide.locked && (
+            <RailAction title="Delete" onClick={() => void app().deleteSlides([slide.id])}>
+              <Trash2 className="size-3" />
             </RailAction>
-            <RailAction
-              title={slide.hidden ? "Show slide" : "Hide slide"}
-              onClick={() => void app().setSlidesHidden([slide.id], !slide.hidden)}
-            >
-              {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
-            </RailAction>
-            <RailAction title="Duplicate" onClick={() => void app().duplicateSlides([slide.id])}>
-              <Copy className="size-3" />
-            </RailAction>
-            {!slide.locked && (
-              <RailAction title="Delete" onClick={() => void app().deleteSlides([slide.id])}>
-                <Trash2 className="size-3" />
-              </RailAction>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </li>
   );

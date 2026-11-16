@@ -33,7 +33,6 @@ import {
 import { plural } from "../lib/utils";
 import { railSelection, useApp } from "../store";
 import { ToolButton } from "./Button";
-import { EDIT_ONLY } from "./editOnly";
 import { Popover } from "./Popover";
 import { ContextMenu, type MenuEntry } from "./rail/ContextMenu";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
@@ -100,9 +99,9 @@ function useRailRows(deck: Deck | null) {
 type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
 
 /**
- * The deck's slides and sections, to go through and pick from. Changing them is Edit mode's:
- * adding, duplicating, deleting, hiding, locking and reordering slides, and the sections. In View
- * the rail only shows them, folds sections and picks slides; its "+" goes to Edit to add one.
+ * The deck's slides and sections, to go through, pick from and change: adding, duplicating,
+ * deleting, hiding, locking and reordering slides, and the sections. All of it works the same in
+ * every mode: View and Edit differ in what can be done on a slide, not to the slides of the deck.
  *
  * A right-click on a slide or a section's header opens its menu (see ./rail/menus.ts): on a slide
  * that is not picked it picks that slide first, and with several picked it is about all of them.
@@ -115,7 +114,7 @@ type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
  */
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
-  const editable = useApp((s) => s.editing);
+  const editing = useApp((s) => s.editing);
   const [editingSection, setEditingSection] = useState<number | null>(null);
   const [addingSlide, setAddingSlide] = useState(false);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -191,7 +190,7 @@ export function SlideRail() {
         deck,
         slide,
         railSelection(state),
-        { editable: state.editing, searching: !!state.search.matches },
+        { searching: !!state.search.matches },
         {
           addSlide: (after) => void app().addSlide(after),
           duplicate: (slides) => void app().duplicateSlides(slides),
@@ -212,14 +211,14 @@ export function SlideRail() {
 
   const openSectionMenu = useCallback((event: React.MouseEvent, key: string) => {
     const app = useApp.getState;
-    const { deck, editing, collapsedSections } = app();
+    const { deck, collapsedSections } = app();
     if (!deck) return;
     const items = railItems(deck);
     const row = items.find((item) => item.key === key);
     if (row?.kind !== "section") return;
     event.preventDefault();
     const { section } = row;
-    const entries = sectionMenu(key, sectionBlocks(items), collapsedSections, editing, {
+    const entries = sectionMenu(key, sectionBlocks(items), collapsedSections, {
       rename: () => setEditingSection(section.index),
       setCollapsed: (first, folded) => app().toggleSection(first, folded),
       setAllCollapsed: (firsts, folded) => app().setSectionsCollapsed(firsts, folded),
@@ -231,9 +230,6 @@ export function SlideRail() {
 
   const keys = useSameKeys(moving ? blockKeys : itemKeys);
   if (!deck) return null;
-  // The layouts add a slide, which is Edit mode's: leaving it puts them away.
-  if (addingSlide && !editable) setAddingSlide(false);
-
   const hiddenCount = deck.slides.filter((s) => s.hidden).length;
 
   const onDragStart = ({ active }: DragStartEvent) => {
@@ -286,24 +282,17 @@ export function SlideRail() {
     await useApp.getState().reorderRail(dropRows(keys, moved, key, String(over.id)));
   };
 
-  /** The "+": the layouts to add a slide on. Adding one is Edit mode's, so in View it goes there first. */
-  const openLayouts = () => {
-    if (!editable) app().setMode("edit");
-    setAddingSlide((open) => !open);
-  };
-
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <SectionLabel>{railTitle(deck.slides.length, found?.size, hiddenCount)}</SectionLabel>
         <div className="flex items-center gap-0.5">
-          <StartSectionButton deck={deck} editable={editable} onStart={startSection} />
+          <StartSectionButton deck={deck} onStart={startSection} />
           <ToolButton
             ref={addButton}
             variant="panel"
             label="New slide"
-            title={editable ? "New slide" : "New slide: switches to Edit and opens the layouts"}
-            onClick={openLayouts}
+            onClick={() => setAddingSlide((open) => !open)}
             aria-expanded={addingSlide}
             aria-haspopup="dialog"
           >
@@ -324,11 +313,11 @@ export function SlideRail() {
       )}
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       <OpenSelectedFold />
-      <BulkActions deck={deck} editable={editable} />
+      <BulkActions deck={deck} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
-            No slides yet. Describe your presentation in the chat, or switch to Edit and add a blank slide.
+            No slides yet. Describe your presentation in the chat, or add a blank slide with the + above.
           </p>
         ) : (
           <DndContext
@@ -345,7 +334,7 @@ export function SlideRail() {
               <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
             )}
             <Remeasure handle={remeasure} />
-            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found || !editable}>
+            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
               <ol ref={list} className="flex flex-col gap-3">
                 {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
                 {items.map((item) =>
@@ -355,7 +344,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      editable={editable}
+                      editing={editing}
                       filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
@@ -368,7 +357,6 @@ export function SlideRail() {
                       key={item.key}
                       itemKey={item.key}
                       section={item.section}
-                      editable={editable}
                       filteredOut={!!found}
                       still={!!moving || settling}
                       slides={moving ? sizes.get(item.key) : undefined}
@@ -429,8 +417,8 @@ function OpenSelectedFold() {
 }
 
 /** Starts a section at the selected slide, which is what it follows, so that the rail need not. */
-function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (slide: string) => void }) {
-  const { deck, editable } = props;
+function StartSectionButton(props: { deck: Deck; onStart: (slide: string) => void }) {
+  const { deck } = props;
   const selected = useApp((s) => s.selected);
   const index = deck.slides.findIndex((s) => s.id === selected);
   return (
@@ -438,10 +426,8 @@ function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (sl
       variant="panel"
       label="Start a section at this slide"
       onClick={() => selected && props.onStart(selected)}
-      disabled={!editable || index < 0 || startsSection(deck, index)}
-      disabledReason={
-        !editable ? EDIT_ONLY : index < 0 ? "Select a slide to start a section" : "This slide already starts a section"
-      }
+      disabled={index < 0 || startsSection(deck, index)}
+      disabledReason={index < 0 ? "Select a slide to start a section" : "This slide already starts a section"}
     >
       <SquareSplitVertical className="size-4" />
     </ToolButton>
@@ -449,10 +435,10 @@ function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (sl
 }
 
 /**
- * What can be done to the slides picked with ⇧/⌘-click. Locked ones are not deleted or hidden,
- * and out of Edit mode (`editable`) none of them is changed.
+ * What can be done to the slides picked with ⇧/⌘-click, in every mode. Locked ones are not
+ * deleted or hidden.
  */
-function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
+function BulkActions({ deck }: { deck: Deck }) {
   const count = useApp((s) => s.railSelected.length);
   const searching = useApp((s) => !!s.search.matches);
   if (count < 2) return null;
@@ -470,8 +456,8 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
         variant="panel"
         label="Move up"
         shortcut="mod+up"
-        disabledReason={editable ? SEARCH_REORDER : EDIT_ONLY}
-        disabled={!editable || searching}
+        disabledReason={SEARCH_REORDER}
+        disabled={searching}
         onClick={() => void app.moveSlides(-1)}
       >
         <ArrowUp className="size-3.5" />
@@ -480,8 +466,8 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
         variant="panel"
         label="Move down"
         shortcut="mod+down"
-        disabledReason={editable ? SEARCH_REORDER : EDIT_ONLY}
-        disabled={!editable || searching}
+        disabledReason={SEARCH_REORDER}
+        disabled={searching}
         onClick={() => void app.moveSlides(1)}
       >
         <ArrowDown className="size-3.5" />
@@ -489,8 +475,8 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
       <ToolButton
         variant="panel"
         aria-label={`${show ? "Show" : "Hide"} slides`}
-        title={editable ? `${show ? "Show" : "Hide"} slides${skips}` : EDIT_ONLY}
-        disabled={!editable || free.length === 0}
+        title={`${show ? "Show" : "Hide"} slides${skips}`}
+        disabled={free.length === 0}
         onClick={() => void app.setSlidesHidden(ids, !show)}
       >
         {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
@@ -498,8 +484,7 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
       <ToolButton
         variant="panel"
         aria-label="Duplicate slides"
-        title={editable ? "Duplicate slides" : EDIT_ONLY}
-        disabled={!editable}
+        title="Duplicate slides"
         onClick={() => void app.duplicateSlides(picked)}
       >
         <Copy className="size-3.5" />
@@ -507,8 +492,8 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
       <ToolButton
         variant="panel"
         aria-label="Delete slides"
-        title={editable ? `Delete slides${skips}` : EDIT_ONLY}
-        disabled={!editable || free.length === 0}
+        title={`Delete slides${skips}`}
+        disabled={free.length === 0}
         onClick={() => void app.deleteSlides(ids)}
       >
         <Trash2 className="size-3.5" />

@@ -18,7 +18,7 @@ beforeEach(() => {
   useApp.setState({
     deck: DECK,
     selected: "intro",
-    // Changing the slides is Edit mode's.
+    // The rail works the same in View (see "in View mode"); most tests run in Edit.
     editing: true,
     toasts: [],
     revealRev: 0,
@@ -774,83 +774,88 @@ describe("double-clicking a thumbnail", () => {
     expect(useApp.getState()).toMatchObject({ selected: "b", editing: true });
   });
 
-  it("enters edit mode on a locked slide too, where it can be unlocked", () => {
+  it("enters edit mode on a locked slide too, which can be unlocked in either mode", () => {
     const deck = withSlides("a", "b");
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, locked: s.id === "b" })) } });
     render(<SlideRail />);
-    expect(item(1).queryByTitle("Unlock slide")).toBeNull();
+    expect(item(1).getByTitle("Unlock slide")).toBeTruthy();
     fireEvent.doubleClick(button(1));
     expect(useApp.getState()).toMatchObject({ selected: "b", editing: true });
     expect(item(1).getByTitle("Unlock slide")).toBeTruthy();
   });
 });
 
-describe("in View mode, which changes nothing", () => {
+describe("in View mode, where the slides of the deck change as in Edit", () => {
   const sectioned = (): Deck => ({
     ...withSlides("a", "b", "c"),
     sections: [{ index: 0, title: "One", before: 1 } as Section],
   });
-  beforeEach(() => useApp.setState({ deck: sectioned(), selected: "a", editing: false }));
+  beforeEach(() => useApp.setState({ deck: sectioned(), selected: "a", editing: false, railSelected: [] }));
 
-  it("offers nothing that changes a slide or a section, only folding and picking", () => {
+  it("offers a slide's and a section's quick actions, and stays in View using them", async () => {
+    invoke.mockResolvedValue(edited(sectioned()));
     render(<SlideRail />);
-    for (const title of ["Lock slide", "Hide slide", "Duplicate", "Delete", "Rename section", "Remove section"]) {
-      expect(screen.queryByTitle(title)).toBeNull();
+    for (const title of ["Lock slide", "Hide slide", "Duplicate", "Delete"]) {
+      expect(item(0).getByTitle(title)).toBeTruthy();
     }
+    await act(async () => fireEvent.click(item(0).getByTitle("Duplicate")));
+    expect(invoke).toHaveBeenCalledWith("duplicate_slides", { id: DECK.id, slides: ["a"] });
+    await act(async () => fireEvent.click(item(0).getByTitle("Hide slide")));
+    expect(invoke).toHaveBeenCalledWith("set_slides_hidden", { id: DECK.id, slides: ["a"], hidden: true });
+    await act(async () => fireEvent.click(item(0).getByTitle("Delete")));
+    expect(invoke).toHaveBeenCalledWith("delete_slides", { id: DECK.id, slides: ["a"] });
+    expect(screen.getByTitle("Remove section (keeps its slides)")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Rename section"));
+    expect(screen.getByLabelText("Section title")).toBeTruthy();
+    fireEvent.keyDown(screen.getByLabelText("Section title"), { key: "Escape" });
     fireEvent.doubleClick(screen.getByText("One"));
-    expect(screen.queryByLabelText("Section title")).toBeNull();
-    fireEvent.click(screen.getByTitle("Collapse section"));
-    expect(useApp.getState().collapsedSections).toEqual(["b"]);
-    fireEvent.click(items()[0]!.querySelector("button")!);
-    expect(useApp.getState().selected).toBe("a");
-    expect(invoke).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Section title")).toBeTruthy();
+    expect(useApp.getState().editing).toBe(false);
   });
 
-  it("has the section button off, saying where it is on, and New slide go to Edit for its layouts", () => {
+  it("starts a section and adds a slide from the header, without going to Edit", async () => {
+    invoke.mockResolvedValue(edited(sectioned(), ["new"]));
     render(<SlideRail />);
     const section = screen.getByRole("button", { name: "Start a section at this slide" }) as HTMLButtonElement;
-    expect(section.disabled).toBe(true);
-    expect(section.title).toBe("Switch to Edit to change the slides");
-    // No dead end: adding a slide is Edit mode's, so the button goes there.
+    expect(section.disabled).toBe(false);
     const add = screen.getByRole("button", { name: "New slide" }) as HTMLButtonElement;
-    expect(add.disabled).toBe(false);
-    expect(add.title).toBe("New slide: switches to Edit and opens the layouts");
-    fireEvent.click(add);
-    expect(useApp.getState().editing).toBe(true);
-    expect(screen.getByTitle("Add blank slide")).toBeTruthy();
     expect(add.title).toBe("New slide");
-    // Back in View, the layouts left open go away again.
-    act(() => useApp.getState().setMode("view"));
-    expect(screen.queryByTitle("Add blank slide")).toBeNull();
+    fireEvent.click(add);
+    expect(useApp.getState().editing).toBe(false);
+    await act(async () => fireEvent.click(screen.getByTitle("Add blank slide")));
+    expect(invoke).toHaveBeenCalledWith("add_slide", { id: DECK.id, after: "a" });
+    expect(useApp.getState().editing).toBe(false);
   });
 
-  it("does not let slides or sections be dragged, and says how to edit one in its tooltip", () => {
+  it("lets slides and sections be dragged, and says how to edit a slide in its tooltip", () => {
     render(<SlideRail />);
     const draggable = () =>
       items().map((li) => li.getAttribute("data-draggable") ?? String(li.getAttribute("aria-disabled") !== "true"));
-    expect(draggable()).toEqual(["false", "false", "false", "false"]);
+    expect(draggable()).toEqual(["true", "true", "true", "true"]);
     expect(screen.getByRole("button", { name: "Slide 1" }).title).toBe("Slide 1 · double-click to edit");
     act(() => useApp.getState().setMode("edit"));
     expect(draggable()).toEqual(["true", "true", "true", "true"]);
     expect(screen.getByRole("button", { name: "Slide 1" }).title).toBe("Slide 1");
+    act(() => useApp.getState().setMode("view"));
   });
 
-  it("keeps the picked slides' tools off, but for clearing the pick", () => {
+  it("has the picked slides' tools on", async () => {
+    invoke.mockResolvedValue(edited(sectioned()));
     render(<SlideRail />);
     act(() => useApp.getState().extendRailSelection("b", "toggle"));
     const bulk = within(screen.getByRole("toolbar", { name: "Selected slides" }));
     for (const name of ["Move up", "Move down", "Hide slides", "Duplicate slides", "Delete slides"]) {
-      expect((bulk.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect((bulk.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
     }
-    fireEvent.click(bulk.getByRole("button", { name: "Clear selection" }));
-    expect(useApp.getState().railSelected).toEqual([]);
-    expect(invoke).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(bulk.getByRole("button", { name: "Duplicate slides" })));
+    expect(invoke).toHaveBeenCalledWith("duplicate_slides", { id: DECK.id, slides: ["a", "b"] });
+    expect(useApp.getState().editing).toBe(false);
   });
 
   it("tells an empty deck where to add its first slide", () => {
     useApp.setState({ deck: withSlides(), selected: null });
     render(<SlideRail />);
-    expect(screen.getByText(/switch to Edit and add a blank slide/)).toBeTruthy();
+    expect(screen.getByText(/add a blank slide with the \+ above/)).toBeTruthy();
   });
 });
 
@@ -1225,13 +1230,15 @@ describe("the menu of a right-click", () => {
     expect(screen.getByLabelText("Section title")).toBeTruthy();
   });
 
-  it("has what changes the deck off in View, saying where it is on, but still copies", async () => {
+  it("has what changes the deck on in View too, and stays in View", async () => {
     useApp.setState({ editing: false });
+    invoke.mockResolvedValue(edit(DECK));
     render(<SlideRail />);
-    fireEvent.contextMenu(thumb(1));
+    fireEvent.contextMenu(thumb(2));
     for (const name of [
       /^New slide/,
       /^Duplicate/,
+      /^Copy/,
       /^Cut/,
       /^Paste/,
       /^Delete/,
@@ -1240,15 +1247,11 @@ describe("the menu of a right-click", () => {
       /^Move up/,
       /^Start/,
     ]) {
-      expect(off(name)).toBe(true);
-      expect(choice(name).title).toBe("Switch to Edit to change the slides");
+      expect(off(name)).toBe(false);
     }
-    fireEvent.click(choice(/^Delete/));
-    expect(invoke).not.toHaveBeenCalled();
-    expect(screen.getByRole("menu")).toBeTruthy();
-    expect(off(/^Copy/)).toBe(false);
-    await act(async () => fireEvent.click(choice(/^Copy/)));
-    expect(invoke).toHaveBeenCalledWith("copy_slides", { id: DECK.id, slides: ["intro"] });
+    await act(async () => fireEvent.click(choice(/^Delete/)));
+    expect(invoke).toHaveBeenCalledWith("delete_slides", { id: DECK.id, slides: ["#2"] });
+    expect(useApp.getState().editing).toBe(false);
   });
 
   it("says why a locked slide is not deleted, and why nothing moves during a search", () => {
@@ -1328,14 +1331,16 @@ describe("the menu of a right-click", () => {
       expect(toast.action?.label).toBe("Undo");
     });
 
-    it("only folds and picks in View", () => {
+    it("renames and removes in View too", () => {
       useApp.setState({ editing: false });
       render(<SlideRail />);
       fireEvent.contextMenu(header(0));
-      expect(off("Rename")).toBe(true);
-      expect(off("Remove section (keeps its slides)")).toBe(true);
+      expect(off("Remove section (keeps its slides)")).toBe(false);
       expect(off("Collapse")).toBe(false);
       expect(off("Select its slides")).toBe(false);
+      fireEvent.click(choice("Rename"));
+      expect((screen.getByLabelText("Section title") as HTMLInputElement).value).toBe("Opening");
+      expect(useApp.getState().editing).toBe(false);
     });
 
     it("keeps the old name, and says so, when a rename leaves it empty", async () => {

@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use super::attrs::{
-    DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR, SECTION_CLASS,
+    ARCHIVED_ATTR, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR, SECTION_CLASS,
     SECTION_TITLE_ATTR, TIME_ATTR,
 };
 use super::edit::with_indent;
@@ -22,6 +22,8 @@ pub struct SlideSpan {
     pub tag_name_end: usize,
     /// Byte range of the whole `data-hidden` attribute, when the slide is hidden.
     pub hidden: Option<Range<usize>>,
+    /// Byte range of the whole `data-archived` attribute, when the slide is in the archive.
+    pub archived: Option<Range<usize>>,
     /// Byte range of the whole `data-locked` attribute, when the slide is locked.
     pub locked: Option<Range<usize>>,
     /// Byte range of the whole `data-time` attribute, and its value, when the slide has one.
@@ -119,6 +121,7 @@ fn scan(html: &str, mut sections: Option<&mut Vec<SectionSpan>>) -> Vec<SlideSpa
                     id_value: None,
                     tag_name_end: tag.name_end,
                     hidden: None,
+                    archived: None,
                     locked: None,
                     time: None,
                     duration: None,
@@ -132,6 +135,8 @@ fn scan(html: &str, mut sections: Option<&mut Vec<SectionSpan>>) -> Vec<SlideSpa
                         slide.id_value = Some(attr.value_range.clone());
                     } else if attr.is(HIDDEN_ATTR) && slide.hidden.is_none() {
                         slide.hidden = Some(attr.range.clone());
+                    } else if attr.is(ARCHIVED_ATTR) && slide.archived.is_none() {
+                        slide.archived = Some(attr.range.clone());
                     } else if attr.is(LOCKED_ATTR) && slide.locked.is_none() {
                         slide.locked = Some(attr.range.clone());
                     } else if attr.is(TIME_ATTR) && slide.time.is_none() {

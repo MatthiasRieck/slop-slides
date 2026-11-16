@@ -5,7 +5,9 @@
 
 use std::collections::HashSet;
 
-use super::attrs::{DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR};
+use super::attrs::{
+    ARCHIVED_ATTR, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR,
+};
 use super::edit::{indent_before, with_indent};
 use super::slide_attrs::{
     check_duration, check_narration_start, flag_edit, set_locked, value_edit, Edit,
@@ -38,6 +40,16 @@ impl<'a> SlideEdit<'a> {
     pub fn set_hidden(&mut self, hidden: bool) -> Result<(), String> {
         let span = self.span()?;
         let edit = flag_edit(self.html, span, HIDDEN_ATTR, span.hidden.clone(), hidden);
+        self.edits.extend(edit);
+        Ok(())
+    }
+
+    /// Puts the slide's `data-archived` attribute on or takes it off; where the slide then
+    /// belongs is [`super::set_archived`]'s to see to.
+    pub fn set_archived(&mut self, archived: bool) -> Result<(), String> {
+        let span = self.span()?;
+        let current = span.archived.clone();
+        let edit = flag_edit(self.html, span, ARCHIVED_ATTR, current, archived);
         self.edits.extend(edit);
         Ok(())
     }

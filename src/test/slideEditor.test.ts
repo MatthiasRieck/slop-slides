@@ -239,6 +239,21 @@ describe("slide editor", () => {
       expect(button(e).hidden).toBe(false);
     });
 
+    it("shows for an inline drawing in a wrapper, which is selected itself and not the wrapper", () => {
+      // An <svg> is display: inline by default; it is still a drawing, not a run of its parent's text.
+      const WRAPPED = DECK.replace(
+        `<svg viewBox="0 0 10 10"><circle r="1"></circle></svg>`,
+        `<div class="reveal"><svg class="fig" style="display: inline" viewBox="0 0 10 10"><circle r="1"></circle></svg></div>`,
+      );
+      const e = editor({ markup: WRAPPED });
+      e.down(e.$("circle"));
+      e.up(e.$("circle"));
+      expect(e.selected()).toEqual([e.$("svg.fig")]);
+      expect(button(e).hidden).toBe(false);
+      button(e).click();
+      expect(opened(e)[0]).toMatchObject({ path: [2, 0] });
+    });
+
     it("hands the drawing to the app, with where it is and the deck's variables", () => {
       const e = editor({ markup: VARS });
       e.down(e.$("svg"));

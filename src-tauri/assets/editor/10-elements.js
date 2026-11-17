@@ -139,7 +139,8 @@
     var box = el.closest("[" + ADDED + '="text"], [' + ADDED + '="shape"]');
     if (box && slide.contains(box)) el = box;
     el = listHolder(el);
-    while (el.parentElement !== slide && getComputedStyle(el).display === "inline") {
+    // A drawing is never a run of its parent's text, though an <svg> is display: inline by default.
+    while (el.parentElement !== slide && !isDrawing(el) && getComputedStyle(el).display === "inline") {
       // A link around an element without text (display: contents) leaves the element selected.
       if (getComputedStyle(el.parentElement).display === "contents") break;
       el = el.parentElement;

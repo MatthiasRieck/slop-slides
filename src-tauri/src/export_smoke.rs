@@ -743,7 +743,7 @@ pub fn check_pptx(bytes: &[u8], slides: usize, texts: &[String]) -> Result<()> {
 }
 
 /// Whether the presentation `bytes` holds `slides` slides that are each one picture and no
-/// text, every picture a PNG in the shape of the `canvas`.
+/// text, every picture a PNG in the shape of the `canvas` with something drawn on it.
 pub fn check_pptx_pictures(bytes: &[u8], slides: usize, canvas: (u32, u32)) -> Result<()> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| Error::msg(format!("the file is not a PowerPoint package: {e}")))?;
@@ -784,15 +784,20 @@ pub fn check_pptx_pictures(bytes: &[u8], slides: usize, canvas: (u32, u32)) -> R
             .map_err(|e| Error::msg(format!("cannot read {name}: {e}")))?
             .read_to_end(&mut png)?;
         let image = capture::decode_png(&png).map_err(|e| Error::msg(format!("{name}: {e}")))?;
-        // At least the canvas wide, in its shape: but for the edge under a point of the fitted
-        // slide that is left out of the capture, which a larger picture has more pixels of.
+        // In the slide's shape: but for the edge under a point of the fitted slide that is left
+        // out of the capture, which a larger picture has more pixels of. How large it is depends
+        // on the platform: where a capture is of the window's own pixels, it is no wider than
+        // the window.
         let expected = f64::from(image.width) * f64::from(canvas.1) / f64::from(canvas.0);
         let slack = 2.0 + expected * 0.005;
-        if image.width < canvas.0 || (f64::from(image.height) - expected).abs() > slack {
+        if (f64::from(image.height) - expected).abs() > slack {
             return Err(Error::msg(format!(
                 "{name} is {}×{}, not a {}×{} slide",
                 image.width, image.height, canvas.0, canvas.1
             )));
+        }
+        if is_blank(&image) {
+            return Err(Error::msg(format!("{name} is blank")));
         }
     }
     Ok(())
@@ -1107,14 +1112,7 @@ mod tests {
 
     #[test]
     fn a_presentation_of_pictures_is_one_picture_a_slide() {
-        let png = |width, height| {
-            capture::encode_png(&Image {
-                width,
-                height,
-                rgba: vec![255; (width * height * 4) as usize],
-            })
-            .unwrap()
-        };
+        let png = |width, height| capture::encode_png(&slide_image(width, height, 40)).unwrap();
         let file = |slide: &str, picture: Vec<u8>| {
             package_bytes(&[
                 ("ppt/slides/slide1.xml", slide.as_bytes().to_vec()),
@@ -1146,10 +1144,13 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(shape.contains("32×32"), "{shape}");
-        let small = check_pptx_pictures(&file(one, png(8, 5)), 1, (16, 9))
+        // A capture of a small window is a smaller picture, and still the slide.
+        assert!(check_pptx_pictures(&file(one, png(16, 9)), 1, (1920, 1080)).is_ok());
+        let blank = capture::encode_png(&slide_image(32, 18, 0)).unwrap();
+        let blank = check_pptx_pictures(&file(one, blank), 1, (16, 9))
             .unwrap_err()
             .to_string();
-        assert!(small.contains("8×5"), "{small}");
+        assert!(blank.contains("is blank"), "{blank}");
     }
 
     #[test]

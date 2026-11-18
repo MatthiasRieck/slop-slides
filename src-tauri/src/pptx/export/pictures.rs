@@ -11,7 +11,9 @@ use crate::error::{Error, Result};
 use crate::export_window::{self, Helper};
 use crate::render;
 
-/// A slide's picture has this many pixels per slide pixel, so it stays sharp shown large.
+/// A slide's picture is asked for with this many pixels per slide pixel, so it stays sharp
+/// shown large. Where a capture is of the window's own pixels (not on macOS, which draws the
+/// slide again at the size asked for), it is no wider than the window shows the slide.
 const PICTURE_SCALE: u32 = 2;
 
 /// How wide the pictures of slides `canvas_width` pixels wide are, in pixels.

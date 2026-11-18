@@ -10,7 +10,7 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { claimDrop, dropCovered } from "../lib/drop";
-import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { DEFAULT_EDIT_STYLES, DEFAULT_THEME, editStylesFor } from "../lib/editTools";
 import { wroteAsset } from "../lib/ownAssets";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
@@ -1556,7 +1556,9 @@ describe("Stage", () => {
       const select = (frame: HTMLIFrameElement, selection: unknown = SELECTION) =>
         fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selection });
 
-      beforeEach(() => useApp.setState({ editTool: "select", editStyles: DEFAULT_EDIT_STYLES }));
+      beforeEach(() =>
+        useApp.setState({ editTool: "select", editStyles: DEFAULT_EDIT_STYLES, editTheme: DEFAULT_THEME }),
+      );
 
       it("picks a tool, telling the editor with the style of what it adds", () => {
         const { post } = enter();
@@ -1591,6 +1593,32 @@ describe("Stage", () => {
         fireEvent.load(frame);
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-size-mode", mode: "stretch" }, "*");
         expect((mode as HTMLSelectElement).value).toBe("stretch");
+      });
+
+      it("starts what the tools add out in the colors of the slide the editor reports", () => {
+        useApp.setState({ editTheme: DEFAULT_THEME });
+        const { frame, post } = enter();
+        fireEvent.click(button("Add a rectangle"));
+        const theme = { background: "#0b0b12", foreground: "#f5f5f5" };
+        fromFrame(frame, { type: "slop:edit-theme", slide: "intro", theme });
+        expect(useApp.getState().editStyles).toEqual(editStylesFor(theme));
+        expect(post).toHaveBeenLastCalledWith(
+          {
+            type: "slop:edit-tool",
+            tool: "rect",
+            style: expect.objectContaining({ fill: "#0b0b12", stroke: "#f5f5f5", color: "#f5f5f5" }),
+          },
+          "*",
+        );
+        fireEvent.click(button("Add text"));
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool: "text", style: expect.objectContaining({ color: "#f5f5f5", fill: null }) },
+          "*",
+        );
+        // What another slide says, or a report that is no theme, changes nothing.
+        fromFrame(frame, { type: "slop:edit-theme", slide: "other", theme: DEFAULT_THEME });
+        fromFrame(frame, { type: "slop:edit-theme", slide: "intro", theme: { background: "red" } });
+        expect(useApp.getState().editTheme).toEqual(theme);
       });
 
       it("tells a reloaded editor the current tool", () => {

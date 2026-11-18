@@ -43,8 +43,8 @@ const MAX_GROUP_DEPTH: usize = 32;
 const SHELL_CSS: &str = r#"
     .slide {
       overflow: hidden;
-      background: var(--slide-bg);
-      color: var(--slide-ink);
+      background: var(--bg);
+      color: var(--ink);
       font-family: var(--font-body);
     }
 
@@ -808,7 +808,7 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         )
     };
     let html = format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n{size_meta}  <style>\n    :root {{\n      --slide-bg: {bg};\n      --slide-ink: {ink};\n      --font-display: {major};\n      --font-body: {minor};\n    }}\n{css}  </style>\n</head>\n<body>\n  <main class=\"deck\">\n{body}  </main>\n</body>\n</html>\n",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n{size_meta}  <style>\n    :root {{\n      --bg: {bg};\n      --ink: {ink};\n      --font-display: {major};\n      --font-body: {minor};\n    }}\n{css}  </style>\n</head>\n<body>\n  <main class=\"deck\">\n{body}  </main>\n</body>\n</html>\n",
         title = escape(&title),
         bg = first_bg.unwrap_or(white).css(),
         ink = first_ink.unwrap_or(black).css(),

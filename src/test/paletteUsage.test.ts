@@ -90,8 +90,9 @@ describe("palette", () => {
   });
 
   it("gives the slide's frame only palette colors", () => {
-    // Styles for what the editor adds to a deck, and transparent, which the pasteboard compares with.
-    const content = /var (?:BORDER_COLOR|FALLBACK_STYLE|SHADOW_COLOR) = .*|"#000"|rgba\(0, 0, 0, 0\)/g;
+    // Styles for what the editor adds to a deck (and the slide colors it assumes when a deck names
+    // none), and transparent, which the pasteboard compares with.
+    const content = /var (?:BORDER_COLOR|FALLBACK_STYLE|SHADOW_COLOR|THEME_FALLBACK) = .*|"#000"|rgba\(0, 0, 0, 0\)/g;
     const defaults = /":root \{ --slop-[\s\S]*?\}" \+/;
     const own = `${EDITOR}\n${PASTEBOARD}`.replace(defaults, "").replace(content, "");
     expect(own.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b(?!-)|\brgba?\(/gi) ?? []).toEqual([]);

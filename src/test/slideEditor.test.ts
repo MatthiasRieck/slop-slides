@@ -5315,6 +5315,65 @@ describe("slide editor: shapes, styling and media", () => {
     });
   });
 
+  describe("slide theme", () => {
+    const deckOf = (css: string, attrs = "") =>
+      `<!DOCTYPE html><html><head><style>${css}</style></head><body><main class="deck"><section class="slide" id="intro"${attrs}><p id="note">Note</p></section></main></body></html>`;
+    const theme = (e: ReturnType<typeof editor>) =>
+      e.messages<{ slide: string; theme: { background: string; foreground: string } }>("slop:edit-theme").at(-1)!;
+
+    it("reports the page's own black on white for a deck that names no colors", () => {
+      const e = editor();
+      expect(e.messages("slop:edit-theme")).toHaveLength(1);
+      expect(theme(e)).toEqual({
+        type: "slop:edit-theme",
+        slide: "intro",
+        theme: { background: "#ffffff", foreground: "#000000" },
+      });
+    });
+
+    it("takes the deck's --bg and --ink, however they are written", () => {
+      const e = editor({ markup: deckOf(":root { --bg: rgb(11, 11, 18); --ink: #F5F5F5; }") });
+      expect(theme(e).theme).toEqual({ background: "#0b0b12", foreground: "#f5f5f5" });
+    });
+
+    it("takes them as a slide sets them for itself", () => {
+      const css = ":root { --bg: #ffffff; --ink: #111111; } .dark { --bg: #000000; --ink: #eeeeee; }";
+      const e = editor({ markup: deckOf(css).replace('class="slide"', 'class="slide dark"') });
+      expect(theme(e).theme).toEqual({ background: "#000000", foreground: "#eeeeee" });
+    });
+
+    it("goes by the color the slide paints, with a foreground that reads on it", () => {
+      // A dark slide in a light deck that names only the deck's colors: its own text color reads.
+      const css = ":root { --bg: #ffffff; --ink: #111111; }";
+      const own = editor({ markup: deckOf(css, ' style="background-color: #101010; color: #fafafa"') });
+      expect(theme(own).theme).toEqual({ background: "#101010", foreground: "#fafafa" });
+      // Without one, the deck's ink would not show on it: white does.
+      const dark = editor({ markup: deckOf(css, ' style="background-color: #101010"') });
+      expect(theme(dark).theme).toEqual({ background: "#101010", foreground: "#ffffff" });
+      // And on a light slide whose text is as light, in a dark deck, ink does.
+      const light = editor({
+        markup: deckOf(
+          ":root { --bg: #000000; --ink: #ffffff; }",
+          ' style="background-color: #fefefe; color: #ffffff"',
+        ),
+      });
+      expect(theme(light).theme).toEqual({ background: "#fefefe", foreground: "#111111" });
+    });
+
+    it("follows the background the user gives the slide", () => {
+      const e = editor({ markup: deckOf(":root { --bg: #ffffff; --ink: #111111; }") });
+      e.fromParent({ type: "slop:edit-background", color: "#000000" });
+      expect(theme(e).theme).toEqual({ background: "#000000", foreground: "#ffffff" });
+      e.fromParent({ type: "slop:edit-background", color: null });
+      expect(theme(e).theme).toEqual({ background: "#ffffff", foreground: "#000000" });
+    });
+
+    it("leaves no probe behind", () => {
+      const e = editor({ markup: deckOf(":root { --bg: white; --ink: black; }") });
+      expect(e.doc.querySelectorAll("span[data-slop-ui]")).toHaveLength(0);
+    });
+  });
+
   describe("format painter", () => {
     const paint = (e: ReturnType<typeof editor>, from: Element, to: Element) => {
       e.down(from);

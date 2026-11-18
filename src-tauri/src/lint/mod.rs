@@ -20,7 +20,9 @@ use deck::{
     check_slides, check_stuck_lines, check_template,
 };
 use markup::check_markup;
-use styles::{check_entrances, check_slide_id_styles, check_tilts, check_untimed_delays};
+use styles::{
+    check_entrances, check_slide_id_styles, check_theme_colors, check_tilts, check_untimed_delays,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +237,7 @@ pub fn lint_parsed(
     check_slides(&mut l);
     check_narration(&mut l);
     check_slide_id_styles(&mut l);
+    check_theme_colors(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
     check_comments(&mut l);

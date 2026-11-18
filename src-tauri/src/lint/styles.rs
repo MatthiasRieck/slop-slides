@@ -7,8 +7,8 @@ use std::ops::Range;
 use crate::html::{parse_tag, MOVED_ATTR};
 
 use super::css::{
-    animates_reveal, css_id_references, easing_vars, steep_tilts, transform_keyframes,
-    untimed_delays, STEEPEST_TILT,
+    animates_reveal, css_id_references, easing_vars, sets_property, steep_tilts,
+    transform_keyframes, untimed_delays, STEEPEST_TILT,
 };
 use super::{in_markup, truncate, Issue, Linter, Severity};
 
@@ -152,4 +152,41 @@ pub(super) fn check_tilts(l: &mut Linter) {
             ),
         );
     }
+}
+
+/// The custom properties a deck names its primary colors with: the background its slides are
+/// painted in, and the text color that reads on it. The editor starts what its tools add out
+/// in them (see `slideTheme` in `assets/editor/70-look.js`).
+pub(super) const THEME_COLORS: [&str; 2] = ["--bg", "--ink"];
+
+/// A deck with slides must define its primary colors (see [`THEME_COLORS`]) in its styles.
+pub(super) fn check_theme_colors(l: &mut Linter) {
+    if l.slides.is_empty() {
+        return;
+    }
+    let blocks = style_blocks(l);
+    let missing: Vec<_> = THEME_COLORS
+        .into_iter()
+        .filter(|name| {
+            !blocks
+                .iter()
+                .any(|b| sets_property(&l.html[b.clone()], name))
+        })
+        .map(|name| format!("`{name}`"))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    // Where the deck's own styles are (after the runtime's), for a deck that has any.
+    let at = blocks.last().map_or(0, |b| b.start);
+    l.issues.push(Issue {
+        rule: "theme-colors",
+        severity: Severity::Warning,
+        message: format!(
+            "The deck's CSS does not define {}. Declare the deck's primary background color as `--bg` and its primary text color as `--ink` on `:root` in <style>, and paint the slides with them (`.slide {{ background: var(--bg); color: var(--ink); }}`): shapes and text the user adds in the editor take these colors. A slide with other colors sets both again for itself.",
+            missing.join(" and ")
+        ),
+        line: l.line(at),
+        slide: None,
+    });
 }

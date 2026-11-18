@@ -3,9 +3,12 @@ import {
   type AgentInsert,
   combineElements,
   DEFAULT_EDIT_STYLES,
+  DEFAULT_THEME,
   type EditElement,
   type EditStyle,
   type EditTool,
+  rethemedStyles,
+  type SlideTheme,
   type ToolFamily,
 } from "../lib/editTools";
 import { memoizeLast } from "../lib/memo";
@@ -46,6 +49,8 @@ export interface EditingSlice {
   editTool: EditTool;
   /** What new text boxes, shapes and drawings look like; restyling one updates its family's. */
   editStyles: Record<ToolFamily, EditStyle>;
+  /** The primary colors of the slide last edited, which `editStyles` start out in. */
+  editTheme: SlideTheme;
   /** Where the deck's history was when edit mode started, and its slides' hashes then. */
   editBase: { version: string; hashes: Record<string, string> } | null;
   /** The slides edited on the stage since edit mode started. */
@@ -83,6 +88,8 @@ export interface EditingSlice {
   setMode: (mode: DeckMode) => void;
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
+  /** Takes the primary colors of the slide being edited: what the tools add then starts out in them. */
+  setEditTheme: (theme: SlideTheme) => void;
   /**
    * Saves `markup` as the new version of `slide`, after any edits still being saved. `group` is
    * the editor's name for a run of small edits (arrow-key nudges of the same elements), whose
@@ -196,6 +203,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   editReload: 0,
   editTool: "select",
   editStyles: DEFAULT_EDIT_STYLES,
+  editTheme: DEFAULT_THEME,
   editBase: null,
   editedSlides: [],
   editSaved: {},
@@ -244,6 +252,13 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
 
   setEditStyle: (family, changes) =>
     set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
+
+  setEditTheme: (theme) =>
+    set((s) => {
+      const was = s.editTheme;
+      if (was.background === theme.background && was.foreground === theme.foreground) return s;
+      return { editTheme: theme, editStyles: rethemedStyles(s.editStyles, was, theme) };
+    }),
 
   changeSlideMarkup: (slide, change) =>
     queueEdit(async () => {

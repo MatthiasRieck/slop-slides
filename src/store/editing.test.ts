@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_THEME, editStylesFor } from "../lib/editTools";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { editedSlidesOf, editingSlide } from "./editing";
 import { lastError } from "./errors";
@@ -308,7 +309,7 @@ describe("editing slides on the stage", () => {
     useApp.getState().setEditTool("ellipse");
     useApp.getState().setEditStyle("shape", { fill: "#ef4444" });
     useApp.getState().setEditStyle("shape", { bold: true });
-    expect(useApp.getState().editStyles.shape).toMatchObject({ fill: "#ef4444", bold: true, color: "#ffffff" });
+    expect(useApp.getState().editStyles.shape).toMatchObject({ fill: "#ef4444", bold: true, color: "#111111" });
     expect(useApp.getState().editStyles.text.fill).toBeNull();
     useApp.getState().setEditing(false);
     useApp.getState().setEditing(true);
@@ -606,5 +607,33 @@ describe("the edit toolbar's own state", () => {
     await useApp.getState().askForInsert("table");
     await useApp.getState().askAboutElements([A, B]);
     expect(useApp.getState().composerFill).toBeNull();
+  });
+});
+
+describe("edit theme", () => {
+  const DARK = { background: "#0b0b12", foreground: "#f5f5f5" };
+
+  it("starts the tools' styles out in the slide's colors, keeping the colors the user picked", async () => {
+    const { useApp } = await freshModule();
+    const app = () => useApp.getState();
+    expect(app().editTheme).toEqual(DEFAULT_THEME);
+    expect(app().editStyles).toEqual(editStylesFor(DEFAULT_THEME));
+    app().setEditTheme(DARK);
+    expect(app().editTheme).toEqual(DARK);
+    expect(app().editStyles).toEqual(editStylesFor(DARK));
+
+    // A fill the user picked stays on the next slide; what was the theme's follows it.
+    app().setEditStyle("shape", { fill: "#ef4444" });
+    app().setEditTheme(DEFAULT_THEME);
+    expect(app().editStyles.shape).toMatchObject({ fill: "#ef4444", stroke: "#111111", color: "#111111" });
+    expect(app().editStyles.text.color).toBe("#111111");
+  });
+
+  it("keeps the styles as they are when the theme is the same", async () => {
+    const { useApp } = await freshModule();
+    useApp.getState().setEditTheme(DARK);
+    const before = useApp.getState();
+    useApp.getState().setEditTheme({ ...DARK });
+    expect(useApp.getState()).toBe(before);
   });
 });

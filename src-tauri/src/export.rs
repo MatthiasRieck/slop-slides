@@ -12,11 +12,14 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::error::{Error, Result};
-use crate::inbox::{Inbox, Serving};
+use crate::inbox::{Inbox, Reporter, Serving};
 use crate::{capture, deck, export_window, html, pdf, render, video};
 
-/// Longest wait for an export: a long video with narration to say takes a while.
+/// Longest wait for an export that says nothing new of its progress: a video says how far it
+/// is as it goes, however long it takes, while the other exports are made in one go.
 pub const WAIT: Duration = Duration::from_secs(60 * 60);
+/// What a waiting tool hears of an export that has said nothing of its progress yet.
+const WAITING: &str = "Exporting";
 /// Where export requests and their answers go in a session.
 static INBOX: Inbox = Inbox {
     requests: "export-requests",
@@ -204,15 +207,37 @@ pub fn destination(
     Ok(rel)
 }
 
-/// Asks the app serving `session` for `request` and waits for its answer.
-pub fn ask(session: &Path, request: &Request, wait: Duration) -> Result<String> {
-    INBOX.ask(
+/// Asks the app serving `session` for `request` and waits for its answer, as long as the app
+/// says something new of its progress every `wait`. `hear` is told how far the export is,
+/// whenever that changes and every few seconds besides.
+pub fn ask(
+    session: &Path,
+    request: &Request,
+    wait: Duration,
+    hear: &dyn Fn(&str),
+) -> Result<String> {
+    INBOX.ask_hearing(
         session,
         request,
         wait,
         "unreadable export answer",
         "The app did not finish the export in time. It only exports while a turn is running.",
+        &|words| hear(words.unwrap_or(WAITING)),
     )
+}
+
+/// How far a video export is, in words, for the agent's tool.
+fn video_progress(progress: video::Progress) -> String {
+    let video::Progress { frame, frames, .. } = progress;
+    match progress.phase {
+        video::Phase::Narration => {
+            format!("Saying the narration: {frame} of {frames} slides done")
+        }
+        video::Phase::Video => {
+            let percent = u64::from(frame) * 100 / u64::from(frames.max(1));
+            format!("Recording the video: frame {frame} of {frames} ({percent}%)")
+        }
+    }
 }
 
 /// Drains the inbox, oldest first, skipping what cannot be read.
@@ -228,14 +253,24 @@ pub fn answer(session: &Path, name: &str, answer: &Answer) -> Result<()> {
 
 /// Serves the inbox of `session` for a turn in workspace `dir`, one export at a time.
 pub fn start(app: AppHandle, dir: PathBuf, session: PathBuf) -> Serving {
-    INBOX.start(app, dir, session, |app, dir, request: Request| async move {
-        serve(&app, &dir, &request).await
-    })
+    INBOX.start(
+        app,
+        dir,
+        session,
+        |app, dir, request: Request, reporter| async move {
+            serve(&app, &dir, &request, &reporter).await
+        },
+    )
 }
 
 /// Makes the export `request` asks for. Anything may write to the inbox, so its paths are
 /// checked again: the destination must be in the workspace, its folder there already.
-async fn serve(app: &AppHandle, dir: &Path, request: &Request) -> Result<String> {
+async fn serve(
+    app: &AppHandle,
+    dir: &Path,
+    request: &Request,
+    reporter: &Reporter,
+) -> Result<String> {
     let file = PathBuf::from(crate::workspace::open_file(dir, &request.path)?.absolute);
     let dest = dir.join(parts(&request.dest)?.join("/"));
     if !dest
@@ -247,11 +282,18 @@ async fn serve(app: &AppHandle, dir: &Path, request: &Request) -> Result<String>
             request.dest
         )));
     }
-    make(app, &file, request, &dest).await
+    make(app, &file, request, &dest, reporter).await
 }
 
-/// Exports the deck `file` as `request` asks, to `dest`; what it made, in words.
-async fn make(app: &AppHandle, file: &Path, request: &Request, dest: &Path) -> Result<String> {
+/// Exports the deck `file` as `request` asks, to `dest`, telling `reporter` how far a video
+/// is; what it made, in words.
+async fn make(
+    app: &AppHandle,
+    file: &Path,
+    request: &Request,
+    dest: &Path,
+    reporter: &Reporter,
+) -> Result<String> {
     let made = match request.format {
         Format::Html => {
             deck::export(file, dest)?;
@@ -269,7 +311,10 @@ async fn make(app: &AppHandle, file: &Path, request: &Request, dest: &Path) -> R
             let options = request
                 .video
                 .unwrap_or(crate::narration::timeline::DEFAULTS);
-            video::export(app, file, dest, options, |_| {}).await?;
+            video::export(app, file, dest, options, |progress| {
+                reporter.say(&video_progress(progress))
+            })
+            .await?;
             None
         }
         Format::Images => Some(images(app, file, dest).await?),
@@ -549,6 +594,31 @@ mod tests {
             serde_json::from_str(r#"{"path":"deck.html","format":"pdf","dest":"deck.pdf"}"#)
                 .unwrap();
         assert_eq!(plain.video, None);
+    }
+
+    #[test]
+    fn says_how_far_a_video_is() {
+        let at = |phase, frame, frames| {
+            video_progress(video::Progress {
+                phase,
+                frame,
+                frames,
+            })
+        };
+        assert_eq!(
+            at(video::Phase::Narration, 3, 12),
+            "Saying the narration: 3 of 12 slides done"
+        );
+        assert_eq!(
+            at(video::Phase::Video, 18_900, 75_600),
+            "Recording the video: frame 18900 of 75600 (25%)"
+        );
+        assert_eq!(
+            at(video::Phase::Video, 0, 0),
+            "Recording the video: frame 0 of 0 (0%)"
+        );
+        // More frames than a u32 holds a hundredfold of.
+        assert!(at(video::Phase::Video, u32::MAX, u32::MAX).ends_with("(100%)"));
     }
 
     #[test]

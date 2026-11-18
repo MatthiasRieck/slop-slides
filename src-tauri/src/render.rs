@@ -158,9 +158,12 @@ fn parse_overflow(json: Option<&String>) -> Vec<String> {
 
 /// Serves the inbox of `session` for a turn in workspace `dir`, one request at a time.
 pub fn start(app: AppHandle, dir: PathBuf, session: PathBuf) -> Serving {
-    INBOX.start(app, dir, session, |app, dir, request: Request| async move {
-        serve(&app, &dir, &request).await
-    })
+    INBOX.start(
+        app,
+        dir,
+        session,
+        |app, dir, request: Request, _| async move { serve(&app, &dir, &request).await },
+    )
 }
 
 /// The tool checked the request, but anything may write to the inbox: check it again.

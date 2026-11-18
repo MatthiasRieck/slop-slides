@@ -24,6 +24,8 @@ pub(super) struct Call<'a> {
     pub arguments: &'a Value,
     pub dir: &'a Path,
     pub session: &'a dyn Fn(&Path) -> Option<PathBuf>,
+    /// Tells the caller how far a long call is, in words; it may be said any number of times.
+    pub progress: &'a dyn Fn(&str),
 }
 
 impl Call<'_> {
@@ -370,6 +372,7 @@ const EXPORT: Tool = Tool {
             call.arguments,
             session.as_deref(),
             export::WAIT,
+            call.progress,
         ))
     },
 };
@@ -415,13 +418,14 @@ fn video_options(arguments: &Value) -> Result<video::Options> {
 }
 
 /// Exports the deck at `path` (`arguments`) as its `format` asks: a standalone HTML file here,
-/// anything else by the app serving the workspace's `session`, waiting at most `wait`. What it
-/// made, for the agent.
+/// anything else by the app serving the workspace's `session`, waiting at most `wait` for news
+/// of it and telling `hear` how far it is. What it made, for the agent.
 pub(super) fn export_deck(
     dir: &Path,
     arguments: &Value,
     session: Option<&Path>,
     wait: std::time::Duration,
+    hear: &dyn Fn(&str),
 ) -> Result<String> {
     let format = export::Format::parse(
         arguments["format"]
@@ -454,5 +458,5 @@ pub(super) fn export_deck(
         return Ok(export::report(&request, None, &path));
     }
     let session = session.ok_or_else(|| Error::msg("no workspace session"))?;
-    export::ask(session, &request, wait)
+    export::ask(session, &request, wait, hear)
 }

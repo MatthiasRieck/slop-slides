@@ -133,7 +133,7 @@ fn lint_tool_reports_issues_in_the_deck() {
 #[test]
 fn lint_tool_reports_slide_id_styles_for_agent_repair_without_modifying_the_deck() {
     let source = html::ensure_runtime(
-        "<!DOCTYPE html><html><head><title>Pitch</title>\n<style>\n#title .card { color: red; }\n</style></head><body><main class=\"deck\"><section class=\"slide\" id=\"title\"><div class=\"card\">AI-KIT</div></section></main></body></html>",
+        "<!DOCTYPE html><html><head><title>Pitch</title>\n<style>\n#title .card { color: red; } :root { --bg: #fff; --ink: #111; }\n</style></head><body><main class=\"deck\"><section class=\"slide\" id=\"title\"><div class=\"card\">AI-KIT</div></section></main></body></html>",
     );
     let dir = temp_deck(&source);
     let report = || {

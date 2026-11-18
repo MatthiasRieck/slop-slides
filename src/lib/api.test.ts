@@ -158,6 +158,7 @@ const CASES = [
   ["presentOn", () => api.presentOn(1, 0), "present_on", { audience: 1, presenter: 0 }],
   ["presentOn", () => api.presentOn(1, null), "present_on", { audience: 1, presenter: null }],
   ["presentInWindows", () => api.presentInWindows(), "present_in_windows", undefined],
+  ["shapeShow", () => api.shapeShow(4 / 3), "shape_show", { ratio: 4 / 3 }],
   ["closePresenterView", () => api.closePresenterView(), "close_presenter_view", undefined],
   ["takePendingFolder", () => api.takePendingFolder(), "take_pending_folder", undefined],
   ["pasteSlides", () => api.pasteSlides("talk", null), "paste_slides", { id: "talk", after: null }],

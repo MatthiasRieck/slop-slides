@@ -132,6 +132,72 @@
   function reportBackground() {
     var color = toHex(getComputedStyle(slide).backgroundColor);
     window.parent.postMessage({ type: "slop:edit-background", slide: slide.id, color: color }, "*");
+    window.parent.postMessage({ type: "slop:edit-theme", slide: slide.id, theme: slideTheme() }, "*");
+  }
+
+  /** Reads CSS colors however they are written (a name, hsl(), another variable); `done` puts its probe away. */
+  function colorReader() {
+    var probe = null;
+    return {
+      /** `#rrggbb` for `value`, or null when it is no plain color. */
+      read: function (value) {
+        value = String(value || "").trim();
+        var hex = toHex(value);
+        if (hex !== null || !value) return hex;
+        if (!probe) {
+          probe = document.createElement("span");
+          probe.setAttribute("data-slop-ui", "");
+          document.body.appendChild(probe);
+        }
+        probe.style.color = "";
+        probe.style.color = value;
+        return probe.style.color ? toHex(getComputedStyle(probe).color) : null;
+      },
+      done: function () {
+        if (probe) document.body.removeChild(probe);
+        probe = null;
+      },
+    };
+  }
+
+  /** How bright a `#rrggbb` color is, from 0 (black) to 1 (white): its WCAG relative luminance. */
+  function luminance(hex) {
+    var channels = [1, 3, 5].map(function (at) {
+      var c = parseInt(hex.slice(at, at + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  }
+
+  /** The WCAG contrast ratio of two `#rrggbb` colors, from 1 (the same) to 21 (black on white). */
+  function contrast(a, b) {
+    var la = luminance(a);
+    var lb = luminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  /**
+   * The slide's primary colors, which what the tools add starts out in. `background` is the color
+   * the slide paints or, behind an image or a gradient, the deck's `--bg`. `foreground` is the
+   * slide's text color, or the deck's `--ink`: the first that reads on that background, and
+   * black or white when neither does. A slide that sets its own colors is so seen as it looks.
+   */
+  function slideTheme() {
+    var computed = getComputedStyle(slide);
+    var colors = colorReader();
+    var background = toHex(computed.backgroundColor) || colors.read(computed.getPropertyValue("--bg")) || THEME_FALLBACK.background;
+    var inks = [toHex(computed.color), colors.read(computed.getPropertyValue("--ink"))];
+    colors.done();
+    var foreground = null;
+    inks.forEach(function (ink) {
+      if (!foreground && ink && contrast(ink, background) >= THEME_CONTRAST) foreground = ink;
+    });
+    if (!foreground) {
+      foreground = contrast(THEME_FALLBACK.foreground, background) >= contrast(THEME_FALLBACK.background, background)
+        ? THEME_FALLBACK.foreground
+        : THEME_FALLBACK.background;
+    }
+    return { background: background, foreground: foreground };
   }
 
   /** The slide's own background, over any image or gradient the deck gives it; null drops it. */
@@ -307,29 +373,17 @@
    */
   function deckColors(found) {
     var computed = getComputedStyle(slide);
-    var probe = null;
-    var worked = function (value) {
-      if (!probe) {
-        probe = document.createElement("span");
-        probe.setAttribute("data-slop-ui", "");
-        document.body.appendChild(probe);
-      }
-      probe.style.color = "";
-      probe.style.color = value;
-      return probe.style.color ? toHex(getComputedStyle(probe).color) : null;
-    };
+    var reader = colorReader();
     var seen = {};
     var colors = [];
     for (var i = 0; i < found.names.length && colors.length < MAX_DECK_COLORS; i++) {
       var name = found.names[i];
-      var value = String(computed.getPropertyValue(name) || found.scoped[name] || "").trim();
-      var hex = toHex(value);
-      if (hex === null && value) hex = worked(value);
+      var hex = reader.read(computed.getPropertyValue(name) || found.scoped[name]);
       if (!hex || seen[hex]) continue;
       seen[hex] = true;
       colors.push({ name: name.slice(2), value: hex });
     }
-    if (probe) document.body.removeChild(probe);
+    reader.done();
     return colors;
   }
 

@@ -466,6 +466,11 @@ export const api = {
   presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
   /** Opens the presenter view in a window of its own; this window stays where and as it is. */
   presentInWindows: () => invoke<void>("present_in_windows"),
+  /**
+   * Fits this window to the slides' shape (`ratio`, width over height) and, on macOS, keeps it
+   * to that shape as it is resized; null gives it back the size it had and lets it go.
+   */
+  shapeShow: (ratio: number | null) => invoke<void>("shape_show", { ratio }),
   /** Closes the presenter view window, if open. */
   closePresenterView: () => invoke<void>("close_presenter_view"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */

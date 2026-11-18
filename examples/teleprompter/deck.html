@@ -977,10 +977,12 @@ We should go back to the Moon because it is the nearest place to learn how to li
 
   if (embed) return;
   // The presenter forwards keys pressed while its drawing tools have focus: { type: "slop:go",
-  // key, shift }. Its controls come and go with the pointer, whose moves over the slide only this
-  // page sees: it says so ({ type: "slop:pointer" }, a few times a second at most), and hides the
-  // cursor while the presenter says the pointer rests ({ type: "slop:idle", idle }).
-  var POINTER_MS = 250;
+  // key, shift }. Its controls come up when the pointer nears the bottom, and the cursor comes
+  // and goes with the pointer, whose moves over the slide only this page sees: it says so, and how
+  // far above the bottom the pointer is ({ type: "slop:pointer", bottom }, at most every
+  // POINTER_MS, often enough for the controls to follow), and hides the cursor while the
+  // presenter says the pointer rests ({ type: "slop:idle", idle }).
+  var POINTER_MS = 50;
   var pointerTold = 0;
   window.addEventListener("message", function (event) {
     var data = event.data;
@@ -994,13 +996,13 @@ We should go back to the Moon because it is the nearest place to learn how to li
     }
   });
   if (framed) {
-    document.addEventListener("mousemove", function () {
+    document.addEventListener("mousemove", function (event) {
       var now = Date.now();
       // Once told, the moves that follow say nothing new, also while the presenter's answer
       // that the pointer no longer rests is on its way.
       if (now - pointerTold < POINTER_MS) return;
       pointerTold = now;
-      window.parent.postMessage({ type: "slop:pointer" }, "*");
+      window.parent.postMessage({ type: "slop:pointer", bottom: window.innerHeight - event.clientY }, "*");
     });
   }
   window.addEventListener("hashchange", function () {

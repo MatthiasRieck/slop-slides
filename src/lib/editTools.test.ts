@@ -5,9 +5,11 @@ import {
   AUTOFIT_LABELS,
   combineElements,
   DEFAULT_EDIT_STYLES,
+  DEFAULT_THEME,
   defaultsFrom,
   EDIT_TOOL_KEYS,
   type EditSelection,
+  editStylesFor,
   FIT_LABELS,
   FIT_POSITION_NAMES,
   FIT_POSITIONS,
@@ -24,6 +26,9 @@ import {
   parseHexColor,
   parseMenuTarget,
   parseSelection,
+  parseTheme,
+  rethemedStyles,
+  SHAPE_BORDER,
   SYSTEM_FONTS,
   stepFontSize,
   strokeWidths,
@@ -415,5 +420,52 @@ describe("what the toolbar and the context menu are told", () => {
     expect(FIT_LABELS.map((c) => c.label)).toEqual(["Fit inside", "Fill and crop", "Stretch"]);
     expect(FIT_POSITION_NAMES).toHaveLength(FIT_POSITIONS.length);
     expect(FIT_POSITION_NAMES[FIT_POSITIONS.indexOf("50% 50%")]).toBe("Center");
+  });
+});
+
+describe("slide theme", () => {
+  const DARK = { background: "#0b0b12", foreground: "#f5f5f5" };
+
+  it("reads the theme the editor reports", () => {
+    expect(parseTheme({ background: "#0B0B12", foreground: "#f5f5f5" })).toEqual(DARK);
+    expect(parseTheme({ background: "#0b0b12" })).toBeNull();
+    expect(parseTheme({ background: "red", foreground: "#f5f5f5" })).toBeNull();
+    expect(parseTheme(null)).toBeNull();
+    expect(parseTheme("#ffffff")).toBeNull();
+  });
+
+  it("starts text and lines in the foreground, and shapes filled with the background and outlined in it", () => {
+    const styles = editStylesFor(DARK);
+    expect(styles.text).toMatchObject({ color: "#f5f5f5", fill: null, stroke: null, strokeWidth: 0 });
+    expect(styles.shape).toMatchObject({
+      color: "#f5f5f5",
+      fill: "#0b0b12",
+      stroke: "#f5f5f5",
+      strokeWidth: SHAPE_BORDER,
+    });
+    expect(styles.draw).toEqual({ fill: null, stroke: "#f5f5f5", strokeWidth: 6 });
+    expect(SHAPE_BORDER).toBeGreaterThan(0);
+  });
+
+  it("is ink on white until a slide says otherwise", () => {
+    expect(DEFAULT_EDIT_STYLES).toEqual(editStylesFor(DEFAULT_THEME));
+    expect(DEFAULT_EDIT_STYLES.shape).toMatchObject({ fill: "#ffffff", stroke: "#111111", color: "#111111" });
+    expect(DEFAULT_EDIT_STYLES.text.color).toBe("#111111");
+  });
+
+  it("moves the old theme's colors to the new theme, keeping what the user picked", () => {
+    expect(rethemedStyles(DEFAULT_EDIT_STYLES, DEFAULT_THEME, DARK)).toEqual(editStylesFor(DARK));
+    const picked = {
+      ...DEFAULT_EDIT_STYLES,
+      text: { ...DEFAULT_EDIT_STYLES.text, fontSize: 96, fill: "#facc15" },
+      shape: { ...DEFAULT_EDIT_STYLES.shape, fill: "#ef4444", strokeWidth: 0, bold: true },
+    };
+    const next = rethemedStyles(picked, DEFAULT_THEME, DARK);
+    expect(next.text).toEqual({ ...picked.text, color: "#f5f5f5" });
+    expect(next.shape).toEqual({ ...picked.shape, color: "#f5f5f5", stroke: "#f5f5f5" });
+    expect(next.draw.stroke).toBe("#f5f5f5");
+    // Nothing of the old theme's is left to move a second time.
+    expect(rethemedStyles(next, DEFAULT_THEME, DARK)).toEqual(next);
+    expect(picked.shape.fill).toBe("#ef4444");
   });
 });

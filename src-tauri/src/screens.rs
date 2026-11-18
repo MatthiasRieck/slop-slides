@@ -10,12 +10,14 @@
 //! are only ever held in the picker: nothing is written to disk. On Linux it goes without (see
 //! [`shots`]).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{
-    ipc::Channel, AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition,
-    Position, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
+    ipc::Channel, AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor,
+    PhysicalPosition, Position, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
 };
 
 use crate::error::{Error, Result};
@@ -320,6 +322,81 @@ pub fn present_in_windows(app: &AppHandle) -> Result<()> {
     open_presenter_view(app, None)
 }
 
+/// The size each show window had before [`shape_show`] fitted it to the slides, by window
+/// label: it gets that size back when the show ends.
+#[derive(Default)]
+pub struct ShowShapes(Mutex<HashMap<String, (f64, f64)>>);
+
+/// `size` (logical width and height) cut to the shape `ratio` (width over height): the side too
+/// long for it is shortened, so the window shrinks to the slides rather than growing off its
+/// screen.
+fn fit_to_ratio((width, height): (f64, f64), ratio: f64) -> (f64, f64) {
+    if width / height > ratio {
+        ((height * ratio).round(), height)
+    } else {
+        (width, (width / ratio).round())
+    }
+}
+
+/// Presenting in windows, gives the show window the slides' shape (`ratio`, width over height),
+/// so a call sharing it shows no bars beside the slide; on macOS it keeps that shape as the user
+/// resizes it. With `None` (the show is over) the window gets back the size it had and can take
+/// any shape again.
+pub fn shape_show(window: &Window, shapes: &ShowShapes, ratio: Option<f64>) -> Result<()> {
+    let failed = |e: tauri::Error| Error::msg(format!("cannot shape the show window: {e}"));
+    let label = window.label().to_string();
+    let Some(ratio) = ratio else {
+        lock_ratio(window, None);
+        if let Some((width, height)) = shapes.0.lock().unwrap().remove(&label) {
+            window
+                .set_size(LogicalSize::new(width, height))
+                .map_err(failed)?;
+        }
+        return Ok(());
+    };
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err(Error::msg(format!("not a slide shape: {ratio}")));
+    }
+    let scale = window.scale_factor().map_err(failed)?;
+    let size = window
+        .inner_size()
+        .map_err(failed)?
+        .to_logical::<f64>(scale);
+    let before = (size.width, size.height);
+    // A show started again before the last one ended keeps the size from before either.
+    shapes.0.lock().unwrap().entry(label).or_insert(before);
+    let (width, height) = fit_to_ratio(before, ratio);
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(failed)?;
+    lock_ratio(window, Some((width, height)));
+    Ok(())
+}
+
+/// Holds the window's content to the shape of `size` as it is resized, or lets it go (`None`).
+#[cfg(target_os = "macos")]
+fn lock_ratio(window: &Window, size: Option<(f64, f64)>) {
+    use objc2_app_kit::NSWindow;
+    use objc2_foundation::NSSize;
+    let Ok(handle) = window.ns_window() else {
+        return;
+    };
+    let handle = handle as usize;
+    let _ = window.run_on_main_thread(move || {
+        // SAFETY: on macOS the handle is the window's live NSWindow, used on the main thread.
+        let ns_window = unsafe { &*(handle as *const NSWindow) };
+        match size {
+            Some((width, height)) => ns_window.setContentAspectRatio(NSSize::new(width, height)),
+            // Resize increments of a point undo an aspect ratio, as AppKit documents.
+            None => ns_window.setContentResizeIncrements(NSSize::new(1.0, 1.0)),
+        }
+    });
+}
+
+/// Elsewhere the window is only sized to the slides when the show starts.
+#[cfg(not(target_os = "macos"))]
+fn lock_ratio(_window: &Window, _size: Option<(f64, f64)>) {}
+
 /// How a presenter view window starts: full screen on `screen`, or else an ordinary window.
 fn presenter_window_size(screen: Option<&Screen>) -> (f64, f64) {
     match screen {
@@ -408,6 +485,19 @@ mod tests {
             pixel_height: 100,
             primary: false,
         }
+    }
+
+    #[test]
+    fn the_show_window_shrinks_to_the_slides_shape() {
+        let wide = 16.0 / 9.0;
+        // Too wide for the slides: narrower, as tall.
+        assert_eq!(fit_to_ratio((2000.0, 900.0), wide), (1600.0, 900.0));
+        // Too tall: as wide, shorter.
+        assert_eq!(fit_to_ratio((1280.0, 1000.0), wide), (1280.0, 720.0));
+        // Already the shape: as it is.
+        assert_eq!(fit_to_ratio((1280.0, 720.0), wide), (1280.0, 720.0));
+        // Portrait slides.
+        assert_eq!(fit_to_ratio((1200.0, 800.0), 0.75), (600.0, 800.0));
     }
 
     #[test]

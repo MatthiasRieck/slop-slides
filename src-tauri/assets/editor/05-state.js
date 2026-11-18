@@ -55,6 +55,10 @@
   var BORDER_COLOR = "#111111";
   // What a new element gets for anything the app's style leaves out.
   var FALLBACK_STYLE = { color: "#111111", fontSize: 48, align: "left", valign: "top", stroke: "#111111", strokeWidth: 4 };
+  // The slide's colors when neither it nor the deck says (see slideTheme), and how far its text
+  // color has to stand off its background (a WCAG contrast ratio) to count as its foreground.
+  var THEME_FALLBACK = { background: "#ffffff", foreground: "#111111" };
+  var THEME_CONTRAST = 3;
   var JUSTIFY = { top: "flex-start", middle: "center", bottom: "flex-end" };
   // Non-positioned elements paint below positioned ones at z-index 0 and above those below it.
   var STATIC_Z = -0.5;

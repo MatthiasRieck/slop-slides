@@ -112,8 +112,15 @@ describe("SlideRail", () => {
 
   it("pads the top of the scroll area so the selection ring is not clipped", () => {
     const { container } = render(<SlideRail />);
-    const scroller = container.querySelector(".overflow-y-auto");
+    const scroller = container.querySelector("[data-rail-scroller]");
     expect(scroller?.classList.contains("pt-1.5")).toBe(true);
+  });
+
+  it("keeps the scrollbar's room even without overflow, so the thumbnails' width never flips with it", () => {
+    const { container } = render(<SlideRail />);
+    const scroller = container.querySelector("[data-rail-scroller]")!;
+    expect(scroller.classList.contains("overflow-y-scroll")).toBe(true);
+    expect(scroller.classList.contains("overflow-y-auto")).toBe(false);
   });
 
   it("leaves hiding the rail to the top bar", () => {
@@ -804,7 +811,7 @@ describe("in View mode, where the slides of the deck change as in Edit", () => {
     expect(invoke).toHaveBeenCalledWith("set_slides_hidden", { id: DECK.id, slides: ["a"], hidden: true });
     await act(async () => fireEvent.click(item(0).getByTitle("Delete")));
     expect(invoke).toHaveBeenCalledWith("delete_slides", { id: DECK.id, slides: ["a"] });
-    expect(screen.getByTitle("Remove section (keeps its slides)")).toBeTruthy();
+    expect(screen.getByTitle("Remove section (keeps its slides)").querySelector(".lucide-x")).toBeTruthy();
     fireEvent.click(screen.getByTitle("Rename section"));
     expect(screen.getByLabelText("Section title")).toBeTruthy();
     fireEvent.keyDown(screen.getByLabelText("Section title"), { key: "Escape" });

@@ -1,7 +1,8 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 
-import { api } from "../../lib/api";
+import { api, type Deck } from "../../lib/api";
+import { DEFAULT_SIZE } from "../../lib/slideSize";
 import { showError, useApp } from "../../store";
 
 // Placing the show on its screens and closing the presenter view run one after the other, in
@@ -13,11 +14,17 @@ function inOrder<T>(command: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** The shape of the deck's slides, width over height. */
+export function showRatio(deck: Deck | null): number {
+  const size = deck?.size ?? DEFAULT_SIZE;
+  return size.pixelWidth / size.pixelHeight;
+}
+
 /**
  * Puts the show where it is to be seen while the component using it is there, and back after.
  * With several screens, the show first moves to the one picked (and the presenter view opens).
- * In windows, it stays as it is and the presenter view opens beside it. Otherwise, it goes full
- * screen.
+ * In windows, it stays where it is, takes the slides' shape (see `showRatio`) and the presenter
+ * view opens beside it. Otherwise, it goes full screen.
  */
 export function useShowPlacement() {
   useEffect(() => {
@@ -30,6 +37,7 @@ export function useShowPlacement() {
       queueMicrotask(() => {
         if (ended) return;
         placed = true;
+        inOrder(() => api.shapeShow(showRatio(useApp.getState().deck))).catch((error) => showError(error));
         inOrder(() => api.presentInWindows()).catch((error) => showError(error));
       });
     } else if (screens) {
@@ -51,6 +59,7 @@ export function useShowPlacement() {
       ended = true;
       if (!windowed) void window_.setFullscreen(false);
       if (placed) void inOrder(() => api.closePresenterView()).catch(() => {});
+      if (placed && windowed) void inOrder(() => api.shapeShow(null)).catch(() => {});
     };
   }, []);
 }

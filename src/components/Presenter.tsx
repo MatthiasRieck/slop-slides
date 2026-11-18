@@ -52,8 +52,9 @@ function startSlide(): string | null {
  *
  * One bar at the bottom holds everything that operates the show: the presenter's tools (laser
  * pointer, pen, highlighter, eraser), previous and next around the slide's number, Play, the
- * presenter view and End show. It comes with any move of the pointer and goes, with the cursor,
- * once the pointer rests (see `useShowControls`); hidden, it takes neither a press nor the focus.
+ * presenter view and End show. It comes up only when the pointer moves near the bottom of the
+ * show, and goes when it moves away or rests; the cursor comes with any move and goes once the
+ * pointer rests (see `useShowControls`). Hidden, the bar takes neither a press nor the focus.
  * Play runs the show by itself, speaking each slide's narration (see `useAutoplay`). `?` lists
  * the show's keys.
  *
@@ -114,8 +115,8 @@ export function Presenter() {
     go(pressed.key, pressed.shift);
     return false;
   };
-  const keys = useRef({ handle, press, wake: controls.wake });
-  keys.current = { handle, press, wake: controls.wake };
+  const keys = useRef({ handle, press, move: controls.move });
+  keys.current = { handle, press, move: controls.move };
   // The last slide the player said is on screen: where the editor goes when the show ends.
   const endedOn = useRef<string | null>(null);
 
@@ -145,7 +146,9 @@ export function Presenter() {
           alt: Boolean(data.alt),
         });
       }
-      if (data?.type === "slop:pointer") keys.current.wake();
+      if (data?.type === "slop:pointer") {
+        keys.current.move(typeof data.bottom === "number" ? data.bottom : undefined);
+      }
       if (data?.type === "slop:slide") {
         if (typeof data.index === "number") setIndex(data.index);
         setCurrent(data.id ? String(data.id) : null);
@@ -163,8 +166,8 @@ export function Presenter() {
     };
   }, []);
 
-  // With the controls gone, the slide's page hides the cursor over it too.
-  const idle = !controls.visible;
+  // With the pointer at rest, the slide's page hides the cursor over it.
+  const idle = controls.cursorHidden;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `post` reads the frame there is.
   useEffect(() => {
     post({ type: "slop:idle", idle });

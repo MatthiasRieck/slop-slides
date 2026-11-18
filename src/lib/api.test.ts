@@ -190,7 +190,12 @@ const CASES = [
   ],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
   ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
-  ["exportPptx", () => api.exportPptx("talk", "/out.pptx"), "export_pptx", { id: "talk", dest: "/out.pptx" }],
+  [
+    "exportPptx",
+    () => api.exportPptx("talk", "/out.pptx", "pictures"),
+    "export_pptx",
+    { id: "talk", dest: "/out.pptx", slides: "pictures" },
+  ],
   ["importPptx", () => api.importPptx("/in.pptx"), "import_pptx", { path: "/in.pptx" }],
   [
     "exportVideo",

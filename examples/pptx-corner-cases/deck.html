@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->
+  <style>
+/* SlopSlide player: fixed stage (--slop-w × --slop-h, 1920×1080 unless the deck names another
+   size) scaled to the window, one slide at a time. The app appends the size-dependent rules.
+   The player sets data-slop-player on <html> from a script in <head>, before the body
+   renders. Viewers without JavaScript (iOS Quick Look, e.g. decks opened from chat apps)
+   never get it and show every slide top to bottom instead. */
+html,
+body {
+  margin: 0;
+  background: #000;
+}
+html[data-slop-thumbnail],
+html[data-slop-thumbnail] body {
+  background: transparent;
+}
+/* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
+   would overflow the slides when the stage is scaled down to a phone. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html[data-slop-player],
+html[data-slop-player] body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+.deck {
+  width: var(--slop-w, 1920px);
+  margin: 0 auto;
+  overflow: hidden;
+}
+html[data-slop-player] .deck {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: var(--slop-h, 1080px);
+  margin: 0;
+  transform-origin: 0 0;
+}
+/* Stage geometry and slide switching are !important: deck styles often set
+   `.slide { position: relative }` or similar, which would stack the slides. */
+.deck > .slide {
+  position: relative !important;
+  inset: auto !important;
+  width: var(--slop-w, 1920px) !important;
+  height: var(--slop-h, 1080px) !important;
+  margin: 0 0 24px !important;
+  overflow: hidden;
+}
+/* Without the player, deck styles must not hide slides or stop the page scrolling. */
+html:not([data-slop-player]),
+html:not([data-slop-player]) body {
+  height: auto !important;
+  overflow: visible !important;
+}
+html:not([data-slop-player]) .deck > .slide {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+html:not([data-slop-player]) .deck > .slide[data-hidden] {
+  display: none !important;
+}
+html:not([data-slop-player]) .slide .reveal {
+  opacity: 1 !important;
+  animation: none !important;
+}
+html[data-slop-player] .deck > .slide {
+  position: absolute !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+html[data-slop-player] .deck > .slide.active {
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: opacity 0.35s ease;
+  z-index: 1;
+}
+/* Section markers only label the editor's slide rail; the player never shows them. */
+.deck > .deck-section {
+  display: none !important;
+}
+.slide .notes,
+.slide .narration {
+  display: none !important;
+}
+/* Review marks from the editor, drawn by the player over their slide; R shows and hides them. */
+.slide > .slop-review {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+html[data-slop-review] .slide > .slop-review {
+  display: block;
+}
+/* B (or .) and W blank the screen to black or white; the slide stays as it is underneath. */
+html[data-slop-blank],
+html[data-slop-blank] body {
+  background: #000 !important;
+}
+html[data-slop-blank="white"],
+html[data-slop-blank="white"] body {
+  background: #fff !important;
+}
+html[data-slop-blank] .deck {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* In the app's show the cursor goes with the show's controls, once the pointer rests. */
+html[data-slop-idle],
+html[data-slop-idle] * {
+  cursor: none !important;
+}
+/* The control strip of a deck opened in a browser (the player adds it, never in the app's frames
+   or in a capture). Hidden, it takes no press and no focus; it is only as wide as its buttons,
+   so pressing the slide beside it still advances. */
+.slop-controls {
+  all: initial;
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(17, 17, 17, 0.8);
+  color: #fff;
+  font: 500 13px/1 system-ui, sans-serif;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0s linear 0.2s;
+}
+html[data-slop-controls] .slop-controls {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.2s ease;
+}
+.slop-controls button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+}
+.slop-controls button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.slop-controls button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+.slop-controls svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.slop-controls-count {
+  min-width: 56px;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.slide img,
+.slide video,
+.slide canvas,
+.slide svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+/* Entrances only say where an element comes from: animating `translate`, `scale`, and
+   `rotate` (not `transform`) and leaving them out of the last frame lands each element on
+   its own styles, rotations and hand edits included. A deck restyles the entrance by
+   setting `animation` on `.slide.active .reveal`; the stagger below outranks that rule, so
+   the shorthand does not reset it. */
+@keyframes slop-reveal {
+  from {
+    opacity: 0;
+    translate: 0 28px;
+  }
+  to {
+    opacity: 1;
+  }
+}
+html[data-slop-player] .slide .reveal {
+  opacity: 0;
+}
+.slide.active .reveal {
+  animation: slop-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.slide.active .reveal.reveal-delay-1 { animation-delay: 0.12s; }
+.slide.active .reveal.reveal-delay-2 { animation-delay: 0.24s; }
+.slide.active .reveal.reveal-delay-3 { animation-delay: 0.36s; }
+.slide.active .reveal.reveal-delay-4 { animation-delay: 0.48s; }
+/* Editor thumbnails render the final frame of every animation. */
+html[data-slop-static] *,
+html[data-slop-static] *::before,
+html[data-slop-static] *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  .slop-controls,
+  html[data-slop-controls] .slop-controls {
+    transition: none !important;
+  }
+}
+/* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
+   shown, backgrounds and all, rather than in the browser's ink-saving colors. */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  html,
+  body,
+  html[data-slop-player],
+  html[data-slop-player] body {
+    height: auto;
+    overflow: visible;
+  }
+  .deck,
+  html[data-slop-player] .deck {
+    position: static;
+    height: auto;
+    margin: 0;
+    transform: none !important;
+  }
+  .deck > .slide,
+  html[data-slop-player] .deck > .slide {
+    position: relative !important;
+    margin: 0 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    break-after: page;
+  }
+  .deck > .slide[data-hidden] {
+    display: none !important;
+  }
+  .slide .reveal {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+  .slop-controls {
+    display: none !important;
+  }
+  html[data-slop-blank] .deck {
+    opacity: 1 !important;
+  }
+}
+
+/* Matched heroes move between click states; slide fades must not delay the snapshot. */
+html:active-view-transition .deck > .slide {
+  transition: none !important;
+}
+::view-transition-group(*) {
+  animation-duration: 550ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
+/* Stage size: 1920x1080 (the deck's slopslide-size meta). */
+:root {
+  --slop-w: 1920px;
+  --slop-h: 1080px;
+}
+@media print {
+  @page {
+    size: 1920px 1080px;
+    margin: 0;
+  }
+}
+@media screen and (max-width: 1919.98px) { html:not([data-slop-player]) .deck { zoom: 0.95; } }
+@media screen and (max-width: 1823.98px) { html:not([data-slop-player]) .deck { zoom: 0.9; } }
+@media screen and (max-width: 1727.98px) { html:not([data-slop-player]) .deck { zoom: 0.85; } }
+@media screen and (max-width: 1631.98px) { html:not([data-slop-player]) .deck { zoom: 0.8; } }
+@media screen and (max-width: 1535.98px) { html:not([data-slop-player]) .deck { zoom: 0.75; } }
+@media screen and (max-width: 1439.98px) { html:not([data-slop-player]) .deck { zoom: 0.7; } }
+@media screen and (max-width: 1343.98px) { html:not([data-slop-player]) .deck { zoom: 0.65; } }
+@media screen and (max-width: 1247.98px) { html:not([data-slop-player]) .deck { zoom: 0.6; } }
+@media screen and (max-width: 1151.98px) { html:not([data-slop-player]) .deck { zoom: 0.55; } }
+@media screen and (max-width: 1055.98px) { html:not([data-slop-player]) .deck { zoom: 0.5; } }
+@media screen and (max-width: 959.98px) { html:not([data-slop-player]) .deck { zoom: 0.45; } }
+@media screen and (max-width: 863.98px) { html:not([data-slop-player]) .deck { zoom: 0.4; } }
+@media screen and (max-width: 767.98px) { html:not([data-slop-player]) .deck { zoom: 0.35; } }
+@media screen and (max-width: 671.98px) { html:not([data-slop-player]) .deck { zoom: 0.3; } }
+@media screen and (max-width: 575.98px) { html:not([data-slop-player]) .deck { zoom: 0.25; } }
+@media screen and (max-width: 479.98px) { html:not([data-slop-player]) .deck { zoom: 0.2; } }
+@media screen and (max-width: 383.98px) { html:not([data-slop-player]) .deck { zoom: 0.15; } }
+@media screen and (max-width: 287.98px) { html:not([data-slop-player]) .deck { zoom: 0.1; } }
+  </style>
+  <script>document.documentElement.setAttribute("data-slop-player", "");</script>
+  <!-- /slopslide:runtime-css -->
+<meta charset="utf-8">
+<title>PowerPoint corner cases</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@700&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&family=Playfair+Display:wght@700&display=swap');
+.slide { background:#f5f4ef; color:#17243b; padding:70px 90px; font:34px/1.35 system-ui,-apple-system,sans-serif }
+h1 { font-size:84px; line-height:1.05; margin:0 0 35px }
+p { margin:0 0 20px }
+.web { font-family:"DM Sans","Avenir Next",sans-serif }
+.display { font-family:"Bodoni Moda","Playfair Display","Iowan Old Style",Georgia,serif; font-weight:700 }
+.tracking { letter-spacing:.12em; text-transform:uppercase; font-weight:500 }
+.columns { display:grid; grid-template-columns:610px 610px; gap:64px }
+.card { padding:30px; background:white; border-radius:24px; border:3px solid #d8e2eb }
+.flex { display:flex; align-items:center; height:180px; margin-top:20px }
+.center { text-align:center; line-height:1.15 }
+.right { text-align:right; line-height:1.12 }
+.mono, code { font-family:ui-monospace,Menlo,monospace }
+.tight { font-family:"Missing Example Sans","Helvetica Neue",Arial,sans-serif; width:460px; line-height:1.05; border:2px solid #aab3c5 }
+svg { display:block }
+.stroke-art { position:relative; width:1680px; height:780px }
+.marker-overlay { position:absolute; left:0; top:410px }
+table { border-collapse:collapse; font-size:28px }
+td,th { padding:8px 24px; border:2px solid #b7c6d8 }
+.gradient-text { color:transparent; background:linear-gradient(90deg,#843bd4,#05766a); background-clip:text }
+.effects { display:grid; grid-template-columns:repeat(3, 440px); gap:65px; align-items:center; margin-top:60px }
+.effect { height:175px; padding:24px }
+.dash { border:10px dashed #325783; border-radius:28px }
+.dot { border:10px dotted #834176; border-radius:40px }
+.single { border-bottom:10px dashed #325783; border-radius:35px }
+.single-dot { border-left:10px dotted #834176 }
+.shade { background:linear-gradient(120deg,#36a6b8,#7040a2); color:white; border-radius:30px; box-shadow:10px 12px 22px #001d5077; opacity:.72; transform:rotate(-8deg) }
+.cover { width:440px; height:175px; object-fit:cover; object-position:75% 55%; border-radius:25px }
+</style>
+</head>
+<body>
+<main class="deck">
+<section class="slide" id="type">
+<h1 class="display">Type, layout &amp; fallback</h1>
+<div class="columns">
+<div class="card web">
+<p class="tracking">Tracked medium</p>
+<p class="center">Centered text wraps deliberately within the available space.</p>
+<p class="right">Right aligned words and numbers in a deliberately narrow text box.</p>
+<p>Regular <strong>bold</strong> <em>italic</em> <code>inline code</code> and a <a href="https://example.com">link</a>.</p>
+</div>
+<div>
+<p class="tight">The width of this paragraph is intentionally close to a wrap boundary. The final words should stay on the same browser lines.</p>
+<div class="card flex"><p>Vertically centered with flex alignment</p></div>
+<p class="mono">System mono 0123456789</p>
+</div>
+</div>
+</section>
+<section class="slide" id="rich">
+<h1 class="gradient-text">Gradient display text</h1>
+<div class="columns">
+<div class="card">
+<ul><li>Bullet with <strong>inline weight</strong> and a longer continuation to wrap onto the next line</li><li><em>Second entry</em></li></ul>
+<ol start="4"><li>Numbered entry</li><li>Next number</li></ol>
+</div>
+<div class="card">
+<table><thead><tr><th>Family</th><th>Metric</th></tr></thead><tbody><tr><td>Avenir Next</td><td>140</td></tr><tr><td><em>Georgia</em></td><td>92</td></tr></tbody></table>
+<p style="font:italic 36px/1.2 Georgia,serif; margin-top:24px">Serif italic<br>Explicit second line</p>
+</div>
+</div>
+</section>
+<section class="slide" id="strokes">
+<h1>Dash patterns and markers</h1>
+<div class="stroke-art">
+<svg width="1680" height="780" viewBox="0 0 840 390" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="head" viewBox="0 0 10 10" markerWidth="4" markerHeight="4" refX="8" refY="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#ae3268"/></marker>
+</defs>
+<g font-family="Arial" font-size="15" fill="#17243b">
+<text x="0" y="35">Short / round cap</text><text x="0" y="70">Long / square cap</text>
+<text x="0" y="105">Odd / offset</text><text x="0" y="140">Single length</text>
+<text x="0" y="175">Percentages</text><text x="0" y="210">Start and end</text>
+<text x="0" y="245">Start / mid / end</text><text x="0" y="280">Cubic / subpaths</text>
+<text x="0" y="315">Thin / scaled</text><text x="0" y="350">Thick / zero dots</text>
+</g>
+<g fill="none" stroke="#325783" stroke-width="4">
+<path d="M178 30 H805" stroke-dasharray="3 8" stroke-linecap="round"/>
+<path d="M178 65 H805" stroke-dasharray="60 40" stroke-linecap="square"/>
+<path d="M178 100 H805" stroke-dasharray="22 10 4" stroke-dashoffset="-13"/>
+<path d="M178 135 H805" stroke-dasharray="14"/>
+<path d="M178 170 H805" stroke-dasharray="4% 2%" stroke-dashoffset="1%"/>
+<path d="M178 205 H805" stroke-dasharray="60 60" marker-start="url(#head)" marker-end="url(#head)"/>
+<path d="M178 275 C245 230 285 310 375 275 M415 275 Q500 230 590 275 T805 275" stroke-dasharray="17 8 4"/>
+<path d="M0 0 H300" transform="translate(178 310) scale(2 0.65) skewX(15)" stroke-width=".6" stroke-dasharray="3 2"/>
+<path d="M178 345 H805" stroke-width="18" stroke-linecap="round" stroke-dasharray="0 29"/>
+</g>
+</svg>
+<svg class="marker-overlay" width="1680" height="125" viewBox="0 205 840 62.5" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="mid-head" viewBox="0 0 10 10" markerWidth="4" markerHeight="4" refX="8" refY="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#ae3268"/></marker>
+</defs>
+<g fill="none" stroke="#325783" stroke-width="4">
+<polyline points="178,240 250,227 330,246 450,226 570,248 685,226 805,243" stroke-dasharray="12 7" marker-start="url(#mid-head)" marker-mid="url(#mid-head)" marker-end="url(#mid-head)"/>
+</g>
+</svg>
+</div>
+</section>
+<section class="slide" id="effects">
+<h1>Borders, effects &amp; shapes</h1>
+<div class="effects">
+<div class="effect dash">Rounded dashed border</div><div class="effect dot">Rounded dotted border</div><div class="effect single">Single dashed side</div>
+<div class="effect single-dot">Single dotted side</div><div class="effect shade">Gradient, shadow, rotation and opacity</div>
+<img class="cover" alt="Landscape cropped to a wide frame" src="assets/crop.png">
+</div>
+<svg data-added="drawing" width="740" height="110" viewBox="0 0 740 110" style="margin-top:45px" xmlns="http://www.w3.org/2000/svg">
+<path d="M15 45 L640 45" fill="none" stroke="#325783" stroke-width="12" stroke-linecap="round" stroke-dasharray="24 36"/>
+<path data-head="end triangle" d="M640 20 L720 45 L640 70 Z" fill="#325783" stroke="#325783" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</section>
+</main>
+  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
+  <script>
+/* SlopSlide player. Keys, none of them with ⌘, Ctrl or Alt held:
+   →/↓, Space, PageDown, Enter: next slide; ←/↑, PageUp, Backspace, Shift+Space: previous slide;
+   Home/End: first/last slide; a number then Enter: that slide; B or . blanks the screen to
+   black, W to white (a navigation key or a click brings the slide back); R: review marks.
+   In a file of its own (not in the app's frames) also N/P for next/previous and F for full
+   screen, and a strip of controls shows while the pointer moves. In the app's show the keys
+   are forwarded to the app too, which has the controls (see "slop:go" below). */
+(function () {
+  var root = document.documentElement;
+  // The runtime-css block sets this before the body renders; without it the stylesheet lists
+  // the slides for viewers that run no JavaScript.
+  root.setAttribute("data-slop-player", "");
+  var params = new URLSearchParams(location.search);
+  var embed = params.has("embed");
+  var framed = window.parent !== window;
+  if (params.has("static")) root.setAttribute("data-slop-static", "");
+  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
+
+  // Rendered for a still or a capture (thumbnails, PDF, video, images): nothing to operate.
+  var still = params.has("static") || params.has("print");
+
+  var deck = document.querySelector(".deck");
+  var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
+    return !el.parentElement || !el.parentElement.closest(".slide");
+  });
+  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  var slides = embed
+    ? all
+    : all.filter(function (el) {
+        return !el.hasAttribute("data-hidden");
+      });
+  if (!deck || slides.length === 0) return;
+  var current = -1;
+  // The stage's size in slide pixels (the deck's slide size, 1920×1080 unless it names another).
+  var W = deck.offsetWidth || 1920;
+  var H = deck.offsetHeight || 1080;
+
+  function fit() {
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * scale) / 2;
+    var y = (window.innerHeight - H * scale) / 2;
+    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
+  }
+
+  function indexFor(ref) {
+    if (!ref) return 0;
+    // A hidden slide's id lands on the next shown slide (or the last one).
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id !== ref) continue;
+      for (var j = i; j < all.length; j++) {
+        var index = slides.indexOf(all[j]);
+        if (index >= 0) return index;
+      }
+      return slides.length - 1;
+    }
+    // The editor addresses slides without an id by position, as "#2".
+    var n = parseInt(ref.replace(/^#/, ""), 10);
+    return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
+  }
+
+  // The control strip's "3 / 12", once the strip is there (see `controls`).
+  var count = null;
+  // When the slide on screen showed, on the document's animation clock (see keepTime).
+  var shownAt = null;
+  var transition = null;
+  function morphNames(slide, enabled) {
+    var seen = Object.create(null);
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-morph]"), function (el) {
+      var key = el.getAttribute("data-morph");
+      // Invalid or duplicate names must not break the whole browser transition.
+      var valid = /^[a-z][a-z0-9-]*$/.test(key) && !seen[key];
+      seen[key] = true;
+      el.style.viewTransitionName = enabled && valid ? "slop-" + key : "";
+    });
+  }
+
+  function show(index) {
+    index = Math.min(slides.length - 1, Math.max(0, index));
+    if (index === current) return;
+    var previous = current;
+    current = index;
+    if (transition) transition.skipTransition();
+    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+      document.startViewTransition && slides[index].querySelector("[data-morph]") &&
+      slides[previous].querySelector("[data-morph]");
+    function update() {
+      if (current !== index) return;
+      slides.forEach(function (el, i) {
+        morphNames(el, !!canMorph && i === index);
+        el.classList.toggle("active", i === index);
+      });
+      shownAt = document.timeline ? document.timeline.currentTime : null;
+    }
+    if (canMorph) {
+      morphNames(slides[previous], true);
+      var next = document.startViewTransition(update);
+      transition = next;
+      // A rejected snapshot (e.g. duplicate author CSS names) still switches the slide.
+      next.ready.catch(function () {});
+      next.finished.catch(function () {}).then(function () {
+        if (transition !== next) return;
+        transition = null;
+        slides.forEach(function (el) { morphNames(el, false); });
+      });
+    } else update();
+    if (count) count.textContent = index + 1 + " / " + slides.length;
+    if (embed) return;
+    var id = slides[index].id || String(index + 1);
+    try {
+      history.replaceState(null, "", "#" + id);
+    } catch (e) {
+      // Sandboxed frames and some file:// contexts refuse URL updates; navigation still works.
+    }
+    if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null, index: index }, "*");
+  }
+
+  // Review marks drawn in the editor (the slopslide:review block), hidden until R or ?review
+  // shows them. The editor draws them itself, so embedded previews leave them out.
+  var review = null;
+  var reviewData = document.getElementById("slopslide-review");
+  if (reviewData && !embed) {
+    try {
+      review = JSON.parse(reviewData.textContent);
+    } catch (e) {
+      review = null;
+    }
+  }
+  var SVG = "http://www.w3.org/2000/svg";
+  // Widths in screen pixels, as the editor draws them.
+  var INK = { pen: { width: 4, opacity: 1 }, highlighter: { width: 28, opacity: 0.4 } };
+
+  // SVG path data for a smooth curve through a stroke's points (fractions of the slide), as the
+  // app draws it: from the first point to halfway to the next, then from halfway to halfway,
+  // bent by each point between as a quadratic Bézier control point, to the last point.
+  function smoothPath(points) {
+    var xy = points.map(function (p) {
+      return [p[0] * W, p[1] * H];
+    });
+    var at = function (x, y) {
+      return Math.round(x * 10) / 10 + " " + Math.round(y * 10) / 10;
+    };
+    var halfway = function (i) {
+      return at((xy[i][0] + xy[i + 1][0]) / 2, (xy[i][1] + xy[i + 1][1]) / 2);
+    };
+    var last = xy.length - 1;
+    if (last < 2) {
+      return xy
+        .map(function (p, i) {
+          return (i ? "L" : "M") + at(p[0], p[1]);
+        })
+        .join("");
+    }
+    var d = "M" + at(xy[0][0], xy[0][1]) + "L" + halfway(0);
+    for (var i = 1; i < last; i++) {
+      d += "Q" + at(xy[i][0], xy[i][1]) + " " + (i === last - 1 ? at(xy[last][0], xy[last][1]) : halfway(i));
+    }
+    return d;
+  }
+
+  function drawReview(slide, strokes) {
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "slop-review");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-hidden", "true");
+    strokes.forEach(function (stroke) {
+      var ink = stroke && INK[stroke.tool];
+      var points = stroke && stroke.points;
+      if (!ink || !Array.isArray(points) || points.length === 0) return;
+      var d = smoothPath(points);
+      // A tap never moves; a tiny step makes the round cap draw it as a dot.
+      if (points.every(function (p) { return p[0] === points[0][0] && p[1] === points[0][1]; })) d += "l0.01 0";
+      var path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", String(stroke.color));
+      path.setAttribute("stroke-width", String(ink.width));
+      path.setAttribute("stroke-opacity", String(ink.opacity));
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("vector-effect", "non-scaling-stroke");
+      svg.appendChild(path);
+    });
+    slide.appendChild(svg);
+  }
+
+  /** Shows or hides the review marks; false when the deck has none. */
+  function toggleReview(on) {
+    if (!review || typeof review !== "object") return false;
+    if (on) {
+      all.forEach(function (slide) {
+        var strokes = slide.id && review[slide.id];
+        if (Array.isArray(strokes) && !slide.querySelector(":scope > .slop-review")) drawReview(slide, strokes);
+      });
+    }
+    if (on) root.setAttribute("data-slop-review", "");
+    else root.removeAttribute("data-slop-review");
+    return true;
+  }
+  if (params.has("review")) toggleReview(true);
+
+  // Text boxes with data-autofit="shrink" shrink their text until it fits their box. Every
+  // font size in the box scales by the same factor, set inline; `original` gives back what the
+  // inline font size was before, so the slide editor saves the markup without the fit.
+  // Scales are tried in hundredths, down to FIT_MIN of them.
+  var FIT_MIN = 20;
+  var fitted = typeof Map === "function" ? new Map() : null;
+  var fitScales = typeof Map === "function" ? new Map() : null;
+  // The hundredths each box was last shrunk to, which is where the next search for it begins.
+  var fitHints = fitted && new WeakMap();
+
+  function overflows(el) {
+    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
+  }
+
+  function fitNodes(el) {
+    return [el].concat(
+      Array.prototype.filter.call(el.querySelectorAll("*"), function (node) {
+        return !node.closest("svg") || node.tagName.toLowerCase() === "svg";
+      }),
+    );
+  }
+
+  /** Puts back the font sizes `fitText` changed in `el`. */
+  function unfitText(el) {
+    if (!fitted) return;
+    fitNodes(el).forEach(function (node) {
+      var before = fitted.get(node);
+      if (!before) return;
+      fitted.delete(node);
+      if (before.value) node.style.setProperty("font-size", before.value, before.priority);
+      else node.style.removeProperty("font-size");
+      if (!node.getAttribute("style")) node.removeAttribute("style");
+    });
+    fitScales.delete(el);
+  }
+
+  /**
+   * The most hundredths, from FIT_MIN up, at which `fits` holds, given that it does not at 100
+   * and holds for everything under the answer. Every question lays the box out again, so the
+   * search begins at `near`, the answer the box had last time, and steps away from it, twice as
+   * far each time, until the answer lies between two steps: text that is typed into, or that is
+   * fitted again once a font arrived, mostly still fits where it did, or nearly.
+   */
+  function searchFit(fits, near) {
+    var lo = FIT_MIN;
+    var hi = 100;
+    if (near > lo && near < hi) {
+      var grows = fits(near);
+      if (grows) lo = near;
+      else hi = near;
+      for (var step = 1; hi - lo > step; step *= 2) {
+        var probe = grows ? lo + step : hi - step;
+        var fitsThere = fits(probe);
+        if (fitsThere) lo = probe;
+        else hi = probe;
+        if (fitsThere !== grows) break;
+      }
+    }
+    while (hi - lo > 1) {
+      var mid = (lo + hi) >> 1;
+      if (fits(mid)) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  /** Shrinks the text of a `data-autofit="shrink"` box until it fits; false when it already does. */
+  function fitText(el) {
+    if (!fitted) return false;
+    unfitText(el);
+    if (el.getAttribute("data-autofit") !== "shrink" || (!el.clientHeight && !el.clientWidth) || !overflows(el)) {
+      return false;
+    }
+    var nodes = fitNodes(el);
+    var sizes = nodes.map(function (node) {
+      return parseFloat(getComputedStyle(node).fontSize) || 0;
+    });
+    nodes.forEach(function (node) {
+      fitted.set(node, {
+        value: node.style.getPropertyValue("font-size"),
+        priority: node.style.getPropertyPriority("font-size"),
+      });
+    });
+    var scaleTo = function (k) {
+      nodes.forEach(function (node, i) {
+        if (sizes[i]) node.style.setProperty("font-size", Math.round(sizes[i] * k * 100) / 100 + "px", "important");
+      });
+    };
+    // The scale last tried, so the answer is not set twice when the search ends on it.
+    var set = 0;
+    var best = searchFit(function (hundredths) {
+      set = hundredths;
+      scaleTo(hundredths / 100);
+      return !overflows(el);
+    }, fitHints.get(el));
+    if (set !== best) scaleTo(best / 100);
+    fitHints.set(el, best);
+    fitScales.set(el, best / 100);
+    return true;
+  }
+
+  // What has arrived since the last fit of all boxes that changes how text measures: an image or
+  // a style sheet (`arrived`), or a web font (more of them loaded than `fontsFitted`).
+  var arrived = false;
+  var fontsFitted = 0;
+
+  /** How many web fonts are loaded; -1 where the browser does not say. */
+  function fontsLoaded() {
+    if (!document.fonts || !document.fonts.forEach) return -1;
+    var loaded = 0;
+    document.fonts.forEach(function (face) {
+      if (face.status === "loaded") loaded += 1;
+    });
+    return loaded;
+  }
+
+  function fitAll() {
+    arrived = false;
+    fontsFitted = fontsLoaded();
+    // An embedded preview shows one slide and never another, so only that one is fitted.
+    var within = embed ? slides[current] : document;
+    Array.prototype.forEach.call(within.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+  }
+
+  /** Fits every box again if anything arrived that the last fit did not see. */
+  function refit() {
+    if (arrived || fontsFitted < 0 || fontsLoaded() !== fontsFitted) fitAll();
+  }
+
+  window.slopAutofit = {
+    fit: fitText,
+    unfit: unfitText,
+    fitAll: fitAll,
+    /** What `node`'s inline font size was before a fit: { value, priority }, or null when not fitted. */
+    original: function (node) {
+      return (fitted && fitted.get(node)) || null;
+    },
+    /** How far the box `el` is shrunk (1 when it is not). */
+    scale: function (el) {
+      return (fitScales && fitScales.get(el)) || 1;
+    },
+  };
+
+  window.addEventListener("resize", fit);
+  fit();
+  show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  // Fitted before the first paint, and again once web fonts are in and once the page has loaded,
+  // if something arrived by then. An image's or a style sheet's `load` and `error` do not bubble,
+  // so they are caught on the way down; the page's own `load` is no arrival.
+  fitAll();
+  ["load", "error"].forEach(function (type) {
+    document.addEventListener(
+      type,
+      function (event) {
+        if (event.target !== document) arrived = true;
+      },
+      true,
+    );
+  });
+  window.addEventListener("load", refit);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else root.requestFullscreen && root.requestFullscreen();
+  }
+
+  // The screen blanked to black or white, the slide staying where it is underneath.
+  function blank(color) {
+    if (root.getAttribute("data-slop-blank") === color) root.removeAttribute("data-slop-blank");
+    else root.setAttribute("data-slop-blank", color);
+  }
+  /** Brings the slide back when the screen is blank; false when it was not. */
+  function unblank() {
+    if (!root.hasAttribute("data-slop-blank")) return false;
+    root.removeAttribute("data-slop-blank");
+    return true;
+  }
+
+  // The digits typed so far of a slide number, which Enter jumps to; forgotten after a pause.
+  var typed = "";
+  var typedTimer = null;
+  var TYPED_MS = 3000;
+  function forget() {
+    typed = "";
+    clearTimeout(typedTimer);
+  }
+
+  /** Where a navigation key goes: a slide index, or null when `key` is none. */
+  function destination(key, shift) {
+    var lower = key.length === 1 ? key.toLowerCase() : key;
+    if (key === " ") return shift ? current - 1 : current + 1;
+    // A file of its own also takes N and P; in the app those letters are the presenter's.
+    if (!framed && lower === "n") return current + 1;
+    if (!framed && lower === "p") return current - 1;
+    if (shift) return null;
+    if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === "Enter") return current + 1;
+    if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp" || key === "Backspace") return current - 1;
+    if (key === "Home") return 0;
+    if (key === "End") return slides.length - 1;
+    return null;
+  }
+
+  /** Acts on a key pressed without ⌘, Ctrl or Alt; false when it is none of the player's. */
+  function navigate(key, shift) {
+    var lower = key.length === 1 ? key.toLowerCase() : key;
+    if (/^[0-9]$/.test(key)) {
+      typed = (typed + key).slice(-4);
+      clearTimeout(typedTimer);
+      typedTimer = setTimeout(forget, TYPED_MS);
+      return true;
+    }
+    var number = typed;
+    forget();
+    if (lower === "b" || key === ".") blank("black");
+    else if (lower === "w") blank("white");
+    else if (lower === "f" && !framed) toggleFullscreen();
+    else if (key === "Enter" && number && !shift) {
+      unblank();
+      show(parseInt(number, 10) - 1);
+    } else {
+      var to = destination(key, shift);
+      if (to === null) return false;
+      // On a blank screen the key only brings the slide back.
+      if (!unblank()) show(to);
+    }
+    return true;
+  }
+
+  /** Whether a key pressed on `el` is its own: typing in a field, or Enter and Space on a control. */
+  function keepsKey(el, key) {
+    if (!el || !el.closest) return false;
+    if (el.closest("input, textarea, select, [contenteditable]")) return true;
+    return (key === "Enter" || key === " ") && !!el.closest("a[href], button, summary, video, audio");
+  }
+
+  window.addEventListener("keydown", function (event) {
+    if (framed) {
+      var mod = event.metaKey || event.ctrlKey;
+      var message = { type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey };
+      if (event.altKey) message.alt = true;
+      window.parent.postMessage(message, "*");
+    }
+    if (embed) return;
+    // With a modifier the key is the browser's (find, back, reload) or the system's.
+    if (event.metaKey || event.ctrlKey || event.altKey || keepsKey(event.target, event.key)) return;
+    if (event.key === "r" || event.key === "R") {
+      if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
+    } else if (navigate(event.key, event.shiftKey)) event.preventDefault();
+  });
+
+  // Narration playing in the app keeps the slide's timed animations with it (src/lib/slideClock.ts):
+  // { type: "slop:clock", slide, at } puts each CSS animation that began as that slide showed
+  // (the ones under `.slide.active`) `at` seconds in, as a video export has them, though the
+  // slide may have shown long before the narration started. One that was running before (a
+  // loop carrying on across slides) or is paused on purpose is left alone, and one is only
+  // moved once it drifted, so nothing stutters. With `paused`, they are held at `at` instead of
+  // running on from it (the timeline's playhead while it does not play), and `at: null` lets
+  // the ones held so run again.
+  var driven = typeof WeakSet === "function" ? new WeakSet() : null;
+  var ended = driven && new WeakSet();
+  var held = driven && new WeakSet();
+  function releaseTime() {
+    if (!held || !document.getAnimations) return;
+    document.getAnimations().forEach(function (animation) {
+      if (!held.has(animation)) return;
+      held.delete(animation);
+      animation.play();
+    });
+  }
+  function keepTime(id, at, paused) {
+    var slide = slides[current];
+    if (!slide || (id && slide.id !== id) || !driven || !document.getAnimations || !(at >= 0)) return;
+    var ms = at * 1000;
+    document.getAnimations().forEach(function (animation) {
+      var effect = animation.effect;
+      var target = effect && effect.target;
+      // CSS transitions (the slide's fade) are not the slide's timeline.
+      if (typeof animation.animationName !== "string" || !target || !slide.contains(target)) return;
+      if (animation.playState === "paused" && !ended.has(animation) && !held.has(animation)) return;
+      if (!driven.has(animation)) {
+        var began = animation.startTime;
+        if (shownAt !== null && began !== null && began < shownAt - 50) return;
+        driven.add(animation);
+      }
+      var end = effect.getComputedTiming().endTime;
+      if (ms >= end) {
+        // Past its end it rests on its last frame instead of starting over.
+        animation.currentTime = end;
+        animation.pause();
+        ended.add(animation);
+        return;
+      }
+      ended.delete(animation);
+      if (paused) {
+        animation.currentTime = ms;
+        animation.pause();
+        held.add(animation);
+        return;
+      }
+      held.delete(animation);
+      if (Math.abs((animation.currentTime || 0) - ms) > 40) animation.currentTime = ms;
+      if (animation.playState === "paused") animation.play();
+    });
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!framed || !data || data.type !== "slop:clock") return;
+    if (data.at === null) releaseTime();
+    else keepTime(data.slide, Number(data.at), !!data.paused);
+  });
+
+  if (embed) return;
+  // The presenter forwards keys pressed while its drawing tools have focus: { type: "slop:go",
+  // key, shift }. Its controls come and go with the pointer, whose moves over the slide only this
+  // page sees: it says so ({ type: "slop:pointer" }, a few times a second at most), and hides the
+  // cursor while the presenter says the pointer rests ({ type: "slop:idle", idle }).
+  var POINTER_MS = 250;
+  var pointerTold = 0;
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!framed || !data) return;
+    if (data.type === "slop:go") navigate(String(data.key), !!data.shift);
+    if (data.type === "slop:idle") {
+      if (data.idle) root.setAttribute("data-slop-idle", "");
+      else root.removeAttribute("data-slop-idle");
+      // The first move after a rest is told at once, so the cursor is back at once.
+      if (data.idle) pointerTold = 0;
+    }
+  });
+  if (framed) {
+    document.addEventListener("mousemove", function () {
+      var now = Date.now();
+      // Once told, the moves that follow say nothing new, also while the presenter's answer
+      // that the pointer no longer rests is on its way.
+      if (now - pointerTold < POINTER_MS) return;
+      pointerTold = now;
+      window.parent.postMessage({ type: "slop:pointer" }, "*");
+    });
+  }
+  window.addEventListener("hashchange", function () {
+    show(indexFor(decodeURIComponent(location.hash.slice(1))));
+  });
+  document.addEventListener("click", function (event) {
+    if (event.target.closest("a, button, input, select, textarea, video, [contenteditable], .slop-controls")) return;
+    // On a blank screen the click only brings the slide back.
+    if (unblank()) return;
+    show(event.clientX < window.innerWidth / 4 ? current - 1 : current + 1);
+  });
+  var touchX = null;
+  document.addEventListener("touchstart", function (event) {
+    touchX = event.touches[0].clientX;
+  });
+  document.addEventListener("touchend", function (event) {
+    if (touchX === null) return;
+    var dx = event.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 40) show(current + (dx < 0 ? 1 : -1));
+    touchX = null;
+  });
+
+  // A file opened in a browser has nothing saying how to operate it: a small strip of controls
+  // (previous, "3 / 12", next, full screen) at the bottom shows while the pointer moves or after
+  // a touch and goes again after a pause. The app's frames have controls of their own, and a
+  // still or a capture is not operated at all. Hidden, the strip takes no press and no focus
+  // (runtime.css), and it is never as wide as the slide, so pressing the slide still advances.
+  if (framed || still) return;
+  var IDLE_MS = 2500;
+  var ICONS = {
+    previous: "M15 6l-6 6 6 6",
+    next: "M9 6l6 6-6 6",
+    fullscreen: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
+  };
+  function control(label, icon, run) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", icon);
+    svg.appendChild(path);
+    button.appendChild(svg);
+    // Pressed with the pointer it leaves the focus where it was, so the strip can go again.
+    button.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+    });
+    button.addEventListener("click", run);
+    return button;
+  }
+  var strip = document.createElement("div");
+  strip.className = "slop-controls";
+  strip.setAttribute("role", "toolbar");
+  strip.setAttribute("aria-label", "Slide controls");
+  strip.appendChild(
+    control("Previous slide (←)", ICONS.previous, function () {
+      if (!unblank()) show(current - 1);
+    }),
+  );
+  count = document.createElement("span");
+  count.className = "slop-controls-count";
+  count.textContent = current + 1 + " / " + slides.length;
+  strip.appendChild(count);
+  strip.appendChild(
+    control("Next slide (→)", ICONS.next, function () {
+      if (!unblank()) show(current + 1);
+    }),
+  );
+  if (root.requestFullscreen) strip.appendChild(control("Full screen (F)", ICONS.fullscreen, toggleFullscreen));
+  document.body.appendChild(strip);
+
+  var idle = null;
+  var over = false;
+  function hideControls() {
+    // It stays while the pointer is on it or the keyboard is in it.
+    if (over || strip.contains(document.activeElement)) return;
+    root.removeAttribute("data-slop-controls");
+  }
+  function showControls() {
+    root.setAttribute("data-slop-controls", "");
+    clearTimeout(idle);
+    idle = setTimeout(hideControls, IDLE_MS);
+  }
+  document.addEventListener("mousemove", showControls);
+  document.addEventListener("touchstart", showControls);
+  strip.addEventListener("mouseenter", function () {
+    over = true;
+  });
+  strip.addEventListener("mouseleave", function () {
+    over = false;
+    showControls();
+  });
+  strip.addEventListener("focusout", showControls);
+})();
+  </script>
+  <!-- /slopslide:runtime-js -->
+</body>
+</html>

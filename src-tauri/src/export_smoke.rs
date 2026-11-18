@@ -140,9 +140,19 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
 
     let pptx_file = step("PowerPoint export", async {
         let pptx_file = out.join("deck.pptx");
-        pptx::export(app, &file, &pptx_file).await?;
+        pptx::export(app, &file, &pptx_file, pptx::Slides::Elements).await?;
         check_pptx(&std::fs::read(&pptx_file)?, shown.len(), &args.texts)?;
         Ok(pptx_file)
+    })
+    .await?;
+
+    step("PowerPoint export (pictures)", async {
+        let pictures_file = out.join("deck-pictures.pptx");
+        pptx::export(app, &file, &pictures_file, pptx::Slides::Pictures).await?;
+        let bytes = std::fs::read(&pictures_file)?;
+        check_pptx(&bytes, shown.len(), &[])?;
+        check_pptx_pictures(&bytes, shown.len(), canvas)?;
+        Ok(pictures_file)
     })
     .await?;
 
@@ -633,7 +643,9 @@ pub fn check_png(bytes: &[u8], canvas: (u32, u32)) -> Result<()> {
     let image = capture::decode_png(bytes)?;
     let (w, h) = (f64::from(image.width), f64::from(image.height));
     let tall = w * f64::from(canvas.1) / f64::from(canvas.0.max(1));
-    if image.width > canvas.0 || (h - tall).abs() > 1.5 {
+    // The capture leaves out the edge under a point of the fitted slide (see
+    // `inside_whole_points`): up to two points of its height.
+    if image.width > canvas.0 || (h - tall).abs() > 2.0 {
         return Err(Error::msg(format!(
             "a {}×{} image of a {}×{} slide",
             image.width, image.height, canvas.0, canvas.1
@@ -730,6 +742,62 @@ pub fn check_pptx(bytes: &[u8], slides: usize, texts: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Whether the presentation `bytes` holds `slides` slides that are each one picture and no
+/// text, every picture a PNG in the shape of the `canvas`.
+pub fn check_pptx_pictures(bytes: &[u8], slides: usize, canvas: (u32, u32)) -> Result<()> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| Error::msg(format!("the file is not a PowerPoint package: {e}")))?;
+    let names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.name_for_index(i)?.ok())
+        .map(|name| name.into_owned())
+        .collect();
+    for name in names.iter().filter(|name| is_slide_part(name)) {
+        let mut xml = String::new();
+        zip.by_name(name)
+            .map_err(|e| Error::msg(format!("cannot read {name}: {e}")))?
+            .read_to_string(&mut xml)?;
+        let pictures = xml.matches("<p:pic>").count();
+        if pictures != 1 || xml.contains("<a:t>") {
+            return Err(Error::msg(format!(
+                "{name} is not one picture: {pictures} pictures{}",
+                if xml.contains("<a:t>") {
+                    ", and text"
+                } else {
+                    ""
+                }
+            )));
+        }
+    }
+    let media: Vec<&String> = names
+        .iter()
+        .filter(|name| name.starts_with("ppt/media/"))
+        .collect();
+    if media.len() != slides {
+        return Err(Error::msg(format!(
+            "{} pictures in the file, {slides} slides",
+            media.len()
+        )));
+    }
+    for name in media {
+        let mut png = Vec::new();
+        zip.by_name(name)
+            .map_err(|e| Error::msg(format!("cannot read {name}: {e}")))?
+            .read_to_end(&mut png)?;
+        let image = capture::decode_png(&png).map_err(|e| Error::msg(format!("{name}: {e}")))?;
+        // At least the canvas wide, in its shape: but for the edge under a point of the fitted
+        // slide that is left out of the capture, which a larger picture has more pixels of.
+        let expected = f64::from(image.width) * f64::from(canvas.1) / f64::from(canvas.0);
+        let slack = 2.0 + expected * 0.005;
+        if image.width < canvas.0 || (f64::from(image.height) - expected).abs() > slack {
+            return Err(Error::msg(format!(
+                "{name} is {}×{}, not a {}×{} slide",
+                image.width, image.height, canvas.0, canvas.1
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `ppt/slides/slide<n>.xml`.
 fn is_slide_part(name: &str) -> bool {
     name.strip_prefix("ppt/slides/slide")
@@ -751,6 +819,15 @@ mod tests {
         for (name, body) in parts {
             zip.start_file(*name, SimpleFileOptions::default()).unwrap();
             zip.write_all(body.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn package_bytes(parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in parts {
+            zip.start_file(*name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(body).unwrap();
         }
         zip.finish().unwrap().into_inner()
     }
@@ -1026,6 +1103,53 @@ mod tests {
             .to_string();
         assert!(missing.contains("Nowhere"), "{missing}");
         assert!(check_pptx(b"not a zip", 0, &[]).is_err());
+    }
+
+    #[test]
+    fn a_presentation_of_pictures_is_one_picture_a_slide() {
+        let png = |width, height| {
+            capture::encode_png(&Image {
+                width,
+                height,
+                rgba: vec![255; (width * height * 4) as usize],
+            })
+            .unwrap()
+        };
+        let file = |slide: &str, picture: Vec<u8>| {
+            package_bytes(&[
+                ("ppt/slides/slide1.xml", slide.as_bytes().to_vec()),
+                ("ppt/media/image1.png", picture),
+            ])
+        };
+        let one = "<p:pic></p:pic>";
+        assert!(check_pptx_pictures(&file(one, png(32, 18)), 1, (16, 9)).is_ok());
+        let text = check_pptx_pictures(
+            &file("<p:pic></p:pic><a:t>x</a:t>", png(32, 18)),
+            1,
+            (16, 9),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(text.contains("and text"), "{text}");
+        let none = check_pptx_pictures(&file("<p:sp/>", png(32, 18)), 1, (16, 9))
+            .unwrap_err()
+            .to_string();
+        assert!(none.contains("0 pictures"), "{none}");
+        let count = check_pptx_pictures(&file(one, png(32, 18)), 2, (16, 9))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            count.contains("1 pictures in the file, 2 slides"),
+            "{count}"
+        );
+        let shape = check_pptx_pictures(&file(one, png(32, 32)), 1, (16, 9))
+            .unwrap_err()
+            .to_string();
+        assert!(shape.contains("32×32"), "{shape}");
+        let small = check_pptx_pictures(&file(one, png(8, 5)), 1, (16, 9))
+            .unwrap_err()
+            .to_string();
+        assert!(small.contains("8×5"), "{small}");
     }
 
     #[test]

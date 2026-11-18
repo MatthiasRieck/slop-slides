@@ -18,7 +18,7 @@ import { useRef, useState } from "react";
 
 import { useDropdown } from "../hooks/useDropdown";
 import { useMenuKeys } from "../hooks/useMenuKeys";
-import { api, type Deck, errorMessage, type Slide } from "../lib/api";
+import { api, type Deck, errorMessage, type PptxSlides, type Slide } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { basename } from "../lib/utils";
 import {
@@ -143,7 +143,7 @@ function Actions({ deck }: { deck: Deck }) {
         shownSlides={deck.slides.filter((s) => !s.hidden)}
         onHtml={() => void exportFile("html", (dest) => api.exportDeck(deck.id, dest))}
         onPdf={() => void exportFile("pdf", (dest) => api.exportPdf(deck.id, dest))}
-        onPptx={() => void exportFile("pptx", (dest) => api.exportPptx(deck.id, dest))}
+        onPptx={(slides) => void exportFile("pptx", (dest) => api.exportPptx(deck.id, dest, slides))}
         onImages={() => void exportImages()}
         onVideo={(options) => void exportVideo(options)}
       />
@@ -248,7 +248,8 @@ function ExportMenu(props: {
   shownSlides: Slide[];
   onHtml: () => void;
   onPdf: () => void;
-  onPptx: () => void;
+  /** As editable elements, or with every slide one picture. */
+  onPptx: (slides: PptxSlides) => void;
   onImages: () => void;
   onVideo: (options: VideoOptions) => void;
 }) {
@@ -305,8 +306,14 @@ function ExportMenu(props: {
           <MenuItem
             icon={Presentation}
             label="PowerPoint…"
-            hint="Editable slides; some effects are simplified. Hidden slides are left out"
-            onClick={choose(props.onPptx)}
+            hint="Editable slides; some effects are simplified, and text needs its fonts installed. Hidden slides are left out"
+            onClick={choose(() => props.onPptx("elements"))}
+          />
+          <MenuItem
+            icon={Presentation}
+            label="PowerPoint, as pictures…"
+            hint="Every slide one picture: looks the same everywhere, but cannot be edited. Hidden slides are left out"
+            onClick={choose(() => props.onPptx("pictures"))}
           />
           <MenuItem
             icon={Images}

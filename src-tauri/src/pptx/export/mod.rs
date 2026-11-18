@@ -7,7 +7,11 @@
 //! lines and text boxes, backdrop blur is dropped, and anything else (filters, masks, 3D, an
 //! SVG using those) comes as a picture. A picture needs its transparency: [`matte`] works it
 //! out from two captures of the element alone, over white and over black.
+//!
+//! Asked for [`Slides::Pictures`], every slide is one picture instead (see [`pictures`]):
+//! faithful everywhere, and not editable.
 
+mod pictures;
 mod scene;
 mod write;
 
@@ -15,6 +19,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::capture::{self, Image};
@@ -32,10 +37,87 @@ const PPTX_JS: &str = include_str!("../../../assets/pptx.js");
 const SHOT_SCALE: f64 = 2.0;
 const TASK: &str = "the PowerPoint export";
 
-/// Exports the deck `file` (in the open workspace) to `dest` as a PowerPoint file.
-pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
+/// What a slide of the exported file is made of.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Slides {
+    /// Native shapes, text and pictures, editable in PowerPoint; what it cannot draw is
+    /// simplified, and text is laid out again with the fonts found where the file is opened.
+    #[default]
+    Elements,
+    /// One picture of the whole slide: exactly as the deck looks, and not editable.
+    Pictures,
+}
+
+impl Slides {
+    pub const ALL: [Slides; 2] = [Slides::Elements, Slides::Pictures];
+
+    /// The name the export tool takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Slides::Elements => "elements",
+            Slides::Pictures => "pictures",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Slides> {
+        Slides::ALL
+            .into_iter()
+            .find(|s| s.name().eq_ignore_ascii_case(name.trim()))
+            .ok_or_else(|| {
+                let names: Vec<&str> = Slides::ALL.iter().map(|s| s.name()).collect();
+                Error::msg(format!("pptx_slides is one of {}", names.join(", ")))
+            })
+    }
+}
+
+/// Exports the deck `file` (in the open workspace) to `dest` as a PowerPoint file, its slides
+/// made of what `slides` says.
+pub async fn export(app: &AppHandle, file: &Path, dest: &Path, slides: Slides) -> Result<()> {
     let loaded = deck::load(file)?;
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
+    let (scene, shots) = match slides {
+        Slides::Elements => read_elements(app, file, canvas).await?,
+        Slides::Pictures => {
+            let shown: Vec<String> = loaded
+                .slides
+                .iter()
+                .filter(|s| !s.hidden)
+                .map(|s| s.id.clone())
+                .collect();
+            pictures::read(app, file, &shown, canvas).await?
+        }
+    };
+
+    let notes = deck_notes(&loaded);
+    let sections = deck_sections(&loaded);
+    let meta = Meta {
+        title: loaded.title.clone(),
+        canvas,
+        notes,
+        sections,
+    };
+    let folder = deck::folder(file).to_path_buf();
+    let dest = dest.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = package(&scene, &meta, &shots, |src| {
+            let path = deck::resolve_in_deck(&folder, src).ok()?;
+            std::fs::read(path).ok()
+        })?;
+        std::fs::write(dest, bytes)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| Error::msg(format!("writing the PowerPoint file failed: {e}")))?
+}
+
+/// The scene of the deck's shown slides as native elements, read by the page's helper, with
+/// the pictures of what cannot be one.
+async fn read_elements(
+    app: &AppHandle,
+    file: &Path,
+    canvas: (u32, u32),
+) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
     let (window, signals) = export_window::open(
         app,
         file,
@@ -58,28 +140,7 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     };
     let read = read_scene(&mut helper).await;
     let _ = window.destroy();
-    let (scene, shots) = read?;
-
-    let notes = deck_notes(&loaded);
-    let sections = deck_sections(&loaded);
-    let meta = Meta {
-        title: loaded.title.clone(),
-        canvas,
-        notes,
-        sections,
-    };
-    let folder = deck::folder(file).to_path_buf();
-    let dest = dest.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = package(&scene, &meta, &shots, |src| {
-            let path = deck::resolve_in_deck(&folder, src).ok()?;
-            std::fs::read(path).ok()
-        })?;
-        std::fs::write(dest, bytes)?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| Error::msg(format!("writing the PowerPoint file failed: {e}")))?
+    read
 }
 
 /// Each slide's notes; narration stands in for them where there are none, as the words go on

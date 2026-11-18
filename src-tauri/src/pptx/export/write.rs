@@ -320,7 +320,9 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             ));
         }
         let id = self.id();
-        let (width, height) = (self.emu(item.w).max(0), self.emu(item.h).max(0));
+        // A freeform can have every vertex on one axis, as in a horizontal dashed
+        // line. Keep its coordinate system nonzero so importers can scale the path.
+        let (width, height) = (self.emu(item.w).max(1), self.emu(item.h).max(1));
         let mut outline = String::new();
         for (kind, numbers) in &segments {
             let points: String = numbers
@@ -341,7 +343,14 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         };
         Some(format!(
             "<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Freeform {id}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l=\"0\" t=\"0\" r=\"r\" b=\"b\"/><a:pathLst><a:path w=\"{width}\" h=\"{height}\"{unfilled}>{outline}</a:path></a:pathLst></a:custGeom>{}{line}{effect}</p:spPr></p:sp>",
-            self.xfrm(item.x, item.y, item.w, item.h, 0.0, false),
+            self.xfrm(
+                item.x,
+                item.y,
+                item.w.max(1.0 / self.emu),
+                item.h.max(1.0 / self.emu),
+                0.0,
+                false,
+            ),
             Self::fill_xml(item.fill.as_ref(), 1.0),
         ))
     }
@@ -441,7 +450,9 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         }
         attrs.push_str(" dirty=\"0\"");
         let mut inner = String::new();
-        if let Some(color) = run.color {
+        if let Some(gradient) = &run.gradient {
+            inner.push_str(&gradient_xml(gradient, 1.0));
+        } else if let Some(color) = run.color {
             inner.push_str(&solid_xml(color, 1.0));
         }
         if let Some(mark) = run.highlight {
@@ -450,7 +461,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         if !run.font.is_empty() {
             let _ = write!(
                 inner,
-                "<a:latin typeface=\"{0}\"/><a:cs typeface=\"{0}\"/>",
+                "<a:latin typeface=\"{0}\"/><a:ea typeface=\"{0}\"/><a:cs typeface=\"{0}\"/>",
                 esc(&run.font)
             );
         }

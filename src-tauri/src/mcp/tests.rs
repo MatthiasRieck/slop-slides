@@ -342,7 +342,7 @@ fn export_tool_asks_the_app_for_other_formats() {
         let session = session.clone();
         std::thread::spawn(move || {
             let mut seen = Vec::new();
-            while seen.len() < 2 {
+            while seen.len() < 4 {
                 for (name, request) in export::take_requests(&session) {
                     export::answer(&session, &name, &Ok(format!("made {}", request.dest))).unwrap();
                     seen.push(request);
@@ -364,7 +364,23 @@ fn export_tool_asks_the_app_for_other_formats() {
         json!({"name": EXPORT_TOOL, "arguments": {"format": "video", "fps": 60, "narration": false}}),
     );
     assert_eq!(video["result"]["isError"], false, "{video}");
+    for arguments in [
+        json!({"format": "pptx", "dest": "out/editable"}),
+        json!({"format": "pptx", "dest": "out/flat", "pptx_slides": "pictures"}),
+    ] {
+        let pptx = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": arguments}),
+        );
+        assert_eq!(pptx["result"]["isError"], false, "{pptx}");
+    }
     let seen = app.join().unwrap();
+    assert_eq!(seen[2].pptx_slides, None);
+    assert_eq!(seen[3].dest, "out/flat.pptx");
+    assert_eq!(seen[3].pptx_slides, Some(crate::pptx::Slides::Pictures));
+    // Only a PowerPoint file has a choice of what its slides are made of.
+    assert_eq!(seen[0].pptx_slides, None);
     assert_eq!(seen[0].format, export::Format::Pdf);
     assert_eq!(seen[0].video, None);
     assert_eq!(seen[1].dest, "exports/Q3 Plan.mp4");
@@ -392,6 +408,10 @@ fn export_tool_refuses_bad_requests_without_asking_the_app() {
         (
             json!({"format": "pptx", "dest": "out.pdf"}),
             "is a .pptx file",
+        ),
+        (
+            json!({"format": "pptx", "pptx_slides": "images"}),
+            "pptx_slides is one of elements, pictures",
         ),
         (
             json!({"format": "video", "fps": 25}),

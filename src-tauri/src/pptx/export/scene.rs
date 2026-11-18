@@ -178,6 +178,7 @@ pub(in crate::pptx) struct Run {
     pub underline: bool,
     pub strike: bool,
     pub color: Option<Rgba>,
+    pub gradient: Option<Gradient>,
     pub spacing: f64,
     pub highlight: Option<Rgba>,
     /// Percent raised; PowerPoint draws such text at two thirds of its size.

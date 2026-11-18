@@ -621,17 +621,23 @@
   /**
    * `segments` as their dashes leave them: the outline itself (the very array) when they cover
    * all of it, as a line drawn in by its dashes does once it is drawn; the stretches that show
-   * when those are few, as on a ring filled part of the way; null for a pattern that repeats,
-   * which PowerPoint has dashes of its own for. `dashes` and `offset` are measured as
+   * with each visible dash as a subpath; null when the pattern would produce too much geometry. `dashes` and `offset` are measured as
    * `pathLength` says, when it says.
    */
-  function dashCut(segments, dashes, offset, pathLength) {
+  function dashCut(segments, dashes, offset, pathLength, dots) {
     var period = 0;
-    dashes = dashes.length % 2 ? dashes.concat(dashes) : dashes;
+    var odd = dashes.length % 2;
+    if (odd) dashes = dashes.concat(dashes);
     dashes.forEach(function (d) {
       period += d;
     });
     if (!(period > 0) || dashes.some(function (d) { return !(d >= 0); })) return segments;
+    if (dashes.every(function (d, i) { return i % 2 === 0 || d === 0; })) return segments;
+    // WebKit normalizes a negative offset against the authored odd list before repeating it.
+    var agent = navigator.userAgent || "";
+    if (odd && offset < 0 && /AppleWebKit/.test(agent) && !/Chrome|Chromium/.test(agent)) {
+      offset = ((offset % (period / 2)) + period / 2) % (period / 2);
+    }
     // Each subpath as pieces: where it starts, the segment, how far along it is, and (a curve)
     // how far along each of its steps is.
     var STEPS = 32;
@@ -685,27 +691,40 @@
     var out = [];
     var whole = true;
     var shown = 0;
+    var steps = 0;
     for (var p = 0; p < paths.length; p++) {
       var path = paths[p];
       var spans = [];
       var at = -((((offset * unit) % period) + period) % period);
-      for (var i = 0; at < path.length; i = (i + 1) % dashes.length) {
+      for (var i = 0; at <= path.length; i = (i + 1) % dashes.length) {
+        if (++steps > 2048) return null;
         var next = at + dashes[i] * unit;
-        if (i % 2 === 0 && next > 0 && next > at) {
+        if (i % 2 === 0 && dots && dashes[i] === 0 && at >= 0) {
+          var piece = path.pieces.find(function (piece) { return piece.at + piece.length >= at; });
+          if (piece) {
+            var t = along(piece, at - piece.at);
+            var point = piece.seg[0] === "L" ? stretchOf(piece.from, piece.seg, 0, t).slice(1) : curveAt(piece.from, piece.seg, t);
+            var tangent = tangentAt(piece.from, piece.seg, t);
+            dots.push({ point: point, angle: Math.atan2(tangent[1], tangent[0]) });
+          }
+        }
+        if (i % 2 === 0 && at < path.length && next > 0 && next > at) {
           var before = spans[spans.length - 1];
           // A dash that runs on from the one before it, through a gap of nothing.
           if (before && Math.max(at, 0) - before[1] < 1e-6) before[1] = Math.min(next, path.length);
           else spans.push([Math.max(at, 0), Math.min(next, path.length)]);
         }
         at = next;
-        if (spans.length > 6) return null;
+
       }
       var full = spans.length === 1 && spans[0][0] <= 1e-6 && spans[0][1] >= path.length - 1e-6;
       if (!full) whole = false;
       shown += spans.length;
-      if (shown > 6) return null;
-      spans.forEach(function (span) {
-        var began = false;
+      if (shown + (dots ? dots.length : 0) > 512) return null;
+      var joined = path.closed && !full && spans.length > 1 && spans[0][0] === 0 && spans[spans.length - 1][1] === path.length;
+      if (joined) spans.push(spans.shift());
+      spans.forEach(function (span, index) {
+        var began = joined && index === spans.length - 1;
         path.pieces.forEach(function (piece) {
           var a = Math.max(span[0], piece.at);
           var b = Math.min(span[1], piece.at + piece.length);
@@ -823,19 +842,134 @@
     return {
       color: [c[0], c[1], c[2], a],
       width: own * scale * (inner ? 0.5 : 1),
-      dash: dashes && dashes[0] > 0 ? (dotted ? "dotted" : "dashed") : null,
+      dash: dashes && dashes.some(function (d) { return d > 0; }) ? (dotted ? "dotted" : "dashed") : null,
       cap: cs.strokeLinecap || null,
       join: cs.strokeLinejoin || null,
     };
   }
 
-  /** PowerPoint's arrowhead for the `<marker>` a line's end names: its kind and size, by eye. */
-  function arrowOf(root, text, width) {
-    var paint = paintOf(text);
-    var marker = paint && paint.ref ? named(root, paint.ref) : null;
-    if (!marker) return null;
-    var size = num(marker.getAttribute("markerWidth"), 3) / (marker.getAttribute("markerUnits") === "userSpaceOnUse" ? width || 1 : 1);
-    return { kind: marker.querySelector("circle, ellipse") ? "oval" : "triangle", size: size < 2.5 ? "sm" : size < 4.5 ? "med" : "lg" };
+  /** Tangent in the direction of a segment, including Béziers with coincident controls. */
+  function tangentAt(from, segment, t) {
+    var point = function (u) {
+      return segment[0] === "L" ? stretchOf(from, segment, 0, u).slice(1) : curveAt(from, segment, u);
+    };
+    var a = point(Math.max(t - 0.001, 0));
+    var b = point(Math.min(t + 0.001, 1));
+    return [b[0] - a[0], b[1] - a[1]];
+  }
+
+  function dashUnits(node, root) {
+    var viewport = node.viewportElement || root;
+    var view = viewport.viewBox && viewport.viewBox.baseVal;
+    if (view && view.width && view.height) return Math.hypot(view.width, view.height) / Math.SQRT2;
+    if (viewport.width && viewport.height) {
+      return Math.hypot(viewport.width.baseVal.value, viewport.height.baseVal.value) / Math.SQRT2;
+    }
+    var rect = viewport.getBoundingClientRect();
+    return Math.hypot(rect.width, rect.height) / Math.SQRT2;
+  }
+
+  function dashLength(value, diagonal) {
+    return num(value, -1) * (/%$/.test(value) ? diagonal / 100 : 1);
+  }
+
+  /** Marker artwork follows the original vertices, independent of the cuts in the stroke. */
+  function svgMarkers(local, cs, matrix, s, alpha, out) {
+    var specs = [cs.markerStart, cs.markerMid, cs.markerEnd].map(function (value) {
+      if (!isSet(value)) return null;
+      var paint = paintOf(value);
+      var marker = paint && paint.ref ? named(s.root, paint.ref) : null;
+      if (!marker || marker.tagName.toLowerCase() !== "marker") throw UNDRAWABLE;
+      return marker;
+    });
+    if (!specs.some(Boolean)) return;
+    var paths = [];
+    var vertices;
+    local.forEach(function (seg) {
+      if (seg[0] === "M") {
+        vertices = [{ point: seg.slice(1) }];
+        paths.push(vertices);
+        return;
+      }
+      var last = vertices[vertices.length - 1];
+      if (seg[0] === "Z") seg = ["L"].concat(vertices[0].point);
+      last.next = tangentAt(last.point, seg, 0);
+      vertices.push({ point: seg.slice(-2), prev: tangentAt(last.point, seg, 1) });
+    });
+    var placements = [];
+    paths.forEach(function (path, i) {
+      path.forEach(function (vertex, j) {
+        if (i === 0 && j === 0) placements.push([specs[0], vertex, true]);
+        if (i === paths.length - 1 && j === path.length - 1) placements.push([specs[2], vertex, false]);
+        else if (i !== 0 || j !== 0) placements.push([specs[1], vertex, false]);
+      });
+    });
+    placements.forEach(function (placement) {
+      var marker = placement[0];
+      var vertex = placement[1];
+      if (!marker) return;
+      var orient = marker.getAttribute("orient") || "0";
+      var angle = num(orient) * (/rad$/.test(orient) ? 1 : /turn$/.test(orient) ? Math.PI * 2 : Math.PI / 180);
+      if (/^auto/.test(orient)) {
+        var a = vertex.prev || vertex.next || [1, 0];
+        var b = vertex.next || a;
+        var start = Math.atan2(a[1], a[0]);
+        var end = Math.atan2(b[1], b[0]);
+        angle = start + Math.atan2(Math.sin(end - start), Math.cos(end - start)) / 2;
+        if (placement[2] && orient === "auto-start-reverse") angle += Math.PI;
+      }
+      var scale = marker.getAttribute("markerUnits") === "userSpaceOnUse" ? 1 : num(cs.strokeWidth, 1);
+      var w = num(marker.getAttribute("markerWidth"), 3);
+      var h = num(marker.getAttribute("markerHeight"), 3);
+      if (!(w > 0 && h > 0 && scale > 0)) return;
+      var view = viewOf(marker, { x: 0, y: 0, w: w, h: h }, 1);
+      var ref = at(view, num(marker.getAttribute("refX")), num(marker.getAttribute("refY")));
+      view[4] -= ref[0];
+      view[5] -= ref[1];
+      var cos = Math.cos(angle) * scale;
+      var sin = Math.sin(angle) * scale;
+      var transform = mul(matrix, mul([cos, sin, -sin, cos, vertex.point[0], vertex.point[1]], view));
+      var content = {
+        root: s.root,
+        to: function (child) {
+          var base = transform;
+          var chain = [];
+          for (var node = child; node !== marker; node = node.parentElement) chain.unshift(node);
+          chain.forEach(function (node) {
+            var list = node.transform && node.transform.baseVal;
+            for (var i = 0; list && i < list.numberOfItems; i++) {
+              var m = list.getItem(i).matrix;
+              base = mul(base, [m.a, m.b, m.c, m.d, m.e, m.f]);
+            }
+          });
+          return base;
+        },
+      };
+      Array.prototype.forEach.call(marker.children, function (child) {
+        svgNode(child, content, alpha, out);
+      });
+    });
+  }
+
+  function dashDots(dots, m, width, cap, color, out) {
+    var path = [];
+    dots.forEach(function (dot) {
+      var angle = dot.angle;
+      var cos = Math.cos(angle);
+      var sin = Math.sin(angle);
+      var r = width / 2;
+      var outline = cap === "round"
+        ? [["M", r, 0]]
+        : [["M", -r, -r], ["L", r, -r], ["L", r, r], ["L", -r, r]];
+      if (cap === "round") {
+        arcTo(outline, r, 0, r, r, 0, false, true, -r, 0);
+        arcTo(outline, -r, 0, r, r, 0, false, true, r, 0);
+      }
+      outline.push(["Z"]);
+      path.push.apply(path, mapSegments(outline, mul(m, [cos, sin, -sin, cos, dot.point[0], dot.point[1]])));
+    });
+    var frame = extentOf(path);
+    out.push({ kind: "path", x: frame.x, y: frame.y, w: frame.w, h: frame.h, d: pathText(path, frame.x, frame.y), fill: { color: color } });
   }
 
   /**
@@ -885,30 +1019,40 @@
     var fill = null;
     if (paint && paint.ref) fill = gradientFill(s.root, paint.ref, own, through, frame, fillAlpha);
     else if (paint && paint.color[3] * fillAlpha > 0) fill = { color: [paint.color[0], paint.color[1], paint.color[2], paint.color[3] * fillAlpha] };
-    var border = strokeOf(cs, spread.scale, alpha, inner);
-    if (isSet(cs.markerMid)) throw UNDRAWABLE;
-    if (isSet(cs.markerStart) || isSet(cs.markerEnd)) {
-      var open = tag === "line" || tag === "polyline" || (tag === "path" && local[local.length - 1][0] !== "Z");
-      if (!open || !border) throw UNDRAWABLE;
-      border.head = arrowOf(s.root, cs.markerStart, num(cs.strokeWidth, 1));
-      border.tail = arrowOf(s.root, cs.markerEnd, num(cs.strokeWidth, 1));
+    var strokeScale = spread.scale;
+    if (local.length === 2 && local[1][0] === "L") {
+      var dx = local[1][1] - local[0][1];
+      var dy = local[1][2] - local[0][2];
+      var transformed = Math.hypot(m[0] * dx + m[2] * dy, m[1] * dx + m[3] * dy);
+      // The perpendicular thickness of a straight stroke under an affine transform.
+      if (transformed > 0) strokeScale = spread.scale * spread.scale * Math.hypot(dx, dy) / transformed;
     }
-    // An outline its dashes leave only stretches of is drawn as those, apart from the fill.
+    var border = strokeOf(cs, strokeScale, alpha, inner);
+    // Cut in SVG coordinates before applying the element's transform. A native preset only
+    // approximates the pattern when a very dense stroke would require too much geometry.
     var apart = null;
-    if (border && isSet(cs.strokeDasharray)) {
-      var lengths = cs.strokeDasharray.split(/[\s,]+/).map(function (n) { return num(n, -1); });
-      var cut = dashCut(local, lengths, num(cs.strokeDashoffset), num(node.getAttribute("pathLength")));
+    var dots = null;
+    if (border && !inner && isSet(cs.strokeDasharray)) {
+      var diagonal = dashUnits(node, s.root);
+      var lengths = cs.strokeDasharray.split(/[\s,]+/).map(function (value) { return dashLength(value, diagonal); });
+      dots = border.cap === "round" || border.cap === "square" ? [] : null;
+      var cut = dashCut(local, lengths, dashLength(cs.strokeDashoffset || "0", diagonal), num(node.getAttribute("pathLength")), dots);
       if (cut) border.dash = null;
+      else dots = null;
       if (cut && cut !== local) {
-        if (cut.length) apart = { border: border, drawn: mapSegments(cut, m) };
+        apart = { border: border, drawn: mapSegments(cut, m) };
         border = null;
       }
     }
     if (fill || border) shapeItem(asBox, m, own, frame, spread, corners, tag, fill, border, drawn, out);
-    if (apart) {
+    if (apart && apart.drawn.length) {
       var reach = extentOf(apart.drawn);
       out.push({ kind: "path", x: reach.x, y: reach.y, w: reach.w, h: reach.h, d: pathText(apart.drawn, reach.x, reach.y), fill: null, border: apart.border });
     }
+    if (dots && dots.length && apart) {
+      dashDots(dots, m, num(cs.strokeWidth, 1) * (inner ? 0.5 : 1), apart.border.cap, apart.border.color, out);
+    }
+    svgMarkers(local, cs, m, s, alpha, out);
   }
 
   /** The box or freeform of one SVG shape, added to `out`. */
@@ -949,7 +1093,7 @@
       var spacing = cs.letterSpacing;
       runs.push({
         text: node.nodeValue.replace(/\s+/g, " "),
-        font: splitTop(cs.fontFamily || "")[0].replace(/^["']|["']$/g, ""),
+        font: typeface(cs),
         size: num(cs.fontSize, 16) * scale,
         bold: num(cs.fontWeight, 400) >= 600 || cs.fontWeight === "bold",
         italic: cs.fontStyle === "italic" || /^oblique/.test(cs.fontStyle || ""),
@@ -1300,9 +1444,33 @@
         ["Bottom", r.x, r.y + r.h - num(cs.borderBottomWidth), r.w, num(cs.borderBottomWidth)],
         ["Left", r.x, r.y, num(cs.borderLeftWidth), r.h],
         ["Right", r.x + r.w - num(cs.borderRightWidth), r.y, num(cs.borderRightWidth), r.h],
-      ].forEach(function (s) {
+      ].forEach(function (s, index) {
         var c = color(cs["border" + s[0] + "Color"]);
-        if (cs["border" + s[0] + "Style"] === "none" || c[3] === 0 || s[3] <= 0 || s[4] <= 0) return;
+        var style = cs["border" + s[0] + "Style"];
+        if (style === "none" || c[3] === 0 || s[3] <= 0 || s[4] <= 0) return;
+        if (style === "dashed" || style === "dotted") {
+          var horizontal = index < 2;
+          var width = (horizontal ? s[4] : s[3]) * ctx.scale;
+          var length = horizontal ? s[3] : s[4];
+          var inset = Math.min(Math.max(radius.value, width / 2), length / 2);
+          var along = horizontal ? s[1] : s[2];
+          var across = (horizontal ? s[2] : s[1]) + width / 2;
+          var points = [along + inset, along + length - inset].map(function (value) {
+            var x = horizontal ? value : across;
+            var y = horizontal ? across : value;
+            var a = t.rotation * Math.PI / 180;
+            var cx = r.x + r.w / 2;
+            var cy = r.y + r.h / 2;
+            return [cx + (x - cx) * Math.cos(a) - (y - cy) * Math.sin(a),
+              cy + (x - cx) * Math.sin(a) + (y - cy) * Math.cos(a)];
+          });
+          var outline = [["M"].concat(points[0]), ["L"].concat(points[1])];
+          var frame = extentOf(outline);
+          c[3] *= ctx.opacity;
+          self.push({ kind: "path", x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+            d: pathText(outline, frame.x, frame.y), border: { color: c, width: width, dash: style, cap: "butt" } }, ctx);
+          return;
+        }
         self.push({ kind: "box", x: s[1], y: s[2], w: s[3], h: s[4], rotation: 0, fill: { color: c }, radius: 0, opacity: ctx.opacity }, ctx);
       });
     }
@@ -1510,6 +1678,65 @@
     return 0;
   }
 
+  var fontAvailability = Object.create(null);
+  var fontContext;
+  var webOnlyFonts = Object.create(null);
+
+  function familyName(value) {
+    return value.trim().replace(/^["']|["']$/g, "");
+  }
+
+  function checkLocalWebFonts() {
+    if (!window.FontFace || !document.fonts) return Promise.resolve();
+    var pending = Object.create(null);
+    document.fonts.forEach(function (face) {
+      var family = familyName(face.family);
+      if (pending[family] || webOnlyFonts[family] !== undefined) return;
+      var local = new FontFace("SlopSlideLocalProbe", "local(" + JSON.stringify(family) + ")");
+      pending[family] = local.load().then(function () {
+        webOnlyFonts[family] = false;
+      }, function () {
+        webOnlyFonts[family] = true;
+      });
+    });
+    return Promise.all(Object.keys(pending).map(function (key) { return pending[key]; }));
+  }
+
+  /** The first usable family in the CSS stack, expressed as a presentation font name. */
+  function typeface(cs) {
+    var mac = /Mac/.test(navigator.platform || "");
+    var windows = /Win/.test(navigator.platform || "");
+    var sans = mac ? "Helvetica Neue" : windows ? "Segoe UI" : "Arial";
+    var mono = mac ? "Menlo" : windows ? "Consolas" : "DejaVu Sans Mono";
+    var generics = {
+      "system-ui": sans, "-apple-system": sans, "blinkmacsystemfont": sans, "ui-sans-serif": sans,
+      "ui-serif": "Georgia", "ui-monospace": mono,
+      "sans-serif": "Arial", serif: "Times New Roman", monospace: "Courier New",
+    };
+    var families = splitTop(cs.fontFamily || "");
+    for (var i = 0; i < families.length; i++) {
+      var raw = families[i].trim();
+      var family = familyName(raw);
+      if (!family) continue;
+      if (raw === family && Object.prototype.hasOwnProperty.call(generics, family.toLowerCase())) return generics[family.toLowerCase()];
+      if (webOnlyFonts[family]) continue;
+      if (!document.fonts) return family;
+      if (fontContext === undefined) fontContext = document.createElement("canvas").getContext("2d");
+      if (!fontContext) return family;
+      if (fontAvailability[family] === undefined) {
+        fontAvailability[family] = ["monospace", "serif"].some(function (fallback) {
+          var sample = "Wm1iIl0@&\u2014";
+          fontContext.font = "72px " + fallback;
+          var width = fontContext.measureText(sample).width;
+          fontContext.font = "72px " + JSON.stringify(family) + ", " + fallback;
+          return Math.abs(fontContext.measureText(sample).width - width) > 0.01;
+        });
+      }
+      if (fontAvailability[family]) return family;
+    }
+    return families.length && families[0].trim() ? sans : "";
+  }
+
   /** Runs for a text node, in the style of the element holding it, raised by `baseline`. */
   function textRuns(text, cs, ctx, link, runs, baseline) {
     var keep = /^pre|break-spaces/.test(cs.whiteSpace);
@@ -1518,10 +1745,14 @@
     else if (cs.textTransform === "lowercase") body = body.toLowerCase();
     var fillText = cs.webkitTextFillColor;
     var ink = color(fillText && fillText !== "currentcolor" ? fillText : cs.color);
+    var g = null;
     if (ink[3] === 0) {
-      // Text showing its background: the gradient's first colour stands in.
-      var g = gradient(cs.backgroundImage || "") || gradient(ctx.clipImage || "");
-      ink = g ? g.stops[0].color : color(cs.color);
+      g = gradient(cs.backgroundImage || "") || gradient(ctx.clipImage || "");
+      if (g) {
+        g.stops.forEach(function (stop) { stop.color[3] *= ctx.opacity; });
+      } else {
+        ink = color(cs.color);
+      }
     }
     ink = [ink[0], ink[1], ink[2], ink[3] * ctx.opacity];
     var mark = color(cs.backgroundColor);
@@ -1532,13 +1763,14 @@
       if (!part) return;
       runs.push({
         text: part,
-        font: splitTop(cs.fontFamily || "")[0].replace(/^["']|["']$/g, ""),
+        font: typeface(cs),
         size: num(cs.fontSize, 16) * ctx.scale,
         bold: num(cs.fontWeight, 400) >= 600,
         italic: cs.fontStyle === "italic" || /^oblique/.test(cs.fontStyle),
         underline: /underline/.test(lines),
         strike: /line-through/.test(lines),
-        color: ink,
+        color: g ? null : ink,
+        gradient: g,
         spacing: cs.letterSpacing === "normal" ? 0 : num(cs.letterSpacing) * ctx.scale,
         highlight: mark[3] > 0.05 ? mark : null,
         baseline: baseline || 0,
@@ -1553,15 +1785,77 @@
     textRuns(cs.content.slice(1, -1), cs, ctx, link, runs, baseline);
   }
 
+  function wrapLayout() {
+    return {
+      range: document.createRange(),
+      last: null,
+      breaks: 0,
+    };
+  }
+
+  function browserText(node, cs, ctx, link, runs, baseline, layout) {
+    var text = node.nodeValue;
+    if (!layout || !text || /^pre|break-spaces/.test(cs.whiteSpace)) {
+      textRuns(text, cs, ctx, link, runs, baseline);
+      return;
+    }
+    var range = layout.range;
+    range.selectNodeContents(node);
+    var rects = range.getClientRects();
+    var append = function (from, to, rect) {
+      var previous = layout.last;
+      if (rect && previous && rect.top >= previous.top + Math.min(rect.height, previous.height) * 0.55 &&
+          (rect.top + rect.bottom) / 2 > (previous.top + previous.bottom) / 2 + Math.min(rect.height, previous.height) * 0.55) {
+        while (runs.length && !runs[runs.length - 1].lineBreak) {
+          var last = runs[runs.length - 1];
+          last.text = last.text.replace(/ +$/, "");
+          if (last.text) break;
+          runs.pop();
+        }
+        runs.push({ text: "", lineBreak: true });
+        layout.breaks++;
+      }
+      var part = text.slice(from, to);
+      if (runs.length && runs[runs.length - 1].lineBreak) part = part.replace(/^\s+/, "");
+      textRuns(part, cs, ctx, link, runs, baseline);
+      if (rect && /\S/.test(part)) layout.last = rect;
+    };
+    var shown = Array.prototype.filter.call(rects, function (rect) { return rect.width > 0; });
+    if (shown.length <= 1) {
+      append(0, text.length, shown[0]);
+      return;
+    }
+    // Each prefix collects the browser's line fragments. Locate each wrap by looking for the
+    // first offset that introduces another fragment, without walking the entire text character by character.
+    var start = 0;
+    for (var line = 0; line + 1 < shown.length; line++) {
+      var low = start + 1;
+      var high = text.length;
+      while (low < high) {
+        var mid = Math.floor((low + high) / 2);
+        range.setEnd(node, mid);
+        var count = Array.prototype.filter.call(range.getClientRects(), function (rect) { return rect.width > 0; }).length;
+        if (count > line + 1) high = mid;
+        else low = mid + 1;
+      }
+      var end = low - 1;
+      if (end <= start) break;
+      append(start, end, shown[line]);
+      start = end;
+    }
+    append(start, text.length, shown[shown.length - 1]);
+  }
+
   /** Collects `node` and what is inside it as runs. */
-  function collect(node, ctx, link, runs, baseline) {
+  function collect(node, ctx, link, runs, baseline, layout) {
     if (node.nodeType === 3) {
-      textRuns(node.nodeValue, getComputedStyle(node.parentElement), ctx, link, runs, baseline);
+      browserText(node, getComputedStyle(node.parentElement), ctx, link, runs, baseline, layout);
       return;
     }
     if (node.nodeType !== 1) return;
     var tag = node.tagName.toLowerCase();
     if (tag === "br") {
+      if (layout) layout.last = null;
       runs.push({ text: "", lineBreak: true });
       return;
     }
@@ -1571,7 +1865,7 @@
     baseline = raisedBy(cs) || baseline;
     pseudoRun(node, "::before", ctx, link, runs, baseline);
     Array.prototype.forEach.call(node.childNodes, function (child) {
-      collect(child, ctx, link, runs, baseline);
+      collect(child, ctx, link, runs, baseline, layout);
     });
     pseudoRun(node, "::after", ctx, link, runs, baseline);
   }
@@ -1717,6 +2011,51 @@
     return "top";
   };
 
+  /** Restrict a horizontal CSS background gradient to the glyphs that show through it. */
+  function textGradient(g, glyphs, paper) {
+    var angle = ((g.angle % 360) + 360) % 360;
+    if (!(paper.width > 0) || (angle !== 90 && angle !== 270)) return;
+    var first = Math.max(0, Math.min(1, (glyphs.left - paper.left) / paper.width));
+    var last = Math.max(0, Math.min(1, (glyphs.right - paper.left) / paper.width));
+    if (angle === 270) {
+      var edge = first;
+      first = 1 - last;
+      last = 1 - edge;
+    }
+    if (!(last > first)) return;
+    var stops = g.stops;
+    var colorAt = function (t) {
+      var i = stops.findIndex(function (stop) { return stop.at >= t; });
+      if (i <= 0) return stops[i < 0 ? stops.length - 1 : 0].color;
+      var a = stops[i - 1];
+      var b = stops[i];
+      var f = (t - a.at) / (b.at - a.at);
+      return a.color.map(function (v, j) { return v + (b.color[j] - v) * f; });
+    };
+    g.stops = [{ at: 0, color: colorAt(first) }].concat(stops.filter(function (stop) {
+      return stop.at > first && stop.at < last;
+    }).map(function (stop) {
+      return { at: (stop.at - first) / (last - first), color: stop.color };
+    }), [{ at: 1, color: colorAt(last) }]);
+  }
+
+  /** Inset a rotated box, keeping the new center in the parent's transformed coordinates. */
+  function turnedContentBox(r, cs, ctx) {
+    var left = (num(cs.paddingLeft) + num(cs.borderLeftWidth)) * ctx.scale;
+    var right = (num(cs.paddingRight) + num(cs.borderRightWidth)) * ctx.scale;
+    var top = (num(cs.paddingTop) + num(cs.borderTopWidth)) * ctx.scale;
+    var bottom = (num(cs.paddingBottom) + num(cs.borderBottomWidth)) * ctx.scale;
+    var angle = ctx.rotation * Math.PI / 180;
+    var dx = (left - right) / 2;
+    var dy = (top - bottom) / 2;
+    return {
+      x: r.x + (left + right) / 2 + dx * Math.cos(angle) - dy * Math.sin(angle),
+      y: r.y + (top + bottom) / 2 + dx * Math.sin(angle) + dy * Math.cos(angle),
+      w: Math.max(0, r.w - left - right),
+      h: Math.max(0, r.h - top - bottom),
+    };
+  }
+
   /**
    * A text box for the inline `nodes`, which sit in `parent`; `first` and `last` tell whether
    * they open and close it, and so stand beside the text of its pseudo-elements.
@@ -1737,12 +2076,26 @@
     range.setEndAfter(nodes[nodes.length - 1]);
     var bounds = range.getBoundingClientRect();
     var r = this.rect(bounds);
-    if (ctx.rotated) r = ctx.rotated;
+    if (ctx.rotated) r = turnedContentBox(ctx.rotated, cs, ctx);
     if (r.w <= 0 && r.h <= 0) return;
     var size = runs[0].size || 16;
     var rects = range.getClientRects ? range.getClientRects() : [];
     var lines = linesIn(rects, size);
     var wrap = lines > 1;
+    // At small angles the line rectangles still advance vertically in reading order.
+    var layout = Math.abs(ctx.rotation || 0) <= 10 && wrap && !before && !after && !/justify/.test(cs.textAlign) ? wrapLayout() : null;
+    var measuredWrap = false;
+    if (layout) {
+      var measured = [];
+      nodes.forEach(function (node) {
+        collect(node, ctx, ctx.link, measured, 0, layout);
+      });
+      if (layout.breaks) runs = tidy(measured);
+      measuredWrap = layout.breaks > 0 || runs.filter(function (run) { return run.lineBreak; }).length + 1 >= lines;
+    }
+    if (!ctx.rotated && !wrap && runs.length === 1 && runs[0].gradient && /text/.test(cs.backgroundClip || cs.webkitBackgroundClip || "")) {
+      textGradient(runs[0].gradient, bounds, parent.getBoundingClientRect());
+    }
     var para = paragraph(parent, cs, runs, ctx);
     // A range measures glyphs, but a line of text stands in its line box: taller or shorter than
     // the glyphs by the leading. Placing the glyph box would shift the text a little every trip.
@@ -1754,7 +2107,7 @@
       var line = mark ? this.rect(mark).y : this.rect(glyphs).y + (glyphHeight - para.lineHeight) / 2;
       r = { x: r.x, y: Math.round(line), w: r.w, h: r.h + para.lineHeight - glyphHeight };
     }
-    if (wrap || before || after) {
+    if (!ctx.rotated && (wrap || before || after)) {
       var p = this.rect(parent.getBoundingClientRect());
       var padL = num(cs.paddingLeft) * ctx.scale;
       var padR = num(cs.paddingRight) * ctx.scale;
@@ -1777,7 +2130,7 @@
       r = { x: r.x - hang, y: r.y, w: r.w + hang, h: r.h };
     }
     var anchor = this.anchor(parent, nodes, r, size, ctx);
-    this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: wrap, anchor: anchor, paragraphs: [para] }, ctx);
+    this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: wrap && !measuredWrap, anchor: anchor, paragraphs: [para] }, ctx);
   };
 
   /** Whether a list can be one text box: items of plain text, each without a box of its own. */
@@ -1805,15 +2158,21 @@
     var ordered = el.tagName.toLowerCase() === "ol";
     var start = ordered ? num(el.getAttribute("start"), 1) : 1;
     var paragraphs = [];
+    var canFreeze = !ctx.rotated;
+    var hasBreak = false;
     Array.prototype.forEach.call(el.children, function (li) {
       var cs = getComputedStyle(li);
       var runs = [];
+      var layout = canFreeze && pseudo(li, "::before") !== "run" && pseudo(li, "::after") !== "run" &&
+        !/justify/.test(cs.textAlign) ? wrapLayout() : null;
       pseudoRun(li, "::before", ctx, ctx.link, runs);
       Array.prototype.forEach.call(li.childNodes, function (node) {
-        collect(node, ctx, ctx.link, runs);
+        collect(node, ctx, ctx.link, runs, 0, layout);
       });
       pseudoRun(li, "::after", ctx, ctx.link, runs);
       tidy(runs);
+      hasBreak = hasBreak || Boolean(layout && layout.breaks);
+      if (!layout) canFreeze = false;
       var box = self.rect(li.getBoundingClientRect());
       var para = paragraph(li, cs, runs, ctx);
       var size = (runs[0] && runs[0].size) || num(cs.fontSize, 16);
@@ -1839,7 +2198,7 @@
     if (ctx.rotation || !(lines.h > 0) || lines.y < r.y - 1 || lines.y + lines.h > r.y + r.h + 1) lines = r;
     var size = (paragraphs[0].runs[0] && paragraphs[0].runs[0].size) || 16;
     var anchor = this.anchor(el, Array.prototype.slice.call(el.childNodes), lines, size, ctx);
-    this.push({ kind: "text", x: lines.x, y: lines.y, w: lines.w, h: lines.h, rotation: ctx.rotation, wrap: true, anchor: anchor, paragraphs: paragraphs }, ctx);
+    this.push({ kind: "text", x: lines.x, y: lines.y, w: lines.w, h: lines.h, rotation: ctx.rotation, wrap: !(canFreeze && hasBreak), anchor: anchor, paragraphs: paragraphs }, ctx);
   };
 
   /**
@@ -1872,14 +2231,7 @@
       tidy(runs);
       paragraphs.push(paragraph(child, getComputedStyle(child), runs, ctx));
     });
-    var left = num(cs.paddingLeft) * ctx.scale;
-    var top = num(cs.paddingTop) * ctx.scale;
-    var inner = {
-      x: r.x + left,
-      y: r.y + top,
-      w: r.w - left - num(cs.paddingRight) * ctx.scale,
-      h: r.h - top - num(cs.paddingBottom) * ctx.scale,
-    };
+    var inner = turnedContentBox(r, cs, ctx);
     this.push({ kind: "text", x: inner.x, y: inner.y, w: inner.w, h: inner.h, rotation: ctx.rotation, wrap: paragraphs.length > 1, anchor: anchorOf(cs), paragraphs: paragraphs }, ctx);
   };
 
@@ -2048,7 +2400,7 @@
       var images = Array.prototype.map.call(document.images, function (img) {
         return img.decode ? img.decode().catch(function () {}) : null;
       });
-      var fonts = document.fonts ? document.fonts.ready : null;
+      var fonts = document.fonts ? document.fonts.ready.then(checkLocalWebFonts) : null;
       // Timers only: a hidden window paints no frames, so requestAnimationFrame never fires.
       var cap = new Promise(function (resolve) {
         setTimeout(resolve, 5000);

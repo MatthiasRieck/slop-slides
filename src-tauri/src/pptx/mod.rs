@@ -6,7 +6,7 @@ mod export;
 mod import;
 mod xml;
 
-pub use export::export;
+pub use export::{export, Slides};
 pub use import::{import, Imported};
 
 /// English Metric Units per inch, PowerPoint's unit of length.

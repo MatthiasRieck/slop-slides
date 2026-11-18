@@ -808,7 +808,11 @@ fn text_stays_text_with_its_lists_links_and_escapes() {
     let parts = read_parts(exported());
     let slide = text_of(&parts, "ppt/slides/slide1.xml");
     assert!(slide.contains("<a:t>R&amp;D &lt;title&gt;</a:t>"));
-    assert!(slide.contains(r#"typeface="Inter""#));
+    assert!(slide.contains(concat!(
+        r#"<a:latin typeface="Inter"/>"#,
+        r#"<a:ea typeface="Inter"/>"#,
+        r#"<a:cs typeface="Inter"/>"#
+    )));
     assert!(slide.contains(r#"b="1""#));
     assert!(slide.contains("<a:br/>"));
     assert!(slide.contains(r#"<a:buChar char="•"/>"#));
@@ -1239,6 +1243,68 @@ fn a_straight_stroke_becomes_a_line_that_runs_the_same_way() {
         ..blob()
     })]);
     assert!(!unstroked.contains("<p:cxnSp>") && !unstroked.contains("<p:sp>"));
+}
+
+#[test]
+fn editable_gradient_text_uses_a_run_fill_and_imports_with_its_first_color() {
+    let bytes = package(
+        &Scene {
+            slides: vec![SceneSlide {
+                items: vec![Item::Text(TextItem {
+                    w: 240.0,
+                    h: 65.0,
+                    paragraphs: vec![Paragraph {
+                        runs: vec![Run {
+                            gradient: Some(Gradient {
+                                angle: 90.0,
+                                stops: vec![
+                                    Stop {
+                                        at: 0.0,
+                                        color: [255.0, 0.0, 0.0, 1.0],
+                                    },
+                                    Stop {
+                                        at: 1.0,
+                                        color: [0.0, 0.0, 255.0, 1.0],
+                                    },
+                                ],
+                            }),
+                            ..run("Gradient text")
+                        }],
+                        ..Paragraph::default()
+                    }],
+                    ..TextItem::default()
+                })],
+                ..SceneSlide::default()
+            }],
+            ..Scene::default()
+        },
+        &meta(),
+        &HashMap::new(),
+        |_| None,
+    )
+    .unwrap();
+    let parts = read_parts(bytes.clone());
+    let slide = text_of(&parts, "ppt/slides/slide1.xml");
+    assert!(slide.contains("<a:gradFill"));
+    assert!(slide.contains("<a:t>Gradient text</a:t>"));
+    let html = convert(bytes, "gradient").unwrap().html;
+    assert!(html.contains("color: #ff0000"));
+    assert!(html.contains("Gradient text"));
+}
+
+#[test]
+fn a_horizontal_dash_path_has_a_nonzero_coordinate_system() {
+    let slide = slide_of(vec![Item::Path(PathItem {
+        d: "M 0 0 L 10 0 M 30 0 L 40 0".into(),
+        h: 0.0,
+        fill: None,
+        border: Some(stroke()),
+        ..blob()
+    })]);
+    assert!(slide.contains(r#"<a:ext cx="254000" cy="1"/>"#));
+    assert!(slide.contains(r#"<a:path w="254000" h="1" fill="none">"#));
+    assert_eq!(slide.matches("<a:moveTo>").count(), 2);
+    assert!(!slide.contains("<a:prstDash") && !slide.contains("<a:tailEnd"));
 }
 
 #[test]

@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 use crate::export;
 use crate::lint;
 use crate::narration;
+use crate::pptx;
 use crate::render;
 use crate::video;
 
@@ -311,7 +312,10 @@ const EXPORT: Tool = Tool {
                 "Export a deck as the app's Export menu does, when the user \
                 asks for an export: `html` (one standalone HTML file with its assets inlined), \
                 `pdf` (one page per shown slide, selectable text), `pptx` (PowerPoint, one slide \
-                per shown slide), `video` (an MP4 of the deck playing, with its animations and \
+                per shown slide: of editable shapes and text, which the app opening it lays out \
+                again with the fonts it has, or with `pptx_slides: \"pictures\"` each slide one \
+                picture, exactly as it looks here and not editable; use that when the user wants \
+                it to look the same everywhere), `video` (an MP4 of the deck playing, with its animations and \
                 narration audio, timed as {TIMELINE_TOOL} says; narration audio that is missing \
                 is generated first) or `images` (a PNG of every slide, the canvas size, in a \
                 folder). It goes to `dest` in the workspace, or to `{}/` next to the deck, named \
@@ -334,6 +338,11 @@ const EXPORT: Tool = Tool {
                 "overwrite": {
                     "type": "boolean",
                     "description": "Replace an existing file, or write images into a folder that is not empty; only when the user agreed.",
+                },
+                "pptx_slides": {
+                    "type": "string",
+                    "enum": pptx::Slides::ALL.iter().map(|s| s.name()).collect::<Vec<_>>(),
+                    "description": "pptx: what each slide is made of. Default elements.",
                 },
                 "seconds_per_slide": {
                     "type": "number",
@@ -432,6 +441,10 @@ pub(super) fn export_deck(
         export::Format::Video => Some(video_options(arguments)?),
         _ => None,
     };
+    let pptx_slides = match (format, arguments["pptx_slides"].as_str()) {
+        (export::Format::Pptx, Some(name)) => Some(pptx::Slides::parse(name)?),
+        _ => None,
+    };
     let (rel, file) = deck_argument(dir, arguments)?;
     let deck = deck::load(&file)?;
     let dest = export::destination(
@@ -447,6 +460,7 @@ pub(super) fn export_deck(
         format,
         dest,
         video,
+        pptx_slides,
     };
     if format == export::Format::Html {
         let path = dir.join(&request.dest);

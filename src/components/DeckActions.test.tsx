@@ -54,9 +54,10 @@ beforeEach(() => {
 describe("deck actions", () => {
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: "Present" }) as HTMLButtonElement;
-  async function exportAs(item: "HTML file" | "PDF" | "PowerPoint" | "PNG images") {
+  async function exportAs(item: "HTML file" | "PDF" | "PowerPoint" | "PowerPoint, as pictures" | "PNG images") {
     fireEvent.click(exportButton());
-    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
+    // Its label, up to the ellipsis: "PowerPoint" is the start of two.
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(`^${item}…`) })));
   }
 
   it("presents right away with one screen", async () => {
@@ -362,31 +363,49 @@ describe("deck actions", () => {
   });
 
   const FILES = [
-    ["HTML file", "Talk.html", "HTML presentation", "export_deck", "Could not save the HTML file: "],
-    ["PDF", "Talk.pdf", "PDF document", "export_pdf", "Could not save the PDF: "],
-    ["PowerPoint", "Talk.pptx", "PowerPoint presentation", "export_pptx", "Could not save the PowerPoint file: "],
+    ["HTML file", "Talk.html", "HTML presentation", "export_deck", "Could not save the HTML file: ", {}],
+    ["PDF", "Talk.pdf", "PDF document", "export_pdf", "Could not save the PDF: ", {}],
+    [
+      "PowerPoint",
+      "Talk.pptx",
+      "PowerPoint presentation",
+      "export_pptx",
+      "Could not save the PowerPoint file: ",
+      { slides: "elements" },
+    ],
+    [
+      "PowerPoint, as pictures",
+      "Talk.pptx",
+      "PowerPoint presentation",
+      "export_pptx",
+      "Could not save the PowerPoint file: ",
+      { slides: "pictures" },
+    ],
   ] as const;
 
-  it.each(FILES)("exports a %s to the chosen file and says it is saved", async (item, name, filter, command) => {
-    const dest = `/Users/me/Desktop/${name}`;
-    const extension = name.split(".")[1];
-    save.mockResolvedValue(dest);
-    render(<DeckActions />);
-    await exportAs(item);
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultPath: name, filters: [{ name: filter, extensions: [extension] }] }),
-    );
-    expect(invoke).toHaveBeenCalledWith(command, { id: "/decks/talk/deck.html", dest });
-    // The file manager opens only when asked for, from the toast.
-    expect(revealItemInDir).not.toHaveBeenCalled();
-    expect(toastTexts(useApp.getState(), "success")).toEqual([`Saved ${name}`]);
-    const toast = useApp.getState().toasts.at(-1)!;
-    expect(toast.action?.label).toBe("Show in folder");
-    await act(async () => toast.action?.run());
-    expect(revealItemInDir).toHaveBeenCalledWith(dest);
-    expect(useApp.getState().imageExport).toBeNull();
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
+  it.each(FILES)(
+    "exports a %s to the chosen file and says it is saved",
+    async (item, name, filter, command, _failure, how) => {
+      const dest = `/Users/me/Desktop/${name}`;
+      const extension = name.split(".")[1];
+      save.mockResolvedValue(dest);
+      render(<DeckActions />);
+      await exportAs(item);
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultPath: name, filters: [{ name: filter, extensions: [extension] }] }),
+      );
+      expect(invoke).toHaveBeenCalledWith(command, { id: "/decks/talk/deck.html", dest, ...how });
+      // The file manager opens only when asked for, from the toast.
+      expect(revealItemInDir).not.toHaveBeenCalled();
+      expect(toastTexts(useApp.getState(), "success")).toEqual([`Saved ${name}`]);
+      const toast = useApp.getState().toasts.at(-1)!;
+      expect(toast.action?.label).toBe("Show in folder");
+      await act(async () => toast.action?.run());
+      expect(revealItemInDir).toHaveBeenCalledWith(dest);
+      expect(useApp.getState().imageExport).toBeNull();
+      expect(screen.queryByRole("menu")).toBeNull();
+    },
+  );
 
   it("says a saved file could not be shown, never that it could not be saved", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
@@ -451,7 +470,8 @@ describe("deck actions", () => {
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
       "HTML file…One self-contained file to share. Hidden slides stay in it; the show skips them",
       "PDF…One page per slide, for printing or sharing. Hidden slides are left out",
-      "PowerPoint…Editable slides; some effects are simplified. Hidden slides are left out",
+      "PowerPoint…Editable slides; some effects are simplified, and text needs its fonts installed. Hidden slides are left out",
+      "PowerPoint, as pictures…Every slide one picture: looks the same everywhere, but cannot be edited. Hidden slides are left out",
       "PNG images…One image per slide, in a new folder. Hidden slides are included",
       "Video…An MP4 that plays the animations and speaks the narration. Hidden slides are left out",
     ]);
@@ -509,6 +529,7 @@ describe("deck actions", () => {
     ["PDF", "Talk.pdf"],
     ["HTML file", "Talk.html"],
     ["PowerPoint", "Talk.pptx"],
+    ["PowerPoint, as pictures", "Talk.pptx"],
   ] as const)("shows the %s is being written, and blocks another export meanwhile", async (item, name) => {
     let finish!: () => void;
     save.mockResolvedValue(`/Users/me/Desktop/${name}`);

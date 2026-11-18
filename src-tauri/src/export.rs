@@ -102,6 +102,9 @@ pub struct Request {
     /// How a video is made; the narration timeline's defaults when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<video::Options>,
+    /// What a PowerPoint file's slides are made of; editable elements when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pptx_slides: Option<crate::pptx::Slides>,
 }
 
 /// What the export made, in words, or why it failed.
@@ -262,7 +265,8 @@ async fn make(app: &AppHandle, file: &Path, request: &Request, dest: &Path) -> R
             None
         }
         Format::Pptx => {
-            crate::pptx::export(app, file, dest).await?;
+            let slides = request.pptx_slides.unwrap_or_default();
+            crate::pptx::export(app, file, dest, slides).await?;
             None
         }
         Format::Video => {
@@ -378,6 +382,7 @@ mod tests {
             format,
             dest: "talk/exports/Talk.pdf".into(),
             video: None,
+            pptx_slides: None,
         }
     }
 
@@ -549,6 +554,14 @@ mod tests {
             serde_json::from_str(r#"{"path":"deck.html","format":"pdf","dest":"deck.pdf"}"#)
                 .unwrap();
         assert_eq!(plain.video, None);
+        assert_eq!(plain.pptx_slides, None);
+        assert!(!json.contains("pptx_slides"), "{json}");
+
+        let mut pictures = request(Format::Pptx);
+        pictures.pptx_slides = Some(crate::pptx::Slides::Pictures);
+        let json = serde_json::to_string(&pictures).unwrap();
+        assert!(json.contains(r#""pptx_slides":"pictures""#), "{json}");
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), pictures);
     }
 
     #[test]

@@ -57,8 +57,9 @@ function helper(slides: string, css = "") {
         return box(child?.nodeType === 1 ? child : node) as DOMRect;
       };
       window.Range.prototype.getClientRects = function (this: Range) {
-        const node = this.startContainer as Element;
-        return [{ ...box(node), height: 10 }] as unknown as DOMRectList;
+        const start = this.startContainer;
+        const node = start.nodeType === 1 ? (start as Element) : start.parentElement;
+        return (node ? [{ ...box(node), height: 10 }] : []) as unknown as DOMRectList;
       };
     },
     scripts: [PPTX_JS],
@@ -257,19 +258,41 @@ describe("PowerPoint helper", () => {
     expect(at(paragraph.runs, 3)).toMatchObject({ italic: true, link: "#next" });
   });
 
-  it("gives text its parent's opacity, and gradient text the gradient's first colour", async () => {
-    const { slides } = await helper(
+  it("preserves opacity and crops a single run's gradient to the visible glyphs", async () => {
+    const h = helper(
       SLIDE(
         `<div style="opacity: 0.5"><p style="color: rgb(9, 9, 9)">Faded</p></div>
-         <p style="-webkit-text-fill-color: transparent; background-clip: text; background-image: linear-gradient(90deg, rgb(7, 8, 9), rgb(0, 0, 0))">Shiny</p>`,
+         <p data-box="0 0 200 40" style="-webkit-text-fill-color: transparent; background-clip: text; background-image: linear-gradient(90deg, rgb(0, 0, 0), rgb(200, 0, 0))">Shiny</p>`,
       ),
-    ).scan();
-    const colors = at(slides, 0).items.map(
-      (i) => at(at(i.paragraphs as { runs: { color: number[] }[] }[], 0).runs, 0).color,
     );
-    expect(colors).toEqual([
-      [9, 9, 9, 0.5],
-      [7, 8, 9, 1],
+    const bounds = h.window.Range.prototype.getBoundingClientRect;
+    h.window.Range.prototype.getBoundingClientRect = function (this: Range) {
+      const result = bounds.call(this);
+      return this.startContainer instanceof h.window.HTMLElement && this.startContainer.hasAttribute("data-box")
+        ? ({ ...result, right: 100, width: 100 } as DOMRect)
+        : result;
+    };
+    const { slides } = await h.scan();
+    expect(at(slides, 0).items).toMatchObject([
+      { paragraphs: [{ runs: [{ color: [9, 9, 9, 0.5] }] }] },
+      {
+        paragraphs: [
+          {
+            runs: [
+              {
+                color: null,
+                gradient: {
+                  angle: 90,
+                  stops: [
+                    { at: 0, color: [0, 0, 0, 1] },
+                    { at: 1, color: [100, 0, 0, 1] },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
     ]);
   });
 
@@ -460,6 +483,80 @@ describe("PowerPoint helper", () => {
     });
   });
 
+  it("keeps browser wraps as editable breaks across styled inline runs", async () => {
+    const h = helper(
+      SLIDE(
+        `<p data-box="0 0 180 80" style="font: 24px/30px system-ui, sans-serif">First line and <b>second line</b></p>`,
+      ),
+    );
+    Object.defineProperty(h.window.navigator, "platform", { value: "MacIntel" });
+    const line = (y: number) => ({ left: 0, top: y, bottom: y + 24, width: 100, height: 24 });
+    h.window.Range.prototype.getClientRects = function (this: Range) {
+      const node = this.startContainer;
+      if (node.nodeType !== 3) return [line(0), line(30)] as unknown as DOMRectList;
+      if (node.parentElement?.tagName === "B") return [line(30)] as unknown as DOMRectList;
+      return (this.endOffset > 11 ? [line(0), line(30)] : [line(0)]) as unknown as DOMRectList;
+    };
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({
+      kind: "text",
+      wrap: false,
+      paragraphs: [
+        {
+          runs: [
+            { text: "First line", font: "Helvetica Neue" },
+            { lineBreak: true },
+            { text: "and " },
+            { text: "second line" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps a wrapped bullet as one native list paragraph", async () => {
+    const h = helper(SLIDE(`<ul><li>Wrapped list item</li></ul>`));
+    const first = { top: 0, bottom: 24, width: 120, height: 24 };
+    const second = { ...first, top: 30, bottom: 54 };
+    h.window.Range.prototype.getClientRects = function (this: Range) {
+      return (this.endOffset > 13 ? [first, second] : [first]) as unknown as DOMRectList;
+    };
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({
+      wrap: false,
+      paragraphs: [{ bullet: { char: "•" }, runs: [{ text: "Wrapped list" }, { lineBreak: true }, { text: "item" }] }],
+    });
+  });
+
+  it("writes an available family from the browser stack when its first family is unavailable", async () => {
+    const h = helper(SLIDE(`<p style="font-family: 'Unavailable', Arial, sans-serif">Fallback</p>`));
+    Object.defineProperty(h.doc, "fonts", { value: {} });
+    const canvas = {
+      font: "",
+      measureText() {
+        return { width: this.font.includes('"Arial"') ? 100 : 90 };
+      },
+    };
+    Object.defineProperty(h.window.HTMLCanvasElement.prototype, "getContext", { value: () => canvas });
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({
+      paragraphs: [{ runs: [{ text: "Fallback", font: "Arial" }] }],
+    });
+  });
+
+  it("retains dash styles for one-sided CSS borders", async () => {
+    const { slides } = await helper(
+      SLIDE(
+        `<div data-box="10 10 100 50" style="border-bottom: 4px dashed blue; ${CORNERS("10px")}"></div>
+       <div data-box="0 0 100 50" style="border-left: 6px dotted red"></div>`,
+      ),
+    ).scan();
+    expect(at(slides, 0).items).toMatchObject([
+      { kind: "path", x: 20, y: 58, w: 80, border: { width: 4, dash: "dashed" } },
+      { kind: "path", x: 3, w: 0, border: { width: 6, dash: "dotted", cap: "butt" } },
+    ]);
+  });
+
   it("lets wrapped text keep its block's width past the space hanging off a line", async () => {
     const h = helper(SLIDE(`<p data-box="0 0 784 90" style="font-size: 34px">Wrapping text</p>`));
     h.window.Range.prototype.getBoundingClientRect = () =>
@@ -516,6 +613,37 @@ describe("PowerPoint helper", () => {
     expect(text).toMatchObject({ rotation: 10, x: 100, y: 100, w: 400, h: 200 });
     const paragraphs = text.paragraphs as { runs: { text: string }[] }[];
     expect(at(paragraphs, 0).runs.map((run) => run.text)).toEqual(["One ", "bold", "", "Two"]);
+  });
+
+  it("keeps the browser break inside a slightly rotated text box", async () => {
+    const h = helper(SLIDE(`<p data-box="100 100 200 100" style="rotate: -8deg">First line then second</p>`));
+    const first = { top: 0, bottom: 24, width: 120, height: 24 };
+    const second = { ...first, top: 30, bottom: 54 };
+    h.window.Range.prototype.getClientRects = function (this: Range) {
+      return (this.startContainer.nodeType !== 3 || this.endOffset > 11
+        ? [first, second]
+        : [first]) as unknown as DOMRectList;
+    };
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({
+      rotation: -8,
+      wrap: false,
+      paragraphs: [{ runs: [{ text: "First line" }, { lineBreak: true }, { text: "then second" }] }],
+    });
+  });
+
+  it("preserves padding and moves the center of inset rotated text", async () => {
+    const { slides } = await helper(
+      SLIDE(`<p data-box="100 100 200 100" style="rotate: 90deg; padding: 10px 10px 10px 30px">Turned</p>`),
+    ).scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({
+      kind: "text",
+      x: 120,
+      y: 120,
+      w: 160,
+      h: 80,
+      rotation: 90,
+    });
   });
 
   it("orders items by stacking order, then by document order", async () => {
@@ -634,7 +762,7 @@ function transformOf(text: string | null): Matrix {
 
 /** What SVG elements inherit, and what they have when nothing says otherwise. */
 const SVG_INHERITED = new Set(
-  "fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray fill-opacity stroke-opacity font-size font-family font-weight text-anchor marker-start marker-end".split(
+  "fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset fill-opacity stroke-opacity font-size font-family font-weight text-anchor marker-start marker-mid marker-end".split(
     " ",
   ),
 );
@@ -712,7 +840,7 @@ describe("SVG as PowerPoint shapes", () => {
   it("reads rectangles, ellipses, paths and lines as shapes of their own, grouped", async () => {
     const { items, shots } = await drawn(
       `<svg data-box="100 200 200 100" viewBox="0 0 100 50">
-         <defs><marker id="tip" markerWidth="6"><path d="M0 0 L6 3 L0 6 z"/></marker></defs>
+         <defs><marker id="tip" markerWidth="6" markerHeight="6" refX="6"><path d="M0 0 L6 3 L0 6 z"/></marker></defs>
          <rect x="10" y="5" width="20" height="10" rx="2" fill="${RED}" stroke="${BLUE}" stroke-width="1" stroke-dasharray="4 2"/>
          <circle cx="50" cy="25" r="5" fill="${BLUE}" fill-opacity="0.5"/>
          <g transform="translate(50 0)" opacity="0.5"><path d="M0 0 h10 v10 q-5 5 -10 0 z" fill="${RED}"/></g>
@@ -721,13 +849,14 @@ describe("SVG as PowerPoint shapes", () => {
     );
     expect(shots).toEqual([]);
     expect(at(items, 0)).toMatchObject({ kind: "group", x: 100, y: 200, w: 200, h: 100 });
-    const [rect, circle, path, line] = shapesOf(items);
+    const [rect, edge, circle, path, line, marker] = shapesOf(items);
     // Two canvas pixels to the drawing's unit.
     expect(rect).toMatchObject({ kind: "box", x: 120, y: 210, w: 40, h: 20, radius: 4, ellipse: false, rotation: 0 });
     expect(rect).toMatchObject({
       fill: { color: [255, 0, 0, 1] },
-      border: { color: [0, 0, 255, 1], width: 2, dash: "dashed" },
+      border: null,
     });
+    expect(edge).toMatchObject({ kind: "path", border: { color: [0, 0, 255, 1], width: 2, dash: null } });
     expect(circle).toMatchObject({
       kind: "box",
       x: 190,
@@ -742,7 +871,9 @@ describe("SVG as PowerPoint shapes", () => {
     expect(path).toMatchObject({ kind: "path", x: 200, y: 200, w: 20, h: 25, fill: { color: [255, 0, 0, 0.5] } });
     expect(path?.d).toBe("M 0 0 L 20 0 L 20 20 C 13.33 26.67 6.67 26.67 0 20 Z");
     expect(line).toMatchObject({ kind: "path", x: 100, y: 200, w: 200, h: 100, d: "M 0 100 L 200 0", fill: null });
-    expect(line?.border).toMatchObject({ width: 4, cap: "round", tail: { kind: "triangle", size: "lg" }, head: null });
+    expect(line?.border).toMatchObject({ width: 4, cap: "round" });
+    expect(line?.border).not.toHaveProperty("tail");
+    expect(marker).toMatchObject({ kind: "path", fill: { color: [0, 0, 0, 1] }, border: null });
   });
 
   it("draws arcs as curves, however tersely they are written", async () => {
@@ -967,8 +1098,9 @@ describe("SVG as PowerPoint shapes", () => {
     expect(Number(half?.h)).toBeCloseTo(80);
     // A ring a dash as long as itself draws in is a ring; one not yet drawn in shows nothing.
     expect(drawnIn).toMatchObject({ kind: "box", ellipse: true, border: { dash: null } });
-    // A pattern that repeats stays PowerPoint's own dashes.
-    expect(dashed).toMatchObject({ kind: "box", ellipse: true, border: { dash: "dashed" } });
+    // Repeated dashes keep their lengths as subpaths of one freeform.
+    expect(dashed).toMatchObject({ kind: "path", border: { dash: null } });
+    expect(String(dashed?.d).match(/M/g)?.length).toBeGreaterThan(6);
     // The fill keeps its shape, under the stretch of outline: the top edge and a way down the right.
     expect(square).toMatchObject({
       kind: "box",
@@ -983,6 +1115,63 @@ describe("SVG as PowerPoint shapes", () => {
     // Two dashes, pushed along by the offset; measured from the first.
     expect(marks).toMatchObject({ kind: "path", x: 20, w: 60, d: "M 0 0 L 10 0 M 40 0 L 60 0" });
     expect(shapesOf(items)).toHaveLength(6);
+  });
+
+  it("renders marker artwork once per original vertex, independent of the dash cuts", async () => {
+    const { items, shots } = await drawn(
+      `<svg data-box="0 0 100 100">
+         <defs><marker id="tip" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8"
+                       viewBox="0 0 8 8" refX="8" refY="4" orient="auto-start-reverse">
+           <path d="M0 0 L8 4 L0 8 Z" fill="${RED}"/>
+         </marker></defs>
+         <polyline points="10,15 50,15 90,15" fill="none" stroke="${BLUE}" stroke-width="3"
+                   stroke-dasharray="5% 5%" marker-start="url(#tip)" marker-mid="url(#tip)" marker-end="url(#tip)"/>
+       </svg>`,
+    );
+    expect(shots).toEqual([]);
+    const [stroke, ...markers] = shapesOf(items);
+    expect(stroke).toMatchObject({ x: 10, y: 15, border: { dash: null } });
+    expect(String(stroke?.d)).toMatch(/^M 0 0 L 5 0 M 10 0 L 15 0/);
+    expect(stroke?.border).not.toHaveProperty("head");
+    expect(stroke?.border).not.toHaveProperty("tail");
+    expect(markers).toMatchObject([10, 42, 82].map((x) => ({ kind: "path", x, fill: { color: [255, 0, 0, 1] } })));
+  });
+
+  it("uses WebKit's negative offset phase for an odd dash list", async () => {
+    const h = helper(
+      SLIDE(`<svg data-box="0 0 100 100">
+      <path d="M0 20 H100" fill="none" stroke="${BLUE}" stroke-dasharray="22 10 4" stroke-dashoffset="-13"/>
+    </svg>`),
+    );
+    withSvg(h.window);
+    Object.defineProperty(h.window.navigator, "userAgent", { value: "AppleWebKit Safari" });
+    const { slides } = await h.scan();
+    const stroke = at(shapesOf(at(slides, 0).items), 0);
+    expect(stroke.x).toBeCloseTo(9);
+    expect(String(stroke.d)).toMatch(/^M 0 0 L 4 0 M 26 0 L 36 0/);
+  });
+
+  it("exports round zero-length dashes as visible editable dots", async () => {
+    const { items } = await drawn(
+      `<svg data-box="0 0 100 100">
+         <path d="M10 20 H50" fill="none" stroke="${BLUE}" stroke-width="6" stroke-linecap="round" stroke-dasharray="0 20"/>
+       </svg>`,
+    );
+    const dots = at(shapesOf(items), 0);
+    expect(dots).toMatchObject({ kind: "path", x: 7, y: 17, w: 46, fill: { color: [0, 0, 255, 1] } });
+    expect(String(dots.d).match(/M/g)).toHaveLength(3);
+  });
+
+  it("measures line thickness perpendicular to a transformed straight stroke", async () => {
+    const { items } = await drawn(
+      `<svg data-box="0 0 100 100">
+         <path d="M0 20 H40" transform="scale(2 0.5)" fill="none" stroke="${BLUE}"
+               stroke-width="6" stroke-dasharray="4"/>
+       </svg>`,
+    );
+    const line = at(shapesOf(items), 0);
+    expect(line).toMatchObject({ y: 10, border: { dash: null, width: 3 } });
+    expect(String(line.d)).toMatch(/^M 0 0 L 8 0 M 16 0 L 24 0/);
   });
 
   it("carries a drawing's own transform into its shapes, as for a line the import mirrored", async () => {

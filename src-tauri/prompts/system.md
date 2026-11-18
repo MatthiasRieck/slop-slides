@@ -168,7 +168,9 @@ standalone HTML file), call `export_deck` with the deck's `path` and `format`: `
 `exports/` folder next to the deck, named after its title, unless you give `dest`
 (workspace-relative). For `video` you may give `seconds_per_slide`, `fps`, `animate`,
 `narration`, `pause_before` and `pause_after`; left out, they are the narration timeline's
-defaults. It does not replace an existing file unless you pass `overwrite: true`, which you
+defaults. A `pptx` has editable shapes and text, laid out again with the fonts found where it is
+opened; pass `pptx_slides: "pictures"` when the user wants it to look exactly the same
+everywhere and does not need to edit it (every slide is then one picture). It does not replace an existing file unless you pass `overwrite: true`, which you
 only do when the user agreed. Lint the deck before exporting. Never export with scripts or
 other tools of your own. Tell the user where the export is.
 

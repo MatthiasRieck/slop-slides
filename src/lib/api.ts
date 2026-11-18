@@ -18,6 +18,9 @@ export interface WorkspaceEntry {
 }
 
 /** A deck made from a PowerPoint file, and what could not come along. */
+/** What a slide of an exported PowerPoint file is made of. */
+export type PptxSlides = "elements" | "pictures";
+
 export interface ImportedPptx {
   deck: Deck;
   skipped: string[];
@@ -592,7 +595,11 @@ export const api = {
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
   /** Writes the deck to `dest` as a PowerPoint file: one editable slide per shown slide. */
-  exportPptx: (id: string, dest: string) => invoke<void>("export_pptx", { id, dest }),
+  /**
+   * Writes the deck as a PowerPoint file: of editable `elements`, or with every slide one of
+   * `pictures`, which looks the same everywhere and cannot be edited.
+   */
+  exportPptx: (id: string, dest: string, slides: PptxSlides) => invoke<void>("export_pptx", { id, dest, slides }),
   /**
    * Records the deck to `dest` as an MP4, each shown slide on screen for the same time (longer
    * to fit its narration, with `options.narration`); `video-export-progress` events follow it.

@@ -56,10 +56,16 @@ pub async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> 
     pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
 }
 
-/// Writes the deck to `dest` as a PowerPoint file, one slide per shown slide.
+/// Writes the deck to `dest` as a PowerPoint file, one slide per shown slide: of editable
+/// elements, or each one picture, as `slides` says.
 #[tauri::command]
-pub async fn export_pptx(app: AppHandle, id: String, dest: String) -> Result<()> {
-    pptx::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
+pub async fn export_pptx(
+    app: AppHandle,
+    id: String,
+    dest: String,
+    slides: pptx::Slides,
+) -> Result<()> {
+    pptx::export(&app, &deck::deck_file(&id)?, Path::new(&dest), slides).await
 }
 
 /// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,

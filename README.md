@@ -238,7 +238,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   whatever PowerPoint cannot draw (filters, masks, 3D, canvases, an SVG that uses filters,
   masks, clips, patterns, radial gradients or pictures, or comes from an image file) becomes a
   transparent picture. Web fonts are not embedded, so install them
-  where the file is opened.
+  where the file is opened. **PowerPoint, as pictures** writes every slide as one picture
+  instead: it looks exactly as the deck does wherever it is opened, fonts included, and nothing
+  on a slide can be edited; notes and sections stay.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: →/↓, Space, Page Down, Enter or `N` (or a click) for the next slide,
   ←/↑, Page Up, Backspace, Shift+Space or `P` for the previous one, Home/End, a number then

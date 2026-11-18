@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronRight, Pencil, Ungroup } from "lucide-react";
+import { ChevronRight, Pencil, X } from "lucide-react";
 import { memo } from "react";
 
 import type { Section } from "../../lib/api";
@@ -129,7 +129,7 @@ export const SectionHeader = memo(function SectionHeader(props: {
                   title={REMOVE_SECTION}
                   onClick={() => void useApp.getState().removeSection(section.index)}
                 >
-                  <Ungroup className="size-3" />
+                  <X className="size-3" />
                 </SectionAction>
               </div>
             </>

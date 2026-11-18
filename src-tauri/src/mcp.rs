@@ -93,7 +93,10 @@ pub fn serve(dir: &Path, given: Option<&Path>) {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, dir, &session),
+            Ok(request) => handle_notifying(&request, dir, &session, &|notification| {
+                let mut stdout = std::io::stdout();
+                let _ = writeln!(stdout, "{notification}").and_then(|_| stdout.flush());
+            }),
             Err(e) => Some(error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
         if let Some(response) = response {
@@ -109,10 +112,35 @@ pub fn serve(dir: &Path, given: Option<&Path>) {
 }
 
 /// Answers one JSON-RPC message; notifications get no response. `session` finds the turn's session.
+#[cfg(test)]
 pub fn handle(
     request: &Value,
     dir: &Path,
     session: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Option<Value> {
+    handle_notifying(request, dir, session, &|_| {})
+}
+
+/// The `notifications/progress` message telling the client that the call it gave `token` has
+/// got as far as `message` says: the `sent`th it hears of the call. A client that stops
+/// waiting for a silent tool (Claude Code, after half an hour) waits on for one that reports.
+/// The progress is how many reports there were, as it must grow and a long call has no total
+/// that holds from its start to its end.
+fn progress_notification(token: &Value, sent: u64, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/progress",
+        "params": { "progressToken": token, "progress": sent, "message": message },
+    })
+}
+
+/// [`handle`], giving `notify` the notifications a long tool call sends the client before
+/// its response: its progress, when the client asked for it with a progress token.
+pub fn handle_notifying(
+    request: &Value,
+    dir: &Path,
+    session: &dyn Fn(&Path) -> Option<PathBuf>,
+    notify: &dyn Fn(Value),
 ) -> Option<Value> {
     let id = request.get("id")?.clone();
     let result = match request["method"].as_str().unwrap_or("") {
@@ -126,10 +154,19 @@ pub fn handle(
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools::definitions() }),
         "tools/call" => {
+            let token = &request["params"]["_meta"]["progressToken"];
+            let sent = std::cell::Cell::new(0u64);
+            let progress = |message: &str| {
+                if token.is_string() || token.is_number() {
+                    sent.set(sent.get() + 1);
+                    notify(progress_notification(token, sent.get(), message));
+                }
+            };
             let call = tools::Call {
                 arguments: &request["params"]["arguments"],
                 dir,
                 session,
+                progress: &progress,
             };
             let name = request["params"]["name"].as_str().unwrap_or_default();
             match tools::call(name, &call) {

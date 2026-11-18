@@ -394,6 +394,82 @@ fn export_tool_asks_the_app_for_other_formats() {
     );
 }
 
+/// Calls the export tool for a PDF with `meta` as the request's `_meta`, while an app says
+/// "Recording the video: frame 5 of 10 (50%)" of its progress and then answers. The
+/// notifications the client got, and the response.
+fn export_with_progress(meta: Value) -> (Vec<Value>, Value) {
+    let dir = temp_deck(TITLED);
+    let session = dir.join("session");
+    let app = {
+        let session = session.clone();
+        std::thread::spawn(move || loop {
+            if let Some((name, _)) = export::take_requests(&session).pop() {
+                let said = "Recording the video: frame 5 of 10 (50%)";
+                let results = session.join("export-results");
+                std::fs::create_dir_all(&results).unwrap();
+                std::fs::write(
+                    results.join(format!("{name}.progress.json")),
+                    serde_json::to_vec(said).unwrap(),
+                )
+                .unwrap();
+                // Until the tool has seen it: it looks every 100ms.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                export::answer(&session, &name, &Ok("made it".into())).unwrap();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        })
+    };
+    let notifications = std::cell::RefCell::new(Vec::new());
+    let response = handle_notifying(
+        &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+            "name": EXPORT_TOOL, "arguments": {"format": "pdf"}, "_meta": meta,
+        }}),
+        &dir,
+        &|_| Some(session.clone()),
+        &|notification| notifications.borrow_mut().push(notification),
+    )
+    .unwrap();
+    app.join().unwrap();
+    (notifications.into_inner(), response)
+}
+
+#[test]
+fn export_tool_reports_the_apps_progress_to_a_client_that_asked() {
+    let (notifications, response) = export_with_progress(json!({"progressToken": "tok-1"}));
+    assert_eq!(response["result"]["content"][0]["text"], "made it");
+    assert_eq!(
+        notifications,
+        [json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {
+                "progressToken": "tok-1",
+                "progress": 1,
+                "message": "Recording the video: frame 5 of 10 (50%)",
+            },
+        })]
+    );
+    // A notification has no id: the client must not take it for the response.
+    assert!(notifications[0].get("id").is_none());
+}
+
+#[test]
+fn export_tool_reports_no_progress_to_a_client_that_did_not_ask() {
+    let (notifications, response) = export_with_progress(json!({}));
+    assert_eq!(response["result"]["content"][0]["text"], "made it");
+    assert!(notifications.is_empty(), "{notifications:?}");
+}
+
+#[test]
+fn progress_grows_with_every_report_and_keeps_the_clients_token() {
+    let first = progress_notification(&json!(42), 1, "Exporting");
+    let second = progress_notification(&json!(42), 2, "Exporting");
+    assert_eq!(first["params"]["progressToken"], 42);
+    assert!(second["params"]["progress"].as_u64() > first["params"]["progress"].as_u64());
+    assert_eq!(second["params"]["message"], "Exporting");
+}
+
 #[test]
 fn export_tool_refuses_bad_requests_without_asking_the_app() {
     let dir = temp_deck(TITLED);
@@ -449,10 +525,11 @@ fn without_the_app_an_export_times_out() {
         &arguments,
         Some(&session),
         std::time::Duration::from_millis(20),
+        &|_| {},
     )
     .unwrap_err();
     assert!(error.to_string().contains("did not finish"), "{error}");
-    let error = export_deck(&dir, &arguments, None, export::WAIT).unwrap_err();
+    let error = export_deck(&dir, &arguments, None, export::WAIT, &|_| {}).unwrap_err();
     assert_eq!(error.to_string(), "no workspace session");
 }
 

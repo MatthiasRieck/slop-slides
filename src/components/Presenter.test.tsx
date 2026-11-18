@@ -29,6 +29,7 @@ import { ToolButton } from "./Button";
 import { Presenter } from "./Presenter";
 import { fitWidth } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
+import { ZONE_PX } from "./presenter/useShowControls";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -221,13 +222,13 @@ describe("Presenter", () => {
           .filter((m) => m.type === "slop:idle")
           .map((m) => m.idle);
 
-      it("shows at the start and goes once the pointer rests, out of reach of pointer and keyboard", () => {
+      // A move of the pointer over the slide, `bottom` px above the bottom of the show.
+      const overSlide = (bottom: number) => fromFrame({ type: "slop:pointer", bottom });
+      // A move beside the slide, in the app's own page.
+      const beside = (bottom: number) => fireEvent.mouseMove(document.body, { clientY: window.innerHeight - bottom });
+
+      it("stays out of sight at the start, out of reach of pointer and keyboard", () => {
         render(<Presenter />);
-        expect(shown()).toBe(true);
-        expect(bar().hasAttribute("inert")).toBe(false);
-        act(() => void vi.advanceTimersByTime(2400));
-        expect(shown()).toBe(true);
-        act(() => void vi.advanceTimersByTime(100));
         expect(shown()).toBe(false);
         expect(bar().hasAttribute("inert")).toBe(true);
         expect(bar().className).toContain("pointer-events-none");
@@ -235,20 +236,42 @@ describe("Presenter", () => {
         expect(bar().className).toContain("motion-reduce:transition-none");
       });
 
-      it("comes back with any move of the pointer, over the slide or beside it", () => {
+      it("stays out of sight while the pointer moves over the slide away from the bottom", () => {
         render(<Presenter />);
-        act(() => void vi.advanceTimersByTime(3000));
+        for (let k = 0; k < 10; k++) {
+          overSlide(ZONE_PX + 1 + k * 50);
+          beside(ZONE_PX + 1 + k * 50);
+          act(() => void vi.advanceTimersByTime(200));
+        }
         expect(shown()).toBe(false);
+        // Nor for a move that says not where it is, as an older page's do.
         fromFrame({ type: "slop:pointer" });
+        expect(shown()).toBe(false);
+      });
+
+      it("comes up when the pointer moves near the bottom, over the slide or beside it", () => {
+        render(<Presenter />);
+        overSlide(ZONE_PX);
         expect(shown()).toBe(true);
+        expect(bar().hasAttribute("inert")).toBe(false);
+        expect(bar().className).toContain("pointer-events-auto");
+        // It goes once the pointer rests there.
         act(() => void vi.advanceTimersByTime(2000));
-        fireEvent.mouseMove(document.body);
-        act(() => void vi.advanceTimersByTime(2000));
+        beside(10);
+        act(() => void vi.advanceTimersByTime(2400));
         expect(shown()).toBe(true);
-        act(() => void vi.advanceTimersByTime(500));
+        act(() => void vi.advanceTimersByTime(100));
         expect(shown()).toBe(false);
         // Not for a move reported by something that is not the show.
-        fromFrame({ type: "slop:pointer" }, window);
+        fromFrame({ type: "slop:pointer", bottom: 0 }, window);
+        expect(shown()).toBe(false);
+      });
+
+      it("goes as soon as the pointer moves away from the bottom", () => {
+        render(<Presenter />);
+        beside(5);
+        expect(shown()).toBe(true);
+        overSlide(ZONE_PX + 200);
         expect(shown()).toBe(false);
       });
 
@@ -283,13 +306,15 @@ describe("Presenter", () => {
         expect(shown()).toBe(true);
       });
 
-      it("takes the cursor over the slide along with it", () => {
+      it("hides the cursor over the slide once the pointer rests, wherever it is", () => {
         render(<Presenter />);
         const post = vi.spyOn(frame().contentWindow!, "postMessage");
         act(() => void vi.advanceTimersByTime(2500));
         expect(idles(post)).toEqual([true]);
-        fromFrame({ type: "slop:pointer" });
+        // Any move brings it back, far from the bar too.
+        overSlide(600);
         expect(idles(post)).toEqual([true, false]);
+        expect(shown()).toBe(false);
         // A page that loads meanwhile is told where things stand.
         act(() => void vi.advanceTimersByTime(2500));
         post.mockClear();
@@ -1921,7 +1946,7 @@ describe("Presenter on several screens", () => {
 describe("Presenter in windows", () => {
   beforeEach(() => useApp.setState({ screens: "windows", toasts: [] }));
 
-  it("opens the presenter view in a window and leaves the show's window as it is", async () => {
+  it("opens the presenter view in a window and leaves the show in its own window", async () => {
     localStorage.setItem("slopslide.presenterPanel", "true");
     const { unmount } = render(<Presenter />);
     await act(async () => {});
@@ -1954,7 +1979,26 @@ describe("Presenter in windows", () => {
       </StrictMode>,
     );
     await act(async () => {});
-    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_in_windows"]);
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["shape_show", "present_in_windows"]);
+  });
+
+  it("gives the show's window the slides' shape, and its own size back afterwards", async () => {
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    expect(calls("shape_show")).toEqual([{ ratio: 1920 / 1080 }]);
+    unmount();
+    await act(async () => {});
+    expect(calls("shape_show")).toEqual([{ ratio: 1920 / 1080 }, { ratio: null }]);
+  });
+
+  it("takes the shape of slides of another size", async () => {
+    const deck = useApp.getState().deck!;
+    useApp.setState({
+      deck: { ...deck, size: { width: 4, height: 3, unit: "in", pixelWidth: 384, pixelHeight: 288 } },
+    });
+    render(<Presenter />);
+    await act(async () => {});
+    expect(calls("shape_show")).toEqual([{ ratio: 4 / 3 }]);
   });
 
   it("says so when the presenter view can't be opened", async () => {

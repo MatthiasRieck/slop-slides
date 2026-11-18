@@ -197,8 +197,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   clears the slide's ink and ⌘Z / ⇧⌘Z undo and redo any change to it, clearing and erasing
   included; `0` fits the slide again, `N` opens the presenter view, `?` lists the keys and `Esc`
   puts a tool away, then ends the show. One bar at the bottom holds the tools, previous and
-  next around the slide's number, Play, the presenter view and **End show**; it comes with any
-  move of the pointer and goes, with the cursor, after it rests. With
+  next around the slide's number, Play, the presenter view and **End show**; it comes up only
+  when the pointer moves near the bottom of the show and goes when the pointer moves away or
+  rests, so it stays out of the audience's way. The cursor comes with any move and goes after
+  it rests. With
   several screens attached, a picker shows them as they are arranged, each with a screenshot
   of what is on it (on macOS this needs the Screen Recording permission; without it the picker
   shows the arrangement alone, as it does on Linux), to choose where the slides and the

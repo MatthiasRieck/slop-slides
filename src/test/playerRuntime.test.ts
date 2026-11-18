@@ -636,7 +636,7 @@ describe("player: in the presenter", () => {
     expect(p.active()).toBe(0);
   });
 
-  it("tells the presenter when the pointer moves over the slide, a few times a second at most", () => {
+  it("tells the presenter when and where the pointer moves over the slide, every 50 ms at most", () => {
     let now = 10_000;
     const clock = (window: DOMWindow) => {
       window.Date.now = () => now;
@@ -644,19 +644,21 @@ describe("player: in the presenter", () => {
     const parent = { postMessage: vi.fn() };
     const p = player({ parent, setup: clock });
     const moves = () => parent.postMessage.mock.calls.filter(([d]) => (d as { type: string }).type === "slop:pointer");
-    const move = () => p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true }));
-    move();
-    move();
+    const move = (clientY = 0) => p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true, clientY }));
+    move(100);
+    move(200);
     expect(moves()).toHaveLength(1);
-    expect(moves()[0]).toEqual([{ type: "slop:pointer" }, "*"]);
-    now = 10_300;
-    move();
+    // With how far above the bottom it is, for the presenter's controls near there.
+    expect(moves()[0]).toEqual([{ type: "slop:pointer", bottom: p.window.innerHeight - 100 }, "*"]);
+    now = 10_060;
+    move(p.window.innerHeight - 10);
     expect(moves()).toHaveLength(2);
+    expect(moves()[1]).toEqual([{ type: "slop:pointer", bottom: 10 }, "*"]);
     // Not from the editor's frames, nor a file of its own.
     const embedded = { postMessage: vi.fn() };
     const e = player({ at: "?embed&slide=intro", parent: embedded });
     e.doc.dispatchEvent(new e.window.MouseEvent("mousemove", { bubbles: true }));
-    expect(embedded.postMessage).not.toHaveBeenCalledWith({ type: "slop:pointer" }, "*");
+    expect(embedded.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:pointer" }), "*");
   });
 
   it("hides the cursor while the presenter says the pointer rests, and tells of the next move at once", () => {
@@ -670,7 +672,7 @@ describe("player: in the presenter", () => {
     expect(hidden()).toBe(true);
     parent.postMessage.mockClear();
     p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true }));
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:pointer" }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "slop:pointer" }), "*");
     // Told once: the moves that follow before the presenter answers say nothing new.
     for (let i = 0; i < 10; i++) p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true }));
     expect(parent.postMessage.mock.calls.filter(([d]) => d.type === "slop:pointer")).toHaveLength(1);

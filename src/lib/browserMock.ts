@@ -113,6 +113,7 @@ export function installBrowserMock() {
         case "new_window":
         case "present_on":
         case "present_in_windows":
+        case "shape_show":
         case "close_presenter_view":
           return null;
         case "list_screens":

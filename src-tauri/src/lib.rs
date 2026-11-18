@@ -95,6 +95,7 @@ pub fn run() {
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
         .manage(windows::PendingFolders::default())
+        .manage(screens::ShowShapes::default())
         .manage(voice::Voice::default())
         .manage(narration::Narration::default())
         .on_menu_event(|app, event| {
@@ -125,6 +126,7 @@ pub fn run() {
             commands::workspace::present_on,
             commands::workspace::close_presenter_view,
             commands::workspace::present_in_windows,
+            commands::workspace::shape_show,
             commands::workspace::take_pending_folder,
             commands::workspace::open_workspace,
             commands::workspace::close_workspace,

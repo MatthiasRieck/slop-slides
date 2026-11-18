@@ -110,6 +110,17 @@ pub fn present_in_windows(app: AppHandle) -> Result<()> {
     screens::present_in_windows(&app)
 }
 
+/// Fits the show window to the slides' shape (`ratio`, width over height) while presenting in
+/// windows; `None` gives it back its size when the show ends.
+#[tauri::command]
+pub fn shape_show(
+    window: Window,
+    shapes: State<screens::ShowShapes>,
+    ratio: Option<f64>,
+) -> Result<()> {
+    screens::shape_show(&window, &shapes, ratio)
+}
+
 /// Closes the presenter view window when the show ends.
 #[tauri::command]
 pub fn close_presenter_view(app: AppHandle) {

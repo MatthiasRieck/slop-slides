@@ -35,6 +35,7 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
   <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
   <style>
+    :root { --bg: #f4f1ea; --ink: #1c1b19; … }   (the deck's primary background and text color)
     /* the deck's design system and per-slide layout */
   </style>
 </head>
@@ -93,6 +94,15 @@ Rules (NON-NEGOTIABLE):
   To fix a `slide-id-style` lint error, add a layout class to the original slide and
   replace every selector that depends on its id with that class, preserving its look.
   Keep the slide id for tracking; do not add duplicate rules for copied ids.
+- Name the deck's two primary colors in `:root`: `--bg`, the background the slides are painted
+  in, and `--ink`, the text color that reads on it, each one plain color (other colors get
+  names of their own: `--accent`, `--muted`). Paint the slides with them (`.slide {
+  background: var(--bg); color: var(--ink); }`, the `--bg` last under any gradient or image).
+  A slide or layout with other colors (a dark slide in a light deck) sets both again for
+  itself (`.layout-dark { --bg: #111; --ink: #f5f5f5; }`) rather than painting over them. The
+  editor starts what the user adds out in them: text and lines in `--ink`, shapes filled with
+  `--bg` and outlined in `--ink`. Keep both when restyling; the `theme-colors` lint warning
+  names a deck that lacks one.
 - Keep the HTML well formed and readable: close every element you open, no stray end
   tags, no `<div/>`-style self-closing HTML elements (fine inside `<svg>`), no duplicate
   attributes, `alt` on every `<img>`.

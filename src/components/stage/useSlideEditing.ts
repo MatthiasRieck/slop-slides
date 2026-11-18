@@ -12,6 +12,7 @@ import {
   parseHexColor,
   parseMenuTarget,
   parseSelection,
+  parseTheme,
 } from "../../lib/editTools";
 import { keepsKey } from "../../lib/keys";
 import { dismissTopLayer } from "../../lib/layers";
@@ -165,6 +166,11 @@ export function useSlideEditing(
       "slop:edit-fonts": aboutSlide((data) => reportDeckLook({ fonts: parseFonts(data.fonts) })),
       "slop:edit-colors": aboutSlide((data) => reportDeckLook({ colors: parseDeckColors(data.colors) })),
       "slop:edit-background": aboutSlide((data) => reportDeckLook({ background: parseHexColor(data.color) })),
+      // The slide's primary colors: what the tools add starts out in them.
+      "slop:edit-theme": aboutSlide((data) => {
+        const theme = parseTheme(data.theme);
+        if (theme) useApp.getState().setEditTheme(theme);
+      }),
       "slop:edit-menu": aboutSlide((data) => {
         // The preview is scaled down to fit; the editor gives the point in its own pixels.
         const at = { x: Number(data.x), y: Number(data.y) };

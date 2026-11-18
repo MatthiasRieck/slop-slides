@@ -250,31 +250,85 @@ export const EDIT_TOOL_KEYS: Record<string, EditTool> = {
   a: "arrow",
 };
 
-export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
-  text: {
-    color: SWATCHES.ink,
-    fontSize: 48,
-    bold: false,
-    italic: false,
-    align: "left",
-    valign: "top",
-    fill: null,
-    stroke: null,
-    strokeWidth: 0,
-  },
-  shape: {
-    color: SWATCHES.white,
-    fontSize: 40,
-    bold: false,
-    italic: false,
-    align: "center",
-    valign: "middle",
-    fill: SWATCHES.blue,
-    stroke: null,
-    strokeWidth: 0,
-  },
-  draw: { fill: null, stroke: SWATCHES.ink, strokeWidth: 6 },
-};
+/** A slide's primary colors, as the slide editor reports them (see `slideTheme` in assets/editor/). */
+export interface SlideTheme {
+  /** What the slide is painted in: the deck's `--bg`, unless the slide shows another color. */
+  background: string;
+  /** What reads on it: the slide's text color, the deck's `--ink`. */
+  foreground: string;
+}
+
+/** The colors of a slide that has not said its own: ink on white. */
+export const DEFAULT_THEME: SlideTheme = { background: SWATCHES.white, foreground: SWATCHES.ink };
+
+/** The theme the slide editor reported, or null when it is malformed. */
+export function parseTheme(value: unknown): SlideTheme | null {
+  if (!value || typeof value !== "object") return null;
+  const { background, foreground } = value as Record<string, unknown>;
+  const theme = { background: parseHexColor(background), foreground: parseHexColor(foreground) };
+  return theme.background && theme.foreground ? (theme as SlideTheme) : null;
+}
+
+/** The border a new shape is outlined with, in slide pixels. */
+export const SHAPE_BORDER = 4;
+
+/**
+ * What new text boxes, shapes and drawings look like on a slide of `theme`, so they fit the deck
+ * whatever its colors: text and lines in its foreground, a shape filled with its background and
+ * outlined in its foreground.
+ */
+export function editStylesFor(theme: SlideTheme): Record<ToolFamily, EditStyle> {
+  return {
+    text: {
+      color: theme.foreground,
+      fontSize: 48,
+      bold: false,
+      italic: false,
+      align: "left",
+      valign: "top",
+      fill: null,
+      stroke: null,
+      strokeWidth: 0,
+    },
+    shape: {
+      color: theme.foreground,
+      fontSize: 40,
+      bold: false,
+      italic: false,
+      align: "center",
+      valign: "middle",
+      fill: theme.background,
+      stroke: theme.foreground,
+      strokeWidth: SHAPE_BORDER,
+    },
+    draw: { fill: null, stroke: theme.foreground, strokeWidth: 6 },
+  };
+}
+
+export const DEFAULT_EDIT_STYLES = editStylesFor(DEFAULT_THEME);
+
+const THEMED = ["color", "fill", "stroke"] as const;
+
+/**
+ * `styles` on a slide whose theme is `to`, after one whose theme was `from`: the colors that
+ * were the old theme's become the new one's. A color the user picked instead stays, as does
+ * everything that is not a color.
+ */
+export function rethemedStyles(
+  styles: Record<ToolFamily, EditStyle>,
+  from: SlideTheme,
+  to: SlideTheme,
+): Record<ToolFamily, EditStyle> {
+  const [was, now] = [editStylesFor(from), editStylesFor(to)];
+  const next = { ...styles };
+  for (const family of Object.keys(styles) as ToolFamily[]) {
+    for (const key of THEMED) {
+      if (styles[family][key] !== was[family][key] || now[family][key] === was[family][key]) continue;
+      next[family] = { ...next[family], [key]: now[family][key] };
+    }
+  }
+  return next;
+}
 
 export const EDIT_COLORS = Object.values(SWATCHES);
 

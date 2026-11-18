@@ -8,7 +8,7 @@ const RUNTIME: &str = "<!-- slopslide:runtime-css (managed by SlopSlide, do not 
 
 fn deck(body: &str) -> String {
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<title>Talk</title>\n{RUNTIME}\n<style>.slide {{}}</style>\n</head>\n<body>\n<main class=\"deck\">\n{body}\n</main>\n</body>\n</html>\n"
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<title>Talk</title>\n{RUNTIME}\n<style>:root {{ --bg: #fff; --ink: #111; }}</style><style>.slide {{}}</style>\n</head>\n<body>\n<main class=\"deck\">\n{body}\n</main>\n</body>\n</html>\n"
     )
 }
 
@@ -1586,4 +1586,56 @@ fn lints_a_big_deck_fast() {
     time("all of it", &|l| {
         l.issues = lint_parsed(&html, &slides, &sections, |_| true, &[]);
     });
+}
+
+#[test]
+fn a_deck_names_its_primary_colors() {
+    let slide = r#"<section class="slide" id="a"><h1>Hi</h1></section>"#;
+    assert!(!rules(&deck(slide)).contains(&"theme-colors"));
+
+    let with = |css: &str| deck(slide).replace(":root { --bg: #fff; --ink: #111; }", css);
+    let issues = lint(&with(""), |_| true, &[]);
+    let issue = issues.iter().find(|i| i.rule == "theme-colors").unwrap();
+    assert_eq!(issue.severity, Severity::Warning);
+    assert!(issue.message.contains("`--bg` and `--ink`"), "{issue:?}");
+    // It points at the deck's styles, and is about no one slide.
+    assert_eq!(issue.line, 6);
+    assert_eq!(issue.slide, None);
+
+    // Each is asked for by itself; using one, or naming one that starts the same, defines none.
+    let issues = lint(&with(":root { --bg: #fff; }"), |_| true, &[]);
+    let issue = issues.iter().find(|i| i.rule == "theme-colors").unwrap();
+    assert!(issue.message.contains("not define `--ink`."), "{issue:?}");
+    let used = with(":root { --bg-soft: #eee; --inky: #000; } .slide { background: var(--bg); color: var(--ink); }");
+    assert!(lint(&used, |_| true, &[])
+        .iter()
+        .any(|i| i.rule == "theme-colors" && i.message.contains("`--bg` and `--ink`")));
+
+    // Anywhere in the styles will do: a layout may set them again for its slides.
+    let scoped = with(".slide { --ink: #111; } .layout-dark { --bg: #000; }");
+    assert!(!rules(&scoped).contains(&"theme-colors"));
+    // Text that reads like it is no style, nor is a comment.
+    let text = with("").replace(
+        "<h1>Hi</h1>",
+        "<p>--bg: red; --ink: blue;</p><!-- <style>:root { --bg: red; --ink: blue; }</style> -->",
+    );
+    assert!(rules(&text).contains(&"theme-colors"));
+
+    // A deck without slides has nothing to add to yet.
+    assert!(!rules(&with("").replace(slide, "")).contains(&"theme-colors"));
+    // A deck without styles is told all the same.
+    let bare = deck(slide).replace(
+        "<style>:root { --bg: #fff; --ink: #111; }</style><style>.slide {}</style>\n",
+        "",
+    );
+    assert!(!bare.contains("<style"));
+    let issues = lint(&bare, |_| true, &[]);
+    assert_eq!(
+        issues
+            .iter()
+            .find(|i| i.rule == "theme-colors")
+            .unwrap()
+            .line,
+        1
+    );
 }

@@ -182,7 +182,12 @@
      file, keeping its box (and cropping to it with `object-fit: cover`, unless it has a fit).
    - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
      back to the deck's. The editor reports it, on load and when it changes, the same way:
-     { type: "slop:edit-background", slide, color }.
+     { type: "slop:edit-background", slide, color }. With it goes the slide's theme, its
+     primary colors as `#rrggbb`: { type: "slop:edit-theme", slide, theme: { background,
+     foreground } }. The background is the color the slide paints, or behind an image or gradient
+     the deck's `--bg`; the foreground its text color or the deck's `--ink`, whichever reads on
+     that background. The app starts what the tools add out in them: text and lines in the
+     foreground, shapes filled with the background and outlined in the foreground.
    - { type: "slop:edit-list", list: "ul" | "ol" } turns lines into a bulleted or numbered list
      (one item per line), switches their kind, or with the same kind turns them back into lines:
      while typing, the lines the text selection (or caret) is in, so a text can hold plain lines

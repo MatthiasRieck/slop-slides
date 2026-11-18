@@ -310,7 +310,7 @@ pub(super) fn transform_keyframes(css: &str) -> Vec<(usize, &str)> {
 }
 
 /// Whether `css` declares `property` itself (not, say, `text-transform` or `transform-origin`).
-fn sets_property(css: &str, property: &str) -> bool {
+pub(super) fn sets_property(css: &str, property: &str) -> bool {
     css.match_indices(property).any(|(i, _)| {
         let before = css[..i].chars().next_back();
         let after = css[i + property.len()..].trim_start();

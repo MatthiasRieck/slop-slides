@@ -314,7 +314,12 @@ export function SlideRail() {
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       <OpenSelectedFold />
       <BulkActions deck={deck} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
+      {/*
+        Always keeps the scrollbar's room (its track is transparent): the thumbnails' height follows
+        their width, so a scrollbar that came and went with the overflow would narrow them until
+        they fit, then widen them until they overflow again, and the rail would flicker.
+      */}
+      <div data-rail-scroller className="min-h-0 flex-1 overflow-y-scroll px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
             No slides yet. Describe your presentation in the chat, or add a blank slide with the + above.

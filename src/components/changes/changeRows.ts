@@ -171,10 +171,14 @@ export function isClean(changes: DeckChanges): boolean {
   );
 }
 
+/** Whether any slide differs from the last commit, in itself, in its place or by the styles they share. */
+export function hasSlideChanges(changes: DeckChanges): boolean {
+  return changes.stylesChanged || changes.slides.some((row) => row.status !== "unchanged" || row.moved);
+}
+
 /** Whether the deck differs from its last commit in a way that can be discarded all at once. */
 export function canDiscardAll(changes: DeckChanges): boolean {
-  if (changes.tracking !== "committed") return false;
-  return changes.stylesChanged || changes.slides.some((row) => row.status !== "unchanged" || row.moved);
+  return changes.tracking === "committed" && hasSlideChanges(changes);
 }
 
 /** Where the next commit goes: the branch's name, or that it goes to none. */

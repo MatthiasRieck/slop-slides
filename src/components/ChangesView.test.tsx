@@ -727,6 +727,29 @@ describe("ChangesView", () => {
     expect(calls()).toBe(4);
   });
 
+  it("shows no slide while nothing changed, not the selected one either", async () => {
+    await show(changes({ slides: [row("unchanged", "intro"), row("unchanged", "#2")], hasUnstaged: false }));
+    expect(screen.getByText("No changes")).toBeTruthy();
+    expect(screen.getByText(/Every slide is as/).textContent).toBe("Every slide is as abc123 has it.");
+    expect(screen.queryByTestId("single-version")).toBeNull();
+    expect(isComparing()).toBe(false);
+    expect((screen.getByRole("button", { name: "Split" }) as HTMLButtonElement).disabled).toBe(true);
+    // Picking a slide in the list selects it, and still shows none.
+    fireEvent.click(screen.getByRole("button", { name: "Slide 2" }));
+    expect(useApp.getState().selected).toBe("#2");
+    expect(screen.queryByTestId("single-version")).toBeNull();
+    expect(screen.queryByText("No changes to this slide.")).toBeNull();
+  });
+
+  it("still shows a slide that did not change while another did, or the styles", async () => {
+    await show(changes({ stylesChanged: true, slides: [row("unchanged", "intro")] }));
+    expect(screen.queryByText("No changes")).toBeNull();
+    expect(isComparing()).toBe(true);
+    cleanup();
+    await show(changes({ slides: [row("unchanged", "intro", [], { moved: true, oldNumber: 2 })] }));
+    expect(screen.queryByText("No changes")).toBeNull();
+  });
+
   it("shows nothing for a deck that just left its repository", async () => {
     await show(changes({ tracking: "noRepository", commit: null, slides: [] }));
     expect(screen.queryByTestId("slide-comparison")).toBeNull();

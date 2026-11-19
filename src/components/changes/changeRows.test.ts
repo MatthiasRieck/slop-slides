@@ -10,6 +10,7 @@ import {
   comparable,
   contentMarkOf,
   describeRow,
+  hasSlideChanges,
   isClean,
   MARKS,
   marksOf,
@@ -169,6 +170,16 @@ describe("the deck as a whole", () => {
     expect(canDiscardAll(changes({ ...clean, stylesChanged: true }))).toBe(true);
     expect(canDiscardAll(changes({ slides: [row("unchanged", "a", { moved: true })] }))).toBe(true);
     expect(canDiscardAll(changes({ tracking: "notCommitted", slides: [row("added", "a")] }))).toBe(false);
+  });
+
+  it("has slide changes when a slide, its place or the shared styles differ, committed or not", () => {
+    expect(hasSlideChanges(changes(clean))).toBe(false);
+    // Other files waiting for a commit change no slide.
+    expect(hasSlideChanges(changes({ ...clean, hasUnstaged: true, stagedFiles: 1 }))).toBe(false);
+    expect(hasSlideChanges(changes({ slides: [row("removed", "a")] }))).toBe(true);
+    expect(hasSlideChanges(changes({ ...clean, stylesChanged: true }))).toBe(true);
+    expect(hasSlideChanges(changes({ slides: [row("unchanged", "a", { moved: true })] }))).toBe(true);
+    expect(hasSlideChanges(changes({ tracking: "notCommitted", slides: [row("added", "a")] }))).toBe(true);
   });
 
   it("says where the next commit goes", () => {

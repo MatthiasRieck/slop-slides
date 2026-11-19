@@ -34,6 +34,7 @@ import {
   comparable,
   contentMarkOf,
   describeRow,
+  hasSlideChanges,
   isClean,
   MARKS,
   type Mark,
@@ -601,11 +602,17 @@ function Changes({ deck }: { deck: Deck }) {
   }
   // Without a repository the mode is about to close; see ModeTabs.tsx.
   if (changes.tracking === "noRepository") return <div className="h-full bg-canvas" />;
+  // With nothing changed there is nothing to compare, so no slide shows: not the one picked either.
+  const shown = row && hasSlideChanges(changes) ? row : null;
   return (
     <div className="flex h-full flex-col">
-      <ComparisonBar changes={changes} deck={deck.id} enabled={!!row && comparable(row, changes)} />
-      {row ? (
-        <SlideArea deck={deck} changes={changes} row={row} />
+      <ComparisonBar changes={changes} deck={deck.id} enabled={!!shown && comparable(shown, changes)} />
+      {shown ? (
+        <SlideArea deck={deck} changes={changes} row={shown} />
+      ) : row ? (
+        <Message title="No changes">
+          Every slide is as {changes.commit ? <code>{changes.commit.hash}</code> : "the last commit"} has it.
+        </Message>
       ) : (
         <Message title="No slides">This deck has no slides, and the last commit had none either.</Message>
       )}

@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use crate::comments;
 use crate::html::{
-    self, parse_tag, Tag, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR,
-    SECTION_TITLE_ATTR, TIME_ATTR,
+    self, parse_tag, Tag, ARCHIVED_ATTR, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR,
+    NARRATION_START_ATTR, SECTION_TITLE_ATTR, TIME_ATTR,
 };
 use crate::narration;
 use crate::review;
@@ -212,6 +212,28 @@ pub(super) fn check_slides(l: &mut Linter) {
                 Severity::Warning,
                 at,
                 format!("Write `{HIDDEN_ATTR}` without a value; any value still hides the slide."),
+            );
+        }
+        if valued(&slide.archived) {
+            l.report(
+                "archived-value",
+                Severity::Warning,
+                at,
+                format!(
+                    "Write `{ARCHIVED_ATTR}` without a value; any value still archives the slide."
+                ),
+            );
+        }
+        // The archive is the end of the deck: a slide of the deck after an archived one would
+        // show among the archive in the file, and in no order the user gave it.
+        if slide.archived.is_none() && l.slides[..index].iter().any(|s| s.archived.is_some()) {
+            l.report(
+                "archived-not-last",
+                Severity::Warning,
+                at,
+                format!(
+                    "This slide comes after an archived one. Slides with `{ARCHIVED_ATTR}` are the user's archive and belong at the end of the deck: move this slide before them."
+                ),
             );
         }
         if valued(&slide.locked) {

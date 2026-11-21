@@ -49,7 +49,7 @@
 
   /** The slides the video shows, in order: those the player shows. */
   function slides() {
-    return Array.prototype.slice.call(document.querySelectorAll(".deck > .slide:not([data-hidden])"));
+    return Array.prototype.slice.call(document.querySelectorAll(".deck > .slide:not([data-hidden]):not([data-archived])"));
   }
 
   /** The slide's heroes by name, as the player names them: the first of each valid name. */

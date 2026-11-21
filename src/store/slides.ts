@@ -1,5 +1,5 @@
 import { api, type Deck, type RailEdit, type Slide } from "../lib/api";
-import { applyOrder, railItems, stepRows, withoutSlides, withSlidesMarked } from "../lib/sections";
+import { applyOrder, archivedSlides, railItems, stepRows, withoutSlides, withSlidesMarked } from "../lib/sections";
 import { shareDeck } from "../lib/share";
 import { loadJson, saveJson } from "../lib/storage";
 import { plural } from "../lib/utils";
@@ -73,6 +73,12 @@ export interface SlidesSlice {
   editRail: (change: (id: string) => Promise<RailEdit>) => Promise<RailEdit | null>;
   /** Hides or shows `slides`, as one change, which shows right away. */
   setSlidesHidden: (slides: string[], hidden: boolean) => Promise<void>;
+  /**
+   * Sends `slides` to the deck's archive, or takes them back out of it to the end of the deck,
+   * leaving locked ones alone. Archiving the slide on the stage goes to one next to it; a slide
+   * taken out is selected. Says how many were archived, with a way to take it back.
+   */
+  setSlidesArchived: (slides: string[], archived: boolean) => Promise<void>;
   /** Locks or unlocks `slides`, as one change, which shows right away. */
   setSlidesLocked: (slides: string[], locked: boolean) => Promise<void>;
   /** Copies `slides`, each right after itself, and selects the copies. */
@@ -135,11 +141,19 @@ export function railStateOf(id: string) {
   return { railSelected: [], collapsedSections: loadCollapsed()[id] ?? [] };
 }
 
-/** The slides the rail lists, in deck order: all of them, or while a search is on only those it found. */
-export function listedSlides(state: Pick<AppState, "deck" | "search">): string[] {
-  const ids = (state.deck?.slides ?? []).map((s) => s.id);
+/**
+ * The slides the rail lists, in deck order: while a search is on those it found, and else the
+ * deck's own. The archive is a list of its own: with one of its slides selected, it is the
+ * archived ones.
+ */
+export function listedSlides(state: Pick<AppState, "deck" | "search"> & { selected?: string | null }): string[] {
+  const slides = state.deck?.slides ?? [];
+  const ids = slides.map((s) => s.id);
   const { matches } = state.search;
-  if (!matches) return ids;
+  if (!matches) {
+    const inArchive = slides.some((s) => s.archived && s.id === state.selected);
+    return slides.filter((s) => !!s.archived === inArchive).map((s) => s.id);
+  }
   const found = new Set(matches.map((m) => m.slide));
   return ids.filter((id) => found.has(id));
 }
@@ -147,6 +161,7 @@ export function listedSlides(state: Pick<AppState, "deck" | "search">): string[]
 /** How the deck's history labels the rail's changes that a toast offers to take back (see src-tauri/src/commands/deck.rs). */
 const DELETE_SLIDES_LABEL = "Delete slides";
 const DELETE_SECTION_LABEL = "Delete section";
+const ARCHIVE_SLIDES_LABEL = "Archive slides";
 
 /** The Undo of a toast about the change labelled `label`; `what` names it if it can no longer be undone. */
 const undoAction = (app: AppStore, label: string, what: string): ToastAction => ({
@@ -462,6 +477,32 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     );
   },
 
+  setSlidesArchived: async (slides, archived) => {
+    const { deck, selected } = get();
+    const moving = (deck?.slides ?? [])
+      .filter((s) => slides.includes(s.id) && !s.locked && !!s.archived !== archived)
+      .map((s) => s.id);
+    if (!deck || moving.length === 0) return;
+    // The slide on the stage goes to the archive: on to the next one that stays, else the one before it.
+    const leaving = archived && selected !== null && moving.includes(selected);
+    const here = deck.slides.findIndex((s) => s.id === selected);
+    const stays = (s: Slide) => !s.archived && !moving.includes(s.id);
+    const neighbor = deck.slides.slice(here + 1).find(stays) ?? deck.slides.slice(0, here).findLast(stays);
+    const edit = await editRail(app, (id) => api.setSlidesArchived(id, moving, archived));
+    if (!edit || get().deck?.id !== deck.id) return;
+    if (!archived) {
+      get().pickSlides(moving);
+      return;
+    }
+    if (leaving && get().selected === selected && neighbor) get().select(neighbor.id);
+    else set((s) => ({ railSelected: unpicked(s) }));
+    showSuccessIn(
+      app,
+      `Archived ${plural(moving.length, "slide")}`,
+      undoAction(app, ARCHIVE_SLIDES_LABEL, "archiving"),
+    );
+  },
+
   setSlidesLocked: async (slides, locked) => {
     if (slides.length === 0) return;
     await editAhead(
@@ -482,6 +523,8 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
 
   reorderRail: async (order) => {
     const rows = new Set(order);
+    // The deck file's order names every slide: the archived ones, which are no rows, stay last.
+    const archived = archivedSlides(get().deck ?? { slides: [] }).map((s) => s.id);
     // An order only says where the rows it names go: a deck with other rows is left as it is.
     const complete = (shown: Deck) => {
       const items = railItems(shown);
@@ -490,7 +533,7 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     await editAhead(
       app,
       (shown) => (complete(shown) ? applyOrder(shown, order) : shown),
-      (id) => api.reorderSlides(id, order),
+      (id) => api.reorderSlides(id, [...order, ...archived]),
       (answer) => answer.deck,
     );
   },
@@ -557,7 +600,9 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
 
   startImageExport: (dir) => {
     const { deck } = get();
-    if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
+    // Archived slides are no part of the deck that is exported.
+    const slides = (deck?.slides ?? []).filter((s) => !s.archived).map((s) => s.id);
+    if (slides.length > 0) set({ imageExport: { dir, slides } });
   },
 
   endImageExport: () => set({ imageExport: null }),

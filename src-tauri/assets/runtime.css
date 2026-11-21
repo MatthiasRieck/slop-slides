@@ -62,7 +62,8 @@ html:not([data-slop-player]) .deck > .slide {
   visibility: visible !important;
   opacity: 1 !important;
 }
-html:not([data-slop-player]) .deck > .slide[data-hidden] {
+html:not([data-slop-player]) .deck > .slide[data-hidden],
+html:not([data-slop-player]) .deck > .slide[data-archived] {
   display: none !important;
 }
 html:not([data-slop-player]) .slide .reveal {
@@ -267,7 +268,8 @@ html[data-slop-static] *::after {
     opacity: 1 !important;
     break-after: page;
   }
-  .deck > .slide[data-hidden] {
+  .deck > .slide[data-hidden],
+  .deck > .slide[data-archived] {
     display: none !important;
   }
   .slide .reveal {

@@ -789,6 +789,29 @@ fn flags_animations_timed_to_a_slide_that_start_with_the_deck() {
 }
 
 #[test]
+fn flags_valued_archived_attributes_and_slides_after_the_archive() {
+    let a = "<section class=\"slide\" id=\"a\"></section>";
+    let archived =
+        |id: &str, attr: &str| format!("<section class=\"slide\" id=\"{id}\" {attr}></section>");
+    let b = archived("b", "data-archived");
+    assert_eq!(rules(&deck(&format!("{a}\n{b}"))), Vec::<&str>::new());
+    assert_eq!(
+        rules(&deck(&archived("b", "data-archived=\"\""))),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        rules(&deck(&archived("b", "data-archived=\"false\""))),
+        ["archived-value"]
+    );
+    // Every slide of the deck after the archive is named, and no archived one.
+    let c = archived("c", "data-archived");
+    let d = "<section class=\"slide\" id=\"d\"></section>";
+    let issues = lint(&deck(&format!("{b}\n{a}\n{c}\n{d}")), |_| true, &[]);
+    let found: Vec<_> = issues.iter().map(|i| i.rule).collect();
+    assert_eq!(found, ["archived-not-last", "archived-not-last"]);
+}
+
+#[test]
 fn flags_valued_hidden_attributes() {
     assert_eq!(
         rules(&deck(

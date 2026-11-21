@@ -251,7 +251,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a
   new folder). Every export ends with a message that the file is saved, with a button to show
   it in its folder. Hidden slides stay in the HTML file (the show skips them) and are among the
-  PNG images; the PDF, PowerPoint and video leave them out. The PDF has one page per shown slide, sized to the slide canvas, each slide as
+  PNG images; the PDF, PowerPoint and video leave them out. Archived slides (**Send to archive**
+  in a slide's menu: slides set aside for later, listed under **Archive** at the end of the slide
+  list, from where they are restored) stay in the HTML file too, skipped by the show, and are
+  in none of the other exports. The PDF has one page per shown slide, sized to the slide canvas, each slide as
   it looks once its animations finish, with real, selectable text: the system webview prints
   the deck straight to the file. On Windows and Linux everything in it is vector. macOS
   WebKit cannot print transparency, so there each slide's decor (backgrounds, shapes, images)

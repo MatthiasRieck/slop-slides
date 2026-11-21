@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
+import { ArchiveRestore, Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
 import { useSettled } from "../../hooks/useSettled";
@@ -25,8 +25,9 @@ export const EDITED_THUMBNAIL_DELAY = 400;
 /** What a screen reader says of a slide's row: "Slide 3, hidden, locked, 2 comments". */
 export function slideLabel(index: number, slide: Slide, comments: number): string {
   return [
-    `Slide ${index + 1}`,
-    slide.hidden && "hidden",
+    // An archived slide is counted among the archive's.
+    slide.archived ? `Archived slide ${index + 1}` : `Slide ${index + 1}`,
+    slide.hidden && !slide.archived && "hidden",
     slide.locked && "locked",
     comments > 0 && plural(comments, "comment"),
   ]
@@ -68,8 +69,15 @@ export const Thumbnail = memo(function Thumbnail(props: {
   // The editor's own saves come in bursts; anything else (the agent, an undo) shows at once.
   const ownSave = useApp((s) => s.editing && s.editSaved[slide.id] === slide.hash);
   const version = useSettled(useSlideVersion(slide), ownSave ? EDITED_THUMBNAIL_DELAY : 0);
+  const archived = !!slide.archived;
+  // An archived slide is skipped by the show as a hidden one is; where it is listed says so.
+  const muted = slide.hidden && !archived;
+  const name = archived ? `Archived slide ${index + 1}` : `Slide ${index + 1}`;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id,
+    // The archive is no part of the deck's order: its slides are restored, not dragged.
+    // Unset for the others, so that the rail's own say (a search stops every drag) holds.
+    ...(archived && { disabled: true }),
     animateLayoutChanges: props.still ? noLayoutAnimation : undefined,
   });
   const itemRef = useRef<HTMLLIElement | null>(null);
@@ -124,10 +132,10 @@ export const Thumbnail = memo(function Thumbnail(props: {
         className={cn(
           "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground transition-opacity duration-200",
           selected && "font-semibold text-foreground",
-          slide.hidden && "opacity-60",
+          muted && "opacity-60",
         )}
       >
-        {index + 1}
+        {!archived && index + 1}
       </span>
       <div className="relative min-w-0 flex-1">
         <button
@@ -142,7 +150,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
           aria-label={slideLabel(index, slide, comments)}
           aria-current={selected ? "true" : undefined}
           aria-pressed={picked || selected}
-          title={props.editing ? `Slide ${index + 1}` : `Slide ${index + 1} · double-click to edit`}
+          title={props.editing ? name : `${name} · double-click to edit`}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
           onContextMenu={(event) => onMenu(event, slide.id)}
@@ -165,10 +173,10 @@ export const Thumbnail = memo(function Thumbnail(props: {
             size={pixelsOf({ size: deckSize })}
             thumbnail
             lazy
-            className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
+            className={cn(MARK_TRANSITION, muted && "opacity-35 grayscale")}
           />
         </button>
-        <RailMark shown={slide.hidden} className="inset-0 flex items-center justify-center text-foreground/80">
+        <RailMark shown={muted} className="inset-0 flex items-center justify-center text-foreground/80">
           <HiddenMark />
         </RailMark>
         <RailMark
@@ -200,15 +208,24 @@ export const Thumbnail = memo(function Thumbnail(props: {
           >
             {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
           </RailAction>
-          <RailAction
-            title={slide.hidden ? "Show slide" : "Hide slide"}
-            onClick={() => void app().setSlidesHidden([slide.id], !slide.hidden)}
-          >
-            {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
-          </RailAction>
-          <RailAction title="Duplicate" onClick={() => void app().duplicateSlides([slide.id])}>
-            <Copy className="size-3" />
-          </RailAction>
+          {archived && !slide.locked && (
+            <RailAction title="Restore from archive" onClick={() => void app().setSlidesArchived([slide.id], false)}>
+              <ArchiveRestore className="size-3" />
+            </RailAction>
+          )}
+          {!archived && (
+            <RailAction
+              title={slide.hidden ? "Show slide" : "Hide slide"}
+              onClick={() => void app().setSlidesHidden([slide.id], !slide.hidden)}
+            >
+              {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+            </RailAction>
+          )}
+          {!archived && (
+            <RailAction title="Duplicate" onClick={() => void app().duplicateSlides([slide.id])}>
+              <Copy className="size-3" />
+            </RailAction>
+          )}
           {!slide.locked && (
             <RailAction title="Delete" onClick={() => void app().deleteSlides([slide.id])}>
               <Trash2 className="size-3" />

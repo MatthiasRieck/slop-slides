@@ -28,6 +28,13 @@ pub(super) fn locked(html: &str) -> Vec<bool> {
         .collect()
 }
 
+pub(super) fn archived(html: &str) -> Vec<bool> {
+    find_slides(html)
+        .into_iter()
+        .map(|s| s.archived.is_some())
+        .collect()
+}
+
 pub(super) fn hidden(html: &str) -> Vec<bool> {
     find_slides(html)
         .into_iter()

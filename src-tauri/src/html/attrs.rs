@@ -3,6 +3,11 @@
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
 
+/// Marks a slide the user set aside in the deck's archive: one they made and will deal with
+/// later. The player skips it as it does a hidden one, the exports leave it out, and the editor
+/// lists it under "Archive", after the deck's slides. Archived slides sit at the end of the deck.
+pub const ARCHIVED_ATTR: &str = "data-archived";
+
 /// Marks a slide neither the user nor the agent may change. The editor refuses edits to it,
 /// and the app puts it back as it was if the agent changes or removes it in a turn.
 pub const LOCKED_ATTR: &str = "data-locked";

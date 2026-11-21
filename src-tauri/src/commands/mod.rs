@@ -185,6 +185,7 @@ mod command_thread_tests {
             "add_slide",
             "duplicate_slides",
             "set_slides_hidden",
+            "set_slides_archived",
             "set_slide_narration",
             "set_slide_notes",
             "set_slide_time",

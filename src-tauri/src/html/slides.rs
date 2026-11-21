@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use super::attrs::{ADDED_ATTR, MOVED_ATTR};
+use super::batch::edit_slides;
 #[cfg(test)]
 use super::edit::remove;
 use super::edit::{end_of_deck, indent_before};
@@ -11,7 +12,9 @@ use super::edit::{end_of_deck, indent_before};
 use super::scan::tags;
 use super::scan::Tag;
 use super::slide_attrs::set_locked;
-use super::spans::{find_sections, find_slides, section_key, slide_span, span_of, SlideSpan};
+use super::spans::{
+    find_sections, find_slides, find_spans, section_key, slide_span, span_of, SlideSpan,
+};
 
 pub fn slugify(text: &str) -> String {
     let mut slug = String::new();
@@ -123,8 +126,50 @@ pub fn delete(html: &str, id: &str) -> Result<String, String> {
     Ok(remove(html, &span.range))
 }
 
+/// Sends the slides `ids` to the deck's archive, or takes them back out of it. Archived slides
+/// carry `data-archived` and sit at the end of the deck, after every other slide and section
+/// marker: those sent now come last, in deck order. A slide taken out goes to the end of the
+/// slides that are not archived. Slides already as asked stay where they are.
+pub fn set_archived(html: &str, ids: &[String], archived: bool) -> Result<String, String> {
+    let before: HashSet<String> = find_slides(html)
+        .into_iter()
+        .filter(|s| s.archived.is_some())
+        .filter_map(|s| s.id)
+        .collect();
+    let ids_str = ids.iter().map(String::as_str);
+    let marked = edit_slides(html, ids_str, |_, slide| slide.set_archived(archived))?;
+    let (slides, sections) = find_spans(&marked);
+    // Each row of the deck: where it starts, its key, and where it belongs (0: the deck,
+    // 1: archived before, 2: archived now).
+    let mut rows: Vec<(usize, Option<String>, u8)> = slides
+        .iter()
+        .map(|s| {
+            let place = match (&s.archived, &s.id) {
+                (None, _) => 0,
+                (Some(_), Some(id)) if !before.contains(id) => 2,
+                (Some(_), _) => 1,
+            };
+            (s.range.start, s.id.clone(), place)
+        })
+        .chain(
+            sections
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.range.start, Some(section_key(i)), 0)),
+        )
+        .collect();
+    rows.sort_by_key(|row| row.0);
+    if rows.windows(2).all(|pair| pair[0].2 <= pair[1].2) {
+        return Ok(marked);
+    }
+    rows.sort_by_key(|row| row.2);
+    let order: Vec<String> = rows.into_iter().filter_map(|row| row.1).collect();
+    reorder(&marked, &order)
+}
+
 /// Inserts `section` (with `{{ID}}` replaced) after slide `after`, after the last slide,
-/// or at the end of the `.deck` container when the deck is empty. Returns the new id.
+/// or at the end of the `.deck` container when the deck is empty. Returns the new id. Archived
+/// slides stay last: after one of them, or after none, the slide goes before the archive.
 pub fn insert(
     html: &str,
     after: Option<&str>,
@@ -135,13 +180,25 @@ pub fn insert(
     let taken: HashSet<String> = slides.iter().filter_map(|s| s.id.clone()).collect();
     let id = unique_id(&taken, &slugify(id_hint));
     let section = section.replace(ID_PLACEHOLDER, &id);
-    let anchor = after.and_then(|a| span_of(&slides, a)).or(slides.last());
-    let (at, indent) = match anchor {
-        Some(span) => (
+    let live = |s: &&SlideSpan| s.archived.is_none();
+    let anchor = after
+        .and_then(|a| span_of(&slides, a))
+        .filter(live)
+        .or(slides.iter().rfind(live));
+    let (at, indent) = match (anchor, slides.first()) {
+        (Some(span), _) => (
             span.range.end,
             indent_before(html, span.range.start).to_string(),
         ),
-        None => (end_of_deck(html)?, "    ".to_string()),
+        // Every slide is archived: the new one comes before them.
+        (None, Some(first)) => {
+            let at = first.range.start;
+            let indent = indent_before(html, at);
+            let section = section.trim();
+            let out = format!("{}{section}\n{indent}{}", &html[..at], &html[at..]);
+            return Ok((out, id));
+        }
+        (None, None) => (end_of_deck(html)?, "    ".to_string()),
     };
     let out = format!(
         "{}\n{}{}{}",
@@ -248,6 +305,8 @@ pub fn copy_slide(
 ) -> Result<(String, String), String> {
     let copy = slide_with_id_placeholder(source, slide)?;
     let (out, id) = insert(html, after, &copy, slide)?;
+    // The copy is neither locked nor archived: it is a slide of the deck, to be changed.
+    let out = edit_slides(&out, [id.as_str()], |_, slide| slide.set_archived(false))?;
     Ok((set_locked(&out, &id, false)?, id))
 }
 
@@ -302,6 +361,90 @@ mod tests {
     use super::*;
     use crate::html::fixtures::*;
     use crate::html::*;
+
+    const FOUR: &str = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <div class=\"deck-section\" data-title=\"Two\"></div>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n  <section class=\"slide\" id=\"d\">D</section>\n</main>";
+
+    fn names(slides: &[&str]) -> Vec<String> {
+        slides.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn archived_slides_go_to_the_end_of_the_deck_in_the_order_they_were_sent() {
+        let one = set_archived(FOUR, &names(&["c"]), true).unwrap();
+        assert_eq!(ids(&one), ["a", "b", "d", "c"]);
+        assert_eq!(archived(&one), [false, false, false, true]);
+        assert!(
+            one.ends_with("  <section data-archived class=\"slide\" id=\"c\">C</section>\n</main>")
+        );
+        // Those sent later come after the ones there, and the section keeps its slides.
+        let more = set_archived(&one, &names(&["d", "a"]), true).unwrap();
+        assert_eq!(ids(&more), ["b", "c", "a", "d"]);
+        assert_eq!(archived(&more), [false, true, true, true]);
+        assert_eq!(section_titles(&more), [("Two".to_string(), 0)]);
+        assert_eq!(set_archived(&more, &names(&["c"]), true).unwrap(), more);
+        // The last slide is where it belongs already: only the attribute changes.
+        assert_eq!(
+            set_archived(FOUR, &names(&["d"]), true).unwrap(),
+            FOUR.replace(
+                "<section class=\"slide\" id=\"d\"",
+                "<section data-archived class=\"slide\" id=\"d\""
+            )
+        );
+        assert!(set_archived(FOUR, &names(&["nope"]), true).is_err());
+    }
+
+    #[test]
+    fn a_slide_taken_out_of_the_archive_ends_the_deck() {
+        let all = set_archived(FOUR, &names(&["b", "c", "d"]), true).unwrap();
+        let back = set_archived(&all, &names(&["c"]), false).unwrap();
+        assert_eq!(ids(&back), ["a", "c", "b", "d"]);
+        assert_eq!(archived(&back), [false, false, true, true]);
+        let rest = set_archived(&back, &names(&["b", "d"]), false).unwrap();
+        assert_eq!(ids(&rest), ["a", "c", "b", "d"]);
+        assert!(!rest.contains("data-archived"));
+        assert_eq!(set_archived(FOUR, &names(&["a"]), false).unwrap(), FOUR);
+    }
+
+    #[test]
+    fn archiving_puts_right_a_deck_whose_archive_is_not_last() {
+        let mixed = FOUR.replace("id=\"a\"", "id=\"a\" data-archived");
+        let out = set_archived(&mixed, &names(&["c"]), true).unwrap();
+        assert_eq!(ids(&out), ["b", "d", "a", "c"]);
+        assert_eq!(archived(&out), [false, false, true, true]);
+    }
+
+    #[test]
+    fn new_slides_go_before_the_archive() {
+        let deck = set_archived(FOUR, &names(&["c", "d"]), true).unwrap();
+        let slide = "<section class=\"slide\" id=\"{{ID}}\">New</section>";
+        // At the end, and after an archived slide: the end of the slides that are not archived.
+        for after in [None, Some("d")] {
+            let (out, id) = insert(&deck, after, slide, "new").unwrap();
+            assert_eq!(ids(&out), ["a", "b", "new", "c", "d"], "{after:?}");
+            assert!(!archived(&out)[2] && id == "new");
+        }
+        let (out, _) = insert(&deck, Some("a"), slide, "new").unwrap();
+        assert_eq!(ids(&out), ["a", "new", "b", "c", "d"]);
+
+        let all = set_archived(FOUR, &names(&["a", "b", "c", "d"]), true).unwrap();
+        let (out, _) = insert(&all, None, slide, "new").unwrap();
+        assert_eq!(ids(&out), ["new", "a", "b", "c", "d"]);
+        assert!(out.contains(
+            "  <section class=\"slide\" id=\"new\">New</section>\n  <section data-archived"
+        ));
+    }
+
+    #[test]
+    fn a_pasted_copy_of_an_archived_slide_is_a_slide_of_the_deck() {
+        let deck = set_archived(FOUR, &names(&["d"]), true).unwrap();
+        let copied = slide_markup(&deck, "d").unwrap().to_string();
+        let (out, id) = paste_slide(&deck, Some("a"), &copied).unwrap();
+        assert_eq!(ids(&out), ["a", id.as_str(), "b", "c", "d"]);
+        assert_eq!(archived(&out), [false, false, false, false, true]);
+        // A copy made in the archive stays in it.
+        let (out, _) = duplicate(&deck, "d").unwrap();
+        assert_eq!(archived(&out), [false, false, false, true, true]);
+    }
 
     #[test]
     fn replaces_one_slide_and_returns_the_old_markup() {

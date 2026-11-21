@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Deck } from "./api";
 import {
   applyOrder,
+  archivedSlides,
   dropRows,
   dropSection,
   foldedSlides,
@@ -94,6 +95,36 @@ describe("applyOrder", () => {
     const next = applyOrder(d, ["b", "nope", "section:0", "a", "c"]);
     expect(next).toMatchObject({ id: "talk", shellHash: "s" });
     expect(next.slides.map((s) => s.id)).toEqual(["b", "a", "c"]);
+    expect(next.sections).toEqual([{ index: 0, title: "One", before: 1 }]);
+  });
+});
+
+describe("the archive", () => {
+  /** Slides a, b, c, d with `ids` archived, and a section before b. */
+  const archiving = (...ids: string[]): Deck => {
+    const d = deck([["One", 1]], ["a", "b", "c", "d"]);
+    return { ...d, slides: d.slides.map((s) => (ids.includes(s.id) ? { ...s, hidden: true, archived: true } : s)) };
+  };
+
+  it("lists the archived slides apart from the rail's rows", () => {
+    const d = archiving("c", "d");
+    expect(keys(d)).toEqual(["a", "section:0", "b"]);
+    expect(archivedSlides(d).map((s) => s.id)).toEqual(["c", "d"]);
+    expect(archivedSlides(deck([]))).toEqual([]);
+  });
+
+  it("numbers the rows without the archived slides, wherever those are in the file", () => {
+    const rows = railItems(archiving("a", "c"));
+    expect(rows.map((row) => (row.kind === "slide" ? [row.key, row.index] : row.key))).toEqual([
+      "section:0",
+      ["b", 0],
+      ["d", 1],
+    ]);
+  });
+
+  it("keeps the archived slides, last, when the rows are put in another order", () => {
+    const next = applyOrder(archiving("b", "d"), ["c", "section:0", "a"]);
+    expect(next.slides.map((s) => s.id)).toEqual(["c", "a", "b", "d"]);
     expect(next.sections).toEqual([{ index: 0, title: "One", before: 1 }]);
   });
 });

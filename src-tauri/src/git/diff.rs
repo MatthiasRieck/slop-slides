@@ -82,7 +82,7 @@ pub(super) struct Snapshot {
     hash: String,
     pub(super) markup: String,
     /// The parts that do not show on the slide, under the name [`SlideChange::details`] gives them.
-    parts: [(&'static str, String); 5],
+    parts: [(&'static str, String); 6],
 }
 
 pub(super) fn snapshots(source: &str) -> Vec<Snapshot> {
@@ -105,6 +105,7 @@ pub(super) fn snapshots(source: &str) -> Vec<Snapshot> {
                     ("speaker notes", html::notes(markup)),
                     ("narration", html::narration(markup)),
                     ("hidden", span.hidden.is_some().to_string()),
+                    ("archived", span.archived.is_some().to_string()),
                     ("locked", span.locked.is_some().to_string()),
                     (
                         "timing",
@@ -411,6 +412,9 @@ mod tests {
         assert_eq!(list[0].status, Modified);
         assert_eq!(list[0].details, ["speaker notes"]);
         assert_eq!(list[1].details, ["hidden"]);
+        let archived = new.replace("data-hidden", "data-archived");
+        let list = compare(&snapshots(&new), &snapshots(&archived), &[]);
+        assert_eq!(list[1].details, ["hidden", "archived"]);
     }
 
     #[test]

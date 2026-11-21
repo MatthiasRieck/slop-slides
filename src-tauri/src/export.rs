@@ -356,12 +356,14 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// Saves every slide of the deck `file`, hidden ones too as the Export menu does, as
+/// Saves every slide of the deck `file`, hidden ones too as the Export menu does but not the
+/// archived ones, as
 /// `slide-NN.png` in `dir`, the slides' canvas width, every animation finished. Images of an
 /// earlier export there are replaced. How many it saved.
 async fn images(app: &AppHandle, file: &Path, dir: &Path) -> Result<usize> {
     let deck = deck::load(file)?;
-    let ids: Vec<String> = deck.slides.iter().map(|s| s.id.clone()).collect();
+    let slides = deck.slides.iter().filter(|s| !s.archived);
+    let ids: Vec<String> = slides.map(|s| s.id.clone()).collect();
     if ids.is_empty() {
         return Err(Error::msg("this deck has no slides to export"));
     }

@@ -1,9 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderInfo } from "../lib/models";
+import type { Provider, ProviderInfo } from "../lib/models";
+import { defaultSettings, patchSettings } from "../lib/settings";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { lastError } from "./errors";
-import { backend, calls, DECK, freshStore, resetBackend } from "./testing";
+import { reconcileSelection, turnedOffMessage, turnedOffProvider } from "./models";
+import {
+  assistantMessage,
+  backend,
+  calls,
+  DECK,
+  freshStore,
+  listeners,
+  resetBackend,
+  settingsBackend,
+  userMessage,
+  withBridge,
+} from "./testing";
 
 beforeEach(resetBackend);
 
@@ -34,6 +47,8 @@ describe("model choice", () => {
         },
       ],
       error: null,
+      version: "1.0.0",
+      auth: "signedIn",
     },
     {
       id: "codex",
@@ -51,6 +66,8 @@ describe("model choice", () => {
         },
       ],
       error: null,
+      version: "1.0.0",
+      auth: "signedIn",
     },
   ];
 
@@ -220,6 +237,140 @@ describe("model choice", () => {
     backend({ list_providers: () => PROVIDERS });
     await useApp.getState().refreshProviders();
     expect(useApp.getState().selection.contextWindow).toBe("200k");
+  });
+
+  describe("a provider turned off in the settings", () => {
+    const OPUS = {
+      provider: "claude",
+      model: "claude-opus-5-5",
+      label: "Claude Opus 5.5",
+      effort: "medium",
+      contextWindow: "1m",
+    } as const;
+    const off = (...ids: Provider[]) =>
+      patchSettings(defaultSettings(), {
+        providers: Object.fromEntries(ids.map((id) => [id, { enabled: false }])),
+      });
+    const ALL: ProviderInfo[] = [
+      { id: "copilot", installed: false, path: null, models: [], error: null, version: null, auth: "unknown" },
+      ...PROVIDERS,
+    ];
+
+    it("gives up the selection to the default model of the first provider that is on and installed", () => {
+      // Copilot is on but not installed, so Codex it is.
+      expect(reconcileSelection(OPUS, ALL, false, off("claude").providers)).toEqual({
+        provider: "codex",
+        model: "gpt-6-astra",
+        label: "GPT-6-Astra",
+        effort: "high",
+        contextWindow: null,
+      });
+      // On, the selection stays; so it does when nothing says what is on.
+      expect(reconcileSelection(OPUS, ALL, false, defaultSettings().providers)).toEqual(OPUS);
+      expect(reconcileSelection(OPUS, ALL)).toEqual(OPUS);
+      // A selection on another provider is not touched by it.
+      expect(reconcileSelection(OPUS, ALL, false, off("codex").providers)).toEqual(OPUS);
+    });
+
+    it("never moves a selection onto a provider that is off", () => {
+      const gone = { ...OPUS, model: "gone", label: "Gone" };
+      const noClaude = ALL.map((p) => (p.id === "claude" ? { ...p, installed: false, models: [] } : p));
+      // The only other installed provider is off: the selection has nowhere to go.
+      expect(reconcileSelection(gone, noClaude, false, off("codex").providers)).toEqual(gone);
+      expect(reconcileSelection(gone, noClaude, false, defaultSettings().providers).provider).toBe("codex");
+    });
+
+    it("leaves a chat's selection with its provider, on or off", () => {
+      expect(reconcileSelection(OPUS, ALL, true, off("claude").providers)).toEqual(OPUS);
+    });
+
+    it("moves the selection as the settings change, here or in another window", async () => {
+      const { useApp } = await withBridge({ list_providers: () => PROVIDERS, ...settingsBackend() });
+      await vi.waitFor(() => expect(useApp.getState().providers).toEqual(PROVIDERS));
+      await useApp.getState().updateSettings({ providers: { claude: { enabled: false } } });
+      expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra" });
+      expect(JSON.parse(localStorage.getItem("slopslide.selection")!)).toMatchObject({ provider: "codex" });
+      // From another window: Codex goes off and Claude comes back.
+      listeners.get("settings-changed")!({ payload: off("codex") });
+      expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
+      // One turned back on takes nothing back.
+      listeners.get("settings-changed")!({ payload: defaultSettings() });
+      expect(useApp.getState().selection.provider).toBe("claude");
+    });
+
+    it("moves the selection when the providers are looked up with one already off", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ settings: off("claude") });
+      backend({ list_providers: () => PROVIDERS });
+      await useApp.getState().refreshProviders();
+      expect(useApp.getState().selection.provider).toBe("codex");
+    });
+
+    it("leaves a chat with its provider, which then takes no message", async () => {
+      const { useApp } = await withBridge({ list_providers: () => PROVIDERS });
+      await vi.waitFor(() => expect(useApp.getState().providers).toEqual(PROVIDERS));
+      useApp.setState({ sessionProvider: "claude" });
+      expect(turnedOffProvider(useApp.getState())).toBeNull();
+      listeners.get("settings-changed")!({ payload: off("claude") });
+      expect(useApp.getState().selection.provider).toBe("claude");
+      expect(turnedOffProvider(useApp.getState())).toBe("claude");
+      // Another provider off is nothing to this chat.
+      listeners.get("settings-changed")!({ payload: off("codex") });
+      expect(turnedOffProvider(useApp.getState())).toBeNull();
+    });
+
+    it("lets go of the selection once the chat that held it on a provider turned off is left", async () => {
+      const codexChat = [userMessage("hi"), assistantMessage({ provider: "codex" })];
+      let chat: unknown[] = codexChat;
+      const { useApp } = await withBridge({
+        list_providers: () => PROVIDERS,
+        load_chat: () => chat,
+        select_chat_thread: () => ({ chat, provider: chat.length ? "codex" : null }),
+        open_workspace: ({ path }) => ({ path, name: "decks", writable: true }),
+      });
+      await vi.waitFor(() => expect(useApp.getState().providers).toEqual(PROVIDERS));
+      const held = () => {
+        useApp.setState({ chatKey: "/decks/talk", settings: defaultSettings() });
+        useApp.getState().setModel("codex", "gpt-6-astra");
+        useApp.setState({ sessionProvider: "codex" });
+        listeners.get("settings-changed")!({ payload: off("codex") });
+        expect(useApp.getState().selection.provider).toBe("codex");
+        expect(turnedOffProvider(useApp.getState())).toBe("codex");
+      };
+      const free = () => {
+        expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
+        expect(turnedOffProvider(useApp.getState())).toBeNull();
+      };
+
+      // A new chat in its place.
+      held();
+      await useApp.getState().resetChat();
+      free();
+
+      // A past chat of Codex is opened (the selection follows it), then an empty one.
+      useApp.setState({ sessionProvider: null, messages: [] });
+      await useApp.getState().selectChatThread("old");
+      expect(useApp.getState().selection.provider).toBe("codex");
+      chat = [];
+      await useApp.getState().selectChatThread("empty");
+      free();
+
+      // The folder is closed.
+      chat = codexChat;
+      held();
+      useApp.setState({ workspace: { path: "/decks", name: "decks", writable: true } as never });
+      expect(await useApp.getState().closeWorkspace()).toBe(true);
+      free();
+    });
+
+    it("says which provider is off for a chat without one yet: the selected model's", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ settings: off("claude") });
+      expect(turnedOffProvider(useApp.getState())).toBe("claude");
+      expect(turnedOffMessage("claude")).toBe(
+        "Claude Code is turned off. Turn it on in Settings > Providers to continue this chat.",
+      );
+    });
   });
 
   it("toggles and persists favorite models", async () => {

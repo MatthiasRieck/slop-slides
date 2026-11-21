@@ -3,6 +3,7 @@ import type { SlideComment } from "./comments";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
+import type { AppSettings, EnvironmentCheck, SettingsPatch } from "./settings";
 import type { SizeInfo, SlideSize } from "./slideSize";
 import type { VideoOptions } from "./video";
 
@@ -714,6 +715,18 @@ export const api = {
     invoke<boolean>("steer_agent", { chat, prompt, message }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
+  /** The app's settings, as ~/.slopslides/settings.json has them. */
+  getSettings: () => invoke<AppSettings>("get_settings"),
+  /**
+   * Changes what `patch` names in the app's settings and gives the settings as they are then;
+   * every window is told (`settings-changed`). Rejects, saying why, what cannot be: the last
+   * provider turned off, or one that is working in a chat.
+   */
+  updateSettings: (patch: SettingsPatch) => invoke<AppSettings>("update_settings", { patch }),
+  /** The providers with a turn running right now, in any window. */
+  busyProviders: () => invoke<Provider[]>("busy_providers"),
+  /** What the agents need from the computer besides their CLIs: git, and an MCP config that parses. */
+  checkEnvironment: () => invoke<EnvironmentCheck[]>("check_environment"),
   /** The user's templates first, then the built-in ones. */
   listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
   /** Copies the template into the workspace's session for the agent; returns its absolute path. */

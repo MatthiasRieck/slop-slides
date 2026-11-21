@@ -21,6 +21,7 @@ use crate::mcp;
 use crate::permissions::{Approval, Approvals, LiveMode, PermissionMode};
 use crate::rewind;
 use crate::sessions::Sessions;
+use crate::settings::Settings;
 use crate::{claude, codex, copilot};
 
 mod deltas;
@@ -144,6 +145,15 @@ pub enum Provider {
 impl Provider {
     pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Copilot];
 
+    /// The provider's name, as the user reads it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::Claude => "Claude Code",
+            Provider::Codex => "Codex",
+            Provider::Copilot => "GitHub Copilot",
+        }
+    }
+
     /// File in the workspace's session (see [`crate::sessions`]) holding this provider's
     /// resumable session id.
     pub fn session_file(self) -> &'static str {
@@ -180,12 +190,15 @@ impl Provider {
 
 #[derive(Default)]
 pub struct AgentManager {
-    running: Mutex<HashMap<String, Running>>,
+    /// Shared with each turn's task, which takes its own entry out as it ends (see [`Ending`]).
+    running: Arc<Mutex<HashMap<String, Running>>>,
     pub approvals: Arc<Approvals>,
 }
 
 /// A chat's turn in progress: how to stop it and how to steer it.
 struct Running {
+    /// The provider taking the turn.
+    provider: Provider,
     cancel: watch::Sender<bool>,
     steer: mpsc::UnboundedSender<Steer>,
     /// The turn's permission mode, which the user may change while it runs.
@@ -224,6 +237,24 @@ impl Steer {
     /// The turn cannot take it (it is ending, or compacting); the sender runs it next.
     pub(crate) fn refused(self) {
         let _ = self.reply.send(false);
+    }
+}
+
+/// Takes a chat's turn out of the turns running once the turn's task is over, however it ends:
+/// a task that panicked would otherwise leave its chat running and its provider busy, which
+/// nothing but a restart of the app would undo.
+struct Ending {
+    running: Arc<Mutex<HashMap<String, Running>>>,
+    chat: String,
+}
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        // Poisoned or not: this may run during a panic, where a second one would end the app.
+        self.running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.chat);
     }
 }
 
@@ -404,7 +435,34 @@ impl AgentManager {
             .any(|key| file.starts_with(resolved(key)))
     }
 
+    /// The provider of the turn running in chat `chat`, if one is.
+    pub fn provider_of(&self, chat: &str) -> Option<Provider> {
+        self.running
+            .lock()
+            .unwrap()
+            .get(chat)
+            .map(|running| running.provider)
+    }
+
+    /// The providers that have a turn running, in any window.
+    pub fn busy_providers(&self) -> Vec<Provider> {
+        self.with_busy_providers(<[Provider]>::to_vec)
+    }
+
+    /// Runs `f` with the providers that have a turn running. No turn starts meanwhile, so what
+    /// `f` decides from them (turning a provider off) still holds when it is done.
+    pub fn with_busy_providers<T>(&self, f: impl FnOnce(&[Provider]) -> T) -> T {
+        let running = self.running.lock().unwrap();
+        let busy: Vec<Provider> = Provider::ALL
+            .into_iter()
+            .filter(|provider| running.values().any(|turn| turn.provider == *provider))
+            .collect();
+        f(&busy)
+    }
+
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
+        // Said before anything about the CLI: one that is off need not even be installed.
+        app.state::<Settings>().require_enabled(args.provider)?;
         let dir = crate::workspace::root(&args.workspace)?;
         let chat = args.chat.clone().unwrap_or_else(|| args.workspace.clone());
         let subject = subject(&chat)?;
@@ -420,10 +478,14 @@ impl AgentManager {
             if let Some(why) = conflict(running.keys(), &subject) {
                 return Err(Error::msg(why));
             }
+            // Again, now that no turn can start beside this one: the provider may have been
+            // turned off since, which only one without a turn can be.
+            app.state::<Settings>().require_enabled(args.provider)?;
             crate::sessions::claim_provider(&session_dir, args.provider)?;
             running.insert(
                 chat.clone(),
                 Running {
+                    provider: args.provider,
                     cancel: cancel_tx,
                     mode: mode_tx,
                     steer: steer_tx,
@@ -431,6 +493,10 @@ impl AgentManager {
             );
         }
         let approvals = self.approvals.clone();
+        let ending = Ending {
+            running: self.running.clone(),
+            chat: chat.clone(),
+        };
         tauri::async_runtime::spawn(async move {
             let (emitter, key) = (app.clone(), chat.clone());
             // Streamed text goes out once a frame, not once per piece (see `deltas`).
@@ -508,11 +574,8 @@ impl AgentManager {
                     false
                 }
             };
-            app.state::<AgentManager>()
-                .running
-                .lock()
-                .unwrap()
-                .remove(&chat);
+            // Before the turn is said to be over: whoever hears of it finds the chat free.
+            drop(ending);
             turn.emit(&AgentEvent::Finished { interrupted });
         });
         Ok(())
@@ -1117,6 +1180,7 @@ mod tests {
         manager.running.lock().unwrap().insert(
             "talk".into(),
             Running {
+                provider: Provider::Claude,
                 cancel,
                 steer,
                 mode,
@@ -1142,6 +1206,7 @@ mod tests {
             manager.running.lock().unwrap().insert(
                 chat.to_string_lossy().into_owned(),
                 Running {
+                    provider: Provider::Claude,
                     cancel,
                     steer,
                     mode,
@@ -1229,6 +1294,7 @@ mod tests {
             manager.running.lock().unwrap().insert(
                 chat.to_string_lossy().into_owned(),
                 Running {
+                    provider: Provider::Claude,
                     cancel,
                     steer,
                     mode,
@@ -1239,6 +1305,77 @@ mod tests {
         manager.interrupt(&deck.canonicalize().unwrap().to_string_lossy());
         assert!(*stopped[0].borrow());
         assert!(!*stopped[1].borrow(), "the other deck's turn goes on");
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_task_panics_is_no_longer_running() {
+        let manager = AgentManager::default();
+        let (cancel, _) = watch::channel(false);
+        let (mode, _) = watch::channel(PermissionMode::default());
+        let (steer, _steers) = mpsc::unbounded_channel();
+        manager.running.lock().unwrap().insert(
+            "talk".into(),
+            Running {
+                provider: Provider::Codex,
+                cancel,
+                mode,
+                steer,
+            },
+        );
+        let ending = Ending {
+            running: manager.running.clone(),
+            chat: "talk".into(),
+        };
+        let task = tokio::spawn(async move {
+            let _ending = ending;
+            panic!("the turn's task fell over");
+        });
+        assert!(task.await.unwrap_err().is_panic());
+        assert!(!manager.is_running("talk"));
+        assert!(manager.busy_providers().is_empty());
+    }
+
+    #[test]
+    fn tells_which_providers_have_a_turn_running() {
+        let manager = AgentManager::default();
+        assert!(manager.busy_providers().is_empty());
+        assert_eq!(manager.provider_of("a"), None);
+        for (chat, provider) in [
+            ("a", Provider::Copilot),
+            ("b", Provider::Claude),
+            ("c", Provider::Copilot),
+        ] {
+            let (cancel, _) = watch::channel(false);
+            let (mode, _) = watch::channel(PermissionMode::Ask);
+            let (steer, _) = mpsc::unbounded_channel();
+            manager.running.lock().unwrap().insert(
+                chat.into(),
+                Running {
+                    provider,
+                    cancel,
+                    steer,
+                    mode,
+                },
+            );
+        }
+        // Each once, in the order the providers are listed in.
+        assert_eq!(
+            manager.busy_providers(),
+            [Provider::Claude, Provider::Copilot]
+        );
+        assert_eq!(manager.provider_of("a"), Some(Provider::Copilot));
+        assert_eq!(manager.provider_of("b"), Some(Provider::Claude));
+        assert_eq!(manager.provider_of("d"), None);
+        let codex_is_busy = manager.with_busy_providers(|busy| busy.contains(&Provider::Codex));
+        assert!(!codex_is_busy);
+        manager.running.lock().unwrap().remove("b");
+        assert_eq!(manager.busy_providers(), [Provider::Copilot]);
+    }
+
+    #[test]
+    fn providers_are_named_as_the_user_knows_them() {
+        let labels = Provider::ALL.map(Provider::label);
+        assert_eq!(labels, ["Claude Code", "Codex", "GitHub Copilot"]);
     }
 
     #[test]
@@ -1263,6 +1400,7 @@ mod tests {
         manager.running.lock().unwrap().insert(
             "talk".into(),
             Running {
+                provider: Provider::Claude,
                 cancel,
                 steer,
                 mode,

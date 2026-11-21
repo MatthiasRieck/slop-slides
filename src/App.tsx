@@ -12,13 +12,14 @@ import {
   Presenter,
   preloadLazyPartsWhenIdle,
   RewindDialog,
+  SettingsDialog,
   SlideImageExport,
 } from "./components/lazy";
 import { usePresentKeys } from "./components/presenter/present";
-import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Sidebar } from "./components/Sidebar";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
+import { useSettingsKeys } from "./components/settings/useSettingsKeys";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
 import { UnsavedChanges } from "./components/UnsavedChanges";
@@ -32,7 +33,7 @@ import { deckMode, lintKey, showError, useApp } from "./store";
  * The window: the start screen until a folder is open, then the workbench. Neither shows before
  * the window knows whether a folder waits for it (see `booted`), so the start screen does not
  * flash by on the way to that folder. What is not on the first screen loads once the browser is
- * idle (see ./components/lazy.tsx).
+ * idle (see ./components/lazy.tsx). The app's settings open over either, in a dialog.
  */
 export function App() {
   const hasWorkspace = useApp((s) => s.workspace !== null);
@@ -40,6 +41,8 @@ export function App() {
   const presenting = useApp((s) => s.presenting);
   const exportingImages = useApp((s) => s.imageExport !== null);
   const askingRewind = useApp((s) => s.rewindAsk !== null);
+  const settingsOpen = useApp((s) => s.settingsSection !== null);
+  useSettingsKeys();
   useNewWindowKey();
   usePresentKeys();
   useCloseGuard();
@@ -52,6 +55,7 @@ export function App() {
       {presenting && <Presenter />}
       {exportingImages && <SlideImageExport />}
       {askingRewind && <RewindDialog />}
+      {settingsOpen && <SettingsDialog />}
       <UnsavedChanges />
       <Toasts />
     </>
@@ -78,8 +82,8 @@ export const SIDEBAR_MAX_SIZE = "67%";
 /**
  * An open workspace: the top bar over the open file (a deck in the slide editor, with its slide
  * rail, or another page as it is), and on the right the sidebar with the chat, the files, the
- * slide's narration and notes, the deck's HTML and the settings, from the top of the window to
- * the bottom, so the top bar ends where it starts.
+ * slide's narration and notes and the deck's HTML, from the top of the window to the bottom, so
+ * the top bar ends where it starts.
  * Maximized, the sidebar covers the whole window, the rest staying as it is underneath.
  */
 function Workbench() {
@@ -98,66 +102,62 @@ function Workbench() {
     useApp.getState().lintChanged();
   }, [deckVersion]);
   return (
-    <>
-      <Group orientation="horizontal" className="h-full">
-        <Panel id="main" minSize={480}>
-          <div className="flex h-full flex-col">
-            <TopBar />
-            <Group orientation="horizontal" className="min-h-0 flex-1">
-              {hasDeck && (
-                <>
-                  <SidePanel
-                    id="rail"
-                    open={railOpen}
-                    onOpenChange={useApp.getState().setRailOpen}
-                    defaultSize={220}
-                    minSize={150}
-                    maxSize={360}
-                  >
-                    {/* The slide list stays mounted so its thumbnails do not load all over again. */}
-                    <div className={cn("h-full", mode === "git" && "hidden")}>
-                      <SlideRail />
-                    </div>
-                    {mode === "git" && <ChangesRail />}
-                  </SidePanel>
-                  <ResizeHandle />
-                </>
-              )}
-              <Panel id="stage" minSize={360}>
-                {hasDeck ? (
-                  <div className="flex h-full flex-col">
-                    <div className="min-h-0 flex-1">
-                      {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
-                    </div>
-                    {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
-                    {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
+    <Group orientation="horizontal" className="h-full">
+      <Panel id="main" minSize={480}>
+        <div className="flex h-full flex-col">
+          <TopBar />
+          <Group orientation="horizontal" className="min-h-0 flex-1">
+            {hasDeck && (
+              <>
+                <SidePanel
+                  id="rail"
+                  open={railOpen}
+                  onOpenChange={useApp.getState().setRailOpen}
+                  defaultSize={220}
+                  minSize={150}
+                  maxSize={360}
+                >
+                  {/* The slide list stays mounted so its thumbnails do not load all over again. */}
+                  <div className={cn("h-full", mode === "git" && "hidden")}>
+                    <SlideRail />
                   </div>
-                ) : (
-                  <FileViewer />
-                )}
-              </Panel>
-            </Group>
-          </div>
-        </Panel>
-        <ResizeHandle />
-        <SidePanel
-          id="sidebar"
-          open={sidebarOpen}
-          onOpenChange={useApp.getState().setSidebarOpen}
-          defaultSize={380}
-          minSize={260}
-          // Up to two thirds of the window, however wide it is, the slides keeping the rest.
-          maxSize={SIDEBAR_MAX_SIZE}
-        >
-          {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
-          <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
-            <Sidebar />
-          </div>
-        </SidePanel>
-      </Group>
-      {/* The keyboard shortcuts, for the whole workbench: `?` or a button opens them. */}
-      <ShortcutHelp />
-    </>
+                  {mode === "git" && <ChangesRail />}
+                </SidePanel>
+                <ResizeHandle />
+              </>
+            )}
+            <Panel id="stage" minSize={360}>
+              {hasDeck ? (
+                <div className="flex h-full flex-col">
+                  <div className="min-h-0 flex-1">
+                    {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
+                  </div>
+                  {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
+                  {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
+                </div>
+              ) : (
+                <FileViewer />
+              )}
+            </Panel>
+          </Group>
+        </div>
+      </Panel>
+      <ResizeHandle />
+      <SidePanel
+        id="sidebar"
+        open={sidebarOpen}
+        onOpenChange={useApp.getState().setSidebarOpen}
+        defaultSize={380}
+        minSize={260}
+        // Up to two thirds of the window, however wide it is, the slides keeping the rest.
+        maxSize={SIDEBAR_MAX_SIZE}
+      >
+        {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
+        <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
+          <Sidebar />
+        </div>
+      </SidePanel>
+    </Group>
   );
 }
 

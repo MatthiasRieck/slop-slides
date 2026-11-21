@@ -40,6 +40,7 @@ mod rewind;
 mod safety;
 mod screens;
 mod sessions;
+mod settings;
 mod size;
 mod sound;
 mod stamp;
@@ -79,19 +80,22 @@ pub fn run() {
     }
     // Asked on a thread of its own: the window does not wait for the user's shell profile.
     env::adopt_login_shell_env();
-    let builder = tauri::Builder::default();
-    #[cfg(target_os = "macos")]
-    let builder = builder.menu(windows::menu).setup(|app| {
+    let builder = tauri::Builder::default().setup(|app| {
+        // The first window is built here, not from the configuration (`"create": false`
+        // there): only a window built in code can be handed the settings before its page
+        // loads (see `windows::open_first`).
+        windows::open_first(app.handle())?;
+        #[cfg(target_os = "macos")]
         windows::dock::add_menu(app.handle());
-        for window in app.webview_windows().values() {
-            windows::paint(window);
-        }
         Ok(())
     });
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(windows::menu);
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentManager::default())
+        .manage(settings::Settings::load_from_home())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
         .manage(windows::PendingFolders::default())
@@ -212,6 +216,10 @@ pub fn run() {
             commands::chat::set_permission_mode,
             commands::chat::agent_running,
             commands::chat::list_providers,
+            commands::settings::get_settings,
+            commands::settings::update_settings,
+            commands::settings::busy_providers,
+            commands::settings::check_environment,
             commands::templates::list_templates,
             commands::templates::stage_template,
             commands::templates::apply_template,
@@ -323,5 +331,18 @@ mod window_config_tests {
         assert_eq!(position["y"].as_f64(), Some((56.0 - 14.0) / 2.0 + 9.0));
         // Leaves room before the `pl-[84px]` content padding.
         assert!(position["x"].as_f64().unwrap() + 54.0 < 84.0);
+    }
+
+    #[test]
+    fn the_first_window_is_built_in_code_not_from_the_configuration() {
+        // `windows::open_first` builds it from this configuration, with the settings in its
+        // initialization script. Created by Tauri as well, there would be two called `main`.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0]["create"], false);
+        assert_eq!(crate::windows::FIRST_LABEL, "main");
+        assert!(windows[0]["label"].is_null(), "the default label: main");
     }
 }

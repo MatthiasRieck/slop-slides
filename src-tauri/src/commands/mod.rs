@@ -9,6 +9,7 @@ pub mod export;
 pub mod git;
 pub mod history;
 pub mod narration;
+pub mod settings;
 pub mod templates;
 pub mod voice;
 pub mod workspace;
@@ -112,6 +113,7 @@ mod command_thread_tests {
             include_str!("git.rs"),
             include_str!("history.rs"),
             include_str!("narration.rs"),
+            include_str!("settings.rs"),
             include_str!("templates.rs"),
             include_str!("voice.rs"),
             include_str!("workspace.rs"),
@@ -167,6 +169,17 @@ mod command_thread_tests {
         ] {
             assert_eq!(command_attribute(name), "#[tauri::command]", "{name}");
         }
+    }
+
+    #[test]
+    fn settings_changes_keep_their_order() {
+        // Two switches flipped one after the other: the file ends as the later change left it.
+        assert_eq!(command_attribute("update_settings"), "#[tauri::command]");
+        // Waits for the shell's environment, which can take seconds after the app starts.
+        assert_eq!(
+            command_attribute("check_environment"),
+            "#[tauri::command(async)]"
+        );
     }
 
     #[test]

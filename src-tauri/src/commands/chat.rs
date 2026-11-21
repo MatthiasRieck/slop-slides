@@ -13,6 +13,7 @@ use crate::permissions;
 use crate::providers;
 use crate::rewind;
 use crate::sessions::{self, OpenedThread, Thread};
+use crate::settings::Settings;
 use crate::workspace::{self, OpenWorkspace};
 
 /// The chat of `id`: a deck's (its file's path), or a folder's own. It goes to the frontend as
@@ -163,10 +164,15 @@ pub fn interrupt_agent(agent: State<AgentManager>, id: String) {
 #[tauri::command]
 pub async fn steer_agent(
     agent: State<'_, AgentManager>,
+    settings: State<'_, Settings>,
     chat: String,
     prompt: String,
     message: Option<String>,
 ) -> Result<bool> {
+    // A provider that is off takes no message, not into a turn it still has running either.
+    if let Some(provider) = agent.provider_of(&chat) {
+        settings.require_enabled(provider)?;
+    }
     Ok(agent.steer(&chat, &prompt, message.as_deref()).await)
 }
 

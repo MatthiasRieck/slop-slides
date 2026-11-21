@@ -152,8 +152,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   A window is named after what is open in it (the deck and its folder), and asks before it
   closes over unsaved HTML edits (**Save**, **Don't save** or **Cancel**, as when the deck or
   the HTML tab closes), a drawing with changes not accepted, or the agent's running turn.
-- **Keyboard:** `?` (or ⌘/, Ctrl+/ on Windows and Linux) lists every shortcut, by where it works:
-  the slides, View, Edit, text, the chat, presenting, the HTML and SVG editors. Tooltips name a
+- **Keyboard:** `?` (or ⌘/, Ctrl+/ on Windows and Linux) lists every shortcut in Settings ›
+  Keyboard shortcuts, by where it works: the slides, View, Edit, text, the chat, presenting, the
+  HTML and SVG editors; the box over the list filters it by keys or by what they do. Tooltips name a
   button's shortcut as the system writes it (⌘Z on macOS, Ctrl+Z elsewhere), also on a button
   that is off, where the tooltip says what it waits for. Escape closes what opened last, one
   thing at a time: a menu, a popover, a dialog, then a message; in a field it first does what
@@ -161,12 +162,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   closes what is open in the app. Menus take the arrow keys, Home and End, and so do tabs;
   a dialog keeps Tab and the keys inside it and gives the focus back when it closes.
   ⌘1, ⌘2 and ⌘3 go to View, Edit and Git; ⌘\ shows or hides the sidebar and ⇧⌘\ the slide
-  list; ⌘, opens the app's settings and ⌘O another folder (Ctrl on Windows and Linux). The
-  keyboard button at the bottom of the sidebar opens the list too.
-- **Settings:** **App settings** (the gear at the bottom of the sidebar, ⌘,) are the app's, for
-  every deck: its appearance, what undoing an agent's changes does to the chat, where the
-  library is, and the app's version. **Deck settings** (the file menu) are the open deck's:
-  its title, slide size and style; **Done** or Escape goes back to the mode they opened from.
+  list; ⌘, opens the app's settings and ⌘O another folder (Ctrl on Windows and Linux).
+- **Settings:** **Settings** (the gear in the top bar, left of Export, or ⌘,) are the app's, for
+  every deck and window, in a dialog with its sections on the left: **General** (its appearance,
+  what undoing an agent's changes does to the chat, where the library is), **Providers**,
+  **Keyboard shortcuts** and **About** (the app's version). Escape or its close button closes
+  it. The appearance, the undo choice and which providers are on are kept in
+  `~/.slopslides/settings.json`, and a change shows in every open window at once. **Deck
+  settings** (the file menu) are the open deck's: its title, slide size and style; **Done** or
+  Escape goes back to the mode they opened from.
 - **Sidebar:** its toggle (⌘\) carries a mark while the chat is out of sight and the agent
   works (a spinner) or waits for an approval (a dot), and so does the Chat tab. A tab closes
   from the × on its trailing edge or with a middle click.
@@ -175,7 +179,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   a button to open it) goes away after a few seconds, unless the pointer is on it. Up to three
   show at once.
 - **Appearance:** the app follows the system's light or dark appearance, native controls and
-  scrollbars included, unless App settings › Appearance says Light or Dark, and its request for reduced motion: nothing in the app then slides,
+  scrollbars included, unless Settings › General › Appearance says Light or Dark, and its request for reduced motion: nothing in the app then slides,
   fades or spins, and lists jump instead of scrolling. A slide's own animations are the deck's.
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come

@@ -25,7 +25,7 @@ import {
   settleReply,
   type UserMessage,
 } from "./messages";
-import { followChatProvider, turnSettings } from "./models";
+import { followChatProvider, reconcileModels, turnedOffMessage, turnedOffProvider, turnSettings } from "./models";
 import { buildPrompt, withRevertNotes } from "./prompts";
 import { commentsInScope, flushReview, heldComment } from "./review";
 import type { AppState, AppStore, Slice } from "./types";
@@ -103,6 +103,9 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   send: async (text, options) => {
     const { chatKey: chat, running, selection } = get();
     if (!chat) return;
+    // A provider turned off in the settings takes no turn (the backend refuses it too).
+    const off = turnedOffProvider(get());
+    if (off) return showErrorIn(app, turnedOffMessage(off));
     if (running) return enqueue(app, text, options);
     // Typed as a message, the command still compacts rather than reaching the agent as text.
     if (text.trim() === COMPACT_COMMAND) return get().compact();
@@ -218,6 +221,8 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
       revertNotes: [],
       chatRevision: s.chatRevision + 1,
     }));
+    // The new chat is no provider's yet: a selection the old one held on a provider turned off moves on.
+    reconcileModels(app);
     get().focusComposer();
   },
 });
@@ -305,6 +310,8 @@ function restoreChat(app: AppStore, key: string, chat: unknown, running: boolean
     sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null,
   });
   followChatProvider(app);
+  // A chat that is no provider's holds no selection on one turned off, as the chat before it may have.
+  reconcileModels(app);
 }
 
 /**

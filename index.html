@@ -6,9 +6,10 @@
     <title>SlopSlide</title>
     <!--
       The window's background in the chosen appearance, before the app's code and styles load, so
-      a dark window does not start white. The colors are `--background` of src/index.css, and the
-      script does what `applyAppearance` in src/lib/theme.ts does; src/test/firstPaint.test.ts
-      holds both to it.
+      a dark window does not start white. The colors are `--background` of src/index.css. The
+      appearance is one of the app's settings, which the app hands the window before the page
+      loads (`__SLOPSLIDE_SETTINGS__`, see src/lib/settings.ts); the script does what
+      `applyAppearance` in src/lib/theme.ts does, and src/test/firstPaint.test.ts holds both to it.
     -->
     <style>
       html { background: oklch(0.992 0 0); color-scheme: light; }
@@ -16,12 +17,9 @@
     </style>
     <script>
       (function () {
-        var choice = null;
-        try {
-          choice = localStorage.getItem("slopslide.appearance");
-        } catch (error) {
-          // Storage is unavailable: as the system shows.
-        }
+        var handed = window.__SLOPSLIDE_SETTINGS__;
+        // Without them (the browser preview): as the system shows.
+        var choice = handed && handed.settings ? handed.settings.appearance : null;
         var dark = choice === "dark" || (choice !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.classList.toggle("dark", dark);
       })();

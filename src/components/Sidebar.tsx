@@ -4,12 +4,10 @@ import {
   ChevronRight,
   Code2,
   Files,
-  Keyboard,
   Maximize2,
   MessageSquare,
   Minimize2,
   Plus,
-  Settings,
   Shapes,
   StickyNote,
   X,
@@ -19,11 +17,9 @@ import { type ReactNode, useEffect, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
 import { useMenuKeys } from "../hooks/useMenuKeys";
 import { useRovingTabs } from "../hooks/useRovingTabs";
-import { formatKeys } from "../lib/keys";
 import { scrollBehavior } from "../lib/motion";
-import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn, isMac } from "../lib/utils";
-import { openShortcutHelp, SIDEBAR_TABS, type SidebarTab, settleUnsavedEdits, useApp } from "../store";
+import { SIDEBAR_TABS, type SidebarTab, settleUnsavedEdits, useApp } from "../store";
 import { hiddenChatAttention } from "../store/attention";
 import { selectedSlideNarrated } from "../store/chrome";
 import { useSvgEditor } from "../svgStore";
@@ -34,7 +30,6 @@ import { FileTree } from "./FileTree";
 import { CodePanel, SvgEditor } from "./lazy";
 import { NarrationPanel } from "./NarrationPanel";
 import { NotesPanel } from "./NotesPanel";
-import { SettingsPanel } from "./SettingsPanel";
 import { SidebarToggle } from "./TopBar";
 
 interface TabKind {
@@ -89,12 +84,6 @@ const TABS: Record<SidebarTab, TabKind> = {
     render: () => <SvgEditor />,
     close: () => void useSvgEditor.getState().close(),
   },
-  settings: {
-    label: "App settings",
-    hint: "How the app looks and behaves, for every deck",
-    icon: Settings,
-    render: () => <SettingsPanel />,
-  },
 };
 
 /**
@@ -108,8 +97,9 @@ async function closeCodeTab() {
 
 /**
  * The right sidebar, from the top of the window to the bottom: a tab for each surface open in it
- * (the chat, the workspace's files, the slide's narration and notes, the deck's HTML, the app's settings, …), each closable, and a `+` to open another;
- * the maximize and hide buttons at its top right; the app's settings and the keyboard shortcuts at its bottom left. Maximized, it covers the whole window.
+ * (the chat, the workspace's files, the slide's narration and notes, the deck's HTML, …), each
+ * closable, and a `+` to open another; the maximize and hide buttons at its top right. Maximized,
+ * it covers the whole window.
  */
 export function Sidebar() {
   const tabs = useApp((s) => s.sidebarTabs);
@@ -146,27 +136,6 @@ export function Sidebar() {
           </div>
         ))}
         {!active && <NoTabs />}
-      </div>
-      <div className="flex h-10 shrink-0 items-center gap-1 border-t px-2">
-        <ToolButton
-          variant="panel"
-          size="md"
-          label="App settings"
-          shortcut={SHELL_SHORTCUTS.appSettings}
-          active={active === "settings"}
-          onClick={() => useApp.getState().setSidebarTab("settings")}
-        >
-          <Settings className="size-4" />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          size="md"
-          label="Keyboard shortcuts"
-          title={`Keyboard shortcuts (?, ${formatKeys("mod+/")})`}
-          onClick={openShortcutHelp}
-        >
-          <Keyboard className="size-4" />
-        </ToolButton>
       </div>
     </div>
   );

@@ -15,6 +15,7 @@ import {
   type PermissionMode,
   type PermissionModes,
 } from "../lib/permissions";
+import type { AppSettings } from "../lib/settings";
 import { loadJson, loadText, saveJson } from "../lib/storage";
 import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
@@ -102,13 +103,20 @@ function loadFavorites(): string[] {
   );
 }
 
-/** Moves a selection that is no longer offered onto an installed provider's default model. */
+/**
+ * Moves a selection that is no longer offered onto an installed provider's default model: the
+ * first of those turned on (`enabled`, from the settings; all of them without it), so a provider
+ * turned off gives up the selection. A `locked` one stays with its provider, on or off: the chat
+ * is that provider's (see `turnedOffProvider` for what becomes of it).
+ */
 export function reconcileSelection(
   selection: ModelSelection,
   providers: ProviderInfo[],
   locked = false,
+  enabled?: AppSettings["providers"],
 ): ModelSelection {
-  const current = providers.find((p) => p.id === selection.provider);
+  const offered = locked || !enabled ? providers : providers.filter((p) => enabled[p.id]?.enabled !== false);
+  const current = offered.find((p) => p.id === selection.provider);
   const model = current?.models.find((m) => m.id === selection.model);
   if (model) {
     return {
@@ -120,7 +128,7 @@ export function reconcileSelection(
   }
   // A provider whose models could not be listed keeps the saved choice rather than losing it.
   if (current?.installed && current.error) return selection;
-  const fallback = (locked ? [current] : [current, ...providers]).find((p) => p?.installed && p.models.length > 0);
+  const fallback = (locked ? [current] : [current, ...offered]).find((p) => p?.installed && p.models.length > 0);
   const next = fallback && defaultModel(fallback);
   if (!fallback || !next) return selection;
   return {
@@ -138,6 +146,34 @@ export function chatProvider(state: Pick<AppState, "messages" | "sessionProvider
   const reply = state.messages.findLast((m) => m.role === "assistant");
   if (reply?.role === "assistant") return reply.provider ?? "claude";
   return state.messages.length > 0 ? state.selection.provider : null;
+}
+
+/**
+ * The provider the next message would go to (the chat's, else the selected model's) when the
+ * settings have it turned off: it takes no turn then, and the composer says so. Null while it is on.
+ */
+export function turnedOffProvider(
+  state: Pick<AppState, "messages" | "sessionProvider" | "selection" | "settings">,
+): Provider | null {
+  const provider = chatProvider(state) ?? state.selection.provider;
+  return state.settings.providers[provider]?.enabled === false ? provider : null;
+}
+
+/** What the app says, as the backend does, of a message for a provider that is turned off. */
+export const turnedOffMessage = (provider: Provider) =>
+  `${PROVIDERS[provider].cli} is turned off. Turn it on in Settings > Providers to continue this chat.`;
+
+/**
+ * Moves the selection off a model that is no longer offered, as the providers known and the
+ * settings have it now: after a provider was turned off, here or in another window, and once a
+ * chat that held the selection on such a provider gives way to one that is no provider's yet.
+ */
+export function reconcileModels(app: AppStore) {
+  const { selection, providers, settings } = app.getState();
+  if (!providers?.length) return;
+  const next = reconcileSelection(selection, providers, chatProvider(app.getState()) !== null, settings.providers);
+  const same = (Object.keys(next) as (keyof ModelSelection)[]).every((key) => next[key] === selection[key]);
+  if (!same) saveSelection(app, next);
 }
 
 /** Moves the selection onto the provider the chat is locked to (see `chatProvider`), if it is on another one. */
@@ -206,8 +242,10 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
     if (quiet && !Array.isArray(result)) return;
     const providers = Array.isArray(result) ? result : [];
     set({ providers });
-    if (providers.length > 0)
-      saveSelection(app, reconcileSelection(get().selection, providers, chatProvider(get()) !== null));
+    if (providers.length > 0) {
+      const locked = chatProvider(get()) !== null;
+      saveSelection(app, reconcileSelection(get().selection, providers, locked, get().settings.providers));
+    }
   },
 
   toggleFavoriteModel: (key) => {

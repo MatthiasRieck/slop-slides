@@ -1,5 +1,5 @@
 // The workbench's own keyboard shortcuts: which keys ask for what. Acting on them is
-// hooks/useShellKeys.ts; the specs here are what the tooltips and the shortcut help show.
+// hooks/useShellKeys.ts; the specs here are what the tooltips and the list of shortcuts in the settings show.
 
 /** What a shell shortcut asks for: a mode, a panel shown or hidden, the app's settings, another folder. */
 export type ShellCommand = "view" | "edit" | "git" | "sidebar" | "rail" | "appSettings" | "openFolder";

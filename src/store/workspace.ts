@@ -6,6 +6,7 @@ import { askUnsaved, confirmStopAgent } from "./confirm";
 import { NO_EDIT_STATE } from "./editing";
 import { showErrorIn, showInfoIn } from "./errors";
 import { refreshHistory } from "./history";
+import { reconcileModels } from "./models";
 import { relativePath, workspaceName } from "./paths";
 import { flushReview, reviewLoaded } from "./review";
 import { NO_SEARCH } from "./search";
@@ -332,6 +333,8 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       running: false,
       sessionProvider: null,
     });
+    // With its chat gone, the selection is no longer held on a provider turned off.
+    reconcileModels(app);
     return true;
   },
 

@@ -1,12 +1,14 @@
-import { ArrowUp, CornerDownRight, ListEnd, Loader2, Paperclip, Square } from "lucide-react";
+import { ArrowUp, CornerDownRight, ListEnd, Loader2, Paperclip, PowerOff, Settings, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { formatKeys } from "../../lib/keys";
 import { hasOpenLayer } from "../../lib/layers";
+import { PROVIDERS } from "../../lib/models";
 import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
-import { useApp } from "../../store";
+import { openSettings, turnedOffProvider, useApp } from "../../store";
 import { lastSentText } from "../../store/messages";
+import { Button } from "../Button";
 import { EffortPicker, ModelPicker } from "../ModelPicker";
 import { COMPOSER_INPUT_ATTR, PermissionPicker } from "../Permissions";
 import { VoiceInput, type VoiceInputHandle } from "../VoiceInput";
@@ -29,7 +31,8 @@ export const SEND_TITLE = `Send (${formatKeys("enter")}) · New line (${formatKe
 /**
  * Where the user writes (or dictates) to the agent, with what goes along with the message: the
  * slide, attachments, the sketch and comments. Enter sends; while the agent works it queues, and
- * with the modifier it steers the turn. A message sent while an attachment is still being saved
+ * with the modifier it steers the turn. A chat whose provider the settings have turned off takes
+ * no message: the composer says so, with the way to the settings, and sends nothing. A message sent while an attachment is still being saved
  * waits for it. Escape in the empty input stops the agent's turn, and the up arrow brings back
  * the last message sent.
  *
@@ -43,6 +46,8 @@ export function Composer() {
   const selected = useApp((s) => s.selected);
   const slideNumber = useApp((s) => slideNumberOf(s.deck, s.selected));
   const running = useApp((s) => s.running);
+  /** The provider this chat's next message would go to, when it is turned off: nothing can be sent. */
+  const turnedOff = useApp(turnedOffProvider);
   const [includeSlide, setIncludeSlide] = useState(true);
   const attachments = useAttachments();
   const { images, screenshot, element } = attachments;
@@ -62,7 +67,8 @@ export function Composer() {
   /** Sends the message, or while the agent works queues it; `steer` sends it into the turn. */
   const send = (message: string, steer = false) => {
     const text = message.trim();
-    if (!text) return;
+    // Unsent, the draft stays for when the provider is back on.
+    if (!text || turnedOff) return;
     const options = {
       includeSlide: includeSlide && slideNumber > 0,
       attachments: attachments.attachments,
@@ -113,7 +119,7 @@ export function Composer() {
   }, [held, attachments.pending]);
 
   const submit = (steer = false) => {
-    if (dictation.dictating || held || !draft.trim()) return;
+    if (turnedOff || dictation.dictating || held || !draft.trim()) return;
     if (attachments.pending > 0) setHeld({ steer, failures: attachments.failures });
     else send(draft, steer);
   };
@@ -152,13 +158,15 @@ export function Composer() {
     }
   };
 
-  const sendTitle = dictation.dictating
-    ? "Stop and send"
-    : held
-      ? "Sends once the attachment is saved"
-      : attachments.pending > 0
-        ? "Send (waits for the attachment being saved)"
-        : SEND_TITLE;
+  const sendTitle = turnedOff
+    ? `${PROVIDERS[turnedOff].cli} is turned off.`
+    : dictation.dictating
+      ? "Stop and send"
+      : held
+        ? "Sends once the attachment is saved"
+        : attachments.pending > 0
+          ? "Send (waits for the attachment being saved)"
+          : SEND_TITLE;
 
   return (
     <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
@@ -197,6 +205,20 @@ export function Composer() {
             attachments.dragging && "border-primary ring-2 ring-primary/30",
           )}
         >
+          {turnedOff && (
+            <div
+              role="status"
+              data-testid="provider-turned-off"
+              className="flex items-center gap-2 border-b px-3.5 py-2 text-xs text-muted-foreground"
+            >
+              <PowerOff aria-hidden="true" className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">{PROVIDERS[turnedOff].cli} is turned off.</span>
+              <Button size="sm" onClick={() => openSettings("providers")} className="shrink-0">
+                <Settings />
+                Open Providers
+              </Button>
+            </div>
+          )}
           <ComposerChips
             slideNumber={slideNumber}
             includeSlide={includeSlide}
@@ -293,7 +315,7 @@ export function Composer() {
                 <button
                   type="button"
                   onClick={() => (dictation.dictating ? voiceInput.current?.finishAndSend() : submit())}
-                  disabled={!dictation.dictating && (!draft.trim() || held !== null)}
+                  disabled={turnedOff !== null || (!dictation.dictating && (!draft.trim() || held !== null))}
                   title={sendTitle}
                   aria-label={dictation.dictating ? "Stop and send" : "Send"}
                   aria-busy={held !== null || undefined}

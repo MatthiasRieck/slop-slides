@@ -23,6 +23,7 @@ beforeEach(() => {
     sidebarTab: "chat",
     sidebarTabs: ["chat", "files"],
     railOpen: true,
+    settingsSection: null,
   });
   useChanges.setState({ repository: null });
 });
@@ -71,10 +72,31 @@ describe("useShellKeys", () => {
     expect(useApp.getState().railOpen).toBe(true);
   });
 
-  it("opens the app's settings on Ctrl+,", () => {
+  it("opens the app's settings on Ctrl+,, on General, leaving the sidebar as it is", () => {
     useApp.setState({ sidebarOpen: false });
     expect(press(",")).toBe(true);
-    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "settings" });
+    expect(useApp.getState()).toMatchObject({ settingsSection: "general", sidebarOpen: false, sidebarTab: "chat" });
+    // Not with Shift, which is the text's "smaller".
+    useApp.getState().closeSettings();
+    expect(press(",", { shiftKey: true })).toBe(false);
+    expect(useApp.getState().settingsSection).toBeNull();
+  });
+
+  it("opens them from a slide preview too, and without a deck", () => {
+    useApp.setState({ deck: null });
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    act(
+      () =>
+        void window.dispatchEvent(
+          new MessageEvent("message", {
+            data: { type: "slop:key", key: ",", mod: true, shift: false },
+            source: frame.contentWindow,
+          }),
+        ),
+    );
+    expect(useApp.getState().settingsSection).toBe("general");
+    frame.remove();
   });
 
   it("asks for a folder to open on Ctrl+O", async () => {
@@ -97,7 +119,12 @@ describe("useShellKeys", () => {
     expect(press("2")).toBe(false);
     expect(press("\\")).toBe(false);
     expect(press(",")).toBe(false);
-    expect(useApp.getState()).toMatchObject({ editing: false, sidebarOpen: true, sidebarTab: "chat" });
+    expect(useApp.getState()).toMatchObject({
+      editing: false,
+      sidebarOpen: true,
+      sidebarTab: "chat",
+      settingsSection: null,
+    });
   });
 
   it("works while typing, as in the chat's composer", () => {
@@ -161,10 +188,11 @@ describe("the shell's keys, gone with what mounted them", () => {
 });
 
 describe("runShellCommand", () => {
-  it("opens nothing in the sidebar on the start screen, but still asks for a folder", () => {
+  it("opens nothing in the sidebar on the start screen, but still the settings, and asks for a folder", () => {
     useApp.setState({ workspace: null, deck: null });
     expect(runShellCommand("sidebar")).toBe(false);
-    expect(runShellCommand("appSettings")).toBe(false);
+    expect(runShellCommand("appSettings")).toBe(true);
+    expect(useApp.getState().settingsSection).toBe("general");
     expect(runShellCommand("openFolder")).toBe(true);
     expect(openDialog).toHaveBeenCalledOnce();
   });

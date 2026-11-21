@@ -5,6 +5,8 @@
 // test replaces or resets them.
 import { type Mock, vi } from "vitest";
 
+import { type AppSettings, defaultSettings, patchSettings, type SettingsPatch } from "../lib/settings";
+
 /** `@tauri-apps/api/core` */
 export const invoke: Mock = vi.fn();
 export class Channel {
@@ -81,3 +83,19 @@ export function backend(handlers: Record<string, Handler>) {
 /** The arguments of every call of `command`, in order. */
 export const calls = (command: string) =>
   invoke.mock.calls.filter(([c]) => c === command).map(([, args]) => args as Record<string, unknown>);
+
+/**
+ * The backend's part of the app's settings, for `backend`: it keeps them, starting from the
+ * defaults with `initial` over them, and answers `get_settings` and `update_settings` as the app
+ * does, short of telling the windows.
+ */
+export function settingsBackend(initial: SettingsPatch = {}): Record<string, Handler> {
+  let settings: AppSettings = patchSettings(defaultSettings(), initial);
+  return {
+    get_settings: () => settings,
+    update_settings: ({ patch }) => {
+      settings = patchSettings(settings, patch as SettingsPatch);
+      return settings;
+    },
+  };
+}

@@ -20,6 +20,7 @@ use tauri::{
 
 use crate::agent::AgentManager;
 use crate::error::{Error, Result};
+use crate::settings::{Appearance, Settings};
 use crate::watcher::WorkspaceWatcher;
 use crate::workspace::OpenWorkspace;
 
@@ -101,7 +102,7 @@ fn target(
     }
     // Before the first window is up (the app was started by opening a folder), it is `main`.
     if windows.is_empty() {
-        return Target::Use("main".into());
+        return Target::Use(FIRST_LABEL.into());
     }
     windows
         .iter()
@@ -194,11 +195,20 @@ const CASCADE: f64 = 28.0;
 
 /// Whether `label` is an app window (not, say, the hidden one a PDF export prints from).
 pub fn is_app_window(label: &str) -> bool {
-    label == "main" || label.starts_with(LABEL_PREFIX)
+    label == FIRST_LABEL || label.starts_with(LABEL_PREFIX)
 }
 
 fn new_label() -> String {
     format!("{LABEL_PREFIX}{}", uuid::Uuid::new_v4().simple())
+}
+
+/// The label of the first app window.
+pub const FIRST_LABEL: &str = "main";
+
+/// Opens the first app window when the app starts. Tauri would open it from the configuration
+/// itself, but then nothing could be handed to its page before it loads (see [`build`]).
+pub fn open_first(app: &AppHandle) -> Result<()> {
+    build(app, FIRST_LABEL)
 }
 
 /// Opens another app window, configured like the first, on the start screen.
@@ -206,8 +216,11 @@ pub fn open_new(app: &AppHandle) -> Result<()> {
     build(app, &new_label())
 }
 
-/// Builds an app window labeled `label`, configured like the first.
+/// Builds an app window labeled `label`, from the app's window configuration. Its page finds
+/// the settings there before any of its own scripts run (see [`Settings::init_script`]), so it
+/// draws in the chosen appearance from its first frame.
 fn build(app: &AppHandle, label: &str) -> Result<()> {
+    let settings = app.state::<Settings>();
     let mut config = app
         .config()
         .app
@@ -217,14 +230,15 @@ fn build(app: &AppHandle, label: &str) -> Result<()> {
         .ok_or_else(|| Error::msg("no window configuration"))?;
     config.label = label.to_string();
     let mut builder = WebviewWindowBuilder::from_config(app, &config)
-        .map_err(|e| Error::msg(format!("cannot open a window: {e}")))?;
+        .map_err(|e| Error::msg(format!("cannot open a window: {e}")))?
+        .initialization_script(settings.init_script());
     if let Some(at) = cascaded_position(app) {
         builder = builder.position(at.x, at.y);
     }
     let window = builder
         .build()
         .map_err(|e| Error::msg(format!("cannot open a window: {e}")))?;
-    paint(&window);
+    paint(&window, settings.get().appearance);
     Ok(())
 }
 
@@ -232,16 +246,23 @@ fn build(app: &AppHandle, label: &str) -> Result<()> {
 /// show before its page has drawn anything.
 const DARK_BACKGROUND: Color = Color(10, 10, 10, 255);
 
-/// What an empty window shows on a system with `theme`: None is the light background the
-/// window's configuration already gives it.
-fn background_for(theme: Theme) -> Option<Color> {
-    matches!(theme, Theme::Dark).then_some(DARK_BACKGROUND)
+/// What an empty window shows when the app is set to `appearance` on a system with `theme`:
+/// None is the light background the window's configuration already gives it.
+fn background_for(appearance: Appearance, theme: Theme) -> Option<Color> {
+    let dark = match appearance {
+        Appearance::Dark => true,
+        Appearance::Light => false,
+        Appearance::System => matches!(theme, Theme::Dark),
+    };
+    dark.then_some(DARK_BACKGROUND)
 }
 
-/// Gives a new window the background of the system's theme, so a dark system sees no light
-/// flash before the page loads. The page's own choice of appearance takes over once it runs.
-pub fn paint(window: &WebviewWindow) {
-    let Some(color) = window.theme().ok().and_then(background_for) else {
+/// Gives a new window the background of the appearance it will draw in (`appearance`, or the
+/// system's theme when that follows the system), so a dark one sees no light flash before the
+/// page loads. The page takes over once it runs.
+pub fn paint(window: &WebviewWindow, appearance: Appearance) {
+    let theme = window.theme().unwrap_or(Theme::Light);
+    let Some(color) = background_for(appearance, theme) else {
         return;
     };
     if let Err(e) = window.set_background_color(Some(color)) {
@@ -391,9 +412,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_dark_system_changes_the_background_a_window_starts_with() {
-        assert_eq!(background_for(Theme::Light), None);
-        assert_eq!(background_for(Theme::Dark), Some(DARK_BACKGROUND));
+    fn a_window_starts_with_the_background_of_the_appearance_it_will_draw_in() {
+        let dark = Some(DARK_BACKGROUND);
+        assert_eq!(background_for(Appearance::System, Theme::Light), None);
+        assert_eq!(background_for(Appearance::System, Theme::Dark), dark);
+        // The app's own choice wins over the system's.
+        assert_eq!(background_for(Appearance::Dark, Theme::Light), dark);
+        assert_eq!(background_for(Appearance::Light, Theme::Dark), None);
         // The colour the page itself draws in the dark, in index.html and src/index.css.
         let page = include_str!("../../index.html");
         assert!(page.contains("html.dark { background: oklch(0.145 0 0)"));

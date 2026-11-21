@@ -4,7 +4,7 @@ import { vi } from "vitest";
 
 import type { AgentEvent, HistoryEntry } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ask, backend, calls, type Handler, invoke, listen } from "../test/tauri";
+import { ask, backend, calls, type Handler, invoke, listen, settingsBackend } from "../test/tauri";
 import type { AssistantMessage, UserMessage } from "./messages";
 
 /** Handlers registered through `listen`, by event name. */
@@ -41,7 +41,7 @@ export async function freshStore(withWorkspace = true) {
 export type TestStore = Awaited<ReturnType<typeof freshStore>>;
 
 // The scripted backend, kept with the Tauri mocks; here too for the store's tests.
-export { backend, calls, type Handler };
+export { backend, calls, type Handler, settingsBackend };
 
 /** The prompts sent to the agent, in order. */
 export const prompts = () => calls("send_message").map((c) => (c.args as { prompt: string }).prompt);

@@ -1,21 +1,20 @@
-// The app's appearance: light, dark, or whatever the system shows. The choice is remembered in
-// storage, which every window of the app shares, and shows as the `dark` class on the document.
-import { loadText, saveText } from "./storage";
+// The app's appearance: light, dark, or whatever the system shows. The choice is one of the app's
+// settings (see ./settings.ts), which every window of the app shares, and shows as the `dark`
+// class on the document.
+import { listen } from "@tauri-apps/api/event";
 
-/** The appearances to choose from, in the order the settings offer them. */
-export const APPEARANCES = ["system", "light", "dark"] as const;
-export type Appearance = (typeof APPEARANCES)[number];
+import { type Appearance, injectedSettings, readSettings, SETTINGS_CHANGED } from "./settings";
 
-export const APPEARANCE_KEY = "slopslide.appearance";
-
-const isAppearance = (value: unknown): value is Appearance => APPEARANCES.includes(value as Appearance);
+export { APPEARANCES, type Appearance } from "./settings";
 
 const systemDark = () => window.matchMedia("(prefers-color-scheme: dark)");
 
-/** The appearance the user chose; `system` until they choose one. */
-export function loadAppearance(): Appearance {
-  const saved = loadText(APPEARANCE_KEY);
-  return isAppearance(saved) ? saved : "system";
+/** The appearance shown since this window loaded; until one is, the one the window started with. */
+let chosen: Appearance | null = null;
+
+/** The appearance the window shows: the one the settings had as it loaded, or the one shown since. */
+export function shownAppearance(): Appearance {
+  return chosen ?? injectedSettings().appearance;
 }
 
 /** Whether `appearance` shows dark, the system showing dark or not. */
@@ -23,32 +22,33 @@ export function showsDark(appearance: Appearance, systemIsDark: boolean): boolea
   return appearance === "system" ? systemIsDark : appearance === "dark";
 }
 
-/** Shows the app in `appearance`. */
-export function applyAppearance(appearance: Appearance = loadAppearance()): void {
+/** Shows the app in `appearance`, from now on (see `followAppearance`). */
+export function applyAppearance(appearance: Appearance = shownAppearance()): void {
+  chosen = appearance;
   document.documentElement.classList.toggle("dark", showsDark(appearance, systemDark().matches));
-}
-
-/** Remembers `appearance` and shows the app in it right away; throws when storage is full or unavailable. */
-export function setAppearance(appearance: Appearance): void {
-  applyAppearance(appearance);
-  saveText(APPEARANCE_KEY, appearance === "system" ? null : appearance);
 }
 
 /**
  * Shows the app in the chosen appearance and keeps it so: when the system's changes (which
- * `system` follows) and when another window of the app changes the choice. Returns what stops it.
+ * `system` follows) and when the settings change, in this window or another. Returns what stops it.
  */
 export function followAppearance(): () => void {
   const media = systemDark();
   const apply = () => applyAppearance();
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === APPEARANCE_KEY || event.key === null) apply();
-  };
+  let stopped = false;
   apply();
   media.addEventListener("change", apply);
-  window.addEventListener("storage", onStorage);
+  // Without a backend to listen to (the browser preview), only the system is followed.
+  const unlisten = Promise.resolve()
+    .then(() =>
+      listen<unknown>(SETTINGS_CHANGED, ({ payload }) => {
+        if (!stopped) applyAppearance(readSettings(payload).appearance);
+      }),
+    )
+    .catch(() => undefined);
   return () => {
+    stopped = true;
     media.removeEventListener("change", apply);
-    window.removeEventListener("storage", onStorage);
+    void unlisten.then((off) => off?.());
   };
 }

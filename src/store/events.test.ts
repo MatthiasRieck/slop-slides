@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Deck } from "../lib/api";
+import { defaultSettings } from "../lib/settings";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke, listen } from "../test/tauri";
 import { lastError } from "./errors";
@@ -125,6 +126,34 @@ describe("agent events", () => {
     expect(failing.useApp.getState().booted).toBe(true);
   });
 
+  it("asks for the settings as it starts: those handed to the window are as old as the window", async () => {
+    const store = await freshModule(false);
+    const settings = { ...defaultSettings(), rewind: "deck" as const };
+    backend({ get_settings: () => settings });
+    await store.initEventBridge();
+    await vi.waitFor(() => expect(store.useApp.getState().settings).toEqual(settings));
+  });
+
+  it("keeps the settings it has when the backend gives none", async () => {
+    for (const answer of [undefined, [], "no"]) {
+      const store = await freshModule(false);
+      const before = store.useApp.getState().settings;
+      backend({ get_settings: () => answer });
+      await store.initEventBridge();
+      await Promise.resolve();
+      expect(store.useApp.getState().settings).toBe(before);
+    }
+    const store = await freshModule(false);
+    backend({
+      get_settings: () => {
+        throw "no";
+      },
+    });
+    await store.initEventBridge();
+    expect(store.useApp.getState().settings).toEqual(defaultSettings());
+    expect(lastError(store.useApp.getState())).toBeNull();
+  });
+
   it("registers its listeners together, not one after the other", async () => {
     const store = await freshModule(false);
     backend({});
@@ -139,8 +168,10 @@ describe("agent events", () => {
     });
     try {
       const bridge = store.initEventBridge();
-      // All three are asked for before the first has answered.
-      await vi.waitFor(() => expect(registered).toEqual(["agent-event", "workspace-changed", "folder-pending"]));
+      // All four are asked for before the first has answered.
+      await vi.waitFor(() =>
+        expect(registered).toEqual(["agent-event", "workspace-changed", "settings-changed", "folder-pending"]),
+      );
       expect(calls("take_pending_folder")).toEqual([]);
       release();
       await bridge;

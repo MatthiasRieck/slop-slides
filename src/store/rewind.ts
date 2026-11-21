@@ -1,25 +1,12 @@
 import { api, type HistoryEntry } from "../lib/api";
-import { loadText, saveText } from "../lib/storage";
+import type { RewindSetting } from "../lib/settings";
 import { showErrorIn } from "./errors";
 import { persistChat } from "./messages";
 import { quoteLabel, rewindNote } from "./prompts";
 import type { AppStore, Slice } from "./types";
 
 /** How the chat follows when the deck changes of an agent turn are undone (see `answerRewind`). */
-export type RewindChoice = "rewind" | "deck";
-/** The answer to keep giving, once the user asked not to be asked again. */
-export const REWIND_KEY = "slopslide.rewindChoice";
-
-/** The answer kept under `REWIND_KEY`; null while the user wants to be asked. */
-export function rememberedRewind(): RewindChoice | null {
-  const saved = loadText(REWIND_KEY);
-  return saved === "rewind" || saved === "deck" ? saved : null;
-}
-
-/** Keeps giving `choice` from now on; null asks again. Throws when storage is full or unavailable. */
-export function rememberRewind(choice: RewindChoice | null) {
-  saveText(REWIND_KEY, choice);
-}
+export type RewindChoice = Exclude<RewindSetting, "ask">;
 
 /** The chat following the deck's history: an undone agent turn takes the chat back, or the agent is told. */
 export interface RewindSlice {
@@ -31,7 +18,7 @@ export interface RewindSlice {
   /**
    * Answers `rewindAsk`: also take the chat back to before the turn's message, keep the chat and
    * tell the agent with the next message, or (null) leave the chat alone. `remember` keeps the
-   * answer for next time.
+   * answer for next time, in the app's settings.
    */
   answerRewind: (choice: RewindChoice | null, remember?: boolean) => Promise<void>;
   /** Stops telling the agent that the changes of the turn of `message` were undone. */
@@ -46,20 +33,20 @@ export const createRewindSlice: Slice<RewindSlice> = (set, get, app) => ({
     const entry = get().rewindAsk;
     set({ rewindAsk: null });
     if (!entry || !choice) return;
-    if (remember) rememberRewind(choice);
+    if (remember) await get().updateSettings({ rewind: choice });
     await applyRewind(app, entry, choice);
   },
 
   dropRevertNote: (message) => set((s) => ({ revertNotes: s.revertNotes.filter((n) => n.message !== message) })),
 });
 
-/** The deck changes of an agent turn were undone: asks whether the chat follows, unless told before. */
+/** The deck changes of an agent turn were undone: asks whether the chat follows, unless the settings say. */
 export function turnUndone(app: AppStore, entry: HistoryEntry) {
   const message = app.getState().messages.find((m) => m.id === entry.message);
   if (message?.role !== "user" || message.reverted) return;
-  const remembered = rememberedRewind();
-  if (remembered) void applyRewind(app, entry, remembered);
-  else app.setState({ rewindAsk: entry });
+  const { rewind } = app.getState().settings;
+  if (rewind === "ask") app.setState({ rewindAsk: entry });
+  else void applyRewind(app, entry, rewind);
 }
 
 /** Redoing an agent turn kept in the chat takes back what undoing it told the agent. */

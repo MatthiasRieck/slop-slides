@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { freshStore, resetBackend } from "./testing";
+import { freshModule, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
 
@@ -26,13 +26,27 @@ describe("sidebar", () => {
     localStorage.clear();
     let useApp = await freshStore();
     expect(useApp.getState().sidebarTabs).toEqual(["chat", "files"]);
-    useApp.getState().setSidebarTab("settings");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files", "settings"], sidebarTab: "settings" });
+    useApp.getState().setSidebarTab("notes");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files", "notes"], sidebarTab: "notes" });
     useApp.getState().setSidebarTab("chat");
-    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "settings"]);
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "notes"]);
     useApp.getState().closeSidebarTab("files");
     useApp = await freshStore();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "chat" });
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "notes"], sidebarTab: "chat" });
+  });
+
+  it("drops the settings tab of a layout saved before the settings became a dialog, saying nothing", async () => {
+    localStorage.clear();
+    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["chat", "settings", "files"]));
+    localStorage.setItem("slopslide.sidebarTab", "settings");
+    let useApp = await freshStore();
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files"], sidebarTab: "chat", toasts: [] });
+    // It was the only tab open: none is, and the sidebar opens on the chat as from any empty one.
+    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["settings"]));
+    useApp = await freshStore();
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null, toasts: [] });
+    useApp.getState().setSidebarOpen(true);
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarTab: "chat" });
   });
 
   it("maximizes the sidebar over the window, opening it, and never leaves a closed one maximized", async () => {
@@ -55,14 +69,14 @@ describe("sidebar", () => {
   it("shows the tab beside a closed one, and none once all are closed", async () => {
     localStorage.clear();
     let useApp = await freshStore();
-    useApp.getState().setSidebarTab("settings");
+    useApp.getState().setSidebarTab("notes");
     useApp.getState().setSidebarTab("files");
     useApp.getState().closeSidebarTab("files");
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "settings" });
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "notes"], sidebarTab: "notes" });
     useApp.getState().closeSidebarTab("chat");
-    expect(useApp.getState().sidebarTab).toBe("settings");
-    useApp.getState().closeSidebarTab("settings");
-    useApp.getState().closeSidebarTab("settings");
+    expect(useApp.getState().sidebarTab).toBe("notes");
+    useApp.getState().closeSidebarTab("notes");
+    useApp.getState().closeSidebarTab("notes");
     expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
     useApp = await freshStore();
     expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null, sidebarOpen: false });
@@ -164,4 +178,26 @@ describe("flags kept across launches", () => {
       expect(useApp.getState()[flag]).toBe(fallback);
     },
   );
+});
+
+describe("the app's settings dialog", () => {
+  it("is closed until opened, on General unless a section is asked for", async () => {
+    const { useApp, openSettings } = await freshModule();
+    expect(useApp.getState().settingsSection).toBeNull();
+    useApp.getState().openSettings();
+    expect(useApp.getState().settingsSection).toBe("general");
+    useApp.getState().closeSettings();
+    expect(useApp.getState().settingsSection).toBeNull();
+    openSettings("providers");
+    expect(useApp.getState().settingsSection).toBe("providers");
+    // Open already, it goes to the section asked for.
+    openSettings("keyboard");
+    expect(useApp.getState().settingsSection).toBe("keyboard");
+    openSettings();
+    expect(useApp.getState().settingsSection).toBe("general");
+  });
+
+  it("lists its sections in the order the dialog shows them", async () => {
+    expect((await freshModule()).SETTINGS_SECTIONS).toEqual(["general", "providers", "keyboard", "about"]);
+  });
 });

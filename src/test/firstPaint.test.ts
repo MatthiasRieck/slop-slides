@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APPEARANCE_KEY, APPEARANCES, showsDark } from "../lib/theme";
+import { APPEARANCES, showsDark } from "../lib/theme";
 
 const read = (path: string) => readFileSync(resolve(__dirname, "../..", path), "utf8");
 const html = read("index.html");
@@ -36,28 +36,34 @@ describe("the window before the app's code has loaded", () => {
     expect(blockOf(inlineStyle, "html.dark")).toContain("color-scheme: dark;");
   });
 
-  it("applies the stored appearance before the app's module is asked for", () => {
-    expect(inlineScript).toContain(`"${APPEARANCE_KEY}"`);
+  it("applies the appearance the app handed the window before the app's module is asked for", () => {
+    expect(inlineScript).toContain("__SLOPSLIDE_SETTINGS__");
+    // The choice is the app's setting now, not the window's storage.
+    expect(inlineScript).not.toContain("localStorage");
     expect(html.indexOf("<script>")).toBeLessThan(html.indexOf('<script type="module"'));
     expect(html.indexOf("<style>")).toBeLessThan(html.indexOf('<script type="module"'));
   });
 
   it.each(
-    [null, ...APPEARANCES, "bogus"].flatMap((stored) => [true, false].map((systemDark) => ({ stored, systemDark }))),
-  )("shows stored $stored, the system dark $systemDark, as the app then does", ({ stored, systemDark }) => {
+    [null, ...APPEARANCES, "bogus"].flatMap((handed) => [true, false].map((systemDark) => ({ handed, systemDark }))),
+  )("shows $handed handed over, the system dark $systemDark, as the app then does", ({ handed, systemDark }) => {
     vi.stubGlobal("matchMedia", (query: string) => ({ matches: query.includes("dark") && systemDark }));
-    if (stored) localStorage.setItem(APPEARANCE_KEY, stored);
+    if (handed) vi.stubGlobal("__SLOPSLIDE_SETTINGS__", { settings: { appearance: handed }, notice: null });
+    // What storage held before the settings moved to the app's file counts no more.
+    localStorage.setItem("slopslide.appearance", systemDark ? "light" : "dark");
     // biome-ignore lint/security/noGlobalEval: runs index.html's own inline script, as the window does
     globalThis.eval(inlineScript);
-    const appearance = APPEARANCES.find((a) => a === stored) ?? "system";
+    const appearance = APPEARANCES.find((a) => a === handed) ?? "system";
     expect(document.documentElement.classList.contains("dark")).toBe(showsDark(appearance, systemDark));
   });
 
-  it("shows as the system does when storage cannot be read", () => {
+  it("shows as the system does when the app handed nothing over, or nothing that holds settings", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
-    vi.spyOn(Storage.prototype, "getItem").mockImplementationOnce(() => {
-      throw new Error("blocked");
-    });
+    // biome-ignore lint/security/noGlobalEval: runs index.html's own inline script, as the window does
+    globalThis.eval(inlineScript);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    document.documentElement.classList.remove("dark");
+    vi.stubGlobal("__SLOPSLIDE_SETTINGS__", { notice: null });
     // biome-ignore lint/security/noGlobalEval: runs index.html's own inline script, as the window does
     globalThis.eval(inlineScript);
     expect(document.documentElement.classList.contains("dark")).toBe(true);

@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "create": false,
         "title": "SlopSlide",
         "width": 1480,
         "height": 920,

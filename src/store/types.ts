@@ -10,6 +10,7 @@ import type { NarrationSlice } from "./narration";
 import type { ReviewSlice } from "./review";
 import type { RewindSlice } from "./rewind";
 import type { SearchSlice } from "./search";
+import type { SettingsSlice } from "./settings";
 import type { SlidesSlice } from "./slides";
 import type { TemplatesSlice } from "./templates";
 import type { UiSlice } from "./ui";
@@ -28,6 +29,7 @@ export type AppState = WorkspaceSlice &
   ChatSlice &
   ModelsSlice &
   UiSlice &
+  SettingsSlice &
   TemplatesSlice &
   LintSlice;
 

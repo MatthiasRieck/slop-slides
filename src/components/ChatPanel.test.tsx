@@ -482,7 +482,7 @@ describe("ChatPanel: composing", () => {
       expect(screen.getByText(text).className).toContain("@[26rem]:inline");
     }
     for (const chevron of toolbar.querySelectorAll(".lucide-chevron-down")) {
-      expect(chevron.getAttribute("class")).toContain("@[17rem]:block");
+      expect(chevron.getAttribute("class")).toContain("@[22rem]:block");
     }
   });
 

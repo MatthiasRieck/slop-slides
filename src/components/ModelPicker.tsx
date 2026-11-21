@@ -42,9 +42,10 @@ export function ModelPicker() {
         className={cn(triggerClass, "max-w-full")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
-        {/* The name always shows, cut short as room runs out; effort and permissions give way first. */}
+        {/* The name always shows, cut short as room runs out; effort and permissions give way first, and the
+            chevrons come only with room to spare (22rem), or they would take the name's. */}
         <span className="truncate font-medium text-foreground/90">{selection.label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
       </button>
       {open && (
         <Popover
@@ -397,7 +398,7 @@ export function EffortPicker() {
       >
         <Gauge className="size-3.5 @[26rem]:hidden" />
         <span className="hidden @[26rem]:inline">{label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
       </button>
       {open && (
         <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">

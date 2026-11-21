@@ -52,8 +52,9 @@ export function KeyboardSection() {
   const sections = filterShortcuts(SECTIONS, filter);
   return (
     <div className="flex flex-col gap-4">
-      {/* Stays in sight over the list, covering the pane's padding above it. */}
-      <div className="sticky top-0 z-10 -mt-5 bg-background pb-1 pt-5">
+      {/* Stays in sight over the list. A sticky box stops at the pane's content edge, below its padding,
+          so it is held that padding higher (`-top-5`) and covers it: no row shows above the box. */}
+      <div className="sticky -top-5 z-10 -mt-5 bg-background pb-1 pt-5">
         <div className="relative">
           <Search
             aria-hidden="true"

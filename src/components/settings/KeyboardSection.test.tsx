@@ -24,6 +24,15 @@ describe("KeyboardSection", () => {
     expect(screen.getByText("Steer: send into the agent's turn now")).toBeTruthy();
   });
 
+  it("keeps the filter box over the pane's top padding, so no row shows above it", () => {
+    render(<KeyboardSection />);
+    const bar = screen.getByRole("searchbox", { name: "Filter shortcuts" }).parentElement!.parentElement!;
+    // The pane pads its content by 5; the box sticks that much higher and covers the padding.
+    for (const name of ["sticky", "-top-5", "-mt-5", "pt-5", "bg-background"]) {
+      expect(bar.className.split(" ")).toContain(name);
+    }
+  });
+
   it("writes each shortcut as a key cap, as the platform writes it, the words between as they are", () => {
     render(<KeyboardSection />);
     const caps = (description: string) =>

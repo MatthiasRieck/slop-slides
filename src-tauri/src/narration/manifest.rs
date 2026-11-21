@@ -29,10 +29,41 @@ pub fn audio_dir(deck_file: &Path) -> PathBuf {
     }
 }
 
-/// A slide's narration audio: `<slide id>.wav`, or a name made from the id when it is not
-/// safe as a file name.
+/// Where the app writes a slide's narration audio (speech a service made, a recording):
+/// `<slide id>.wav`, or a name made from the id when it is not safe as a file name. Audio made
+/// elsewhere may be kept in a file of its own format instead: see [`kept_audio`].
 pub fn audio_file(deck_file: &Path, slide: &str) -> PathBuf {
     audio_dir(deck_file).join(format!("{}.wav", file_stem(slide)))
+}
+
+/// The file a slide's narration audio is kept in: the one its manifest entry names, for audio
+/// made elsewhere and kept as it came, otherwise [`audio_file`].
+pub fn kept_audio(deck_file: &Path, slide: &str) -> PathBuf {
+    let dir = audio_dir(deck_file);
+    match Manifest::read(&dir).slides.get(slide) {
+        Some(entry) => entry.path(&dir, slide),
+        None => audio_file(deck_file, slide),
+    }
+}
+
+/// The extensions audio made elsewhere keeps in its file's name; other files are named
+/// `.audio`, as what they hold says what they are.
+const KEPT_EXTENSIONS: [&str; 9] = [
+    "mp3", "m4a", "aac", "flac", "ogg", "oga", "wav", "aif", "aiff",
+];
+
+/// The name `source`, audio made elsewhere, is kept under as the audio of `slide`.
+pub(super) fn kept_name(slide: &str, source: &Path) -> String {
+    let extension = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|e| KEPT_EXTENSIONS.contains(&e.as_str()));
+    format!(
+        "{}.{}",
+        file_stem(slide),
+        extension.as_deref().unwrap_or("audio")
+    )
 }
 
 /// A name for a file kept for `slide`, safe on every platform: the id itself when it is plain
@@ -86,6 +117,10 @@ pub(super) struct Entry {
     /// recording, but a recording replaces it rather than going on from its end.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) imported: bool,
+    /// The file in the audio folder holding the audio, when it is not `<slide id>.wav`: audio
+    /// made elsewhere, kept as it came (see [`super::import_audio`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) file: Option<String>,
     /// Every word said in the audio and when, once it was heard again by the speech-to-text
     /// model (see [`super::time_words`]). Made audio is a new entry, without them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,6 +148,7 @@ impl Entry {
             seconds,
             recorded: false,
             imported: false,
+            file: None,
             timing: if words.is_some() { WORD_TIMING } else { 0 },
             words,
         }
@@ -126,8 +162,22 @@ impl Entry {
             seconds,
             recorded: true,
             imported,
+            file: None,
             words: None,
             timing: 0,
+        }
+    }
+
+    /// The file in `dir` holding the audio of `slide`, which this entry is of. A named file
+    /// is only ever one in `dir` itself.
+    pub(super) fn path(&self, dir: &Path, slide: &str) -> PathBuf {
+        let named = self
+            .file
+            .as_deref()
+            .filter(|name| Path::new(name).file_name() == Some(std::ffi::OsStr::new(name)));
+        match named {
+            Some(name) => dir.join(name),
+            None => dir.join(format!("{}.wav", file_stem(slide))),
         }
     }
 
@@ -195,6 +245,54 @@ mod tests {
             );
         }
         assert_ne!(audio_file(deck, "#3"), audio_file(deck, "#4"));
+    }
+
+    #[test]
+    fn audio_made_elsewhere_keeps_its_format_in_its_name() {
+        assert_eq!(
+            kept_name("intro", Path::new("/music/Song.MP3")),
+            "intro.mp3"
+        );
+        assert_eq!(kept_name("intro", Path::new("take.m4a")), "intro.m4a");
+        // Names the app has other uses for, or none, are not taken over.
+        assert_eq!(kept_name("manifest", Path::new("x.json")), "manifest.audio");
+        assert_eq!(kept_name("intro", Path::new("x.part")), "intro.audio");
+        assert_eq!(kept_name("intro", Path::new("sound")), "intro.audio");
+        assert!(kept_name("../x", Path::new("a.mp3")).starts_with("slide-"));
+    }
+
+    #[test]
+    fn a_slides_audio_is_the_file_its_entry_names() {
+        let dir = temp_dir();
+        let deck = dir.join("deck.html");
+        let audio = audio_dir(&deck);
+        fs::create_dir_all(&audio).unwrap();
+        assert_eq!(kept_audio(&deck, "a"), audio.join("a.wav"));
+        let named = |name: &str| Entry {
+            file: Some(name.to_string()),
+            ..Entry::recording(1.0, true)
+        };
+        Manifest::update(&audio, |m| {
+            m.slides.insert("a".into(), named("a.mp3"));
+            m.slides.insert("b".into(), Entry::recording(1.0, false));
+            // A manifest from elsewhere names no file outside the folder.
+            m.slides.insert("c".into(), named("../../secret.mp3"));
+            m.slides.insert("d".into(), named("/etc/passwd"));
+            m.slides.insert("e".into(), named(""));
+        })
+        .unwrap();
+        assert_eq!(kept_audio(&deck, "a"), audio.join("a.mp3"));
+        for slide in ["b", "c", "d", "e"] {
+            assert_eq!(kept_audio(&deck, slide), audio.join(format!("{slide}.wav")));
+        }
+        // The name is written only for such audio, and read back.
+        let json = fs::read_to_string(audio.join(MANIFEST)).unwrap();
+        assert_eq!(json.matches("\"file\"").count(), 4, "{json}");
+        assert_eq!(
+            Manifest::read(&audio).slides["a"].file.as_deref(),
+            Some("a.mp3")
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

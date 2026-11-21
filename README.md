@@ -283,7 +283,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   by a hosted text-to-speech service, OpenAI (the default) or ElevenLabs, with your own API key
   (entered in the tab, or `OPENAI_API_KEY` / `ELEVENLABS_API_KEY` in the environment), in the
   voice and one of ten languages chosen per deck. Each slide's audio is
-  `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
+  `narration/<slide id>.wav` next to the deck (audio made elsewhere that the agent sets as a slide's narration, an MP3 say, is kept there in its own format when that is smaller); a slide whose narration, voice or language
   changed is spoken again, the rest never. The tab shows the slide's audio as a waveform above its text, with each word where it is said once the words are synced to the audio (**Sync words to audio**): press it to play from there; Play pauses and plays on. When presenting, the play button in the
   bar runs the show by itself, always speaking each slide's narration, on the timeline's
   timing. The timeline under the slide (Timeline in the ribbon, in View and in Edit) shows the slides above the audio. In Edit, drag the end of a

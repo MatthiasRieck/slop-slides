@@ -10,7 +10,8 @@
 //! A slide's audio can also be the presenter's own voice, recorded in the presenter view (see
 //! [`crate::voice::Voice::record_narration`]) and marked so in the manifest. It is the slide's
 //! audio whatever its script says, and is never said again; deleting it brings the service's
-//! audio back. Audio made elsewhere (see [`set_audio`]) is kept the same way.
+//! audio back. Audio made elsewhere (see [`set_audio`]) is kept the same way, in the file it
+//! came as (an MP3 stays an MP3, named in the manifest) when that is smaller than a WAV of it.
 
 pub mod audio;
 pub mod beats;
@@ -35,9 +36,9 @@ use crate::deck::{self, Deck};
 use crate::error::{Error, Result};
 pub use cloud::{Provider, DEFAULT_PROVIDER};
 pub use generate::Outcome;
-pub use manifest::{audio_dir, audio_file, file_stem, fingerprint};
+pub use manifest::{audio_dir, audio_file, file_stem, fingerprint, kept_audio};
 use manifest::{Entry, Manifest};
-pub use recordings::{append_recording, delete_recording, refusal, set_audio, Refusal};
+pub use recordings::{append_recording, delete_recording, playable, refusal, set_audio, Refusal};
 use settings::settings;
 pub use settings::{language, provider_of, Language, Settings, DEFAULT_LANGUAGE, LANGUAGES};
 pub use words::{time_words, words, TimingProgress, TIMING_EVENT};
@@ -322,12 +323,15 @@ fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
 pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
     // The deck names who says it: the file is not read for that again.
     let (provider, voice, language) = deck.narration.resolved();
-    let manifest = Manifest::read(&audio_dir(file));
+    let dir = audio_dir(file);
+    let manifest = Manifest::read(&dir);
     deck.slides
         .iter()
         .map(|slide| {
-            let path = audio_file(file, &slide.id);
-            let entry = manifest.slides.get(&slide.id).filter(|_| path.is_file());
+            let entry = manifest
+                .slides
+                .get(&slide.id)
+                .filter(|e| e.path(&dir, &slide.id).is_file());
             let seconds = entry.map(|e| e.seconds);
             let text = spoken(&slide.narration);
             let recorded = entry.is_some_and(|e| e.recorded);
@@ -360,7 +364,7 @@ pub fn ready_audio(file: &Path, deck: &Deck) -> BTreeMap<String, (Vec<f32>, u32)
         .into_iter()
         .filter(|a| a.state == AudioState::Ready)
         .filter_map(|a| {
-            let read = audio::read_wav(&audio_file(file, &a.slide)).ok()?;
+            let read = audio::read(&kept_audio(file, &a.slide)).ok()?;
             Some((a.slide, read))
         })
         .collect()
@@ -370,6 +374,15 @@ pub fn ready_audio(file: &Path, deck: &Deck) -> BTreeMap<String, (Vec<f32>, u32)
 mod testing {
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    /// An MP3 file of `frames` frames of silence (1152 samples each, mono, at 44.1 kHz).
+    pub fn silent_mp3(frames: usize) -> Vec<u8> {
+        // MPEG-1 Layer III, 128 kbit/s, 44.1 kHz, mono: 417 bytes a frame, and one of zeros
+        // after its header holds no sound.
+        let mut frame = vec![0xFF, 0xFB, 0x90, 0xC4];
+        frame.resize(417, 0);
+        frame.repeat(frames)
+    }
 
     pub fn temp_dir() -> PathBuf {
         let dir =

@@ -133,18 +133,18 @@ pub fn narration_words(id: String, slide: String) -> Result<Option<Vec<voice::Wo
     Ok(narration::words(&deck::deck_file(&id)?, &slide))
 }
 
-/// A slide's narration audio, as WAV bytes.
+/// A slide's narration audio, as WAV bytes, whatever format it is kept in.
 #[tauri::command(async)]
 pub fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
-    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
-    Ok(tauri::ipc::Response::new(std::fs::read(file)?))
+    let wav = narration::playable(&deck::deck_file(&id)?, &slide)?;
+    Ok(tauri::ipc::Response::new(wav))
 }
 
 /// How loud a slide's narration audio is along its length, for drawing its waveform.
 #[tauri::command]
 pub async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
-    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
-    let (samples, rate) = narration::audio::read_wav(&file)?;
+    let file = narration::kept_audio(&deck::deck_file(&id)?, &slide);
+    let (samples, rate) = narration::audio::read(&file)?;
     Ok(narration::audio::peaks(&samples, rate))
 }
 

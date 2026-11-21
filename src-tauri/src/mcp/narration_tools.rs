@@ -25,7 +25,8 @@ pub(super) const SET_AUDIO: Tool = Tool {
                 playing over the next slides when it is longer than the slide: music for several \
                 slides goes on the first, and those after it get no narration of their own. Like \
                 a recording, it is the slide's audio whatever its narration script says; the \
-                script is not changed. Its words are then timed with the speech-to-text model. \
+                script is not changed. A compressed file (an MP3, say) is kept as it is, not \
+                turned into a larger WAV. Its words are then timed with the speech-to-text model. \
                 The audio file must be in the workspace: copy it in first if needed. Then call \
                 {TIMELINE_TOOL} for when its words fall on the slides and {BEATS_TOOL} for its \
                 beat."

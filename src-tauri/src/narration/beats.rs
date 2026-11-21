@@ -350,7 +350,7 @@ pub fn on_show(
     {
         return Ok(SlideBeat::NoAudio);
     }
-    let (samples, rate) = super::audio::read_wav(&super::audio_file(file, slide))?;
+    let (samples, rate) = super::audio::read(&super::kept_audio(file, slide))?;
     let Some(found) = find(&samples, rate) else {
         return Ok(SlideBeat::NoBeat);
     };

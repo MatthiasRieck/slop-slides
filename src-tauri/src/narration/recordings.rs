@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use super::audio;
-use super::manifest::{audio_dir, audio_file, Entry, Manifest};
+use super::manifest::{audio_dir, audio_file, kept_audio, kept_name, Entry, Manifest};
 use crate::error::Result;
 use crate::sound;
 
@@ -16,6 +16,7 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
     let dir = audio_dir(file);
     fs::create_dir_all(&dir)?;
     let dest = audio_file(file, slide);
+    let before = kept_audio(file, slide);
     let manifest = Manifest::read(&dir);
     // A recording goes on from the end of the last one; audio brought in it replaces.
     let recorded = manifest
@@ -35,7 +36,16 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
         manifest
             .slides
             .insert(slide.to_string(), Entry::recording(seconds, false));
-    })
+    })?;
+    forget(&before, &dest);
+    Ok(())
+}
+
+/// Deletes `before`, the file a slide's audio was kept in, unless its audio is still there.
+fn forget(before: &Path, now: &Path) {
+    if before != now {
+        let _ = fs::remove_file(before);
+    }
 }
 
 /// Whether the slide's audio is the presenter's own recording (not audio brought in), which
@@ -58,7 +68,7 @@ pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
     {
         return Ok(());
     }
-    match fs::remove_file(audio_file(file, slide)) {
+    match fs::remove_file(kept_audio(file, slide)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
     }
@@ -71,19 +81,52 @@ pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
 /// place of whatever it had. Like a recording, it is the slide's audio whatever its script
 /// says, until deleted; its words are not timed yet (see [`super::time_words`]). Returns how
 /// long it plays, in seconds.
+///
+/// The file is kept as it came, under the slide's name, when that takes less room than the
+/// WAV the app would write of it (an MP3 or AAC file is a fraction of it); what hears or plays
+/// the audio decodes it then (see [`audio::read`]).
 pub fn import_audio(file: &Path, slide: &str, source: &Path) -> Result<f64> {
     let (samples, rate) = audio::decode(source)?;
     let samples = sound::resample(&samples, rate, audio::RATE);
     let seconds = samples.len() as f64 / f64::from(audio::RATE);
     let dir = audio_dir(file);
     fs::create_dir_all(&dir)?;
-    audio::replace_wav(&audio_file(file, slide), &samples, audio::RATE)?;
+    let before = kept_audio(file, slide);
+    let as_wav = audio::wav_bytes(&[], audio::RATE).len() + samples.len() * 2;
+    let name = (fs::metadata(source)?.len() < as_wav as u64).then(|| kept_name(slide, source));
+    let dest = match &name {
+        Some(name) => {
+            let (dest, part) = (dir.join(name), dir.join(format!("{name}.part")));
+            fs::copy(source, &part)?;
+            fs::rename(&part, &dest)?;
+            dest
+        }
+        None => {
+            let dest = audio_file(file, slide);
+            audio::replace_wav(&dest, &samples, audio::RATE)?;
+            dest
+        }
+    };
     Manifest::update(&dir, |manifest| {
-        manifest
-            .slides
-            .insert(slide.to_string(), Entry::recording(seconds, true));
+        let entry = Entry {
+            file: name,
+            ..Entry::recording(seconds, true)
+        };
+        manifest.slides.insert(slide.to_string(), entry);
     })?;
+    forget(&before, &dest);
     Ok(seconds)
+}
+
+/// A slide's narration audio as the bytes of a WAV file, which every webview plays: the file
+/// itself when the app wrote it, audio kept in another format decoded.
+pub fn playable(file: &Path, slide: &str) -> Result<Vec<u8>> {
+    let kept = kept_audio(file, slide);
+    if kept == audio_file(file, slide) {
+        return Ok(fs::read(kept)?);
+    }
+    let (samples, rate) = audio::decode(&kept)?;
+    Ok(audio::wav_bytes(&samples, rate))
 }
 
 /// Why the agent may not replace a slide's audio with audio made elsewhere.
@@ -124,7 +167,7 @@ pub fn refusal(
 pub struct SetAudio {
     /// How long the audio plays, in seconds.
     pub seconds: f64,
-    /// Where it is kept now (see [`audio_file`]).
+    /// Where it is kept now (see [`kept_audio`]).
     pub kept: std::path::PathBuf,
     /// Whether its start could be pinned to the slide's (see [`set_audio`]).
     pub pinned: Result<()>,
@@ -146,7 +189,7 @@ pub fn set_audio(file: &Path, slide: &crate::deck::Slide, source: &Path) -> Resu
     .map(|_| ());
     Ok(SetAudio {
         seconds,
-        kept: audio_file(file, &slide.id),
+        kept: kept_audio(file, &slide.id),
         pinned,
     })
 }
@@ -154,7 +197,7 @@ pub fn set_audio(file: &Path, slide: &crate::deck::Slide, source: &Path) -> Resu
 #[cfg(test)]
 mod tests {
     use super::super::manifest::fingerprint;
-    use super::super::testing::{deck_with, temp_dir};
+    use super::super::testing::{deck_with, silent_mp3, temp_dir};
     use super::super::{ready_audio, statuses, AudioState, Provider};
     use super::*;
     use crate::deck;
@@ -260,13 +303,102 @@ mod tests {
             Some(2.0),
             "a recording goes on"
         );
-        let (samples, rate) = audio::read_wav(&audio_file(&file, "a")).unwrap();
-        assert_eq!((samples.len(), rate), (12_000, audio::RATE));
+        // The take is smaller than the app's WAV of it, so it is kept as it came.
+        assert_eq!(
+            fs::read(kept_audio(&file, "a")).unwrap(),
+            fs::read(&source).unwrap()
+        );
         assert!(source.is_file(), "the source stays where it was");
         // A file that is no audio changes nothing.
         fs::write(dir.join("notes.txt"), "hello").unwrap();
         assert!(import_audio(&file, "a", &dir.join("notes.txt")).is_err());
         assert_eq!(statuses(&file, &deck)[0].seconds, Some(0.5));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compressed_audio_is_kept_as_it_came() {
+        let dir = temp_dir();
+        let slides = r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section><section class="slide" id="b"></section>"#;
+        let file = deck_with(&dir, "deck.html", "", slides);
+        let deck = deck::load(&file).unwrap();
+        let audio = audio_dir(&file);
+        fs::create_dir_all(&audio).unwrap();
+        // Made audio of a is replaced by the MP3, which stays an MP3.
+        audio::write_wav(&audio_file(&file, "a"), &[0.0; 24_000], audio::RATE).unwrap();
+        Manifest::update(&audio, |m| {
+            let made = fingerprint(Provider::OpenAi, "Say A.", "marin", "en");
+            m.slides.insert("a".into(), Entry::made(made, 1.0, None));
+        })
+        .unwrap();
+        let source = dir.join("Talk.MP3");
+        fs::write(&source, silent_mp3(40)).unwrap();
+        let seconds = import_audio(&file, "a", &source).unwrap();
+        assert!(
+            (seconds - 40.0 * 1152.0 / 44_100.0).abs() < 0.06,
+            "{seconds}"
+        );
+        let kept = kept_audio(&file, "a");
+        assert_eq!(kept, audio.join("a.mp3"));
+        assert_eq!(fs::read(&kept).unwrap(), silent_mp3(40));
+        assert!(!audio_file(&file, "a").exists(), "no WAV next to it");
+        let names: Vec<_> = fs::read_dir(&audio)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        let a = &statuses(&file, &deck)[0];
+        assert_eq!((a.state, a.seconds), (AudioState::Ready, Some(seconds)));
+        assert!(a.recorded && a.imported);
+        // It is heard and played from the MP3.
+        let (samples, rate) = &ready_audio(&file, &deck)["a"];
+        assert_eq!(*rate, 44_100);
+        assert!((samples.len() as f64 / 44_100.0 - seconds).abs() < 0.001);
+        let wav = playable(&file, "a").unwrap();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(wav.len(), 44 + samples.len() * 2);
+        fs::write(dir.join("played.wav"), &wav).unwrap();
+        assert_eq!(audio::read_wav(&dir.join("played.wav")).unwrap().1, 44_100);
+        // Its words are kept with it, once timed.
+        assert_eq!(super::super::words(&file, "a"), None);
+        Manifest::update(&audio, |m| {
+            let entry = m.slides.get_mut("a").unwrap();
+            (entry.words, entry.timing) = (Some(vec![]), super::super::manifest::WORD_TIMING);
+        })
+        .unwrap();
+        assert_eq!(super::super::words(&file, "a"), Some(vec![]));
+
+        // Other audio brought in replaces the file: one of another format leaves no MP3.
+        let flac = dir.join("song.flac");
+        fs::write(&flac, silent_mp3(20)).unwrap();
+        import_audio(&file, "a", &flac).unwrap();
+        assert_eq!(kept_audio(&file, "a"), audio.join("a.flac"));
+        assert!(!kept.exists());
+        // Audio no smaller than the app's WAV of it is kept as that WAV.
+        let big = dir.join("big.aiff");
+        let mut bytes = audio::wav_bytes(&[0.1; 48_000], 48_000);
+        bytes.extend([0; 60_000]);
+        fs::write(&big, bytes).unwrap();
+        assert_eq!(import_audio(&file, "a", &big).unwrap(), 1.0);
+        assert_eq!(kept_audio(&file, "a"), audio_file(&file, "a"));
+        assert!(!audio.join("a.flac").exists());
+        let (samples, rate) = audio::read_wav(&audio_file(&file, "a")).unwrap();
+        assert_eq!((samples.len(), rate), (24_000, audio::RATE));
+        assert_eq!(
+            playable(&file, "a").unwrap(),
+            fs::read(audio_file(&file, "a")).unwrap()
+        );
+
+        // A recording replaces the MP3, and deleting kept audio deletes its file.
+        import_audio(&file, "b", &source).unwrap();
+        append_recording(&file, "b", &[0.1; 24_000], audio::RATE).unwrap();
+        assert!(!audio.join("b.mp3").exists());
+        assert_eq!(kept_audio(&file, "b"), audio_file(&file, "b"));
+        assert_eq!(statuses(&file, &deck)[1].seconds, Some(1.0));
+        import_audio(&file, "b", &source).unwrap();
+        delete_recording(&file, "b").unwrap();
+        assert!(!audio.join("b.mp3").exists());
+        assert_eq!(statuses(&file, &deck)[1].state, AudioState::None);
         fs::remove_dir_all(dir).unwrap();
     }
 

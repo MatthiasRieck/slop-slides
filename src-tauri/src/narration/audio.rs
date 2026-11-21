@@ -13,8 +13,8 @@ pub const RATE: u32 = 24_000;
 /// How finely the timeline draws a waveform.
 const PEAKS_PER_SECOND: u32 = 25;
 
-/// Writes `samples` (mono, at `rate`) as a 16-bit PCM WAV file.
-pub fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
+/// `samples` (mono, at `rate`) as the bytes of a 16-bit PCM WAV file.
+pub fn wav_bytes(samples: &[f32], rate: u32) -> Vec<u8> {
     let data = (samples.len() * 2) as u32;
     let mut out = Vec::with_capacity(44 + data as usize);
     out.extend_from_slice(b"RIFF");
@@ -32,7 +32,12 @@ pub fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
     for s in samples {
         out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
     }
-    fs::File::create(path)?.write_all(&out)?;
+    out
+}
+
+/// Writes `samples` (mono, at `rate`) as a 16-bit PCM WAV file.
+pub fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
+    fs::File::create(path)?.write_all(&wav_bytes(samples, rate))?;
     Ok(())
 }
 
@@ -65,6 +70,12 @@ pub fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {
     fs::File::open(path)?.read_to_end(&mut bytes)?;
     parse_wav(&bytes)
         .ok_or_else(|| Error::msg(format!("{} is not a usable WAV file", path.display())))
+}
+
+/// The sound of a slide's kept audio file, mono: the WAV the app writes, or audio made
+/// elsewhere in its own format (see [`decode`]).
+pub fn read(path: &Path) -> Result<(Vec<f32>, u32)> {
+    read_wav(path).or_else(|_| decode(path))
 }
 
 fn parse_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
@@ -192,8 +203,10 @@ mod tests {
         assert_eq!(rate, RATE);
         assert_eq!(read.len(), samples.len());
         assert!(read.iter().zip(&samples).all(|(a, b)| (a - b).abs() < 1e-4));
+        assert_eq!(fs::read(&path).unwrap(), wav_bytes(&samples, RATE));
         fs::write(dir.join("bad.wav"), b"not a wav").unwrap();
         assert!(read_wav(&dir.join("bad.wav")).is_err());
+        assert!(super::read(&dir.join("bad.wav")).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -237,6 +250,20 @@ mod tests {
             "{:?}",
             &samples[..4]
         );
+        // Kept audio is read whichever way it is written.
+        assert!(read_wav(&dir.join("stereo.wav")).is_err());
+        assert_eq!(read(&dir.join("stereo.wav")).unwrap(), (samples, 44_100));
+        // An MP3 file decodes: 1152 samples a frame.
+        let mp3 = crate::narration::testing::silent_mp3(40);
+        fs::write(dir.join("hush.mp3"), mp3).unwrap();
+        let (samples, rate) = read(&dir.join("hush.mp3")).unwrap();
+        assert_eq!(rate, 44_100);
+        assert!(
+            samples.len().abs_diff(40 * 1152) <= 2 * 1152,
+            "{}",
+            samples.len()
+        );
+        assert!(samples.iter().all(|s| s.abs() < 1e-4));
         // What write_wav writes decodes too, whatever its extension says.
         let tone: Vec<f32> = (0..RATE / 10)
             .map(|i| (i as f32 / 10.0).sin() * 0.5)

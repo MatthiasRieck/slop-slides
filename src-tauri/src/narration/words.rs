@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::manifest::{audio_dir, audio_file, Entry, Manifest, WORD_TIMING};
+use super::manifest::{audio_dir, Entry, Manifest, WORD_TIMING};
 use super::settings::settings;
 use super::{audio, statuses, AudioState, SlideAudio};
 use crate::deck;
@@ -29,10 +29,11 @@ pub const TIMING_EVENT: &str = "narration-timing";
 /// When each word of a slide's audio is said: seconds from the start of its audio, which
 /// plays `data-narration-start` seconds after the slide shows.
 pub fn words(file: &Path, slide: &str) -> Option<Vec<Word>> {
-    if !audio_file(file, slide).is_file() {
+    let dir = audio_dir(file);
+    let entry = Manifest::read(&dir).slides.remove(slide)?;
+    if !entry.path(&dir, slide).is_file() {
         return None;
     }
-    let entry = Manifest::read(&audio_dir(file)).slides.remove(slide)?;
     entry.timed_words().cloned()
 }
 
@@ -65,7 +66,7 @@ pub async fn time_words(
         let Some(heard) = Manifest::read(&dir).slides.remove(&audio.slide) else {
             continue;
         };
-        let (samples, rate) = audio::read_wav(&audio_file(file, &audio.slide))?;
+        let (samples, rate) = audio::read(&heard.path(&dir, &audio.slide))?;
         let spoken_in = (!heard.recorded).then(|| language.id.to_string());
         let words = voice
             .time_words(home, samples, rate, spoken_in)
@@ -102,7 +103,7 @@ mod tests {
     use std::fs;
     use std::sync::Mutex;
 
-    use super::super::manifest::{fingerprint, MANIFEST};
+    use super::super::manifest::{audio_file, fingerprint, MANIFEST};
     use super::super::testing::{deck_with, temp_dir};
     use super::super::{append_recording, Provider};
     use super::*;

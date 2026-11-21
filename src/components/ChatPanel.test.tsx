@@ -21,6 +21,7 @@ import { catchDrops } from "../lib/drop";
 import { openLayer } from "../lib/layers";
 import type { ProviderInfo } from "../lib/models";
 import { forgetModes } from "../lib/permissions";
+import { defaultSettings, patchSettings } from "../lib/settings";
 import { workspaceChatFileUrl } from "../lib/utils";
 import {
   type AssistantMessage,
@@ -61,6 +62,8 @@ const PROVIDERS: ProviderInfo[] = [
       },
     ],
     error: null,
+    version: "1.0.0",
+    auth: "signedIn",
   },
   {
     id: "codex",
@@ -78,8 +81,10 @@ const PROVIDERS: ProviderInfo[] = [
       },
     ],
     error: null,
+    version: "1.0.0",
+    auth: "signedIn",
   },
-  { id: "copilot", installed: false, path: null, models: [], error: null },
+  { id: "copilot", installed: false, path: null, models: [], error: null, version: null, auth: "unknown" },
 ];
 
 const send = vi.fn(async () => {});
@@ -127,6 +132,8 @@ beforeEach(() => {
       contextWindow: "1m",
     },
     providers: PROVIDERS,
+    settings: defaultSettings(),
+    settingsSection: null,
     favoriteModels: [],
     toasts: [],
     sketches: {},
@@ -475,7 +482,7 @@ describe("ChatPanel: composing", () => {
       expect(screen.getByText(text).className).toContain("@[26rem]:inline");
     }
     for (const chevron of toolbar.querySelectorAll(".lucide-chevron-down")) {
-      expect(chevron.getAttribute("class")).toContain("@[17rem]:block");
+      expect(chevron.getAttribute("class")).toContain("@[22rem]:block");
     }
   });
 
@@ -777,6 +784,71 @@ describe("ChatPanel: composing", () => {
     ).toHaveLength(2);
     fireEvent.pointerDown(screen.getByPlaceholderText("Ask for slides or changes…"));
     expect(document.querySelector("[data-index]")).toBeNull();
+  });
+
+  describe("a provider turned off in the settings", () => {
+    const off = (...ids: ("claude" | "codex" | "copilot")[]) =>
+      patchSettings(defaultSettings(), { providers: Object.fromEntries(ids.map((id) => [id, { enabled: false }])) });
+    const offered = () => [...document.querySelectorAll("[data-index]")].map((row) => row.textContent);
+
+    it("has no tab in the menu", () => {
+      useApp.setState({ settings: off("codex", "copilot") });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+      expect(screen.getByTitle("Claude")).toBeTruthy();
+      expect(screen.getByTitle("Favorites")).toBeTruthy();
+      expect(screen.queryByTitle("Codex")).toBeNull();
+      expect(screen.queryByTitle(/GitHub Copilot/)).toBeNull();
+    });
+
+    it("has its models in neither the search nor the favorites", () => {
+      useApp.setState({ settings: off("codex"), favoriteModels: ["codex:gpt-6-astra", "claude:claude-sonnet-5"] });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+      fireEvent.click(screen.getByTitle("Favorites"));
+      expect(offered()).toEqual([expect.stringContaining("Claude Sonnet 5")]);
+      fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "astra" } });
+      expect(offered()).toEqual([]);
+      expect(screen.getByText("No models match.")).toBeTruthy();
+      fireEvent.keyDown(screen.getByPlaceholderText("Search models..."), { key: "Enter" });
+      expect(useApp.getState().selection.provider).toBe("claude");
+    });
+
+    it("comes back to the menu when it is turned on again, also from another window", () => {
+      useApp.setState({ settings: off("codex") });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+      expect(screen.queryByTitle("Codex")).toBeNull();
+      act(() => useApp.setState({ settings: defaultSettings() }));
+      fireEvent.click(screen.getByTitle("Codex"));
+      expect(offered()).toEqual([expect.stringContaining("GPT-6-Astra")]);
+    });
+
+    it("says so in the menu of a chat that is its own, with the way to the settings", () => {
+      useApp.setState({ settings: off("claude"), sessionProvider: "claude" });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+      expect(screen.getByText("Claude Code is turned off")).toBeTruthy();
+      expect(offered()).toEqual([]);
+      const menu = screen.getByText("Claude Code is turned off").parentElement!;
+      fireEvent.click(within(menu).getByRole("button", { name: "Open Providers" }));
+      expect(useApp.getState().settingsSection).toBe("providers");
+      expect(screen.queryByRole("textbox", { name: "Search models" })).toBeNull();
+    });
+  });
+
+  it("opens the settings on the providers from a provider that cannot list its models", () => {
+    useApp.setState({
+      providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, models: [], error: "Not signed in" } : p)),
+    });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.click(screen.getByTitle("Codex"));
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Providers" }));
+    expect(useApp.getState().settingsSection).toBe("providers");
+    // The menu gives way to the settings.
+    expect(screen.queryByRole("textbox", { name: "Search models" })).toBeNull();
   });
 
   it("explains a provider that is not installed", () => {
@@ -2282,6 +2354,13 @@ describe("ChatPanel: an agent that is not installed", () => {
     view.unmount();
   });
 
+  it("opens the settings on the providers", () => {
+    useApp.setState({ providers: missing("claude") });
+    render(<ChatPanel />);
+    fireEvent.click(banner().getByRole("button", { name: "Open Providers" }));
+    expect(useApp.getState().settingsSection).toBe("providers");
+  });
+
   it("sends a chat that belongs to that agent to a new chat, not to another model", () => {
     useApp.setState({ providers: missing("claude"), sessionProvider: "claude" });
     showMessages(said("u", "Hi"), reply({ provider: "claude" }));
@@ -2297,6 +2376,49 @@ describe("ChatPanel: an agent that is not installed", () => {
     const button = banner().getByRole("button", { name: "New chat" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.title).toBe("Stop the current turn to start a new chat");
+  });
+});
+
+describe("ChatPanel: a chat whose provider is turned off", () => {
+  const codexOff = () => patchSettings(defaultSettings(), { providers: { codex: { enabled: false } } });
+  const notice = () => screen.queryByTestId("provider-turned-off");
+
+  it("stays readable but cannot send, saying why, with the way to the settings", () => {
+    useApp.setState({ settings: codexOff(), sessionProvider: "codex" });
+    showMessages(said("u", "Hi"), reply({ provider: "codex", parts: [{ kind: "text", text: "Hello there" }] }));
+    expect(screen.getByText("Hello there")).toBeTruthy();
+    expect(notice()!.textContent).toContain("Codex is turned off.");
+    type("and then?");
+    expect(sendButton().disabled).toBe(true);
+    expect(sendButton().title).toBe("Codex is turned off.");
+    fireEvent.click(sendButton());
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    fireEvent.keyDown(textarea(), { key: "Enter", metaKey: true });
+    expect(send).not.toHaveBeenCalled();
+    expect(steer).not.toHaveBeenCalled();
+    // What was written stays for when the provider is back on.
+    expect(textarea().value).toBe("and then?");
+    fireEvent.click(within(notice()!).getByRole("button", { name: "Open Providers" }));
+    expect(useApp.getState().settingsSection).toBe("providers");
+  });
+
+  it("sends again once the provider is turned back on, here or in another window", () => {
+    useApp.setState({ settings: codexOff(), sessionProvider: "codex" });
+    showMessages(said("u", "Hi"), reply({ provider: "codex" }));
+    type("and then?");
+    act(() => useApp.setState({ settings: defaultSettings() }));
+    expect(notice()).toBeNull();
+    expect(sendButton().disabled).toBe(false);
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("and then?", expect.anything());
+  });
+
+  it("says nothing in a chat of a provider that is on", () => {
+    useApp.setState({ settings: codexOff(), sessionProvider: "claude" });
+    showMessages(said("u", "Hi"), reply({ provider: "claude" }));
+    expect(notice()).toBeNull();
+    type("go on");
+    expect(sendButton().disabled).toBe(false);
   });
 });
 

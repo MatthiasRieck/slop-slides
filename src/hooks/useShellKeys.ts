@@ -34,8 +34,7 @@ export function runShellCommand(command: ShellCommand): boolean {
       app.setRailOpen(!app.railOpen);
       return true;
     case "appSettings":
-      if (!workspace) return false;
-      app.setSidebarTab("settings");
+      app.openSettings();
       return true;
     case "openFolder":
       void chooseWorkspace();
@@ -48,8 +47,8 @@ const isFrame = (source: MessageEventSource | null) =>
 
 /**
  * The shell's keyboard shortcuts (see ../lib/shellKeys.ts): ⌘1 / ⌘2 / ⌘3 for View, Edit and Git,
- * ⌘\ and ⇧⌘\ to show or hide the sidebar and the slide list, ⌘, for the app's settings and ⌘O to
- * open a folder. They work while typing too (the chat's composer has the focus most of the time,
+ * ⌘\ and ⇧⌘\ to show or hide the sidebar and the slide list, ⌘, for the app's settings (a dialog, on the
+ * start screen too) and ⌘O to open a folder. They work while typing too (the chat's composer has the focus most of the time,
  * and no field has a use for these keys), unless what the key was pressed in took it: the model
  * menu picks with ⌘1–9 in its own field. Those pressed in a slide preview count as well, which
  * forwards them as `slop:key`.

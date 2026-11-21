@@ -93,4 +93,10 @@ describe("what the window loads before it shows anything", () => {
   ])("leaves out %s, loaded on first use", (name) => {
     expect(graph.files).not.toContain(`src/components/${name}.tsx`);
   });
+
+  it("leaves out the settings dialog, but not the keys that open it", () => {
+    expect(graph.files.filter((file) => file.startsWith("src/components/settings/"))).toEqual([
+      "src/components/settings/useSettingsKeys.ts",
+    ]);
+  });
 });

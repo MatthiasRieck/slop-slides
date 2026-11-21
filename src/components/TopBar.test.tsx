@@ -36,6 +36,7 @@ beforeEach(() => {
     messages: [],
     toasts: [],
     imageExport: null,
+    settingsSection: null,
   });
 });
 
@@ -476,7 +477,7 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail, the file's menu and undo / redo first, then the modes, the deck's actions and the sidebar", () => {
+  it("puts the rail, the file's menu and undo / redo first, then the modes, the settings, the deck's actions and the sidebar", () => {
     useApp.setState({ lint: [], sidebarTab: "files", sidebarOpen: false });
     render(<TopBar />);
     // What the deck's actions are called is theirs to say (DeckActions); where they go is the bar's.
@@ -486,6 +487,7 @@ describe("layout", () => {
       "Undo",
       "Redo",
       "Mode",
+      "Settings",
       expect.stringMatching(/^Export/),
       expect.stringMatching(/^Present/),
       expect.stringMatching(/present/i),
@@ -532,6 +534,37 @@ describe("layout", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("button", { name: /Export/ })).toBeNull();
     expect(screen.queryByText(/Lint/)).toBeNull();
+  });
+});
+
+describe("the settings gear", () => {
+  const gear = () => screen.getByRole("button", { name: "Settings" });
+
+  it("sits immediately left of Export and opens the app's settings on General", () => {
+    render(<TopBar />);
+    expect(gear().nextElementSibling!.contains(screen.getByRole("button", { name: "Export" }))).toBe(true);
+    expect(gear().nextElementSibling!.querySelector("button")).toBe(screen.getByRole("button", { name: "Export" }));
+    expect(gear().title).toBe("Settings (Ctrl+,)");
+    // A button that opens a dialog, not a toggle.
+    expect(gear().hasAttribute("aria-pressed")).toBe(false);
+    fireEvent.click(gear());
+    expect(useApp.getState().settingsSection).toBe("general");
+  });
+
+  it("is there without a deck too, and with the sidebar open or closed", () => {
+    useApp.setState({ deck: null, openedFile: null, sidebarOpen: false });
+    render(<TopBar />);
+    expect(gear().nextElementSibling).toBe(screen.getByRole("button", { name: "Show sidebar" }).parentElement);
+    act(() => useApp.setState({ sidebarOpen: true }));
+    expect(gear().nextElementSibling).toBeNull();
+    fireEvent.click(gear());
+    expect(useApp.getState().settingsSection).toBe("general");
+  });
+
+  it("goes with the bar when no folder is open", () => {
+    useApp.setState({ workspace: null, deck: null });
+    render(<TopBar />);
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 });
 

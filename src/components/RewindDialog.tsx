@@ -53,7 +53,7 @@ export function RewindDialog() {
         <input type="checkbox" className="mt-0.5" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
         <span>
           Don't ask again: always do what I pick here.
-          <span className="block">You can change this in the app settings.</span>
+          <span className="block">You can change this in Settings › General.</span>
         </span>
       </label>
       <div className="flex items-center justify-between gap-3 border-t pt-3">

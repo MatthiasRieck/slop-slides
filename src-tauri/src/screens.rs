@@ -418,6 +418,8 @@ fn open_presenter_view(app: &AppHandle, screen: Option<&Screen>) -> Result<()> {
         WebviewUrl::App("index.html?presenter".into()),
     )
     .title("Presenter view")
+    // It is the app's page too, and draws in the app's appearance.
+    .initialization_script(app.state::<crate::settings::Settings>().init_script())
     .inner_size(width, height)
     .visible(false);
     if screen.is_none() {

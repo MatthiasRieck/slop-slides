@@ -16,6 +16,7 @@ export const DeckSettings = lazyPart(() => import("./DeckSettings").then((m) => 
 export const NarrationTimeline = lazyPart(() => import("./NarrationTimeline").then((m) => m.NarrationTimeline));
 export const Presenter = lazyPart(() => import("./Presenter").then((m) => m.Presenter));
 export const RewindDialog = lazyPart(() => import("./RewindDialog").then((m) => m.RewindDialog));
+export const SettingsDialog = lazyPart(() => import("./settings/SettingsDialog").then((m) => m.SettingsDialog));
 export const SlideImageExport = lazyPart(() => import("./SlideImageExport").then((m) => m.SlideImageExport));
 export const VideoExportPanel = lazyPart(() => import("./VideoExport").then((m) => m.VideoExportPanel));
 
@@ -30,6 +31,7 @@ const PARTS = [
   VideoExportPanel,
   SlideImageExport,
   RewindDialog,
+  SettingsDialog,
   SvgEditor,
 ];
 

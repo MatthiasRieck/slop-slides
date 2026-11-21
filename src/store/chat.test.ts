@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defaultSettings, patchSettings } from "../lib/settings";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { appWindow, invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { type AssistantMessage, lastSentText, retryTarget, sendOptionsOf, type UserMessage } from "./messages";
+import { turnedOffProvider } from "./models";
 import {
   assistantMessage,
   backend,
@@ -28,6 +31,38 @@ describe("sending a message", () => {
     expect(calls("send_message")).toEqual([]);
     expect(useApp.getState().messages).toEqual([]);
     expect(useApp.getState().queue).toEqual([]);
+  });
+
+  it("sends nothing to a provider turned off in the settings, and says why", async () => {
+    const useApp = await freshStore();
+    const settings = patchSettings(defaultSettings(), { providers: { codex: { enabled: false } } });
+    // The chat is Codex's, whatever model is selected.
+    useApp.setState({ deck: DECK, settings, sessionProvider: "codex" });
+    await useApp.getState().send("hi", { includeSlide: false, attachments: [] });
+    await useApp.getState().steer("now", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")).toEqual([]);
+    expect(useApp.getState().messages).toEqual([]);
+    expect(useApp.getState().running).toBe(false);
+    expect(lastError(useApp.getState())).toBe(
+      "Codex is turned off. Turn it on in Settings > Providers to continue this chat.",
+    );
+    // Turned back on, the chat goes on.
+    useApp.setState({ settings: defaultSettings(), toasts: [] });
+    await useApp.getState().send("hi", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")).toHaveLength(1);
+  });
+
+  it("opens a past chat of a provider that is off to be read, not gone on with", async () => {
+    const useApp = await freshStore();
+    const past = [userMessage("Earlier"), assistantMessage({ provider: "codex" })];
+    backend({ select_chat_thread: () => ({ chat: past, provider: "codex" }) });
+    useApp.setState({ settings: patchSettings(defaultSettings(), { providers: { codex: { enabled: false } } }) });
+    await useApp.getState().selectChatThread("old-thread");
+    expect(useApp.getState().messages).toHaveLength(2);
+    expect(turnedOffProvider(useApp.getState())).toBe("codex");
+    await useApp.getState().send("and then?", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")).toEqual([]);
+    expect(useApp.getState().messages).toHaveLength(2);
   });
 
   it("queues the message while the agent runs, keeping the slide it is about", async () => {
@@ -114,6 +149,8 @@ describe("sending a message", () => {
             },
           ],
           error: null,
+          version: "1.0.0",
+          auth: "signedIn",
         },
       ],
       selection: { provider: "copilot", model: "auto", label: "Auto", effort: "medium", contextWindow: null },

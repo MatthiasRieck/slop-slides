@@ -95,7 +95,7 @@ export function PermissionPicker() {
         <span className={cn("whitespace-nowrap", !full && "hidden @[26rem]:inline")}>
           {PERMISSION_MODES[mode].label}
         </span>
-        <ChevronDown className="hidden size-3 @[17rem]:block" />
+        <ChevronDown className="hidden size-3 @[22rem]:block" />
       </button>
       {open && (
         <Popover anchor={root} onClose={close} width={256} variant="menu" portal follow className="p-1.5">

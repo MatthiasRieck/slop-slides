@@ -8,7 +8,8 @@ import { initNarrationEvents } from "./narrationStore";
 import { initEventBridge } from "./store";
 
 // Light, dark, or as the system shows, as chosen in the app's settings; every window follows the
-// choice. index.html has already shown the window in it, before this code loaded.
+// choice, the presenter view's included. index.html has already shown the window in it, before
+// this code loaded.
 followAppearance();
 
 if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {

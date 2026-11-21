@@ -13,7 +13,6 @@ vi.mock("./ChatPanel", async () => {
   };
 });
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
-vi.mock("./SettingsPanel", () => ({ SettingsPanel: () => <div data-testid="settings" /> }));
 vi.mock("./SvgEditor", () => ({ SvgEditor: () => <div data-testid="svg" /> }));
 vi.mock("./NarrationPanel", () => ({ NarrationPanel: () => <div data-testid="narration" /> }));
 vi.mock("./NotesPanel", () => ({ NotesPanel: () => <div data-testid="notes" /> }));
@@ -53,7 +52,6 @@ beforeEach(() => {
     sidebarOpen: true,
     running: false,
     messages: [],
-    shortcutHelpOpen: false,
   });
 });
 
@@ -115,7 +113,6 @@ describe("Sidebar", () => {
       "Notes",
       "HTML",
       "SVG",
-      "App settings",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
@@ -211,7 +208,7 @@ describe("Sidebar", () => {
   });
 
   it("turns off + once every surface is open", () => {
-    useApp.setState({ sidebarTabs: ["chat", "files", "narration", "notes", "code", "svg", "settings"] });
+    useApp.setState({ sidebarTabs: ["chat", "files", "narration", "notes", "code", "svg"] });
     render(<Sidebar />);
     expect((screen.getByRole("button", { name: "Open a tab" }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -327,27 +324,15 @@ describe("Sidebar", () => {
     expect(tab("Narration")).toBeTruthy();
   });
 
-  it("opens the app's settings in a tab from the button at the bottom", () => {
+  it("leaves the app's settings and the keyboard shortcuts to the settings dialog: no tab, no bar at its bottom", () => {
+    useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
-    const settings = screen.getByRole("button", { name: "App settings" });
-    expect(settings.getAttribute("aria-pressed")).toBe("false");
-    expect(settings.title).toBe("App settings (Ctrl+,)");
-    fireEvent.click(settings);
-    expect(tabNames()).toEqual(["Chat", "Files", "App settings"]);
-    expect(shown("settings")).toBe(true);
-    expect(screen.getByRole("button", { name: "App settings" }).getAttribute("aria-pressed")).toBe("true");
-    // A second press keeps the one tab.
-    fireEvent.click(screen.getByRole("button", { name: "App settings" }));
-    expect(tabNames()).toEqual(["Chat", "Files", "App settings"]);
-  });
-
-  it("opens the keyboard shortcuts from the button beside the settings", () => {
-    render(<Sidebar />);
-    const shortcuts = screen.getByRole("button", { name: "Keyboard shortcuts" });
-    expect(shortcuts.previousElementSibling).toBe(screen.getByRole("button", { name: "App settings" }));
-    expect(shortcuts.title).toBe("Keyboard shortcuts (?, Ctrl+/)");
-    fireEvent.click(shortcuts);
-    expect(useApp.getState().shortcutHelpOpen).toBe(true);
+    expect(screen.queryByRole("button", { name: /settings/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Keyboard shortcuts" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
+    expect(screen.queryByRole("menuitem", { name: /settings/i })).toBeNull();
+    // The tab's panel is the last thing in the sidebar.
+    expect(screen.getByRole("tabpanel").nextElementSibling).toBeNull();
   });
 
   describe("a tab's close button", () => {

@@ -62,7 +62,7 @@ describe("RewindDialog", () => {
     render(<RewindDialog />);
     const remember = screen.getByRole("checkbox", { name: /^Don't ask again/ });
     // Where to take the answer back is said beside it.
-    expect(remember.closest("label")!.textContent).toContain("You can change this in the app settings.");
+    expect(remember.closest("label")!.textContent).toContain("You can change this in Settings › General.");
     fireEvent.click(remember);
     const keep = screen.getByRole("button", { name: /^Keep the chat, tell the agent/ });
     expect(keep.textContent).toContain("Your next message tells the agent");

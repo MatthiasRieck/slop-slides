@@ -1,9 +1,9 @@
-import { AlertTriangle, RotateCw, SquarePen } from "lucide-react";
+import { AlertTriangle, RotateCw, Settings, SquarePen } from "lucide-react";
 import { Activity, useEffect, useState } from "react";
 
 import { PROVIDERS, type Provider } from "../lib/models";
 import { cn } from "../lib/utils";
-import { chatProvider, useApp } from "../store";
+import { chatProvider, openSettings, useApp } from "../store";
 import { Button } from "./Button";
 import { Composer } from "./chat/Composer";
 import { InstallHint } from "./chat/InstallHint";
@@ -81,8 +81,9 @@ function Chat() {
 
 /**
  * Says that the selected agent's CLI is not installed, with what to do about it: the command to
- * copy, a button that looks again (as does coming back to the window, say from a terminal), and
- * the way to another agent, which for a chat that belongs to this one is a new chat.
+ * copy, a button that looks again (as does coming back to the window, say from a terminal), one
+ * that opens the settings on the providers, where each agent's state is told in full, and the
+ * way to another agent, which for a chat that belongs to this one is a new chat.
  */
 function MissingCli({ provider }: { provider: Provider }) {
   const { cli, install } = PROVIDERS[provider];
@@ -114,6 +115,10 @@ function MissingCli({ provider }: { provider: Provider }) {
           <Button busy={checking} onClick={() => void check()} className="bg-background">
             {!checking && <RotateCw />}
             Check again
+          </Button>
+          <Button onClick={() => openSettings("providers")} className="bg-background">
+            <Settings />
+            Open Providers
           </Button>
           {locked && (
             <Button

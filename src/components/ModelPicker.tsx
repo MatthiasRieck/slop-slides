@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Settings, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatKeys, isMod } from "../lib/keys";
 import { memoizeLast } from "../lib/memo";
@@ -13,7 +13,7 @@ import {
   type ProviderModel,
 } from "../lib/models";
 import { cn } from "../lib/utils";
-import { chatProvider, useApp } from "../store";
+import { chatProvider, openSettings, useApp } from "../store";
 import { InstallHint } from "./chat/InstallHint";
 import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
@@ -42,9 +42,10 @@ export function ModelPicker() {
         className={cn(triggerClass, "max-w-full")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
-        {/* The name always shows, cut short as room runs out; effort and permissions give way first. */}
+        {/* The name always shows, cut short as room runs out; effort and permissions give way first, and the
+            chevrons come only with room to spare (22rem), or they would take the name's. */}
         <span className="truncate font-medium text-foreground/90">{selection.label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
       </button>
       {open && (
         <Popover
@@ -68,6 +69,8 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const locked = useApp(chatProvider);
   const favorites = useApp((s) => s.favoriteModels);
   const providers = useApp((s) => s.providers);
+  // A provider turned off in the settings is not offered: neither its tab nor its models.
+  const enabled = useApp((s) => s.settings.providers);
   const [filter, setFilter] = useState<Filter>(selection.provider);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -78,9 +81,9 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const allRows = useMemo<Row[]>(
     () =>
       (providers ?? [])
-        .filter((p) => !locked || p.id === locked)
+        .filter((p) => enabled[p.id].enabled && (!locked || p.id === locked))
         .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
-    [providers, locked],
+    [providers, locked, enabled],
   );
 
   const rows = useMemo(() => {
@@ -127,7 +130,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
 
   const rail: { id: Filter; title: string; icon: React.ReactNode }[] = [
     { id: "favorites", title: "Favorites", icon: <Star className="size-4" /> },
-    ...PROVIDER_IDS.map((p) => {
+    ...PROVIDER_IDS.filter((p) => enabled[p].enabled).map((p) => {
       const missing = info(p)?.installed === false;
       return {
         id: p,
@@ -146,6 +149,8 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
 
   // A provider tab that has no models to show explains why instead.
   const status = !query && filter !== "favorites" ? info(filter) : undefined;
+  // The menu opens on the selected provider, tab or none: one that is off (the chat is its own) says so.
+  const turnedOff = !query && filter !== "favorites" && !enabled[filter].enabled ? filter : null;
 
   return (
     <div className="flex min-h-0 w-full">
@@ -201,8 +206,10 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
               <Loader2 className="size-3.5 animate-spin" />
               Looking for installed agents…
             </p>
+          ) : turnedOff ? (
+            <TurnedOff provider={turnedOff} onClose={onClose} />
           ) : status && status.models.length === 0 ? (
-            <ProviderStatus info={status} />
+            <ProviderStatus info={status} onClose={onClose} />
           ) : rows.length === 0 ? (
             <p className="px-2 py-8 text-center text-xs text-muted-foreground">
               {filter === "favorites" && !query ? "Star a model to pin it here." : "No models match."}
@@ -273,7 +280,38 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ProviderStatus({ info }: { info: ProviderInfo }) {
+/** In place of the models of a provider the settings have turned off: that it is, and the way to turn it on. */
+function TurnedOff({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+      <ProviderIcon provider={provider} className="size-6 opacity-40 grayscale" />
+      <p className="text-sm text-foreground">{PROVIDERS[provider].cli} is turned off</p>
+      <OpenProviders onClose={onClose} />
+    </div>
+  );
+}
+
+const statusButtonClass =
+  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground";
+
+/** Opens the settings on the providers, where each agent's state is told in full, closing the menu. */
+function OpenProviders({ onClose }: { onClose: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onClose();
+        openSettings("providers");
+      }}
+      className={statusButtonClass}
+    >
+      <Settings className="size-3" />
+      Open Providers
+    </button>
+  );
+}
+
+function ProviderStatus({ info, onClose }: { info: ProviderInfo; onClose: () => void }) {
   const { cli, install } = PROVIDERS[info.id];
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
@@ -294,14 +332,13 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
           </p>
         </>
       )}
-      <button
-        type="button"
-        onClick={() => void useApp.getState().refreshProviders()}
-        className="mt-1 flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <RotateCw className="size-3" />
-        Check again
-      </button>
+      <div className="mt-1 flex flex-wrap justify-center gap-1.5">
+        <button type="button" onClick={() => void useApp.getState().refreshProviders()} className={statusButtonClass}>
+          <RotateCw className="size-3" />
+          Check again
+        </button>
+        <OpenProviders onClose={onClose} />
+      </div>
     </div>
   );
 }
@@ -361,7 +398,7 @@ export function EffortPicker() {
       >
         <Gauge className="size-3.5 @[26rem]:hidden" />
         <span className="hidden @[26rem]:inline">{label}</span>
-        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
       </button>
       {open && (
         <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">

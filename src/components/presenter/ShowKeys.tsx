@@ -1,15 +1,15 @@
 import { Dialog } from "../Dialog";
-import { keysLabel, SECTIONS } from "../ShortcutHelp";
+import { keysLabel, SECTIONS } from "../settings/shortcuts";
 
 /** The keys that close the list: Escape, and `?` again. */
 const CLOSE_KEYS = ["Escape", "?"];
 
-/** The keys of a show, as the shortcut help lists them under Presenting. */
+/** The keys of a show, as the settings list them under Presenting. */
 export const showKeyRows = () => SECTIONS.find((section) => section.title === "Presenting")?.rows ?? [];
 
 /**
  * The show's keys, in a small dialog over the show: `?` opens it there, where the app's whole
- * shortcut help would bury them under the editor's.
+ * list of shortcuts would bury them under the editor's.
  */
 export function ShowKeys({ onClose }: { onClose: () => void }) {
   return (

@@ -2,21 +2,29 @@ export type Provider = "claude" | "codex" | "copilot";
 
 export const PROVIDER_IDS: Provider[] = ["claude", "codex", "copilot"];
 
-export const PROVIDERS: Record<Provider, { label: string; cli: string; install: string }> = {
+/**
+ * What the app calls each agent: `label` beside its models, `cli` for the program on the computer
+ * (the name the backend's messages use too), and how to `install` it and to `signIn` to it, the
+ * commands in backticks (see components/chat/InstallHint.tsx).
+ */
+export const PROVIDERS: Record<Provider, { label: string; cli: string; install: string; signIn: string }> = {
   claude: {
     label: "Claude",
     cli: "Claude Code",
     install: "Install it from claude.com/claude-code and run `claude` once to sign in.",
+    signIn: "Run `claude` in a terminal and sign in.",
   },
   codex: {
     label: "Codex",
     cli: "Codex",
     install: "Install it with `npm i -g @openai/codex` and run `codex` once to sign in.",
+    signIn: "Run `codex login` in a terminal to sign in.",
   },
   copilot: {
     label: "GitHub Copilot",
     cli: "GitHub Copilot",
     install: "Install it with `npm i -g @github/copilot`, then run `copilot` and use /login to sign in.",
+    signIn: "Run `copilot` in a terminal and use /login to sign in.",
   },
 };
 
@@ -32,6 +40,9 @@ export interface ProviderModel {
   defaultContextWindow: string | null;
 }
 
+/** Whether the CLI is signed in; `unknown` when that could not be found out without asking a model. */
+export type ProviderAuth = "signedIn" | "signedOut" | "unknown";
+
 export interface ProviderInfo {
   id: Provider;
   installed: boolean;
@@ -39,7 +50,13 @@ export interface ProviderInfo {
   models: ProviderModel[];
   /** The CLI is installed but its models could not be listed. */
   error: string | null;
+  /** The CLI's version, as `--version` says it; null when it is not installed or did not say. */
+  version: string | null;
+  auth: ProviderAuth;
 }
+
+// The app's settings name the providers too (which are on); they are in ./settings.ts.
+export type { AppSettings, EnvironmentCheck, RewindSetting, SettingsPatch } from "./settings";
 
 const EFFORT_LABELS: Record<string, string> = {
   none: "None",

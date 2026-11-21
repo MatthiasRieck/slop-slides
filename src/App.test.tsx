@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { App, SIDEBAR_MAX_SIZE } from "./App";
 import { preloadLazyParts } from "./components/lazy";
 import { TOAST_EXIT_MS } from "./components/Toasts";
-import { openShortcutHelp, showError, useApp } from "./store";
+import { openSettings, showError, useApp } from "./store";
 import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 import { appWindow, ask, requestClose } from "./test/tauri";
@@ -37,6 +37,7 @@ beforeEach(() => {
     railOpen: true,
     presenting: false,
     toasts: [],
+    settingsSection: null,
   });
 });
 
@@ -175,26 +176,57 @@ describe("App", () => {
     expect(shown("stage")).toBe(true);
   });
 
-  it("offers the keyboard shortcuts in any mode of an open workspace, not on the start screen", () => {
-    const help = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
+  it("opens the app's settings on their keyboard shortcuts with ?, on the start screen and in any mode", () => {
+    const settings = () => screen.queryByRole("dialog", { name: "Settings" });
+    const onShortcuts = () => screen.queryByRole("tab", { name: "Keyboard shortcuts", selected: true }) !== null;
     const { unmount } = render(<App />);
+    expect(settings()).toBeNull();
     fireEvent.keyDown(document.body, { key: "?" });
-    expect(help()).toBeNull();
+    expect(onShortcuts()).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(settings()).toBeNull();
     unmount();
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
     render(<App />);
     fireEvent.keyDown(document.body, { key: "?" });
-    expect(help()).toBeTruthy();
+    expect(onShortcuts()).toBe(true);
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(help()).toBeNull();
+    expect(settings()).toBeNull();
     act(() => useApp.getState().setMode("git"));
     fireEvent.keyDown(document.body, { key: "/", ctrlKey: true });
-    expect(help()).toBeTruthy();
+    expect(onShortcuts()).toBe(true);
     fireEvent.keyDown(document.body, { key: "Escape" });
     // Without a deck too.
     act(() => useApp.setState({ deck: null }));
-    act(() => openShortcutHelp());
-    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(onShortcuts()).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(settings()).toBeNull();
+  });
+
+  it("shows the app's settings over whatever is open, on the section asked for", () => {
+    const settings = () => screen.queryByRole("dialog", { name: "Settings" });
+    render(<App />);
+    act(() => openSettings());
+    expect(settings()).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "General", selected: true })).toBeTruthy();
+    act(() => useApp.getState().closeSettings());
+    expect(settings()).toBeNull();
+    act(() => useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) }));
+    act(() => openSettings("providers"));
+    expect(screen.getByRole("tab", { name: "Providers", selected: true })).toBeTruthy();
+    // Pressing beside the dialog leaves it open.
+    fireEvent.pointerDown(screen.getByTestId("settings-backdrop"));
+    expect(settings()).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(settings()).toBeNull();
+  });
+
+  it("opens the settings on Ctrl+, in an open folder", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    fireEvent.keyDown(document.body, { key: ",", ctrlKey: true });
+    expect(screen.getByRole("tab", { name: "General", selected: true })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: "Escape" });
   });
 

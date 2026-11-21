@@ -22,7 +22,7 @@ use serde_json::{json, Map, Value};
 use crate::error::Result;
 use crate::mcp;
 
-const MCP_FILE: &str = "mcp.json";
+pub(crate) const MCP_FILE: &str = "mcp.json";
 const WORKSPACE_MCP_FILE: &str = ".mcp.json";
 const INSTRUCTIONS_FILE: &str = "AGENTS.md";
 const SKILLS_DIR: &str = "skills";
@@ -226,6 +226,17 @@ fn servers_of(value: Value) -> Option<Map<String, Value>> {
             None => Some(obj),
         },
         _ => None,
+    }
+}
+
+/// Whether `raw`, the text of an `.mcp.json`-style file, can be loaded whole: what is wrong with
+/// it otherwise, which loading it only warns about (see [`Extensions::load`]).
+pub(crate) fn check_mcp_servers(raw: &str) -> std::result::Result<(), String> {
+    let value = serde_json::from_str::<Value>(raw).map_err(|e| e.to_string())?;
+    let servers = servers_of(value).ok_or("Expected an object of MCP servers.")?;
+    match servers.iter().find(|(_, server)| !server.is_object()) {
+        Some((name, _)) => Err(format!("MCP server `{name}`: expected an object.")),
+        None => Ok(()),
     }
 }
 

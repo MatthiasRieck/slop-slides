@@ -1,7 +1,10 @@
 // Dev-only: when the UI runs in a plain browser, fake the Tauri IPC with read-only data
 // served by dev/browserPreview.ts. Never loaded inside the desktop app.
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
+import { PROVIDER_IDS } from "./models";
+import { defaultSettings, patchSettings, SETTINGS_CHANGED, type SettingsPatch } from "./settings";
 import { loadJson } from "./storage";
 
 export function installBrowserMock() {
@@ -12,6 +15,8 @@ export function installBrowserMock() {
     if (!res.ok) throw new Error(`not found: ${Object.values(query).join(" ") || route}`);
     return res.json();
   };
+  /** The app's settings, kept while the page is open: the preview has no file to keep them in. */
+  let settings = defaultSettings();
   mockIPC(
     async (cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
@@ -60,8 +65,10 @@ export function installBrowserMock() {
                 },
               ],
               error: null,
+              version: "2.1.0",
+              auth: "signedIn",
             },
-            { id: "codex", installed: false, path: null, models: [], error: null },
+            { id: "codex", installed: false, path: null, models: [], error: null, version: null, auth: "unknown" },
             {
               id: "copilot",
               installed: true,
@@ -87,7 +94,27 @@ export function installBrowserMock() {
                 },
               ],
               error: null,
+              version: "1.0.4",
+              auth: "signedIn",
             },
+          ];
+        case "get_settings":
+          return settings;
+        case "update_settings": {
+          const next = patchSettings(settings, a.patch as SettingsPatch);
+          if (!PROVIDER_IDS.some((id) => next.providers[id].enabled)) {
+            throw new Error("At least one provider has to stay on.");
+          }
+          settings = next;
+          void emit(SETTINGS_CHANGED, settings);
+          return settings;
+        }
+        case "busy_providers":
+          return [];
+        case "check_environment":
+          return [
+            { id: "git", ok: true, detail: "/usr/bin/git" },
+            { id: "mcpConfig", ok: true, detail: "No ~/.slopslides/mcp.json; nothing to load." },
           ];
         case "agent_running":
           return false;

@@ -1,11 +1,9 @@
-import { useEffect } from "react";
-
-import { formatKeys, isMod, isTypingTarget } from "../lib/keys";
-import { useApp } from "../store";
-import { Dialog } from "./Dialog";
+// Every keyboard shortcut of the app, as the settings list them (see ./KeyboardSection.tsx) and
+// the show lists its own (see ../presenter/ShowKeys.tsx).
+import { formatKeys } from "../../lib/keys";
 
 /**
- * A row of the help: the keys, and what they do. In the keys, `{mod+z}` is a shortcut, written as
+ * A row of the list: the keys, and what they do. In the keys, `{mod+z}` is a shortcut, written as
  * the platform writes it (see `formatKeys`); the rest is said as it is: `{mod+c} / {mod+v}`,
  * `{shift} moving`, `Double-click a group`.
  */
@@ -40,14 +38,14 @@ export const SECTIONS: ShortcutSection[] = [
   {
     title: "General",
     rows: [
-      ["{?} / {mod+/}", "Show these shortcuts"],
+      ["{?} / {mod+/}", "Show these shortcuts, in the settings"],
       ["{mod+z} / {mod+shift+z}", "Undo / redo a change to the deck"],
       ["{mod+n}", "New window"],
       ["{mod+o}", "Open a folder"],
       ["{mod+1} / {mod+2} / {mod+3}", "View / Edit / Git (in a repository)"],
       ["{mod+\\}", "Show or hide the sidebar"],
       ["{mod+shift+\\}", "Show or hide the slide list"],
-      ["{mod+,}", "App settings"],
+      ["{mod+,}", "Settings"],
       ["{escape}", "Close what is open: a menu, a popover, a dialog, a message"],
       ["{up} {down} in a menu", "Go through its choices"],
       ["{left} {right} on a tab", "Go to the tab beside it"],
@@ -198,79 +196,3 @@ export const SECTIONS: ShortcutSection[] = [
     ],
   },
 ];
-
-/** The keys that close the help: Escape, and `?` again. */
-const CLOSE_KEYS = ["Escape", "?"];
-
-/** Whether the keys ask for the help: `?` outside of typing, or ⌘/ anywhere nothing else took it. */
-function asksForHelp(event: KeyboardEvent): boolean {
-  if (event.altKey) return false;
-  if (event.key === "/") return isMod(event) && !event.defaultPrevented;
-  return event.key === "?" && !event.metaKey && !event.ctrlKey && !isTypingTarget(event.target);
-}
-
-/**
- * The app's keyboard shortcuts, in a dialog. It is mounted once, for the whole workbench, and
- * opens on `?` (unless the user is typing), on ⌘/, on either pressed in a slide preview, which
- * forwards its keys, and from `openShortcutHelp` in ../store.ts (a button, say). Not during a
- * show, whose keys are the show's.
- */
-export function ShortcutHelp() {
-  const open = useApp((s) => s.shortcutHelpOpen);
-
-  useEffect(() => {
-    const show = () => {
-      const app = useApp.getState();
-      if (!app.presenting) app.setShortcutHelpOpen(true);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (!asksForHelp(event)) return;
-      event.preventDefault();
-      show();
-    };
-    const onMessage = (event: MessageEvent) => {
-      const { type, key, mod } = event.data ?? {};
-      if (type !== "slop:key" || !(key === "?" ? !mod : key === "/" && mod)) return;
-      if (Array.from(document.querySelectorAll("iframe")).some((f) => f.contentWindow === event.source)) show();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("message", onMessage);
-      // Gone with the workbench, it is not left open for the next one.
-      useApp.getState().setShortcutHelpOpen(false);
-    };
-  }, []);
-
-  if (!open) return null;
-
-  return (
-    <Dialog
-      label="Keyboard shortcuts"
-      onClose={() => useApp.getState().setShortcutHelpOpen(false)}
-      className="flex max-h-[calc(100vh-4rem)] w-[60rem] max-w-[calc(100vw-2rem)] flex-col rounded-xl border bg-card p-4 text-xs text-foreground shadow-lg outline-none"
-      heading={<h2 className="text-sm font-medium">Keyboard shortcuts</h2>}
-      closeKeys={CLOSE_KEYS}
-      closeOnBackdrop
-      closeButton
-      backdropTestId="shortcut-help-backdrop"
-    >
-      <div className="min-h-0 columns-1 gap-x-6 overflow-y-auto sm:columns-2 lg:columns-3">
-        {SECTIONS.map((section) => (
-          <section key={section.title} className="mb-4 break-inside-avoid">
-            <h3 className="mb-1 font-medium text-muted-foreground">{section.title}</h3>
-            <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-              {section.rows.map(([keys, what]) => (
-                <div key={keys} className="contents">
-                  <dt className="max-w-44 tabular-nums">{keysLabel(keys)}</dt>
-                  <dd className="text-muted-foreground">{keysLabel(what)}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        ))}
-      </div>
-    </Dialog>
-  );
-}

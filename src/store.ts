@@ -14,10 +14,11 @@ import { createNarrationSlice } from "./store/narration";
 import { createReviewSlice, flushReview } from "./store/review";
 import { createRewindSlice } from "./store/rewind";
 import { createSearchSlice } from "./store/search";
+import { createSettingsSlice } from "./store/settings";
 import { createSlidesSlice } from "./store/slides";
 import { createTemplatesSlice } from "./store/templates";
 import type { AppState } from "./store/types";
-import { createUiSlice, type ToastAction } from "./store/ui";
+import { createUiSlice, type SettingsSection, type ToastAction } from "./store/ui";
 import { createWorkspaceSlice, leaveForClose, settleUnsavedEdits as settleDeckEdits } from "./store/workspace";
 
 export { SKETCH_TARGET_ATTR } from "./store/capture";
@@ -34,7 +35,7 @@ export type {
   Sketch,
   UserMessage,
 } from "./store/messages";
-export { chatProvider, type ModelSelection } from "./store/models";
+export { chatProvider, type ModelSelection, turnedOffProvider } from "./store/models";
 export { relativePath } from "./store/paths";
 export {
   addLayoutPrompt,
@@ -47,11 +48,19 @@ export {
   withRevertNotes,
 } from "./store/prompts";
 export { commentsInScope, commentsToSend, deckComments, hasComments, hasReview, heldComment } from "./store/review";
-export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
+export type { RewindChoice } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
 export { listedSlides, railSelection } from "./store/slides";
 export type { DesignChange } from "./store/templates";
-export { SIDEBAR_TABS, type SidebarTab, type Toast, type ToastAction, type ToastKind } from "./store/ui";
+export {
+  SETTINGS_SECTIONS,
+  type SettingsSection,
+  SIDEBAR_TABS,
+  type SidebarTab,
+  type Toast,
+  type ToastAction,
+  type ToastKind,
+} from "./store/ui";
 export { provideCodeSave, type WorkspaceChange } from "./store/workspace";
 
 export const useApp = create<AppState>()((...a) => ({
@@ -67,6 +76,7 @@ export const useApp = create<AppState>()((...a) => ({
   ...createChatSlice(...a),
   ...createModelsSlice(...a),
   ...createUiSlice(...a),
+  ...createSettingsSlice(...a),
   ...createTemplatesSlice(...a),
   ...createLintSlice(...a),
 }));
@@ -101,8 +111,8 @@ export const showSuccess = (text: string, action?: ToastAction) => showSuccessIn
 /** Takes the toast with `id` away. */
 export const dismissToast = (id: number) => useApp.getState().dismissToast(id);
 
-/** Opens the list of keyboard shortcuts. */
-export const openShortcutHelp = () => useApp.getState().setShortcutHelpOpen(true);
+/** Opens the app's settings, on General unless a section is asked for (`"keyboard"` lists the shortcuts). */
+export const openSettings = (section?: SettingsSection) => useApp.getState().openSettings(section);
 
 /** Runs `action`, showing what goes wrong in the app's toasts; undefined when it failed. */
 export const reportingErrors = <T>(action: () => Promise<T>, prefix = "") => reportingErrorsIn(useApp, action, prefix);

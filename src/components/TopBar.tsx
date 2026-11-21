@@ -11,6 +11,7 @@ import {
   PanelRightOpen,
   PencilLine,
   Redo2,
+  Settings,
   Settings2,
   Undo2,
   X,
@@ -23,7 +24,7 @@ import type { HistoryEntry, OpenedFile, WorkspaceInfo } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn, isMac, revealLabel } from "../lib/utils";
-import { useApp } from "../store";
+import { openSettings, useApp } from "../store";
 import { hiddenChatAttention } from "../store/attention";
 import { ATTENTION_LABELS, AttentionMark } from "./AttentionMark";
 import { ToolButton } from "./Button";
@@ -38,8 +39,9 @@ import { TitleField } from "./TitleField";
  * path from the workspace folder with the deck's title under it, which opens the file menu: for
  * the deck, rename it, open its settings or close it (back to the folder); for the folder, show
  * its files, reveal it in the file manager, open another folder or close this one (back to the
- * start screen); then undo / redo. For a deck, its mode tabs in the middle, then export and
- * present; then the sidebar's toggle while the sidebar is closed (open, it sits in the sidebar),
+ * start screen); then undo / redo. For a deck, its mode tabs in the middle. On the right, the
+ * gear that opens the app's settings, then, for a deck, export and present; then the sidebar's
+ * toggle while the sidebar is closed (open, it sits in the sidebar),
  * which marks an agent that works or waits while the chat is out of sight. The tools of each
  * mode live above the slide (Stage), and the lint status beside Tidy layout under it.
  */
@@ -73,6 +75,15 @@ export function TopBar() {
         <div />
       )}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
+        <ToolButton
+          variant="panel"
+          size="md"
+          label="Settings"
+          shortcut={SHELL_SHORTCUTS.appSettings}
+          onClick={() => openSettings()}
+        >
+          <Settings className="size-4" />
+        </ToolButton>
         {hasDeck && (
           <div className="mr-2 flex items-center gap-1">
             <DeckActions />

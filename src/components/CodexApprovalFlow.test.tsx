@@ -22,6 +22,8 @@ const providers: ProviderInfo[] = [
     installed: true,
     path: "/mock/codex",
     error: null,
+    version: "1.0.0",
+    auth: "signedIn",
     models: [
       {
         id: "test",

@@ -4,9 +4,12 @@ import { type DeckMode, deckMode } from "./editing";
 import type { Slice } from "./types";
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files", "narration", "notes", "code", "svg", "settings"] as const;
+export const SIDEBAR_TABS = ["chat", "files", "narration", "notes", "code", "svg"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
+/** The sections of the app's settings, in the order the dialog lists them (see components/settings/SettingsDialog.tsx). */
+export const SETTINGS_SECTIONS = ["general", "providers", "keyboard", "about"] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 /** The tabs a first start opens. */
 const DEFAULT_SIDEBAR_TABS: SidebarTab[] = ["chat", "files"];
 
@@ -67,8 +70,8 @@ export interface UiSlice {
   presentFrom: ShowStart;
   /** What the app has to tell the user, oldest first; at most `MAX_TOASTS`. */
   toasts: Toast[];
-  /** The shortcut help is open (see ../components/ShortcutHelp.tsx). */
-  shortcutHelpOpen: boolean;
+  /** The section the app's settings dialog shows; null while it is closed. */
+  settingsSection: SettingsSection | null;
   /** The mode the deck's settings opened from, which closing them goes back to. */
   settingsReturn: Exclude<DeckMode, "settings">;
 
@@ -88,14 +91,19 @@ export interface UiSlice {
    */
   showToast: (kind: ToastKind, text: string, action?: ToastAction) => number;
   dismissToast: (id: number) => void;
-  setShortcutHelpOpen: (open: boolean) => void;
+  /** Opens the app's settings, on General unless a section is asked for; open already, they go to it. */
+  openSettings: (section?: SettingsSection) => void;
+  closeSettings: () => void;
   /** Shows the deck's settings in the place of the slide, remembering the mode to go back to. */
   openDeckSettings: () => void;
   /** Leaves the deck's settings for the mode they opened from. */
   closeDeckSettings: () => void;
 }
 
-/** The sidebar's tabs as last left; anything saved that is not a tab is dropped. */
+/**
+ * The sidebar's tabs as last left; anything saved that is not a tab is dropped, as is one that
+ * no longer is (the app's settings were a tab before they became a dialog).
+ */
 function loadSidebarTabs(): { sidebarTabs: SidebarTab[]; sidebarTab: SidebarTab | null } {
   const sidebarTabs = loadJson(SIDEBAR_TABS_KEY, DEFAULT_SIDEBAR_TABS, (saved) =>
     Array.isArray(saved) ? [...new Set(saved.filter(isSidebarTab))] : DEFAULT_SIDEBAR_TABS,
@@ -122,7 +130,7 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   screens: null,
   presentFrom: "current",
   toasts: [],
-  shortcutHelpOpen: false,
+  settingsSection: null,
   settingsReturn: "view",
 
   setSidebarOpen: (sidebarOpen) => {
@@ -185,7 +193,9 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
 
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
-  setShortcutHelpOpen: (shortcutHelpOpen) => set({ shortcutHelpOpen }),
+  openSettings: (section = "general") => set({ settingsSection: section }),
+
+  closeSettings: () => set({ settingsSection: null }),
 
   openDeckSettings: () => {
     const from = deckMode(get());

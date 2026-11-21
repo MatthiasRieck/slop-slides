@@ -2,14 +2,33 @@ import { listen } from "@tauri-apps/api/event";
 
 import { type AgentEventEnvelope, api, type WorkspaceChanged } from "../lib/api";
 import { wroteAsset } from "../lib/ownAssets";
+import { type AppSettings, readSettings, SETTINGS_CHANGED, takeInjectedNotice } from "../lib/settings";
 import { basename, dirname } from "../lib/utils";
 import { applyAgentEvent } from "./chat";
 import { showErrorIn } from "./errors";
 import { adoptReview } from "./review";
+import { adoptSettings } from "./settings";
 import type { AppStore } from "./types";
 
-/** Follows the backend's events: the agent's, changes in the open workspace, and a folder opened from Finder. */
+/**
+ * Follows the backend's events: the agent's, changes in the open workspace, changes to the app's
+ * settings (made in any window), and a folder opened from Finder.
+ */
 export async function initEventBridge(app: AppStore) {
+  // The settings file could not be read and the app started on the defaults: said once, to stay
+  // until dismissed.
+  const notice = takeInjectedNotice();
+  if (notice) app.getState().showToast("error", notice);
+  // What the backend handed the window is as old as the window: a page loaded again asks anew.
+  void api.getSettings().then(
+    // Not an answer (a backend that has none, as in the browser preview's absence): the settings stay.
+    (settings) => {
+      if (settings && typeof settings === "object" && !Array.isArray(settings)) {
+        adoptSettings(app, readSettings(settings));
+      }
+    },
+    () => {},
+  );
   // Listing Codex models starts its app server; don't hold up the rest of the bridge.
   void app.getState().refreshProviders();
   try {
@@ -21,6 +40,7 @@ export async function initEventBridge(app: AppStore) {
       listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
         if (payload.root === app.getState().workspace?.path) applyWorkspaceChanged(app, payload.paths);
       }),
+      listen<AppSettings>(SETTINGS_CHANGED, ({ payload }) => adoptSettings(app, payload)),
       // A folder opened with the app from Finder may be waiting for this window: one opened before
       // the window was up, or one sent to it later.
       listen("folder-pending", () => void openPendingFolder(app)),

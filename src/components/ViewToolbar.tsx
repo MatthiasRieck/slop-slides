@@ -33,7 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AreaShape } from "../lib/comments";
-import { INK_COLORS } from "../lib/ink";
+import { INK_COLORS, inkColorName } from "../lib/ink";
 import { cn } from "../lib/utils";
 import { deckComments, hasReview, useApp } from "../store";
 import { CommentsOverview } from "./Comments";
@@ -125,6 +125,11 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
     <div ref={ribbon.ref} role="toolbar" aria-label="View tools" className="flex min-w-0 flex-[1_1_200px]">
       <RibbonSection title="Mark up" icon={<PenLine />} collapsed={collapsedFrom <= 0} closeOn={tool}>
         <RibbonRow>
+          {/*
+            Buttons marked as pressed, not a ToggleGroup: they share their one choice with the
+            comment tools of Review, and a group's arrows would be taken from the slides, which
+            they page through in View.
+          */}
           <Button
             variant="tool"
             size="icon-xs"
@@ -164,22 +169,29 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
         <RibbonRow>
           <div className="flex flex-1 items-center justify-around">
             {INK_COLORS.map((color) => (
-              <Button
-                key={color}
-                variant="outline"
-                aria-label={`Color ${color}`}
-                aria-pressed={inkColor === color}
-                onClick={() => {
-                  onCommenting(false);
-                  onDrawingArea(false);
-                  setColor(color);
-                }}
-                className={cn(
-                  "size-3.5 rounded-full border-foreground/20 p-0 dark:border-foreground/20",
-                  inkColor === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background",
-                )}
-                style={{ background: color }}
-              />
+              <Tooltip key={color}>
+                {/* A swatch is its color, which no variant of a button is: it stays a plain one. */}
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={inkColorName(color)}
+                      aria-pressed={inkColor === color}
+                      onClick={() => {
+                        onCommenting(false);
+                        onDrawingArea(false);
+                        setColor(color);
+                      }}
+                      className={cn(
+                        "size-3.5 rounded-full border border-foreground/20 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                        inkColor === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background",
+                      )}
+                      style={{ background: color }}
+                    />
+                  }
+                />
+                <TooltipContent>{inkColorName(color)}</TooltipContent>
+              </Tooltip>
             ))}
           </div>
         </RibbonRow>

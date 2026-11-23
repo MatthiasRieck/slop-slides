@@ -14,6 +14,7 @@ import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isFrame } from "../lib/framePress";
 import { openLayer } from "../lib/layers";
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
@@ -224,23 +225,29 @@ export function RibbonSelect({
   onPick: (value: string) => void;
   onDone?: () => void;
 }) {
-  return (
+  const tooltip = rest.disabled && disabledReason ? disabledReason : (title ?? label);
+  // `className` sizes the box around the list, which fills it.
+  const box = cn("block w-fit", className);
+  const list = (
     <NativeSelect
       size="sm"
       aria-label={label}
-      // The list's own tooltip: it shows on a disabled list too, which a tooltip of the app's cannot.
-      title={rest.disabled && disabledReason ? disabledReason : (title ?? label)}
       {...rest}
       onChange={(event) => {
         onPick(event.target.value);
         onDone?.();
       }}
-      // `className` sizes the box around the list, which fills it; the row of a ribbon is 24px high.
-      className={cn(
-        "[&_select]:h-6 [&_select]:py-0 [&_select]:pr-5 [&_select]:pl-1.5 [&_select]:text-xs [&_svg]:right-1 [&_svg]:size-3",
-        className,
-      )}
+      // The row of a ribbon is 24px high.
+      className="w-full [&_select]:h-6 [&_select]:py-0 [&_select]:pr-5 [&_select]:pl-1.5 [&_select]:text-xs [&_svg]:right-1 [&_svg]:size-3"
     />
+  );
+  if (!tooltip) return <span className={box}>{list}</span>;
+  return (
+    <Tooltip>
+      {/* The tooltip is the box's: a disabled list is nothing under the pointer, and could not say why it is off. */}
+      <TooltipTrigger render={<span className={box} />}>{list}</TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 

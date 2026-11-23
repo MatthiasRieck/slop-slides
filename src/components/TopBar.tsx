@@ -16,7 +16,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -152,6 +152,14 @@ function Breadcrumbs(props: {
 function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; deckTitle: string | null }) {
   const { workspace, file, deckTitle } = props;
   const [renaming, setRenaming] = useState(false);
+  // Rename… takes the menu and its button away for the field, which takes the focus; the menu
+  // would otherwise hand the focus back as it closes, to whatever had it before (its button being
+  // gone), and the field, blurred, would end the renaming at once.
+  const renameChosen = useRef(false);
+  const stopRenaming = () => {
+    renameChosen.current = false;
+    setRenaming(false);
+  };
   const isDeck = deckTitle !== null;
 
   if (renaming && isDeck) {
@@ -163,8 +171,8 @@ function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; de
           title={deckTitle}
           selectOnMount
           onCommit={(title) => useApp.getState().renameDeck(title)}
-          onDone={() => setRenaming(false)}
-          onCancel={() => setRenaming(false)}
+          onDone={stopRenaming}
+          onCancel={stopRenaming}
           className="h-6 w-64 max-w-full px-1.5 font-medium"
         />
       </div>
@@ -195,14 +203,21 @@ function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; de
           </span>
           <ChevronDown className="size-3 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-60">
+        <DropdownMenuContent align="start" className="w-60" finalFocus={() => !renameChosen.current}>
           {file && (
             <>
               <DropdownMenuGroup>
                 <DropdownMenuLabel className={sectionLabel}>{isDeck ? "Deck" : "File"}</DropdownMenuLabel>
                 {isDeck && (
                   <>
-                    <MenuItem icon={PencilLine} label="Rename…" onClick={() => setRenaming(true)} />
+                    <MenuItem
+                      icon={PencilLine}
+                      label="Rename…"
+                      onClick={() => {
+                        renameChosen.current = true;
+                        setRenaming(true);
+                      }}
+                    />
                     <MenuItem
                       icon={Settings2}
                       label="Deck settings"

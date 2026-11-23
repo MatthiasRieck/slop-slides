@@ -306,8 +306,23 @@ describe("SvgEditor", () => {
     fireEvent.change(markup, { target: { value: "<svg><circle r='5'/>" } });
     expect(draft()).toBe('<svg><circle r="5"></circle></svg>');
     fireEvent.change(markup, { target: { value: "<div>" } });
-    expect(screen.getByText(/the last valid markup is kept/)).toBeTruthy();
+    // Said as the field's error, and tied to the field it is about.
+    const problem = screen.getByText(/the last valid markup is kept/);
+    expect(problem.getAttribute("data-slot")).toBe("field-error");
+    expect(markup.getAttribute("aria-invalid")).toBe("true");
+    expect(markup.getAttribute("aria-describedby")).toBe(problem.id);
     expect(draft()).toBe('<svg><circle r="5"></circle></svg>');
+    fireEvent.change(markup, { target: { value: "<svg></svg>" } });
+    expect(screen.queryByText(/the last valid markup is kept/)).toBeNull();
+    expect(markup.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("says so in place of the canvas when the drawing's markup is not one drawing", async () => {
+    await open();
+    act(() => useSvgEditor.setState((s) => ({ edit: s.edit && { ...s.edit, draft: "<div>" } })));
+    expect(screen.queryByTestId("svg-canvas")).toBeNull();
+    const placeholder = screen.getByText("The markup is not one <svg> drawing").closest("[data-slot=empty]")!;
+    expect(placeholder.textContent).toContain("Fix it in Markup, or undo.");
   });
 
   it("accepts or discards only when there are changes", async () => {
@@ -334,7 +349,9 @@ describe("SvgEditor", () => {
 
   it("does not accept into a deck other than the drawing's", async () => {
     await open({ deckId: "/decks/other/deck.html" });
-    expect(screen.getByText(/in another deck/)).toBeTruthy();
+    // A notice across the editor, as the code editor's are; advice, so not announced as an error.
+    const notice = screen.getByText(/in another deck/).closest("[data-slot=alert]")!;
+    expect(notice.getAttribute("role")).toBe("note");
     const accept = screen.getByRole("button", { name: /Apply to slide/ }) as HTMLButtonElement;
     expect(isOff(accept)).toBe(true);
     expect(tooltipOf(accept)).toBe("Open the deck the drawing is in to save it");

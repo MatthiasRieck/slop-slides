@@ -231,7 +231,8 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
           <Button
             variant="tool"
             size="icon-xs"
-            aria-label="Scroll tabs left"
+            tooltip="Scroll tabs left"
+            tooltipSide="bottom"
             disabled={!overflow.left}
             onClick={() => scroll(-1)}
           >
@@ -240,7 +241,8 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
           <Button
             variant="tool"
             size="icon-xs"
-            aria-label="Scroll tabs right"
+            tooltip="Scroll tabs right"
+            tooltipSide="bottom"
             disabled={!overflow.right}
             onClick={() => scroll(1)}
           >

@@ -20,6 +20,7 @@ import {
 } from "../lib/editTools";
 import { RibbonSelect } from "./Ribbon";
 import { QUIET_LABEL } from "./styles";
+import { TOOLBAR_POPUP } from "./toolProps";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
 const HEAD_LABELS: Record<HeadKind, string> = { arrow: "Arrow", triangle: "Triangle", bar: "Bar", dot: "Dot" };
@@ -115,6 +116,7 @@ export function LineButton(props: {
       </PopoverTrigger>
       {line && (
         <PopoverContent
+          {...TOOLBAR_POPUP}
           aria-label="Line ends and route"
           initialFocus={false}
           finalFocus={false}

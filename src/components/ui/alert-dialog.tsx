@@ -3,7 +3,7 @@
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
-import { keepKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
+import { keepKeys, ModalKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +57,7 @@ function AlertDialogContent({
         onKeyDown={keepKeys(onKeyDown)}
       >
         <OverlayLayer />
+        <ModalKeys />
         {children}
       </AlertDialogPrimitive.Popup>
     </AlertDialogPortal>

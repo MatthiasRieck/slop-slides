@@ -60,6 +60,12 @@ describe("SlideTime", () => {
     const problem = screen.getByRole("alert");
     expect(problem.textContent).toMatch(/1:30/);
     expect(field().getAttribute("aria-describedby")).toBe(problem.id);
+    // Said by the field's tooltip, which places itself in the window: no bubble of its own to clip.
+    expect(problem.closest("[data-slot=tooltip-content]")).toBeTruthy();
+    expect(document.querySelectorAll("[data-slot=tooltip-content]")).toHaveLength(1);
+    // It stays for as long as the time is wrong, wherever the pointer goes.
+    fireEvent.mouseLeave(field().parentElement!);
+    expect(screen.getByRole("alert")).toBe(problem);
     expect(field().className).toContain("ring-destructive");
     // Typing over it clears the mark; a time is saved as ever.
     fireEvent.change(field(), { target: { value: "2" } });
@@ -67,6 +73,10 @@ describe("SlideTime", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     await act(async () => fireEvent.blur(field()));
     expect(invoke).toHaveBeenCalledWith("set_slide_time", expect.objectContaining({ seconds: 120 }));
+    // The hint is the tooltip's again, and still not opened by the focus.
+    fireEvent.focus(field());
+    expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull();
+    expect(tooltipOf(field().parentElement!)).toMatch(/How long you plan to spend on this slide/);
   });
 
   it("Escape takes back what is no time", async () => {

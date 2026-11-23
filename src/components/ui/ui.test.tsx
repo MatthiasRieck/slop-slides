@@ -294,6 +294,53 @@ describe("Dialog", () => {
     window.removeEventListener("keydown", page);
   });
 
+  it("takes a key pressed with the focus lost as its own, and brings the focus back in", async () => {
+    const page = vi.fn();
+    window.addEventListener("keydown", page);
+    render(<Example />);
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    const dialog = screen.getByRole("dialog");
+    await settle();
+    // A press on the scrim of a dialog that stays open leaves the focus on the body.
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    expect(page).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(dialog);
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    fireEvent.keyDown(document.body, { key: "Delete" });
+    expect(page).not.toHaveBeenCalled();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // Tab does not walk on from where the focus was lost.
+    (document.activeElement as HTMLElement).blur();
+    expect(fireEvent.keyDown(document.body, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(dialog);
+    // Escape goes on and closes the dialog, and the keys are the app's again.
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    expect(page).toHaveBeenCalledOnce();
+    window.removeEventListener("keydown", page);
+  });
+
+  it("leaves a key pressed in another popup beside it to that popup", async () => {
+    const page = vi.fn();
+    window.addEventListener("keydown", page);
+    render(<Example />);
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await settle();
+    // Rendered into the body beside the dialog, as a popover or the toasts are.
+    const beside = document.body.appendChild(document.createElement("input"));
+    beside.focus();
+    fireEvent.keyDown(beside, { key: "ArrowRight" });
+    expect(page).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(beside);
+    beside.remove();
+    window.removeEventListener("keydown", page);
+  });
+
   it("closes on a press beside it unless told not to", async () => {
     const onOpenChange = vi.fn();
     const { rerender } = render(
@@ -372,6 +419,19 @@ describe("AlertDialog", () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     expect(answer.mock.calls).toEqual([["cancel"]]);
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps a key pressed with the focus lost from the app, and takes the focus back", async () => {
+    const page = vi.fn();
+    window.addEventListener("keydown", page);
+    render(<Question answer={() => {}} />);
+    await settle();
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: "Delete" });
+    expect(page).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("alertdialog"));
+    window.removeEventListener("keydown", page);
   });
 
   it("does not close on a press beside it", async () => {

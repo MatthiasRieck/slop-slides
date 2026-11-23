@@ -187,6 +187,8 @@ describe("RibbonSection", () => {
 
 describe("RibbonSelect", () => {
   const select = (name: string) => screen.getByRole("combobox", { name }) as HTMLSelectElement;
+  /** The tooltip of the box around the list: a disabled list is nothing under the pointer, its box is. */
+  const tip = (name: string) => tooltipOf(select(name).closest("[data-slot=tooltip-trigger]")!);
   const options = (
     <>
       <option value="12">12</option>
@@ -201,7 +203,9 @@ describe("RibbonSelect", () => {
       </RibbonSelect>,
     );
     expect(select("Font size").value).toBe("12");
-    expect(select("Font size").title).toBe("Font size");
+    expect(tip("Font size")).toBe("Font size");
+    // A tooltip of the app's, not the list's own, which a disabled list could not show.
+    expect(select("Font size").hasAttribute("title")).toBe(false);
     expect(Array.from(select("Font size").options).map((option) => option.value)).toEqual(["12", "24"]);
   });
 
@@ -234,13 +238,15 @@ describe("RibbonSelect", () => {
       </RibbonSelect>,
     );
     expect(select("Font size").disabled).toBe(true);
-    expect(select("Font size").title).toBe("Select some text");
+    expect(tip("Font size")).toBe("Select some text");
+    // The reason is on what the pointer still reaches, not on the list, which lets it through.
+    expect(select("Font size").closest("[data-slot=tooltip-trigger]")).not.toBe(select("Font size"));
     rerender(
       <RibbonSelect label="Font size" title="The size of the text" disabledReason="Select some text" onPick={() => {}}>
         {options}
       </RibbonSelect>,
     );
-    expect(select("Font size").title).toBe("The size of the text");
+    expect(tip("Font size")).toBe("The size of the text");
   });
 
   it("is as wide as it is told to be, the list filling its box", () => {
@@ -249,10 +255,22 @@ describe("RibbonSelect", () => {
         {options}
       </RibbonSelect>,
     );
-    const box = select("Font size").parentElement!;
-    expect(box.getAttribute("data-slot")).toBe("native-select-wrapper");
+    const box = select("Font size").closest("[data-slot=tooltip-trigger]")!;
     expect(box.classList.contains("w-24")).toBe(true);
+    expect(select("Font size").parentElement!.getAttribute("data-slot")).toBe("native-select-wrapper");
+    expect(select("Font size").parentElement!.classList.contains("w-full")).toBe(true);
     expect(select("Font size").className).toContain("w-full");
+  });
+
+  it("has no tooltip with nothing to say", () => {
+    render(
+      <RibbonSelect id="size" className="w-24" onPick={() => {}}>
+        {options}
+      </RibbonSelect>,
+    );
+    const list = screen.getByRole("combobox");
+    expect(list.closest("[data-slot=tooltip-trigger]")).toBeNull();
+    expect(list.closest(".w-24")).toBeTruthy();
   });
 });
 

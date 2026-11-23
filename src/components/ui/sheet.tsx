@@ -2,7 +2,7 @@ import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
-import { keepKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
+import { keepKeys, ModalKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -62,6 +62,7 @@ function SheetContent({
         onKeyDown={keepKeys(onKeyDown)}
       >
         <OverlayLayer />
+        <ModalKeys />
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close

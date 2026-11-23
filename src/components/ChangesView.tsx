@@ -26,7 +26,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
@@ -35,6 +34,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type CompareView, useChanges, visibleRows } from "../changesStore";
 import { useContentSize } from "../hooks/useContentSize";
 import type { Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
@@ -697,21 +698,31 @@ function ComparisonBar({ changes, deck, enabled }: { changes: DeckChanges; deck:
           "Not committed yet"
         )}
       </span>
-      <ButtonGroup aria-label="Show" className="shrink-0">
-        {VIEWS.map((option) => (
-          <Button
-            key={option.id}
+      <Tooltip disabled={enabled}>
+        {/* Why the choice is off, on what is around it: the choices let the pointer through while they are. */}
+        <TooltipTrigger render={<span className="shrink-0" />}>
+          <ToggleGroup
+            aria-label="Show"
             variant="outline"
             size="xs"
-            aria-pressed={view === option.id}
+            spacing={0}
             disabled={!enabled}
-            tooltip={enabled ? option.title : "This slide has one version to show"}
-            onClick={() => useChanges.getState().setView(option.id)}
+            value={[view]}
+            // One of them always shows: pressing the one that does leaves it so.
+            onValueChange={([next]) => next && useChanges.getState().setView(next as CompareView)}
           >
-            {option.label}
-          </Button>
-        ))}
-      </ButtonGroup>
+            {VIEWS.map((option) => (
+              <Tooltip key={option.id}>
+                <TooltipTrigger render={<ToggleGroupItem value={option.id} className="px-2 font-medium" />}>
+                  {option.label}
+                </TooltipTrigger>
+                <TooltipContent>{option.title}</TooltipContent>
+              </Tooltip>
+            ))}
+          </ToggleGroup>
+        </TooltipTrigger>
+        <TooltipContent>This slide has one version to show</TooltipContent>
+      </Tooltip>
       <DividerSettings enabled={enabled && view === "split"} />
       <Button variant="ghost" size="icon-xs" tooltip="Refresh" onClick={() => void useChanges.getState().refresh(deck)}>
         <RefreshCw className={cn(loading && "animate-spin")} />

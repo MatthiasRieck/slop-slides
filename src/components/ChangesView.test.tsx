@@ -666,7 +666,9 @@ describe("ChangesView", () => {
     for (const name of ["Split", "Before", "After", "Divider"]) {
       expect(isOff(screen.getByRole("button", { name }))).toBe(true);
     }
-    expect(tooltipOf(screen.getByRole("button", { name: "Split" }))).toBe("This slide has one version to show");
+    // The choices let the pointer through while they are off: what is around them says why.
+    const choices = screen.getByRole("group", { name: "Show" });
+    expect(tooltipOf(choices.closest("[data-slot=tooltip-trigger]")!)).toBe("This slide has one version to show");
     expect(tooltipOf(screen.getByRole("button", { name: "Divider" }))).toBe("The divider shows in the split view");
   });
 
@@ -692,6 +694,34 @@ describe("ChangesView", () => {
     fireEvent.click(view("Split"));
     expect(isComparing()).toBe(true);
     expect(screen.queryByText("After (now).")).toBeNull();
+  });
+
+  it("offers the versions as one choice of three: one is always on, each says what it shows", async () => {
+    await show();
+    const group = screen.getByRole("group", { name: "Show" });
+    expect(group.getAttribute("data-slot")).toBe("toggle-group");
+    const view = (name: string) => within(group).getByRole("button", { name });
+    const pressed = () =>
+      within(group)
+        .getAllByRole("button")
+        .filter((b) => b.getAttribute("aria-pressed") === "true")
+        .map((b) => b.textContent);
+    expect(pressed()).toEqual(["Split"]);
+    // Pressing the one that is on leaves it on.
+    fireEvent.click(view("Split"));
+    expect(pressed()).toEqual(["Split"]);
+    expect(isComparing()).toBe(true);
+    fireEvent.click(view("After"));
+    expect(pressed()).toEqual(["After"]);
+    fireEvent.click(view("After"));
+    expect(pressed()).toEqual(["After"]);
+    expect(tooltipOf(view("Before"))).toBe("The slide as it was committed");
+    // The arrows move between the choices, as in any group of them.
+    view("Split").focus();
+    fireEvent.focus(view("Split"));
+    fireEvent.keyDown(view("Split"), { key: "ArrowRight" });
+    await settle();
+    expect(document.activeElement).toBe(view("Before"));
   });
 
   it("keeps the view going from slide to slide", async () => {

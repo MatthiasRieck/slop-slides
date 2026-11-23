@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Screen } from "../lib/api";
@@ -105,10 +105,14 @@ describe("ScreenPicker", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByText("Start presenting")));
   });
 
-  it("is a dialog called Choose screens, under the heading that says what it asks", () => {
+  it("is a dialog named by its heading, which says what it asks, and described by what is under it", () => {
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
-    const dialog = screen.getByRole("dialog", { name: "Choose screens" });
-    expect(dialog.querySelector("h2")!.textContent).toBe("Present on");
+    const dialog = screen.getByRole("dialog", { name: "Present on" });
+    const heading = within(dialog).getByRole("heading", { name: "Present on" });
+    expect(heading.getAttribute("data-slot")).toBe("dialog-title");
+    // One name, the one that is read: no label of its own beside the heading.
+    expect(dialog.hasAttribute("aria-label")).toBe(false);
+    expect(dialog.getAttribute("aria-labelledby")).toBe(heading.id);
     // It has no close button of its own: Cancel and Escape close it.
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
   });

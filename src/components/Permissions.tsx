@@ -2,6 +2,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Shield, ShieldAlert } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CodeBlock, CodeBlockContent } from "@/components/ui/code-block";
 import {
@@ -11,6 +12,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { FieldError } from "@/components/ui/field";
 import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
 import { Kbd } from "@/components/ui/kbd";
 import { api, errorMessage } from "../lib/api";
@@ -25,6 +27,9 @@ import {
 } from "../lib/permissions";
 import { cn } from "../lib/utils";
 import { type ChatPart, useApp } from "../store";
+
+/** What goes wrong in the permission menu, as a line of it: one look for each of its complaints. */
+const MENU_ERROR = "p-2 text-xs";
 
 /** Marks the chat's message input, which an approval may take the keyboard focus from while it is empty. */
 export const COMPOSER_INPUT_ATTR = "data-composer-input";
@@ -110,9 +115,7 @@ export function PermissionPicker() {
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="end" className="w-64">
         {error ? (
-          <p role="alert" className="p-2 text-xs text-destructive">
-            {error}
-          </p>
+          <FieldError className={MENU_ERROR}>{error}</FieldError>
         ) : modes.length === 0 ? (
           <p className="p-2 text-xs text-muted-foreground">Checking {name} permissions…</p>
         ) : (
@@ -138,9 +141,7 @@ export function PermissionPicker() {
           <p className="p-2 text-xs text-muted-foreground">Codex applies a change from your next message.</p>
         )}
         {modes.length > 0 && !modes.includes(mode) && (
-          <p role="alert" className="p-2 text-xs text-destructive">
-            The saved mode is unavailable. Select another mode.
-          </p>
+          <FieldError className={MENU_ERROR}>The saved mode is unavailable. Select another mode.</FieldError>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -256,9 +257,11 @@ export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract
         </p>
       )}
       {error && (
-        <p role="alert" className="mt-2 text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="mt-2 border-destructive/30 bg-destructive/10 text-xs">
+          <AlertDescription className="whitespace-pre-wrap break-words text-xs text-destructive">
+            {error}
+          </AlertDescription>
+        </Alert>
       )}
     </section>
   );

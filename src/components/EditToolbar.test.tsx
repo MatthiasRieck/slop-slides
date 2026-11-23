@@ -288,7 +288,8 @@ describe("EditToolbar controls", () => {
     for (const name of ["Font", "Border width", "Border style", "When text does not fit"]) {
       const list = screen.getByRole("combobox", { name }) as HTMLSelectElement;
       expect(list.disabled, name).toBe(true);
-      expect(list.title, name).toMatch(/^Select /);
+      // The list lets the pointer through while it is off: the box around it says why.
+      expect(tooltipOf(list.closest("[data-slot=tooltip-trigger]")!), name).toMatch(/^Select /);
     }
   });
 

@@ -1,7 +1,7 @@
 // The comment panels by themselves: the composer's chip and the deck's overview. The pins and the
 // comment's editor are tested on the stage (Stage.test.tsx), where they live.
 import { fireEvent, render, screen } from "@testing-library/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -116,6 +116,15 @@ function Opener() {
     </>
   );
 }
+/** The chat's message box, as far as the focus goes: it takes it when asked to (see chat/Composer.tsx). */
+function MessageBox() {
+  const asked = useApp((s) => s.composerFocus);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asked` is only what to watch
+  useEffect(() => box.current?.focus(), [asked]);
+  return <textarea ref={box} aria-label="Message" />;
+}
+
 describe("the overview of the deck's comments", () => {
   const opener = () => screen.getByRole("button", { name: "Comments" });
   const overview = () => screen.queryByRole("dialog", { name: "Comments" });
@@ -145,6 +154,31 @@ describe("the overview of the deck's comments", () => {
     fireEvent.click(row("Add a chart"));
     expect(useApp.getState()).toMatchObject({ selected: "outro", commentAsked: { slide: "outro", id: "c" } });
     expect(overview()).toBeNull();
+  });
+
+  it("leaves the focus in the message box after Send to agent, and gives it back to its button on Escape", async () => {
+    render(
+      <>
+        <Opener />
+        <MessageBox />
+      </>,
+    );
+    opener().focus();
+    fireEvent.click(opener());
+    await settle();
+    const send = screen.getByRole("button", { name: "Send to agent" });
+    send.focus();
+    fireEvent.click(send);
+    await settle();
+    expect(overview()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message" }));
+
+    opener().focus();
+    fireEvent.click(opener());
+    await settle();
+    fireEvent.keyDown(overview()!, { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(opener());
   });
 
   it("hands every comment to the agent, and is off with none to hand over", () => {

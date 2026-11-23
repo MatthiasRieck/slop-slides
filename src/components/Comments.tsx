@@ -496,9 +496,13 @@ export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLEl
   const comments = useApp(deckComments);
   const selected = useApp((s) => s.selected);
   const numbers = [...new Set(comments.map((c) => c.slideNumber))];
+  // "Send to agent" hands the focus to the chat's message box: the panel, closing, does not then
+  // give it back to what had it before, as it does when it closes any other way.
+  const handedOver = useRef(false);
   const send = () => {
     const app = useApp.getState();
     app.takeAllComments();
+    handedOver.current = true;
     app.focusComposer();
     onClose();
   };
@@ -506,6 +510,7 @@ export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLEl
     <Popover open onOpenChange={closeBesideAnchor(anchor, onClose)}>
       <PopoverContent
         anchor={anchor}
+        finalFocus={() => !handedOver.current}
         side="bottom"
         align="start"
         aria-label="Comments"

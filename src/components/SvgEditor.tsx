@@ -22,14 +22,17 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -287,9 +290,12 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
         </Button>
       </div>
       {otherDeck && (
-        <p className="border-b bg-warning/10 px-3 py-1.5 text-xs text-warning">
-          This drawing is in another deck; open it to apply the changes.
-        </p>
+        // A word of advice, not an error: it is not announced as one.
+        <Alert role="note" className="shrink-0 rounded-none border-x-0 border-t-0 bg-warning/10 px-3 py-1.5">
+          <AlertDescription className="text-xs text-warning">
+            This drawing is in another deck; open it to apply the changes.
+          </AlertDescription>
+        </Alert>
       )}
       <div className="flex min-h-0 flex-1 flex-col @3xl:flex-row">
         <div className="relative min-h-40 flex-1 basis-1/2 @3xl:basis-auto">
@@ -307,9 +313,12 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
               onChange={change}
             />
           ) : (
-            <div className="flex h-full items-center justify-center p-6 text-center text-xs text-destructive">
-              The markup is not one &lt;svg&gt; drawing. Fix it in Markup, or undo.
-            </div>
+            <Empty className="h-full">
+              <EmptyHeader>
+                <EmptyTitle className="text-destructive">The markup is not one &lt;svg&gt; drawing</EmptyTitle>
+                <EmptyDescription className="text-xs/relaxed">Fix it in Markup, or undo.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
         </div>
         <Tabs
@@ -1098,11 +1107,13 @@ function Markup({ draft, onChange }: { draft: string; onChange: (text: string) =
     if (!focused.current) setText(draft);
   }, [draft]);
   const valid = parseSvg(text) !== null;
+  const problemId = useId();
   return (
     <div className="flex h-full flex-col gap-1.5 p-2">
       <Textarea
         aria-label="Markup"
         aria-invalid={!valid || undefined}
+        aria-describedby={valid ? undefined : problemId}
         spellCheck={false}
         value={text}
         onFocus={() => {
@@ -1120,7 +1131,9 @@ function Markup({ draft, onChange }: { draft: string; onChange: (text: string) =
         className="field-sizing-fixed min-h-40 flex-1 resize-none rounded-md p-2 font-mono text-2xs leading-relaxed"
       />
       {!valid && (
-        <p className="text-xs text-destructive">Not one &lt;svg&gt; drawing yet; the last valid markup is kept.</p>
+        <FieldError id={problemId} className="text-xs">
+          Not one &lt;svg&gt; drawing yet; the last valid markup is kept.
+        </FieldError>
       )}
     </div>
   );

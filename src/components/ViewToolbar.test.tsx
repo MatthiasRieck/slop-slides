@@ -94,7 +94,7 @@ describe("ViewToolbar ribbon", () => {
     // The Timeline section's toggle is called "Timeline" too, under its caption.
     for (const name of SECTIONS) within(screen.getByRole("group", { name })).getAllByText(name);
     expect(inGroup("Mark up", "Draw on the slide")).toBeTruthy();
-    expect(inGroup("Mark up", "Color #3b82f6")).toBeTruthy();
+    expect(inGroup("Mark up", "Blue")).toBeTruthy();
     expect(inGroup("Review", "Comment on an area (rectangle)")).toBeTruthy();
     expect(inGroup("Animations", /final state/)).toBeTruthy();
     expect(inGroup("Find", "Replace…")).toBeTruthy();
@@ -302,12 +302,21 @@ describe("ViewToolbar ribbon", () => {
     expect(tooltipOf(review())).toBe("Show review marks and comments on the slides");
   });
 
+  it("names each ink color by what it is called, in its tooltip too, and marks the one in use", () => {
+    render(toolbar());
+    const swatches = ["Red", "Yellow", "Green", "Blue", "White"].map((name) => inGroup("Mark up", name));
+    for (const swatch of swatches) expect(tooltipOf(swatch)).toBe(swatch.getAttribute("aria-label"));
+    expect(swatches.filter((swatch) => swatch.getAttribute("aria-pressed") === "true")).toHaveLength(1);
+    // Plain buttons, as the presenter's swatches are: a swatch is its color, not a variant of a button.
+    for (const swatch of swatches) expect(swatch.getAttribute("data-slot")).toBe("tooltip-trigger");
+  });
+
   it("puts the other tools away when a color picks up the pen", () => {
     const setColor = vi.fn();
     const onCommenting = vi.fn();
     const onDrawingArea = vi.fn();
     render(toolbar({ annotations: annotations({ setColor }), commenting: true, onCommenting, onDrawingArea }));
-    fireEvent.click(inGroup("Mark up", "Color #22c55e"));
+    fireEvent.click(inGroup("Mark up", "Green"));
     expect(setColor).toHaveBeenCalledWith("#22c55e");
     expect(onCommenting).toHaveBeenCalledWith(false);
     expect(onDrawingArea).toHaveBeenCalledWith(false);

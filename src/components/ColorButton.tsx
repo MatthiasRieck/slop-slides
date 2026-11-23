@@ -15,6 +15,7 @@ import { useApp } from "../store";
 import type { EditPanel } from "../store/editing";
 import { useEditPanelAsk } from "./editPanelAsk";
 import { QUIET_LABEL } from "./styles";
+import { TOOLBAR_POPUP } from "./toolProps";
 
 /** What a color well holds: a color, none at all, or something that is not one color. */
 export type ColorState = "color" | "none" | "other";
@@ -129,6 +130,7 @@ export function ColorButton(props: {
         />
       </PopoverTrigger>
       <PopoverContent
+        {...TOOLBAR_POPUP}
         aria-label={props.label}
         align="start"
         initialFocus={false}

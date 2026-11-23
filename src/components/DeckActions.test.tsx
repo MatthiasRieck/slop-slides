@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, listen, open as openDialog, revealItemInDir, save } from "../test/tauri";
@@ -858,7 +858,12 @@ describe("video export", () => {
     const panel = progress()!;
     expect(panel.textContent).toContain("Talk.mp4");
     expect(panel.textContent).toContain("Rendering video 45%");
-    const bar = screen.getByRole("progressbar");
+    // The bar is named by the file it writes, and its label and value are the bar's own parts.
+    const bar = screen.getByRole("progressbar", { name: "Talk.mp4" });
+    expect(bar.hasAttribute("aria-label")).toBe(false);
+    expect(bar.querySelector("[data-slot=progress-label]")!.textContent).toBe("Talk.mp4");
+    expect(bar.querySelector("[data-slot=progress-value]")!.textContent).toBe("Rendering video 45%");
+    expect(within(panel).getByRole("status").textContent).toBe("Rendering video 45%");
     expect(bar.getAttribute("aria-valuenow")).toBe("45");
     expect(bar.getAttribute("aria-valuetext")).toBe("Rendering video 45%");
     expect(bar.querySelector<HTMLElement>("[data-slot=progress-indicator]")!.style.width).toBe("45%");

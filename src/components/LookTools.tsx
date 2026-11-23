@@ -2,12 +2,14 @@ import { Blend, Crop, Paintbrush, Replace } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelectOption } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { keepFocus } from "@/lib/focus";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
   type EditSelection,
@@ -23,6 +25,7 @@ import { cn } from "../lib/utils";
 import { DraftInput } from "./DraftInput";
 import { RibbonSelect } from "./Ribbon";
 import { QUIET_LABEL } from "./styles";
+import { TOOLBAR_POPUP } from "./toolProps";
 
 /**
  * The toolbar's tools for how an element looks, beyond text, fill and border: opacity, shadow and
@@ -109,7 +112,13 @@ function AppearanceButton(props: {
         <Blend />
       </PopoverTrigger>
       {s && (
-        <PopoverContent aria-label="Appearance" initialFocus={false} finalFocus={false} className={popoverPanel}>
+        <PopoverContent
+          {...TOOLBAR_POPUP}
+          aria-label="Appearance"
+          initialFocus={false}
+          finalFocus={false}
+          className={popoverPanel}
+        >
           <LookSlider
             label="Opacity"
             value={Math.round(s.opacity * 100)}
@@ -316,7 +325,13 @@ function ImageButton(props: {
         <Crop />
       </PopoverTrigger>
       {s && (
-        <PopoverContent aria-label="Image options" initialFocus={false} finalFocus={false} className={popoverPanel}>
+        <PopoverContent
+          {...TOOLBAR_POPUP}
+          aria-label="Image options"
+          initialFocus={false}
+          finalFocus={false}
+          className={popoverPanel}
+        >
           <span className={QUIET_LABEL}>Image</span>
           <span className="flex items-center gap-0.5">
             <Button
@@ -347,21 +362,32 @@ function ImageButton(props: {
             ))}
           </RibbonSelect>
           <span className={QUIET_LABEL}>Position</span>
-          <FieldSet aria-label="Image position" className="grid w-max grid-cols-3 gap-0.5">
+          <ToggleGroup
+            aria-label="Image position"
+            variant="outline"
+            size="xs"
+            spacing={0.5}
+            value={s.fitPosition ? [s.fitPosition] : []}
+            // An image is always placed somewhere: pressing where it is leaves it there.
+            onValueChange={([position]) => position && props.onStyle({ fitPosition: position })}
+            className="grid w-max grid-cols-3"
+          >
             {FIT_POSITIONS.map((position, index) => (
-              <Button
-                key={position}
-                variant="outline"
-                size="icon-2xs"
-                aria-label={`Position ${position}`}
-                tooltip={FIT_POSITION_NAMES[index]}
-                aria-pressed={s.fitPosition === position}
-                keepFocus
-                onClick={() => props.onStyle({ fitPosition: position })}
-                className="rounded-sm aria-pressed:bg-foreground/60 aria-pressed:hover:bg-foreground/60"
-              />
+              <Tooltip key={position}>
+                <TooltipTrigger
+                  render={
+                    <ToggleGroupItem
+                      value={position}
+                      aria-label={`Position ${position}`}
+                      onMouseDownCapture={keepFocus}
+                      className="size-5 min-w-0 rounded-sm p-0 aria-pressed:bg-foreground/60 aria-pressed:hover:bg-foreground/60"
+                    />
+                  }
+                />
+                <TooltipContent>{FIT_POSITION_NAMES[index]}</TooltipContent>
+              </Tooltip>
             ))}
-          </FieldSet>
+          </ToggleGroup>
           <Label htmlFor={`${id}-alt`} className={QUIET_LABEL}>
             Alt text
           </Label>

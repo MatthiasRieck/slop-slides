@@ -16,3 +16,10 @@ export const SLIDE_TOOL = { variant: "tool", size: "icon-xs", keepFocus: true } 
 export function unlessOff(off: boolean, reason: string, tooltip: string, shortcut?: string) {
   return off ? { disabled: true, tooltip: reason } : { disabled: false, tooltip, ...(shortcut && { shortcut }) };
 }
+
+/**
+ * What every popup of the edit toolbar carries (spread onto its `PopoverContent`): it renders into
+ * the body, outside the toolbar, and a press in it is still a press in the toolbar, which restyles
+ * the text being typed in the slide instead of ending the typing (see stage/useSlideEditing.ts).
+ */
+export const TOOLBAR_POPUP = { "data-edit-toolbar": "" } as const;

@@ -777,16 +777,16 @@ describe("Stage", () => {
     it("offers colors, which pick up the pen when no ink tool is in hand", () => {
       render(<Stage />);
       // With neither in hand the swatches show the pen's color.
-      expect(pressed("Color #ef4444")).toBe(true);
+      expect(pressed("Red")).toBe(true);
       fireEvent.click(tool("Comment on an element"));
-      fireEvent.click(tool("Color #3b82f6"));
+      fireEvent.click(tool("Blue"));
       expect([pressed("Draw on the slide"), pressed("Comment on an element")]).toEqual([true, false]);
-      expect(pressed("Color #3b82f6")).toBe(true);
+      expect(pressed("Blue")).toBe(true);
       draw([[10, 10]]);
       expect(useApp.getState().sketches.intro?.[0]?.color).toBe("#3b82f6");
       // The highlighter keeps a color of its own.
       fireEvent.click(tool("Highlight on the slide"));
-      expect(pressed("Color #facc15")).toBe(true);
+      expect(pressed("Yellow")).toBe(true);
     });
 
     it("undoes and clears marks", () => {
@@ -2243,6 +2243,20 @@ describe("Stage", () => {
           fireEvent.click(button("Position 50% 0%"));
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fitPosition: "50% 0%" } }, "*");
           expect(tooltipOf(button("Position 50% 0%"))).toBe("Top");
+          // The nine places are one choice: the one the image has is on, and a press on it changes nothing.
+          const places = screen.getByRole("group", { name: "Image position" });
+          expect(places.getAttribute("data-slot")).toBe("toggle-group");
+          const on = within(places)
+            .getAllByRole("button")
+            .filter((place) => place.getAttribute("aria-pressed") === "true");
+          expect(on.map((place) => place.getAttribute("aria-label"))).toEqual(["Position 50% 50%"]);
+          post.mockClear();
+          fireEvent.click(button("Position 50% 50%"));
+          expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
+          // A press on one keeps the focus in the slide.
+          const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+          button("Position 0% 0%").dispatchEvent(press);
+          expect(press.defaultPrevented).toBe(true);
           // Flipping is with the other flips, under Position and size.
           expect(
             within(screen.getByRole("dialog", { name: "Image options" })).queryByRole("button", { name: /Flip/ }),
@@ -2371,6 +2385,23 @@ describe("Stage", () => {
           expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
           fireEvent.pointerDown(document.body);
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+        });
+
+        it("keeps the typing going on a press in one of the toolbar's popups, which open outside it", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          const finished = () => post.mock.calls.some(([message]) => message?.type === "slop:edit-finish");
+          for (const name of ["Text color", "Link", "Spacing"]) {
+            fireEvent.click(button(name));
+            const popup = screen.getByRole("dialog", { name });
+            // In the body, not in the toolbar: only its mark says whose it is.
+            expect(popup.closest("[role=toolbar]")).toBeNull();
+            fireEvent.pointerDown(popup.querySelector("button, input, select") ?? popup);
+            expect(finished()).toBe(false);
+            fireEvent.keyDown(popup, { key: "Escape" });
+          }
+          fireEvent.pointerDown(document.body);
+          expect(finished()).toBe(true);
         });
 
         it("closes the toolbar's popup on Escape, pressed in the app or in the slide, staying in edit mode", () => {

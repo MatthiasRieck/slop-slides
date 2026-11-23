@@ -25,7 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Progress } from "@/components/ui/progress";
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { api, type Deck, errorMessage, type PptxSlides, type Slide } from "../lib/api";
 import { formatKeys } from "../lib/keys";
@@ -370,20 +370,24 @@ function ExportMenu(props: {
 /** A video export under way: the file it writes, what it is doing, how far along, and a way to cancel it. */
 function VideoProgressPanel({ run, cancelRef }: { run: VideoRun; cancelRef: React.Ref<HTMLButtonElement> }) {
   const percent = videoPercent(run.progress);
+  const phase = videoPhase(run.progress);
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
-      <div className="truncate text-sm font-medium" title={run.dest}>
-        {basename(run.dest)}
-      </div>
-      <div role="status" className="text-muted-foreground tabular-nums">
-        {videoPhase(run.progress)}
-      </div>
+      {/* The file names the bar, and the phase is what it reads as: "Rendering video 45%", not a bare 45%. */}
       <Progress
         value={percent}
-        aria-label="Video export"
-        getAriaValueText={() => videoPhase(run.progress)}
-        className="[&_[data-slot=progress-track]]:h-1.5"
-      />
+        getAriaValueText={() => phase}
+        className="gap-x-2 gap-y-1.5 [&_[data-slot=progress-track]]:h-1.5"
+      >
+        <ProgressLabel className="min-w-0 basis-full truncate" title={run.dest}>
+          {basename(run.dest)}
+        </ProgressLabel>
+        <ProgressValue className="ml-0 basis-full text-xs">{() => phase}</ProgressValue>
+      </Progress>
+      {/* The value shown is hidden from assistive tech (the bar says it); this announces each new phase. */}
+      <span role="status" className="sr-only">
+        {phase}
+      </span>
       <div className="flex justify-end">
         <Button ref={cancelRef} variant="outline" size="xs" onClick={() => void api.cancelVideoExport()}>
           <X data-icon="inline-start" />

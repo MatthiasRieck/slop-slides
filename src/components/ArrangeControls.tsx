@@ -59,7 +59,7 @@ import { DraftInput } from "./DraftInput";
 import { RibbonSelect } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 import { QUIET_LABEL, SECTION_HEADING } from "./styles";
-import { SLIDE_TOOL, unlessOff } from "./toolProps";
+import { SLIDE_TOOL, TOOLBAR_POPUP, unlessOff } from "./toolProps";
 
 const DISTRIBUTE: { axis: DistributeAxis; label: string; title: string; icon: ReactNode }[] = [
   {
@@ -206,6 +206,7 @@ export const PositionControls = memo(function PositionControls(props: PositionPr
         <Scaling />
       </PopoverTrigger>
       <PopoverContent
+        {...TOOLBAR_POPUP}
         aria-label="Position and size"
         initialFocus={false}
         finalFocus={false}
@@ -540,6 +541,7 @@ export const LayersPanel = memo(function LayersPanel(props: { onArrange?: (messa
         <Layers />
       </PopoverTrigger>
       <PopoverContent
+        {...TOOLBAR_POPUP}
         aria-label="Layers"
         initialFocus={false}
         finalFocus={false}

@@ -302,6 +302,57 @@ describe("workspace bar", () => {
       expect(invoke).not.toHaveBeenCalledWith("rename_deck", expect.anything());
     });
 
+    it("keeps the focus in the field when something else had it before the menu opened", async () => {
+      render(
+        <>
+          <textarea aria-label="Message" />
+          <TopBar />
+        </>,
+      );
+      // As where a click does not focus a button: the composer keeps the focus while the menu opens.
+      const composer = screen.getByRole("textbox", { name: "Message" });
+      composer.focus();
+      openFileMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+      await settle();
+      expect(titleField()).not.toBeNull();
+      expect(document.activeElement).toBe(titleField());
+      expect(invoke).not.toHaveBeenCalledWith("rename_deck", expect.anything());
+    });
+
+    it("keeps the focus in the field after an earlier popup opened from a field", async () => {
+      render(
+        <>
+          <textarea aria-label="Message" />
+          <TopBar />
+        </>,
+      );
+      screen.getByRole("textbox", { name: "Message" }).focus();
+      openFileMenu();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      await settle();
+      (document.activeElement as HTMLElement).blur();
+      openFileMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+      await settle();
+      expect(document.activeElement).toBe(titleField());
+    });
+
+    it("still gives the focus back to the file button when the menu closes another way, also after a rename", async () => {
+      render(<TopBar />);
+      openFileMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+      fireEvent.keyDown(titleField()!, { key: "Escape" });
+      await settle();
+      const opener = fileButton();
+      opener.focus();
+      openFileMenu();
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      await settle();
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+
     it("takes the new title on Enter", async () => {
       const field = startRenaming();
       fireEvent.change(field, { target: { value: "  Board update " } });

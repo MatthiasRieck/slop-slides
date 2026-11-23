@@ -32,7 +32,7 @@ import { provideCodeSave, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask } from "../test/tauri";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { answerUnsaved, unsavedAsked } from "../test/unsaved";
 import { CodePanel, SvgEditor } from "./lazy";
 import { Sidebar } from "./Sidebar";
@@ -498,16 +498,21 @@ describe("Sidebar", () => {
       lay(strip, { width: 100, content: 300 });
       const left = screen.getByRole("button", { name: "Scroll tabs left" }) as HTMLButtonElement;
       const right = screen.getByRole("button", { name: "Scroll tabs right" }) as HTMLButtonElement;
-      expect(left.disabled).toBe(true);
-      expect(right.disabled).toBe(false);
+      // Each says what it does, also while it is off at its end.
+      expect(tooltipOf(left)).toBe("Scroll tabs left");
+      expect(tooltipOf(right)).toBe("Scroll tabs right");
+      expect(isOff(left)).toBe(true);
+      expect(isOff(right)).toBe(false);
       expect(strip.dataset.fade).toBe("right");
+      fireEvent.click(left);
+      expect(scrollBy).not.toHaveBeenCalled();
 
       fireEvent.click(right);
       expect(scrollBy).toHaveBeenCalledWith({ left: 75, behavior: "smooth" });
 
       lay(strip, { width: 100, content: 300, left: 200 });
-      expect(left.disabled).toBe(false);
-      expect(right.disabled).toBe(true);
+      expect(isOff(left)).toBe(false);
+      expect(isOff(right)).toBe(true);
       expect(strip.dataset.fade).toBe("left");
       fireEvent.click(left);
       expect(scrollBy).toHaveBeenLastCalledWith({ left: -75, behavior: "smooth" });

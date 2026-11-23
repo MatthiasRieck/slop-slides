@@ -4,7 +4,14 @@ import { useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -55,14 +62,13 @@ export function ScreenPicker(props: {
       }}
     >
       <DialogContent
-        aria-label="Choose screens"
         showCloseButton={false}
         // Enter starts the show with what is picked.
         initialFocus={start}
         className="sm:max-w-[34rem]"
       >
         <DialogHeader>
-          <h2 className="text-base leading-none font-medium">Present on</h2>
+          <DialogTitle>Present on</DialogTitle>
           <DialogDescription className="text-xs">
             Screens match the arrangement in your system display settings. Pick where your slides and notes appear.
           </DialogDescription>

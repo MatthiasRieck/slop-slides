@@ -106,7 +106,7 @@ import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 import { QUIET_LABEL } from "./styles";
 import { TimelineTools } from "./TimelineTools";
-import { SLIDE_TOOL, unlessOff } from "./toolProps";
+import { SLIDE_TOOL, TOOLBAR_POPUP, unlessOff } from "./toolProps";
 
 /** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
 interface ToolChoice {
@@ -530,6 +530,12 @@ const ParagraphSection = memo(function ParagraphSection(
   return (
     <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={props.collapsed} closeOn={props.tool}>
       <RibbonRow>
+        {/*
+          The alignments (and the vertical ones below) stay tool buttons marked as pressed, not a
+          ToggleGroup: off, each still takes the pointer to say what it waits for (`unlessOff`),
+          none is on over a mixed selection, and they sit in a row of ordinary tools, where a
+          group would be one stop for Tab and take the arrows.
+        */}
         {ALIGN.map((a) => (
           <Button
             key={a.value}
@@ -789,7 +795,13 @@ function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void })
       >
         {current?.icon ?? <Shapes />}
       </PopoverTrigger>
-      <PopoverContent aria-label="More shapes" initialFocus={false} finalFocus={false} className="w-max gap-1 p-1.5">
+      <PopoverContent
+        {...TOOLBAR_POPUP}
+        aria-label="More shapes"
+        initialFocus={false}
+        finalFocus={false}
+        className="w-max gap-1 p-1.5"
+      >
         {MORE_SHAPES.map((group) => (
           <FieldSet key={group.heading} className="gap-0.5">
             <FieldLegend
@@ -942,7 +954,13 @@ function LinkButton(props: {
         <Link />
       </PopoverTrigger>
       {/* The address is typed, so the focus goes to its field; done, it goes back to the slide (`onDone`). */}
-      <PopoverContent aria-label="Link" initialFocus={field} finalFocus={false} className="w-64 p-2 text-xs">
+      <PopoverContent
+        {...TOOLBAR_POPUP}
+        aria-label="Link"
+        initialFocus={field}
+        finalFocus={false}
+        className="w-64 p-2 text-xs"
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -1050,6 +1068,7 @@ function SpacingButton(props: {
         <Space />
       </PopoverTrigger>
       <PopoverContent
+        {...TOOLBAR_POPUP}
         aria-label="Spacing"
         initialFocus={false}
         finalFocus={false}

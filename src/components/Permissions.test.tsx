@@ -146,6 +146,7 @@ describe("permission picker", () => {
     await screen.findByRole("menuitemradio", { name: /Use your existing/ });
     expect(screen.queryByRole("menuitemradio", { name: /Full access/ })).toBeNull();
     expect(screen.getByRole("alert").textContent).toContain("saved mode is unavailable");
+    expect(screen.getByRole("alert").getAttribute("data-slot")).toBe("field-error");
   });
 
   it("reports capability errors without inventing available modes", async () => {
@@ -153,6 +154,8 @@ describe("permission picker", () => {
     render(<PermissionPicker />);
     fireEvent.click(picker());
     expect((await screen.findByRole("alert")).textContent).toBe("CLI unavailable");
+    // The menu's complaints are all the same kind of line.
+    expect(screen.getByRole("alert").getAttribute("data-slot")).toBe("field-error");
     expect(screen.queryByRole("menuitemradio", { name: /Full access/ })).toBeNull();
   });
 
@@ -429,7 +432,10 @@ describe("approval card", () => {
     invoke.mockRejectedValueOnce("No longer pending");
     render(<ApprovalCard part={part()} />);
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("No longer pending");
+    const failed = await screen.findByRole("alert");
+    expect(failed.textContent).toBe("No longer pending");
+    // An error notice like the chat's others, not a line of red text.
+    expect(failed.getAttribute("data-slot")).toBe("alert");
     fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
   });

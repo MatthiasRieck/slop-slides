@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 
@@ -20,6 +21,11 @@
   --background: oklch(0.992 0 0);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
+  --card-foreground: var(--foreground);
+  --popover: var(--color-white);
+  --popover-foreground: var(--foreground);
+  --secondary: var(--color-neutral-100);
+  --secondary-foreground: var(--color-neutral-900);
   --muted: var(--color-neutral-50);
   --muted-foreground: var(--color-neutral-500);
   --accent: var(--color-neutral-100);
@@ -78,6 +84,9 @@
   --background: var(--color-neutral-950);
   --foreground: var(--color-neutral-100);
   --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
+  --popover: color-mix(in srgb, var(--color-neutral-950) 94%, var(--color-white));
+  --secondary: --alpha(var(--color-white) / 8%);
+  --secondary-foreground: var(--color-neutral-100);
   --muted: --alpha(var(--color-white) / 3%);
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
   --accent: --alpha(var(--color-white) / 5%);
@@ -119,6 +128,11 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);

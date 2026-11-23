@@ -1,16 +1,19 @@
 import { ChevronLeft, ChevronRight, PanelRight, Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+
 import { dismissTopLayer, hasOpenLayer } from "../lib/layers";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock } from "../lib/slideClock";
 import { loadFlag, saveFlag } from "../lib/storage";
 import { cn, fileUrl } from "../lib/utils";
 import { useApp } from "../store";
-import { ToolButton } from "./Button";
 import { LevelDot, RecordingTime } from "./NarrationRecorder";
 import { PresenterPanel } from "./PresenterPanel";
 import { InkTools, useAnnotations } from "./PresenterTools";
+import { ShowButton } from "./presenter/ShowButton";
 import { ShowKeys } from "./presenter/ShowKeys";
 import { fitSlide, ShowZoom } from "./presenter/ShowZoom";
 import { useAutoplay } from "./presenter/useAutoplay";
@@ -32,7 +35,9 @@ interface ShowKey {
 /** Whether a key pressed on `target` is its own rather than the show's: Tab anywhere, and Enter or Space on a control. */
 function keptByControl(event: KeyboardEvent): boolean {
   if (event.key === "Tab") return true;
-  const control = (event.target as Element | null)?.closest?.("button, a, input, select, textarea");
+  const control = (event.target as Element | null)?.closest?.(
+    "button, a, input, select, textarea, [role=switch], [role=checkbox], [role=combobox], [role=option]",
+  );
   return Boolean(control) && (event.key === "Enter" || event.key === " ");
 }
 
@@ -226,15 +231,9 @@ export function Presenter() {
           >
             <InkTools annotations={annotations} />
             <Divider />
-            <ToolButton
-              variant="presenter"
-              keepFocus
-              label="Previous slide"
-              shortcut="left"
-              onClick={() => go("ArrowLeft")}
-            >
+            <ShowButton tooltip="Previous slide" shortcut="left" onClick={() => go("ArrowLeft")}>
               <ChevronLeft />
-            </ToolButton>
+            </ShowButton>
             <span
               data-testid="show-position"
               title="The slide on screen, of the slides shown"
@@ -242,51 +241,41 @@ export function Presenter() {
             >
               {position + 1} / {shown.length}
             </span>
-            <ToolButton
-              variant="presenter"
-              keepFocus
-              label="Next slide"
-              shortcut="right"
-              onClick={() => go("ArrowRight")}
-            >
+            <ShowButton tooltip="Next slide" shortcut="right" onClick={() => go("ArrowRight")}>
               <ChevronRight />
-            </ToolButton>
-            <ToolButton
-              variant="presenter"
-              keepFocus
-              label={autoplay.playing ? "Pause" : "Play"}
-              title={autoplay.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
+            </ShowButton>
+            <ShowButton
+              aria-label={autoplay.playing ? "Pause" : "Play"}
+              tooltip={autoplay.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
               onClick={autoplay.toggle}
             >
               {autoplay.playing ? <Pause /> : <Play />}
-            </ToolButton>
+            </ShowButton>
             <Divider />
-            <ToolButton
-              variant="presenter"
-              keepFocus
-              label="Presenter view"
-              title={
+            <ShowButton
+              aria-label="Presenter view"
+              tooltip={
                 separate
                   ? "The presenter view is in a window of its own"
-                  : "Presenter view: notes, the next slide and the time (N)"
+                  : "Presenter view: notes, the next slide and the time"
               }
-              active={panelShown}
+              shortcut={separate ? undefined : "n"}
+              aria-pressed={panelShown}
               disabled={separate}
               onClick={() => setPanelOpen((open) => !open)}
             >
               <PanelRight />
-            </ToolButton>
-            <button
-              type="button"
-              title="End show (Esc)"
-              // Keep keyboard focus where it was, so Space still advances the slide.
-              onMouseDown={(event) => event.preventDefault()}
+            </ShowButton>
+            <ShowButton
+              size="default"
+              tooltip="End show"
+              shortcut="escape"
               onClick={() => useApp.getState().setPresenting(false)}
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs text-foreground/80 hover:bg-foreground/10 hover:text-foreground [&_svg]:size-4"
+              className="text-xs"
             >
               <X />
               End show
-            </button>
+            </ShowButton>
           </div>
         </div>
       </div>
@@ -306,7 +295,9 @@ export function Presenter() {
 }
 
 function Divider() {
-  return <div className="mx-1 h-5 w-px shrink-0 bg-foreground/15" />;
+  return (
+    <Separator orientation="vertical" className="mx-1 bg-foreground/15 data-vertical:h-5 data-vertical:self-center" />
+  );
 }
 
 /**
@@ -319,18 +310,19 @@ function MicrophonePill({ session }: { session: ShowSession }) {
   const following = session.teleprompter.phase === "following";
   if (!recording && !following) return null;
   return (
-    <div
+    <Badge
+      variant="outline"
       role="status"
       data-testid="microphone-pill"
       title="Open the presenter view (N) to stop it"
       className={cn(
-        "dark absolute top-4 right-4 z-10 flex items-center gap-2 rounded-full border border-foreground/10 bg-overlay px-3 py-1.5 text-xs shadow-lg backdrop-blur",
+        "dark absolute top-4 right-4 z-10 h-auto gap-2 overflow-visible border-foreground/10 bg-overlay px-3 py-1.5 font-normal shadow-lg backdrop-blur",
         recording ? "text-destructive" : "text-primary",
       )}
     >
       {recording ? <LevelDot /> : <span aria-hidden className="size-2.5 shrink-0 rounded-full bg-primary" />}
       {recording ? "Recording" : "Teleprompter listening"}
       <RecordingTime since={session.recorder.since} />
-    </div>
+    </Badge>
   );
 }

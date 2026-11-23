@@ -1,10 +1,16 @@
-import { AudioLines, Loader2, Sparkles, Timer, X } from "lucide-react";
+import { AudioLines, Sparkles, Timer, X } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 
 import type { Deck } from "../../lib/api";
 import { canSpeakWith, deckProvider, useNarration } from "../../narrationStore";
 import { useApp } from "../../store";
-import { Button } from "../Button";
 import { useDeckAudio } from "./useDeckAudio";
+
+/** How far along `done` of `total` is, in percent, for a progress bar. */
+const percentDone = (done: number, total: number) => Math.min(100, Math.round((100 * done) / total));
 
 /** Has the agent make clean, fluent scripts of the whole deck's recorded words. */
 export function CleanUpAll({ deck }: { deck: Deck }) {
@@ -12,11 +18,12 @@ export function CleanUpAll({ deck }: { deck: Deck }) {
   return (
     <div className="border-t p-3">
       <Button
-        size="md"
+        variant="outline"
+        size="xs"
         onClick={() => useApp.getState().cleanNarration(null)}
-        title="Puts a request in the chat, for the agent to turn the recorded words of all slides into clean, fluent sentences. It opens the chat; you send it."
+        tooltip="Puts a request in the chat, for the agent to turn the recorded words of all slides into clean, fluent sentences. It opens the chat; you send it."
       >
-        <Sparkles />
+        <Sparkles data-icon="inline-start" />
         Clean up all narration
       </Button>
     </div>
@@ -35,17 +42,20 @@ export function DeckAudio({ deck }: { deck: Deck }) {
   const canSpeak = canSpeakWith(speech, speech ? deckProvider(deck, speech) : undefined);
   if (render?.deck === deck.id && render.total > 0) {
     return (
-      <div className="flex items-center justify-between gap-2 border-t p-3 text-xs" role="status">
-        <span className="flex min-w-0 items-center gap-1">
-          <Loader2 className="size-3.5 shrink-0 animate-spin" />
-          <span className="truncate">
-            Generating audio for slide {render.done + 1} of {render.total}…
+      <div className="flex flex-col gap-2 border-t p-3 text-xs">
+        <div className="flex items-center justify-between gap-2" role="status">
+          <span className="flex min-w-0 items-center gap-1">
+            <Spinner aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">
+              Generating audio for slide {render.done + 1} of {render.total}…
+            </span>
           </span>
-        </span>
-        <Button size="md" onClick={() => void useNarration.getState().cancelRender()}>
-          <X />
-          Cancel
-        </Button>
+          <Button variant="outline" size="xs" onClick={() => void useNarration.getState().cancelRender()}>
+            <X data-icon="inline-start" />
+            Cancel
+          </Button>
+        </div>
+        <Progress aria-label="Audio generated" value={percentDone(render.done, render.total)} />
       </div>
     );
   }
@@ -56,11 +66,12 @@ export function DeckAudio({ deck }: { deck: Deck }) {
         {pending} {pending === 1 ? "slide needs" : "slides need"} audio
       </span>
       <Button
-        size="md"
+        variant="outline"
+        size="xs"
         disabled={render !== null}
         onClick={() => void useNarration.getState().renderAudio(deck.id, null)}
       >
-        <AudioLines />
+        <AudioLines data-icon="inline-start" />
         Generate all
       </Button>
     </div>
@@ -83,9 +94,16 @@ export function WordTiming({ deck }: { deck: Deck }) {
         ? `Syncing words of slide ${timing.done + 1} of ${timing.total}…`
         : "Syncing words to audio…";
     return (
-      <div className="flex min-w-0 items-center gap-1 border-t p-3 text-xs" role="status">
-        <Loader2 className="size-3.5 shrink-0 animate-spin" />
-        <span className="truncate">{label}</span>
+      <div className="flex flex-col gap-2 border-t p-3 text-xs">
+        <div className="flex min-w-0 items-center gap-1" role="status">
+          <Spinner aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </div>
+        {/* How many slides are through; while the model downloads or nothing is counted yet, only that it runs. */}
+        <Progress
+          aria-label="Words synced"
+          value={!timing.downloading && timing.total > 0 ? percentDone(timing.done, timing.total) : null}
+        />
       </div>
     );
   }
@@ -97,12 +115,13 @@ export function WordTiming({ deck }: { deck: Deck }) {
         {untimed} {untimed === 1 ? "slide's words are" : "slides' words are"} not synced to the audio
       </span>
       <Button
-        size="md"
+        variant="outline"
+        size="xs"
         disabled={timing !== null || render !== null}
         onClick={() => void useNarration.getState().timeWords(deck.id, null)}
-        title="Find when each word is said in the audio, by listening to it with the speech-to-text model on this computer. Animations and slide changes can then follow the words."
+        tooltip="Find when each word is said in the audio, by listening to it with the speech-to-text model on this computer. Animations and slide changes can then follow the words."
       >
-        <Timer />
+        <Timer data-icon="inline-start" />
         Sync words to audio
       </Button>
     </div>

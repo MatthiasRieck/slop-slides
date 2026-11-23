@@ -1,11 +1,18 @@
 import { KeyRound, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { Deck, NarrationProvider } from "../../lib/api";
 import { deckProvider, useNarration } from "../../narrationStore";
 import { useApp } from "../../store";
-import { Button } from "../Button";
-import { Field, inputClass, wideSelectClass } from "../Field";
+
+/** The label of a field of the panel: small and quiet, over its control. */
+const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** The deck's provider, voice and language, and the service's API key. */
 export function SpeechSettings({ deck }: { deck: Deck }) {
@@ -15,6 +22,7 @@ export function SpeechSettings({ deck }: { deck: Deck }) {
   const provider = speech ? deckProvider(deck, speech) : undefined;
   const providerId = provider?.id;
   const hasKey = provider?.key != null;
+  const id = useId();
   useEffect(() => {
     // ElevenLabs accounts have voices of their own, such as the user's cloned voice.
     if (providerId === "elevenlabs" && hasKey) void loadVoices(providerId);
@@ -24,52 +32,73 @@ export function SpeechSettings({ deck }: { deck: Deck }) {
   const voices = accountVoices[provider.id] ?? provider.voices;
   // A voice the deck names that is not listed (an account's own, before the list came) stays pickable.
   const listed = voices.some((v) => v.id === settings.voice);
+  const choices = [...(listed ? [] : [{ id: settings.voice, name: settings.voice, description: "" }]), ...voices];
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
-      <Field label="Spoken by" className="flex min-w-0 flex-col gap-1">
-        <select
+      <Field className="gap-1">
+        <FieldLabel htmlFor={`${id}-provider`} className={LABEL}>
+          Spoken by
+        </FieldLabel>
+        <NativeSelect
+          id={`${id}-provider`}
+          size="sm"
           aria-label="Narration provider"
           value={provider.id}
           onChange={(event) => void useApp.getState().setNarrationProvider(event.target.value)}
-          className={wideSelectClass}
+          className="w-full"
         >
           {speech.providers.map((p) => (
-            <option key={p.id} value={p.id}>
+            <NativeSelectOption key={p.id} value={p.id}>
               {p.name}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
       </Field>
       <div className="flex gap-2">
-        <Field label="Voice" className="flex min-w-0 flex-[3] flex-col gap-1">
-          <select
-            aria-label="Narration voice"
+        <Field className="min-w-0 flex-[3] gap-1">
+          <FieldLabel htmlFor={`${id}-voice`} className={LABEL}>
+            Voice
+          </FieldLabel>
+          {/* The voices have a line each on how they sound, which the list shows and the field does not. */}
+          <Select
+            items={choices.map((voice) => ({ value: voice.id, label: voice.name }))}
             value={settings.voice}
-            onChange={(event) => void useApp.getState().setNarrationVoice(event.target.value)}
-            className={wideSelectClass}
+            onValueChange={(voice) => void useApp.getState().setNarrationVoice(voice as string)}
           >
-            {!listed && <option value={settings.voice}>{settings.voice}</option>}
-            {voices.map((voice) => (
-              <option key={voice.id} value={voice.id}>
-                {voice.name}
-                {voice.description ? ` — ${voice.description}` : ""}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id={`${id}-voice`} size="sm" aria-label="Narration voice" className="w-full min-w-0 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="start" className="w-auto max-w-96">
+              <SelectGroup>
+                {choices.map((voice) => (
+                  <SelectItem key={voice.id} value={voice.id} className="text-xs">
+                    {voice.name}
+                    {voice.description && " "}
+                    {voice.description && <span className="text-muted-foreground">— {voice.description}</span>}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </Field>
-        <Field label="Language" className="flex min-w-0 flex-[2] flex-col gap-1">
-          <select
+        <Field className="min-w-0 flex-[2] gap-1">
+          <FieldLabel htmlFor={`${id}-language`} className={LABEL}>
+            Language
+          </FieldLabel>
+          <NativeSelect
+            id={`${id}-language`}
+            size="sm"
             aria-label="Narration language"
             value={settings.language}
             onChange={(event) => void useApp.getState().setNarrationLanguage(event.target.value)}
-            className={wideSelectClass}
+            className="w-full"
           >
             {speech.languages.map((language) => (
-              <option key={language.id} value={language.id}>
+              <NativeSelectOption key={language.id} value={language.id}>
                 {language.name}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </Field>
       </div>
       <ApiKey provider={provider} />
@@ -83,6 +112,7 @@ const KEY_ENV: Record<string, string> = { elevenlabs: "ELEVENLABS_API_KEY", open
 /** A hosted provider's API key: entered once, kept in ~/.slopslides for every deck. */
 function ApiKey({ provider }: { provider: NarrationProvider }) {
   const [key, setKey] = useState("");
+  const id = useId();
   const save = async () => {
     if (await useNarration.getState().setKey(provider.id, key)) setKey("");
   };
@@ -101,11 +131,12 @@ function ApiKey({ provider }: { provider: NarrationProvider }) {
           {provider.name} API key saved
         </span>
         <Button
-          size="md"
+          variant="outline"
+          size="xs"
           onClick={() => void useNarration.getState().setKey(provider.id, null)}
-          title={`Forget the ${provider.name} API key on this computer`}
+          tooltip={`Forget the ${provider.name} API key on this computer`}
         >
-          <Trash2 />
+          <Trash2 data-icon="inline-start" />
           Remove
         </Button>
       </div>
@@ -113,31 +144,35 @@ function ApiKey({ provider }: { provider: NarrationProvider }) {
   }
   return (
     <form
-      className="flex flex-col gap-2 rounded-md border bg-card p-2"
+      className="rounded-lg border bg-card p-2"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
     >
-      <p className="text-muted-foreground">
-        {provider.name} says the narration with your account. Its API key is kept on this computer for every deck, never
-        in a deck. Narration text is sent to {provider.name}.
-      </p>
-      <div className="flex gap-1">
-        <input
-          type="password"
-          aria-label={`${provider.name} API key`}
-          placeholder="API key"
-          autoComplete="off"
-          spellCheck={false}
-          value={key}
-          onChange={(event) => setKey(event.target.value)}
-          className={`${inputClass} flex-1 text-xs`}
-        />
-        <Button size="md" type="submit" disabled={key.trim() === ""}>
-          Save
-        </Button>
-      </div>
+      <Field className="gap-2">
+        <FieldDescription id={`${id}-about`} className="text-xs">
+          {provider.name} says the narration with your account. Its API key is kept on this computer for every deck,
+          never in a deck. Narration text is sent to {provider.name}.
+        </FieldDescription>
+        <div className="flex gap-1">
+          <Input
+            size="sm"
+            type="password"
+            aria-label={`${provider.name} API key`}
+            aria-describedby={`${id}-about`}
+            placeholder="API key"
+            autoComplete="off"
+            spellCheck={false}
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            className="flex-1"
+          />
+          <Button size="sm" type="submit" disabled={key.trim() === ""}>
+            Save
+          </Button>
+        </div>
+      </Field>
     </form>
   );
 }

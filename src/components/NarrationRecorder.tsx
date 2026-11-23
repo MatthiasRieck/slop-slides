@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
+import { Item, ItemActions, ItemContent, ItemMedia } from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
+
 import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type NarrationRecordMode } from "../lib/api";
@@ -105,26 +108,30 @@ export function RecordingStatus(props: { recorder: NarrationRecorder; locked: bo
   const { phase, mode } = props.recorder;
   if (phase === "saving")
     return (
-      <p role="status" className="shrink-0 rounded-lg bg-foreground/5 p-2 text-foreground/60 text-xs">
-        Saving the recording…
-      </p>
+      <Item role="status" variant="muted" size="xs" className="shrink-0 flex-nowrap text-xs text-muted-foreground">
+        <ItemMedia>
+          <Spinner aria-hidden="true" className="size-3.5" />
+        </ItemMedia>
+        <ItemContent>Saving the recording…</ItemContent>
+      </Item>
     );
   if (phase !== "recording") return null;
   return (
-    <div
-      role="status"
-      className="flex shrink-0 items-center gap-2 rounded-lg bg-destructive/15 p-2 text-destructive text-xs"
-    >
-      <LevelDot />
-      <span className="min-w-0 flex-1">
+    <Item role="status" size="xs" className="shrink-0 flex-nowrap bg-destructive/15 text-xs text-destructive">
+      <ItemMedia>
+        <LevelDot />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
         {props.locked
           ? "This slide is locked: what you say over it is not kept."
           : mode === "text"
             ? "Recording text: what you say is added to the narration of the slide on screen."
             : "Recording audio: your voice is added to the narration of the slide on screen."}
-      </span>
-      <RecordingTime since={props.recorder.since} />
-    </div>
+      </ItemContent>
+      <ItemActions>
+        <RecordingTime since={props.recorder.since} />
+      </ItemActions>
+    </Item>
   );
 }
 

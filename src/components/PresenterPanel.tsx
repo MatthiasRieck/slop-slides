@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Keyboard,
-  Loader2,
   Mic,
   Pause,
   Play,
@@ -15,14 +14,22 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Spinner } from "@/components/ui/spinner";
+import { keepKeys } from "@/hooks/useOverlayLayer";
 
 import type { Deck, Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { RecordingStatus } from "./NarrationRecorder";
-import { Popover } from "./Popover";
 import { loadNotesSize, NOTE_SIZES, saveNotesSize, stepNotesSize } from "./presenter/notesSize";
+import { ShowButton } from "./presenter/ShowButton";
 import {
   type Budget,
   budgetSources,
@@ -146,7 +153,7 @@ export function PresenterPanel(props: {
           onClick={() => void teleprompter.toggle()}
         >
           {teleprompter.phase === "starting" || teleprompter.phase === "downloading" ? (
-            <Loader2 className="animate-spin" />
+            <Spinner aria-hidden="true" />
           ) : (
             <ScrollText />
           )}
@@ -164,7 +171,7 @@ export function PresenterPanel(props: {
           onClick={() => void recorder.toggle("text")}
         >
           {busyRecording && recorder.mode === "text" ? (
-            <Loader2 className="animate-spin" />
+            <Spinner aria-hidden="true" />
           ) : recordingText ? (
             <Square className="fill-current" />
           ) : (
@@ -184,7 +191,7 @@ export function PresenterPanel(props: {
           onClick={() => void recorder.toggle("audio")}
         >
           {busyRecording && recorder.mode === "audio" ? (
-            <Loader2 className="animate-spin" />
+            <Spinner aria-hidden="true" />
           ) : recordingAudio ? (
             <Square className="fill-current" />
           ) : (
@@ -199,27 +206,29 @@ export function PresenterPanel(props: {
           <RotateCcw />
         </PanelButton>
         <TimerSettings budget={budget} sources={budgetSources(budget, shown, slide)} onChange={update} />
-        <PanelButton
-          label="Smaller notes"
-          disabledReason={notesSize === 0 ? "The notes are as small as they get" : undefined}
-          onClick={() => resize(-1)}
-        >
-          <AArrowDown />
-        </PanelButton>
-        <PanelButton
-          label="Larger notes"
-          disabledReason={notesSize === NOTE_SIZES.length - 1 ? "The notes are as large as they get" : undefined}
-          onClick={() => resize(1)}
-        >
-          <AArrowUp />
-        </PanelButton>
+        <ButtonGroup aria-label="Notes size">
+          <PanelButton
+            label="Smaller notes"
+            disabledReason={notesSize === 0 ? "The notes are as small as they get" : undefined}
+            onClick={() => resize(-1)}
+          >
+            <AArrowDown />
+          </PanelButton>
+          <PanelButton
+            label="Larger notes"
+            disabledReason={notesSize === NOTE_SIZES.length - 1 ? "The notes are as large as they get" : undefined}
+            onClick={() => resize(1)}
+          >
+            <AArrowUp />
+          </PanelButton>
+        </ButtonGroup>
         {props.onShowKeys && (
-          <PanelButton label="Keys while presenting (?)" onClick={props.onShowKeys}>
+          <PanelButton label="Keys while presenting" shortcut="?" onClick={props.onShowKeys}>
             <Keyboard />
           </PanelButton>
         )}
         {props.onClose && (
-          <PanelButton label="Close presenter view (N)" onClick={props.onClose}>
+          <PanelButton label="Close presenter view" shortcut="n" onClick={props.onClose}>
             <X />
           </PanelButton>
         )}
@@ -279,14 +288,15 @@ function TheEnd() {
  */
 function NextSlide(props: { onPress: () => void }) {
   return (
-    <button
-      type="button"
+    <ShowButton
+      variant="ghost"
+      size="default"
       aria-label="Go to the next slide"
-      title="Go to the next slide (→)"
-      // Keep keyboard focus where it was, so Space still advances the slide.
-      onMouseDown={(event) => event.preventDefault()}
+      tooltip="Go to the next slide"
+      shortcut="right"
       onClick={props.onPress}
-      className="absolute inset-0 rounded-lg ring-foreground/40 hover:ring-2 focus-visible:ring-2"
+      // Nothing of its own shows but a ring around the picture, under the pointer or the focus.
+      className="absolute inset-0 h-auto rounded-lg ring-foreground/40 hover:bg-transparent hover:ring-2 focus-visible:ring-2 focus-visible:ring-foreground/40 dark:hover:bg-transparent"
     />
   );
 }
@@ -295,40 +305,31 @@ function NextSlide(props: { onPress: () => void }) {
 function RemoteRow({ remote, onNext }: { remote: ShowRemote; onNext: () => void }) {
   return (
     <div role="toolbar" aria-label="Show controls" className="flex shrink-0 flex-wrap items-center gap-1.5">
-      <RemoteButton label="Previous" title="Previous slide (←)" onClick={remote.previous}>
-        <ChevronLeft />
-      </RemoteButton>
-      <RemoteButton label="Next" title="Next slide (→)" onClick={onNext}>
-        <ChevronRight />
-      </RemoteButton>
-      <RemoteButton
-        label={remote.playing ? "Pause" : "Play"}
-        title={remote.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
+      <ButtonGroup>
+        <ShowButton variant="outline" size="default" tooltip="Previous slide" shortcut="left" onClick={remote.previous}>
+          <ChevronLeft data-icon="inline-start" />
+          Previous
+        </ShowButton>
+        <ShowButton variant="outline" size="default" tooltip="Next slide" shortcut="right" onClick={onNext}>
+          <ChevronRight data-icon="inline-start" />
+          Next
+        </ShowButton>
+      </ButtonGroup>
+      <ShowButton
+        variant="outline"
+        size="default"
+        tooltip={remote.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
         onClick={remote.togglePlay}
       >
-        {remote.playing ? <Pause /> : <Play />}
-      </RemoteButton>
+        {remote.playing ? <Pause data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+        {remote.playing ? "Pause" : "Play"}
+      </ShowButton>
       <span className="flex-1" />
-      <RemoteButton label="End show" title="End show (Esc)" onClick={remote.end}>
-        <X />
-      </RemoteButton>
+      <ShowButton variant="outline" size="default" tooltip="End show" shortcut="escape" onClick={remote.end}>
+        <X data-icon="inline-start" />
+        End show
+      </ShowButton>
     </div>
-  );
-}
-
-function RemoteButton(props: { label: string; title: string; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      title={props.title}
-      // Keep keyboard focus where it was, so Space still advances the slide.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={props.onClick}
-      className="flex h-8 items-center gap-1.5 rounded-lg border border-foreground/15 px-3 text-sm text-foreground/80 hover:bg-foreground/10 hover:text-foreground [&_svg]:size-4"
-    >
-      {props.children}
-      {props.label}
-    </button>
   );
 }
 
@@ -342,44 +343,53 @@ function TimerSettings(props: {
   onChange: (change: Partial<Budget>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
+  // What had the focus as the settings opened: the slide, when the button was pressed with the
+  // pointer (it leaves the focus there), and that is where the focus goes back to, so Space
+  // still advances the slide. Opened with the keys, that is the button itself.
+  const before = useRef<HTMLElement | null>(null);
   const { budget, sources } = props;
   return (
-    <>
-      <PanelButton ref={anchor} label="Timer settings" expanded={open} onClick={() => setOpen((o) => !o)}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) before.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setOpen(next);
+      }}
+    >
+      <PopoverTrigger render={<ShowButton size="icon-sm" tooltip="Timer settings" />}>
         <Settings2 />
-      </PanelButton>
-      {open && (
-        <Popover
-          anchor={anchor}
-          placement="below"
-          align="end"
-          width={260}
-          label="Timer settings"
-          onClose={() => setOpen(false)}
-        >
-          <div className="flex flex-col gap-2 p-3 text-xs">
-            <BudgetInput
-              label="Total time"
-              value={budget.total}
-              source={sources.total}
-              onChange={(total) => props.onChange({ total })}
-            />
-            <BudgetInput
-              label="Per slide"
-              value={budget.perSlide}
-              source={budget.perSlide ? null : sources.perSlide}
-              onChange={(perSlide) => props.onChange({ perSlide })}
-            />
-            <p className="text-foreground/60">
-              {budget.perSlide && sources.perSlide
-                ? `In minutes. This slide counts down its own time instead: ${sources.perSlide}.`
-                : "In minutes. A time planned on a slide (Narration tab) comes before the time per slide; the total of the planned times is counted down when no total is set."}
-            </p>
-          </div>
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        finalFocus={before}
+        // Typing here must not move the slides.
+        onKeyDown={keepKeys()}
+        className="dark w-64 gap-3 p-3 text-xs"
+      >
+        <PopoverHeader>
+          <PopoverTitle>Timer settings</PopoverTitle>
+        </PopoverHeader>
+        <FieldGroup className="gap-2">
+          <BudgetInput
+            label="Total time"
+            value={budget.total}
+            source={sources.total}
+            onChange={(total) => props.onChange({ total })}
+          />
+          <BudgetInput
+            label="Per slide"
+            value={budget.perSlide}
+            source={budget.perSlide ? null : sources.perSlide}
+            onChange={(perSlide) => props.onChange({ perSlide })}
+          />
+          <FieldDescription className="text-xs">
+            {budget.perSlide && sources.perSlide
+              ? `In minutes. This slide counts down its own time instead: ${sources.perSlide}.`
+              : "In minutes. A time planned on a slide (Narration tab) comes before the time per slide; the total of the planned times is counted down when no total is set."}
+          </FieldDescription>
+        </FieldGroup>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -390,23 +400,27 @@ function BudgetInput(props: {
   source: string | null;
   onChange: (minutes: number) => void;
 }) {
+  const id = useId();
   return (
-    <label className="flex items-center justify-between gap-2">
-      {props.label}
-      <input
+    <Field orientation="horizontal">
+      <FieldLabel htmlFor={id} className="text-xs font-normal">
+        {props.label}
+      </FieldLabel>
+      <Input
+        id={id}
+        size="sm"
         type="number"
         min={0}
         step={0.5}
         placeholder={props.source ?? "min"}
+        // The placeholder in full, where the field is too narrow for it.
         title={props.source ?? undefined}
         aria-label={`${props.label} in minutes`}
         value={props.value || ""}
         onChange={(event) => props.onChange(Math.max(0, Number(event.target.value) || 0))}
-        // Typing here must not move the slides.
-        onKeyDown={(event) => event.key !== "Escape" && event.stopPropagation()}
-        className="w-40 rounded-md border border-foreground/15 bg-foreground/5 px-1.5 py-0.5 text-foreground tabular-nums outline-none focus:border-foreground/40"
+        className="w-40 flex-none tabular-nums"
       />
-    </label>
+    </Field>
   );
 }
 
@@ -486,9 +500,9 @@ function ElapsedTime(props: { timer: ShowTimer; budget: Budget }) {
         {formatElapsed(elapsed)}
       </span>
       {timer.paused && (
-        <span data-testid="timer-paused" className="text-xs uppercase tracking-wide">
+        <Badge data-testid="timer-paused" variant="outline" className="text-inherit uppercase tracking-wide">
           Paused
-        </span>
+        </Badge>
       )}
       {total && (
         <span
@@ -511,47 +525,40 @@ function ElapsedTime(props: { timer: ShowTimer; budget: Budget }) {
 type Tone = "recording" | "primary";
 
 const ACTIVE: Record<Tone, string> = {
-  recording: "bg-destructive/15 text-destructive",
-  primary: "bg-primary/20 text-primary",
+  recording: "aria-pressed:bg-destructive/15 aria-pressed:text-destructive",
+  primary: "aria-pressed:bg-primary/20 aria-pressed:text-primary",
 };
 
 /**
- * An icon button of the panel's header, with its name beside the icon (`text`) where there is
- * room. Pressed in (`active`), it takes the color of its `tone`. With a `disabledReason` it
- * cannot be pressed, and says why in its tooltip.
+ * An icon button of the panel's header (a `ShowButton`), with its name beside the icon (`text`)
+ * where there is room. `label` names it and is its tooltip, with the keys that do the same
+ * (`shortcut`) after it. Pressed in (`active`), it takes the color of its `tone`. With a
+ * `disabledReason` it cannot be pressed, and says why in its tooltip.
  */
 function PanelButton(props: {
-  ref?: React.Ref<HTMLButtonElement>;
   label: string;
+  shortcut?: string;
   text?: string;
   active?: boolean;
   tone?: Tone;
-  expanded?: boolean;
   disabledReason?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
   const disabled = props.disabledReason !== undefined;
   return (
-    <button
-      ref={props.ref}
-      type="button"
-      title={props.disabledReason ?? props.label}
+    <ShowButton
+      size={props.text === undefined ? "icon-sm" : "sm"}
       aria-label={props.label}
-      aria-pressed={props.active}
-      aria-expanded={props.expanded}
+      tooltip={props.disabledReason ?? props.label}
+      shortcut={disabled ? undefined : props.shortcut}
+      {...(props.active !== undefined && { "aria-pressed": props.active })}
       disabled={disabled}
-      // Keep keyboard focus where it was, so Space still advances the slide.
-      onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
-      className={cn(
-        "flex h-7 min-w-7 items-center justify-center gap-1.5 rounded-lg text-xs enabled:hover:bg-foreground/10 disabled:cursor-default disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0",
-        props.text !== undefined && "px-2",
-        props.active ? ACTIVE[props.tone ?? "primary"] : "text-foreground/70 enabled:hover:text-foreground",
-      )}
+      className={cn("text-xs [&_svg:not([class*='size-'])]:size-4", ACTIVE[props.tone ?? "primary"])}
     >
       {props.children}
       {props.text}
-    </button>
+    </ShowButton>
   );
 }

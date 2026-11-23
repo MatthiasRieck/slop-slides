@@ -202,7 +202,7 @@ function Pin(props: {
       onBlur={() => props.onPointed?.(false)}
       style={{ left: `${spot.x * 100}%`, top: `${spot.y * 100}%` }}
       className={cn(
-        "absolute z-10 -translate-y-full rounded-full rounded-bl-none border-2 border-background bg-clip-border text-2xs font-semibold shadow-md",
+        "absolute z-10 -translate-y-full rounded-full rounded-bl-none border-2 border-background text-2xs font-semibold shadow-md",
         props.inking ? "pointer-events-none" : "pointer-events-auto",
         !spot.found && "opacity-60",
       )}

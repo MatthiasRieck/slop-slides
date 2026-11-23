@@ -100,6 +100,33 @@ describe("SlideRail", () => {
     });
   });
 
+  it("opens the layouts for a new slide from +, and puts them away on Escape, a press beside them, or + again", async () => {
+    render(<SlideRail />);
+    const add = screen.getByRole("button", { name: "New slide" });
+    add.focus();
+    fireEvent.click(add);
+    expect(add.getAttribute("aria-expanded")).toBe("true");
+    const picker = screen.getByRole("dialog", { name: "New slide" });
+    expect(within(picker).getByRole("button", { name: "Blank slide" })).toBeTruthy();
+    await settle();
+    expect(picker.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(add);
+
+    fireEvent.click(add);
+    const beside = document.querySelector("[data-rail-scroller]")!;
+    fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+    fireEvent.click(beside);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(add);
+    expect(screen.getByRole("dialog", { name: "New slide" })).toBeTruthy();
+    fireEvent.click(add);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("marks itself for the stage's keys, so ⌘C pressed on it copies the slide", () => {
     const { container } = render(<SlideRail />);
     expect(container.querySelector("[data-slide-rail]")).not.toBeNull();

@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { answerUnsaved } from "../test/unsaved";
 
 // The real thing, counted: finding the slides reads the whole document.
@@ -338,8 +339,15 @@ describe("CodeView: editing and saving", () => {
 
   it("starts clean with Save and Revert disabled", async () => {
     await renderView();
-    expect(button("Save").disabled).toBe(true);
-    expect(button("Revert").disabled).toBe(true);
+    // Off, they stay in reach to say what they are for.
+    expect(button("Save").getAttribute("aria-disabled")).toBe("true");
+    expect(button("Revert").getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(button("Save"))).toBe("Save deck.htmlCtrl+S");
+    expect(tooltipOf(button("Revert"))).toBe("Discard unsaved changes");
+    await act(async () => fireEvent.click(button("Save")));
+    await act(async () => fireEvent.click(button("Revert")));
+    expect(invoke).not.toHaveBeenCalledWith("save_deck_source", expect.anything());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.queryByTitle("Unsaved changes")).toBeNull();
   });
 
@@ -347,8 +355,8 @@ describe("CodeView: editing and saving", () => {
     const { view } = await renderView();
     await type(view, "<h1>Hello", "!");
     expect(useApp.getState().codeDirty).toBe(true);
-    expect(button("Save").disabled).toBe(false);
-    expect(button("Revert").disabled).toBe(false);
+    expect(button("Save").getAttribute("aria-disabled")).toBeNull();
+    expect(button("Revert").getAttribute("aria-disabled")).toBeNull();
     expect(screen.getByTitle("Unsaved changes")).toBeTruthy();
   });
 
@@ -488,10 +496,17 @@ describe("CodeView: editing and saving", () => {
     await type(view, "<h1>Hello", " there");
     await act(async () => fireEvent.click(button("Revert")));
     // It asks first: the edits are not on disk, so there is no getting them back.
-    const dialog = screen.getByRole("dialog", { name: "Discard unsaved changes" });
-    expect(dialog).toBeTruthy();
+    const dialog = () => screen.queryByRole("alertdialog", { name: "Discard your unsaved changes?" });
+    expect(dialog()).toBeTruthy();
+    // Keeping the edits is where the focus starts, and what Escape does.
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep editing" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(dialog()).toBeNull();
+    expect(useApp.getState().codeDirty).toBe(true);
+    await act(async () => fireEvent.click(button("Revert")));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
-    expect(screen.queryByRole("dialog", { name: "Discard unsaved changes" })).toBeNull();
+    expect(dialog()).toBeNull();
     expect(useApp.getState().codeDirty).toBe(true);
     await act(async () => fireEvent.click(button("Revert")));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Discard changes" })));
@@ -525,6 +540,8 @@ describe("CodeView: conflicts with changes on disk", () => {
     await type(rendered.view, "<h1>Hello", " mine");
     await writeDisk(AGENT);
     await screen.findByText("deck.html changed on disk while you were editing.");
+    // It is said as it happens, not only shown.
+    expect(screen.getByRole("alert").textContent).toContain("changed on disk while you were editing");
     return rendered;
   }
 

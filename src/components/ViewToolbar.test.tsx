@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { tooltipOf } from "../test/ui";
 import { useFindShortcut } from "./FindReplace";
 import type { Annotations } from "./PresenterTools";
 import { ViewToolbar } from "./ViewToolbar";
@@ -56,6 +58,8 @@ function widen(width: number) {
 const collapsedButton = (section: string) => screen.queryByRole("button", { name: `${section} tools` });
 const inGroup = (group: string, tool: string | RegExp) =>
   within(screen.getByRole("group", { name: group })).getByRole("button", { name: tool }) as HTMLButtonElement;
+/** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
+const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
 
 describe("ViewToolbar ribbon", () => {
   beforeEach(() => {
@@ -127,6 +131,69 @@ describe("ViewToolbar ribbon", () => {
     expect(useApp.getState()).toMatchObject({ finalState: false, replayRev: 1 });
   });
 
+  it("keeps the choice made for the animations when it is pressed again, and says what each half does", () => {
+    useApp.setState({ finalState: true });
+    render(toolbar());
+    const final = inGroup("Animations", /final state/);
+    expect(tooltipOf(final)).toBe("Show the slide's final state, with no animations, as the slide list does");
+    fireEvent.click(final);
+    expect(useApp.getState().finalState).toBe(true);
+    expect(final.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(inGroup("Animations", /^Play the slide's animations/));
+    expect(useApp.getState().finalState).toBe(false);
+  });
+
+  it("names its icon tools in their tooltips", () => {
+    render(toolbar());
+    for (const name of ["Draw on the slide", "Highlight on the slide", "Erase marks", "Comment on an element"]) {
+      expect(tooltipOf(screen.getByRole("button", { name })), name).toBe(name);
+    }
+    expect(tooltipOf(inGroup("Review", "Comments (0)"))).toBe("All comments of the deck, by slide");
+  });
+
+  it("picks the shape an area is outlined with from a menu, with the pointer or the keys", async () => {
+    const onAreaShape = vi.fn();
+    const onDrawingArea = vi.fn();
+    const user = userEvent.setup();
+    render(toolbar({ onAreaShape, onDrawingArea }));
+    const shapes = inGroup("Review", "Area shape");
+    expect(shapes.getAttribute("aria-haspopup")).toBe("menu");
+    fireEvent.click(shapes);
+    const menu = screen.getByRole("menu", { name: "Area shape" });
+    const checked = () =>
+      within(menu)
+        .getAllByRole("menuitemradio")
+        .map((item) => [item.textContent, item.getAttribute("aria-checked")]);
+    expect(checked()).toEqual([
+      ["Rectangle", "true"],
+      ["Ellipse", "false"],
+      ["Lasso", "false"],
+    ]);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Lasso" }));
+    expect(onAreaShape).toHaveBeenLastCalledWith("lasso");
+    expect(onDrawingArea).toHaveBeenLastCalledWith(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    // The shape in use starts outlining with it all the same.
+    fireEvent.click(shapes);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Rectangle" }));
+    expect(onAreaShape).toHaveBeenLastCalledWith("rect");
+
+    // With the keys: the menu opens from its button, the arrows move, Enter picks, and the focus returns.
+    shapes.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu", { name: "Area shape" });
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onAreaShape).toHaveBeenLastCalledWith("ellipse");
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(shapes));
+
+    fireEvent.click(shapes);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(onAreaShape).toHaveBeenCalledTimes(3);
+  });
+
   it("lists the deck's comments by slide, goes to one pressed, and hands them all to the agent", () => {
     const comment = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5 });
     useApp.setState({
@@ -190,7 +257,7 @@ describe("ViewToolbar ribbon", () => {
   it("keeps every tool in place, off while it has nothing to work on", () => {
     const { rerender } = render(toolbar());
     for (const name of ["Remove last mark", "Clear marks on this slide"])
-      expect(inGroup("Mark up", name).disabled).toBe(true);
+      expect(isOff(inGroup("Mark up", name))).toBe(true);
     expect(inGroup("Review", "Show review marks and comments on the slides").disabled).toBe(true);
 
     const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };

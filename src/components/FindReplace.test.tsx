@@ -5,6 +5,7 @@ import { searchHighlight, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { FindBar, SlideSearch, useDeckSearch, useFindShortcut } from "./FindReplace";
 
 /** The search as the stage has it: its shortcut and its searching, with View's ribbon rows or Edit's bar. */
@@ -29,6 +30,13 @@ const match = (slide: string, index: number, more: Partial<FindMatch> = {}): Fin
 const MATCHES = [match("intro", 0), match("outro", 2), match("outro", 2, { locked: true })];
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
+/** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
+const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
+/** What a control's tooltip says. The pointer leaves it first: a press keeps the tooltip away until then. */
+const tip = (control: Element) => {
+  fireEvent.mouseLeave(control);
+  return tooltipOf(control);
+};
 const field = () => screen.getByLabelText("Search slides") as HTMLInputElement;
 const search = (value: string) => fireEvent.change(field(), { target: { value } });
 const status = () => screen.getByRole("status");
@@ -70,7 +78,7 @@ describe("search", () => {
   it("steps through the matches around the deck, going to their slides", async () => {
     found(MATCHES);
     render(<Find />);
-    expect(button("Next match").disabled).toBe(true);
+    expect(isOff(button("Next match"))).toBe(true);
     search("hello");
     await waitFor(() => expect(status().textContent).toBe("1 / 3"));
     fireEvent.click(button("Next match"));
@@ -117,6 +125,27 @@ describe("search", () => {
     found([]);
     search("nothing");
     await waitFor(() => expect(status().textContent).toBe("No matches"));
+  });
+
+  it("says what its field and its buttons are for, with the keys, under the pointer", async () => {
+    found(MATCHES);
+    render(<Find />);
+    // The field's hint is of the box around it, and does not show for as long as it is typed in.
+    expect(tip(field().parentElement!)).toBe("Search the text on the slides and in their notesCtrl+F");
+    fireEvent.focus(field());
+    expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull();
+    search("hello");
+    await waitFor(() => expect(status()).toBeTruthy());
+    expect(tip(button("Next match"))).toBe("Next matchEnter");
+    expect(tip(button("Previous match"))).toBe("Previous matchShift+Enter");
+    expect(tip(button("Clear search"))).toBe("Clear searchEsc");
+    expect(tip(button("Match case"))).toBe("Match case");
+    expect(button("Match case").getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(button("Match case"));
+    expect(button("Match case").getAttribute("aria-pressed")).toBe("true");
+    // A press on the magnifier or the count puts the caret in the field.
+    fireEvent.click(status());
+    expect(document.activeElement).toBe(field());
   });
 
   it("clears with the button or Escape", async () => {
@@ -213,7 +242,7 @@ describe("search", () => {
       expect(field().value).toBe("hello");
       expect(document.activeElement).not.toBe(field());
       await waitFor(() => expect(status().textContent).toBe("1 / 3"));
-      expect(button("Replace…").disabled).toBe(false);
+      expect(isOff(button("Replace…"))).toBe(false);
     });
   });
 
@@ -245,8 +274,8 @@ describe("replace", () => {
     render(<Find />);
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
-    expect(button("Replace…").disabled).toBe(true);
-    expect(button("Replace…").title).toBe("Switch to Edit to change the slides");
+    expect(isOff(button("Replace…"))).toBe(true);
+    expect(tip(button("Replace…"))).toBe("Switch to Edit to change the slides");
     act(() => useApp.setState({ editing: true }));
     fireEvent.click(button("Replace…"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
@@ -283,9 +312,15 @@ describe("replace", () => {
     });
     await open();
     await waitFor(() => expect(status().textContent).toBe("1 / 3"));
-    fireEvent.click(button("Next match"));
+    // With the keyboard, from the search field: a press beside the panel would close it.
+    fireEvent.keyDown(field(), { key: "Enter" });
     expect(status().textContent).toBe("2 / 3");
     type("Hi");
+    expect(tip(button("Replace"))).toBe("Replace this match and go to the nextEnter");
+    expect(tip(button(/^Replace all/))).toBe("Replace every matchCtrl+Enter");
+    expect(tip(screen.getByLabelText("Replace with").parentElement!)).toBe(
+      "Enter replaces this match, Ctrl+Enter all of them",
+    );
     fireEvent.click(button("Replace"));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("replace_match_in_deck", {
@@ -315,13 +350,37 @@ describe("replace", () => {
     found([match("outro", 2, { locked: true }), match("intro", 0)]);
     useApp.setState({ selected: SLIDES[1]! });
     await open();
-    expect(button("Replace").disabled).toBe(true);
-    expect(button("Replace").title).toBe("Go to a match first");
-    fireEvent.click(button("Previous match"));
+    expect(isOff(button("Replace"))).toBe(true);
+    expect(tip(button("Replace"))).toBe("Go to a match first");
+    fireEvent.keyDown(field(), { key: "Enter", shiftKey: true });
     expect(useApp.getState().selected).toBe("intro");
-    expect(button("Replace").disabled).toBe(false);
-    fireEvent.click(button("Previous match"));
-    expect(button("Replace").title).toBe("This match is on a locked slide");
+    expect(isOff(button("Replace"))).toBe(false);
+    fireEvent.keyDown(field(), { key: "Enter", shiftKey: true });
+    expect(tip(button("Replace"))).toBe("This match is on a locked slide");
+  });
+
+  it("opens under its button with the focus in its field, and gives the focus back as it closes", async () => {
+    found(MATCHES);
+    await open();
+    const trigger = button("Replace…");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    await settle();
+    expect(document.activeElement).toBe(screen.getByLabelText("Replace with"));
+    fireEvent.keyDown(screen.getByLabelText("Replace with"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Replace" })).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(trigger);
+    // The search is still there: Escape closed only what was on top.
+    expect(field().value).toBe("hello");
+  });
+
+  it("closes on a press beside it", async () => {
+    found(MATCHES);
+    await open();
+    fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("dialog", { name: "Replace" })).toBeNull();
   });
 
   const open = async (query = "hello") => {
@@ -349,7 +408,7 @@ describe("replace", () => {
     });
     await open();
     type("Hi");
-    await waitFor(() => expect(button(/^Replace all/).disabled).toBe(false));
+    await waitFor(() => expect(isOff(button(/^Replace all/))).toBe(false));
     fireEvent.click(button(/^Replace on this slide/));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("replace_in_deck", {
@@ -374,8 +433,8 @@ describe("replace", () => {
   it("cannot replace where only locked slides match, or on a slide without matches", async () => {
     found([MATCHES[2]!]);
     await open();
-    expect(button(/^Replace all/).disabled).toBe(true);
-    expect(button(/^Replace on this slide/).disabled).toBe(true);
+    expect(isOff(button(/^Replace all/))).toBe(true);
+    expect(isOff(button(/^Replace on this slide/))).toBe(true);
   });
 
   it("shows a failed replace and keeps the panel open", async () => {
@@ -384,7 +443,7 @@ describe("replace", () => {
       throw "disk full";
     });
     await open();
-    await waitFor(() => expect(button(/^Replace all/).disabled).toBe(false));
+    await waitFor(() => expect(isOff(button(/^Replace all/))).toBe(false));
     fireEvent.click(button(/^Replace all/));
     await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();

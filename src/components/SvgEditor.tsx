@@ -22,12 +22,23 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { useRovingTabs } from "../hooks/useRovingTabs";
+
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { keepFocus } from "@/lib/focus";
 import { formatKeys, isMod, keepsKey } from "../lib/keys";
 import { SWATCHES } from "../lib/palette";
 import {
@@ -53,9 +64,6 @@ import {
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
-import { Button, keepFocus, ToolButton } from "./Button";
-import { Field, inputClass, wideSelectClass } from "./Field";
-import { SectionLabel } from "./SectionLabel";
 import { checkerboard, duplicate, NO_OVERLAY, type Overlay, overlayOf, showDrawing, subtreeSize } from "./svg/drawing";
 
 const MIN_ZOOM = 0.05;
@@ -89,17 +97,24 @@ export function SvgEditor() {
 
 function NoDrawing() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <Shapes className="size-6 text-muted-foreground" />
-      <h2 className="text-sm font-medium">No drawing open</h2>
-      <p className="max-w-64 text-xs text-muted-foreground">
-        In edit mode, select an SVG drawing on a slide and press <strong>Edit SVG</strong> beside it.
-      </p>
-    </div>
+    <Empty className="h-full">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Shapes />
+        </EmptyMedia>
+        <EmptyTitle role="heading" aria-level={2}>
+          No drawing open
+        </EmptyTitle>
+        <EmptyDescription className="max-w-64 text-xs/relaxed">
+          In edit mode, select an SVG drawing on a slide and press <strong>Edit SVG</strong> beside it.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
-type InspectorTab = "properties" | "layers" | "markup";
+const INSPECTOR_TABS = ["properties", "layers", "markup"] as const;
+type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
 function DrawingEditor({ edit }: { edit: SvgEdit }) {
   const svg = useMemo(() => parseSvg(edit.draft), [edit.draft]);
@@ -108,7 +123,6 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   const [point, setPoint] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);
   const [tab, setTab] = useState<InspectorTab>("properties");
-  const inspectorTabs = useRovingTabs();
   // The backdrop the user picked; null follows the drawing's colors.
   const [picked, setPicked] = useState<Backdrop | null>(null);
   const auto = useMemo(() => (svg ? backdropFor(svg, edit.color, edit.vars) : "light"), [svg, edit.color, edit.vars]);
@@ -204,25 +218,34 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
     // biome-ignore lint/a11y/noNoninteractiveElementInteractions: the editor's shortcuts apply anywhere in it.
     <div className="@container flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
-        <ToolButton variant="panel" label="Undo" shortcut="mod+z" disabled={!edit.past.length} onClick={store().undo}>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Undo"
+          shortcut="mod+z"
+          disabled={!edit.past.length}
+          onClick={store().undo}
+        >
           <Undo2 />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          label="Redo"
+        </Button>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Redo"
           shortcut="mod+shift+z"
           disabled={!edit.future.length}
           onClick={store().redo}
         >
           <Redo2 />
-        </ToolButton>
-        <div className="mx-1 h-4 w-px bg-border" />
+        </Button>
+        <Separator orientation="vertical" className="mx-1 h-4 data-vertical:self-center" />
         <ZoomControls zoom={zoom} onZoom={setZoom} />
-        <div className="mx-1 h-4 w-px bg-border" />
-        <ToolButton
-          variant="panel"
-          label={`${backdrop === "dark" ? "Light" : "Dark"} backdrop (now ${backdrop}${picked ? "" : ", from the drawing's colors"})`}
-          active={backdrop === "dark"}
+        <Separator orientation="vertical" className="mx-1 h-4 data-vertical:self-center" />
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip={`${backdrop === "dark" ? "Light" : "Dark"} backdrop (now ${backdrop}${picked ? "" : ", from the drawing's colors"})`}
+          aria-pressed={backdrop === "dark"}
           onClick={() => {
             const next = backdrop === "dark" ? "light" : "dark";
             // Picking what the colors suggest follows them again.
@@ -230,34 +253,37 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
           }}
         >
           {backdrop === "dark" ? <Moon /> : <Sun />}
-        </ToolButton>
+        </Button>
         <div className="min-w-2 flex-1" />
         {dirty && <span className="mr-1 hidden text-xs text-muted-foreground @xs:inline">Not accepted yet</span>}
         <Button
-          size="md"
+          variant="outline"
+          size="xs"
           disabled={!dirty || edit.saving}
           onClick={store().discard}
-          title="Go back to the drawing on the slide"
+          tooltip="Go back to the drawing on the slide"
         >
-          <RotateCcw />
+          <RotateCcw data-icon="inline-start" />
           Discard
         </Button>
         <Button
-          variant="primary"
-          size="md"
+          size="xs"
           disabled={!dirty || edit.saving || otherDeck || !svg}
           onClick={() => void store().accept()}
-          title={
+          tooltip={
             otherDeck
               ? "Open the deck the drawing is in to save it"
               : !dirty
                 ? "Nothing has changed in the drawing yet"
-                : `Save the drawing into the slide (${formatKeys("mod+s")})`
+                : "Save the drawing into the slide"
           }
+          {...(!otherDeck && dirty && { shortcut: "mod+s" })}
         >
-          <Check />
+          <Check data-icon="inline-start" />
           {edit.saving ? "Saving…" : "Apply to slide"}
-          {!edit.saving && <span className="font-normal opacity-70">{formatKeys("mod+s")}</span>}
+          {!edit.saving && (
+            <Kbd className="h-4 min-w-4 bg-primary-foreground/20 text-primary-foreground">{formatKeys("mod+s")}</Kbd>
+          )}
         </Button>
       </div>
       {otherDeck && (
@@ -286,55 +312,53 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
             </div>
           )}
         </div>
-        <div className="flex min-h-0 flex-1 basis-1/2 flex-col border-t @3xl:w-80 @3xl:flex-none @3xl:basis-auto @3xl:border-l @3xl:border-t-0">
-          <div
-            role="tablist"
-            aria-label="Inspector"
-            {...inspectorTabs}
-            className="flex shrink-0 gap-1 border-b px-2 py-1.5"
-          >
-            {(["properties", "layers", "markup"] as const).map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                // A press leaves the focus where it is, as the editor's keys go on working there.
-                onMouseDown={keepFocus}
-                onClick={() => setTab(id)}
-                className={cn(
-                  "rounded-md px-2 py-1 text-xs font-medium capitalize text-muted-foreground hover:bg-accent hover:text-foreground",
-                  tab === id && "bg-accent text-foreground",
-                )}
-              >
-                {id}
-              </button>
-            ))}
-          </div>
-          <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "properties" &&
-              (element && selected !== null ? (
-                <Properties
-                  key={selected}
-                  element={element}
-                  root={selected === 0}
-                  point={point}
-                  onEdit={editElement}
-                  onParent={selectParent}
-                  onForward={() => restackSelected(true)}
-                  onBackward={() => restackSelected(false)}
-                  onDuplicate={duplicateSelected}
-                  onDelete={removeSelected}
-                />
-              ) : (
-                <p className="p-4 text-xs text-muted-foreground">
-                  Click an element of the drawing, or pick one in Layers.
-                </p>
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as InspectorTab)}
+          className="min-h-0 flex-1 basis-1/2 gap-0 border-t @3xl:w-80 @3xl:flex-none @3xl:basis-auto @3xl:border-l @3xl:border-t-0"
+        >
+          <div className="shrink-0 border-b px-2 py-1.5">
+            <TabsList aria-label="Inspector" className="group-data-horizontal/tabs:h-7">
+              {INSPECTOR_TABS.map((id) => (
+                <TabsTrigger
+                  key={id}
+                  value={id}
+                  // A press leaves the focus where it is, as the editor's keys go on working there.
+                  onMouseDown={keepFocus}
+                  className="px-2 text-xs capitalize"
+                >
+                  {id}
+                </TabsTrigger>
               ))}
-            {tab === "layers" && <Layers elements={elements} selected={selected} onSelect={select} />}
-            {tab === "markup" && <Markup draft={edit.draft} onChange={(text) => change(text, "markup")} />}
+            </TabsList>
           </div>
-        </div>
+          <TabsContent value="properties" className="min-h-0 overflow-y-auto">
+            {element && selected !== null ? (
+              <Properties
+                key={selected}
+                element={element}
+                root={selected === 0}
+                point={point}
+                onEdit={editElement}
+                onParent={selectParent}
+                onForward={() => restackSelected(true)}
+                onBackward={() => restackSelected(false)}
+                onDuplicate={duplicateSelected}
+                onDelete={removeSelected}
+              />
+            ) : (
+              <p className="p-4 text-xs text-muted-foreground">
+                Click an element of the drawing, or pick one in Layers.
+              </p>
+            )}
+          </TabsContent>
+          <TabsContent value="layers" className="min-h-0 overflow-y-auto">
+            <Layers elements={elements} selected={selected} onSelect={select} />
+          </TabsContent>
+          <TabsContent value="markup" className="min-h-0 overflow-y-auto">
+            <Markup draft={edit.draft} onChange={(text) => change(text, "markup")} />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
@@ -344,18 +368,18 @@ function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: nu
   const by = (factor: number) => onZoom(clampZoom((zoom ?? 1) * factor));
   return (
     <>
-      <ToolButton variant="panel" label="Zoom out" onClick={() => by(1 / 1.25)}>
+      <Button variant="tool" size="icon-xs" tooltip="Zoom out" onClick={() => by(1 / 1.25)}>
         <Minus />
-      </ToolButton>
+      </Button>
       <span className="w-10 text-center text-xs tabular-nums text-muted-foreground">
         {zoom === null ? "" : `${Math.round(zoom * 100)}%`}
       </span>
-      <ToolButton variant="panel" label="Zoom in" onClick={() => by(1.25)}>
+      <Button variant="tool" size="icon-xs" tooltip="Zoom in" onClick={() => by(1.25)}>
         <Plus />
-      </ToolButton>
-      <ToolButton variant="panel" label="Fit the drawing" onClick={() => onZoom(null)}>
+      </Button>
+      <Button variant="tool" size="icon-xs" tooltip="Fit the drawing" onClick={() => onZoom(null)}>
         <Maximize />
-      </ToolButton>
+      </Button>
     </>
   );
 }
@@ -708,53 +732,75 @@ function Properties(props: {
         <span className="min-w-0 flex-1 truncate font-mono font-medium" title={labelOf(el)}>
           {labelOf(el)}
         </span>
-        <ToolButton variant="panel" label="Select the parent (Escape)" disabled={root} onClick={props.onParent}>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Select the parent"
+          shortcut="escape"
+          disabled={root}
+          onClick={props.onParent}
+        >
           <CornerLeftUp />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          label="Bring forward"
+        </Button>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Bring forward"
           disabled={root || !el.nextElementSibling}
           onClick={props.onForward}
         >
           <ArrowUp />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          label="Send backward"
+        </Button>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Send backward"
           disabled={root || !el.previousElementSibling}
           onClick={props.onBackward}
         >
           <ArrowDown />
-        </ToolButton>
-        <ToolButton variant="panel" label="Duplicate" shortcut="mod+d" disabled={root} onClick={props.onDuplicate}>
+        </Button>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip="Duplicate"
+          shortcut="mod+d"
+          disabled={root}
+          onClick={props.onDuplicate}
+        >
           <Copy />
-        </ToolButton>
-        <ToolButton
-          variant="panel"
-          label={point ? "Remove the point (Delete)" : "Delete (Delete)"}
+        </Button>
+        <Button
+          variant="tool"
+          size="icon-xs"
+          tooltip={point ? "Remove the point" : "Delete"}
+          shortcut="delete"
           disabled={point ? !handle?.removable : root}
           onClick={props.onDelete}
+          className="hover:text-destructive aria-disabled:hover:text-muted-foreground"
         >
           <Trash2 />
-        </ToolButton>
+        </Button>
       </div>
       {handle && (
         <Section title="Point">
           <div className="flex gap-2">
             {(["x", "y"] as const).map((axis) => (
-              <Field key={axis} label={axis.toUpperCase()}>
-                <CommitInput
-                  aria-label={`Point ${axis}`}
-                  value={String(Math.round(handle[axis] * 1000) / 1000)}
-                  onCommit={(text) => {
-                    const n = Number.parseFloat(text);
-                    if (!Number.isFinite(n)) return;
-                    const to: Point = axis === "x" ? [n, handle.y] : [handle.x, n];
-                    onEdit((e) => moveHandle(e, handle.id, to));
-                  }}
-                />
-              </Field>
+              <Labeled key={axis} label={axis.toUpperCase()}>
+                {(id) => (
+                  <CommitInput
+                    id={id}
+                    aria-label={`Point ${axis}`}
+                    value={String(Math.round(handle[axis] * 1000) / 1000)}
+                    onCommit={(text) => {
+                      const n = Number.parseFloat(text);
+                      if (!Number.isFinite(n)) return;
+                      const to: Point = axis === "x" ? [n, handle.y] : [handle.x, n];
+                      onEdit((e) => moveHandle(e, handle.id, to));
+                    }}
+                  />
+                )}
+              </Labeled>
             ))}
           </div>
         </Section>
@@ -764,49 +810,70 @@ function Properties(props: {
           <ColorField key={name} label={name === "fill" ? "Fill" : "Stroke"} value={value(name)} onChange={set(name)} />
         ))}
         <div className="flex gap-2">
-          <Field label="Stroke width">
-            <CommitInput aria-label="Stroke width" value={value("stroke-width")} onCommit={set("stroke-width")} live />
-          </Field>
-          <Field label="Opacity">
-            <CommitInput aria-label="Opacity" value={value("opacity")} onCommit={set("opacity")} live />
-          </Field>
+          <Labeled label="Stroke width">
+            {(id) => (
+              <CommitInput
+                id={id}
+                aria-label="Stroke width"
+                value={value("stroke-width")}
+                onCommit={set("stroke-width")}
+                live
+              />
+            )}
+          </Labeled>
+          <Labeled label="Opacity">
+            {(id) => (
+              <CommitInput id={id} aria-label="Opacity" value={value("opacity")} onCommit={set("opacity")} live />
+            )}
+          </Labeled>
         </div>
         <div className="flex gap-2">
-          <Field label="Line ends">
-            <select
-              aria-label="Line ends"
-              value={value("stroke-linecap")}
-              onChange={(event) => set("stroke-linecap")(event.target.value)}
-              className={wideSelectClass}
-            >
-              <option value="">Default</option>
-              <option value="butt">Flat</option>
-              <option value="round">Round</option>
-              <option value="square">Square</option>
-            </select>
-          </Field>
-          <Field label="Corners">
-            <select
-              aria-label="Corners"
-              value={value("stroke-linejoin")}
-              onChange={(event) => set("stroke-linejoin")(event.target.value)}
-              className={wideSelectClass}
-            >
-              <option value="">Default</option>
-              <option value="miter">Sharp</option>
-              <option value="round">Round</option>
-              <option value="bevel">Bevel</option>
-            </select>
-          </Field>
+          <Labeled label="Line ends">
+            {(id) => (
+              <NativeSelect
+                id={id}
+                size="sm"
+                aria-label="Line ends"
+                value={value("stroke-linecap")}
+                onChange={(event) => set("stroke-linecap")(event.target.value)}
+                className="w-full"
+              >
+                <NativeSelectOption value="">Default</NativeSelectOption>
+                <NativeSelectOption value="butt">Flat</NativeSelectOption>
+                <NativeSelectOption value="round">Round</NativeSelectOption>
+                <NativeSelectOption value="square">Square</NativeSelectOption>
+              </NativeSelect>
+            )}
+          </Labeled>
+          <Labeled label="Corners">
+            {(id) => (
+              <NativeSelect
+                id={id}
+                size="sm"
+                aria-label="Corners"
+                value={value("stroke-linejoin")}
+                onChange={(event) => set("stroke-linejoin")(event.target.value)}
+                className="w-full"
+              >
+                <NativeSelectOption value="">Default</NativeSelectOption>
+                <NativeSelectOption value="miter">Sharp</NativeSelectOption>
+                <NativeSelectOption value="round">Round</NativeSelectOption>
+                <NativeSelectOption value="bevel">Bevel</NativeSelectOption>
+              </NativeSelect>
+            )}
+          </Labeled>
         </div>
-        <Field label="Dashes">
-          <CommitInput
-            aria-label="Dashes"
-            placeholder="e.g. 8 4"
-            value={value("stroke-dasharray")}
-            onCommit={set("stroke-dasharray")}
-          />
-        </Field>
+        <Labeled label="Dashes">
+          {(id) => (
+            <CommitInput
+              id={id}
+              aria-label="Dashes"
+              placeholder="e.g. 8 4"
+              value={value("stroke-dasharray")}
+              onCommit={set("stroke-dasharray")}
+            />
+          )}
+        </Labeled>
       </Section>
       {textOnly && (
         <Section title="Text">
@@ -830,9 +897,22 @@ function Properties(props: {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <SectionLabel as="h2">{title}</SectionLabel>
+      <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/** A control of the inspector under its muted label, the two filling their share of a row. */
+function Labeled({ label, children }: { label: string; children: (id: string) => ReactNode }) {
+  const id = useId();
+  return (
+    <Field className="min-w-0 flex-1 gap-1">
+      <FieldLabel htmlFor={id} className="text-xs font-normal text-muted-foreground">
+        {label}
+      </FieldLabel>
+      {children(id)}
+    </Field>
   );
 }
 
@@ -840,18 +920,20 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const hex = hexOf(value);
   return (
-    <Field label={label}>
-      <div className="flex gap-1.5">
-        <input
-          type="color"
-          aria-label={`${label} color`}
-          value={hex ?? SWATCHES.ink}
-          onChange={(event) => onChange(event.target.value)}
-          className={cn("h-7 w-9 shrink-0 cursor-pointer rounded-md border bg-background p-0.5", !hex && "opacity-50")}
-        />
-        <CommitInput aria-label={label} placeholder="none" value={value} onCommit={onChange} />
-      </div>
-    </Field>
+    <Labeled label={label}>
+      {(id) => (
+        <div className="flex gap-1.5">
+          <Input
+            type="color"
+            aria-label={`${label} color`}
+            value={hex ?? SWATCHES.ink}
+            onChange={(event) => onChange(event.target.value)}
+            className={cn("h-7 w-9 shrink-0 cursor-pointer rounded-md p-0.5", !hex && "opacity-50")}
+          />
+          <CommitInput id={id} aria-label={label} placeholder="none" value={value} onCommit={onChange} />
+        </div>
+      )}
+    </Labeled>
   );
 }
 
@@ -860,6 +942,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
  * Enter or leaving the field (or as it is typed, when `live`). Escape takes the typing back.
  */
 function CommitInput(props: {
+  id?: string;
   "aria-label": string;
   value: string;
   onCommit: (value: string) => void;
@@ -878,6 +961,7 @@ function CommitInput(props: {
     if (text !== value) onCommit(text);
   };
   const common = {
+    id: props.id,
     "aria-label": props["aria-label"],
     placeholder: props.placeholder,
     value: text,
@@ -901,9 +985,9 @@ function CommitInput(props: {
     },
   };
   return multiline ? (
-    <textarea {...common} rows={3} className="w-full min-w-0 rounded-md border bg-background px-1.5 py-1" />
+    <Textarea {...common} rows={3} className="min-w-0 rounded-md px-1.5 py-1 text-xs" />
   ) : (
-    <input {...common} className={inputClass} />
+    <Input {...common} size="sm" className="tabular-nums" />
   );
 }
 
@@ -937,14 +1021,14 @@ function Attributes({
               value={attr.value}
               onCommit={(text) => onEdit((el) => el.setAttribute(attr.name, text), `attr:${attr.name}`)}
             />
-            <ToolButton
-              variant="panel"
-              size="xs"
-              label={`Remove ${attr.name}`}
+            <Button
+              variant="tool"
+              size="icon-2xs"
+              tooltip={`Remove ${attr.name}`}
               onClick={() => onEdit((el) => el.removeAttribute(attr.name))}
             >
               <X className="size-3.5" />
-            </ToolButton>
+            </Button>
           </div>
         ))}
         <form
@@ -954,23 +1038,25 @@ function Attributes({
             add();
           }}
         >
-          <input
+          <Input
+            size="sm"
             aria-label="New attribute name"
             placeholder="name"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className={cn(inputClass, "w-24 shrink-0 font-mono")}
+            className="w-24 shrink-0 font-mono"
           />
-          <input
+          <Input
+            size="sm"
             aria-label="New attribute value"
             placeholder="value"
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            className={inputClass}
+            className="tabular-nums"
           />
-          <ToolButton type="submit" variant="panel" size="xs" label="Add the attribute" disabled={!name.trim()}>
+          <Button type="submit" variant="tool" size="icon-2xs" tooltip="Add the attribute" disabled={!name.trim()}>
             <Plus className="size-3.5" />
-          </ToolButton>
+          </Button>
         </form>
       </div>
     </Section>
@@ -998,18 +1084,19 @@ function Layers({
       {elements.map((el, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: an element's index is what names it.
         <li key={i}>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             aria-current={i === selected || undefined}
             onClick={() => onSelect(i)}
             style={{ paddingLeft: 12 + depth(el) * 12 }}
             className={cn(
-              "flex w-full items-center truncate py-1 pr-3 text-left font-mono hover:bg-accent",
+              "w-full justify-start truncate rounded-none pr-3 font-mono font-normal",
               i === selected && "bg-accent font-medium",
             )}
           >
             {labelOf(el)}
-          </button>
+          </Button>
         </li>
       ))}
     </ul>
@@ -1026,8 +1113,9 @@ function Markup({ draft, onChange }: { draft: string; onChange: (text: string) =
   const valid = parseSvg(text) !== null;
   return (
     <div className="flex h-full flex-col gap-1.5 p-2">
-      <textarea
+      <Textarea
         aria-label="Markup"
+        aria-invalid={!valid || undefined}
         spellCheck={false}
         value={text}
         onFocus={() => {
@@ -1042,10 +1130,7 @@ function Markup({ draft, onChange }: { draft: string; onChange: (text: string) =
           const svg = parseSvg(event.target.value);
           if (svg) onChange(serializeSvg(svg));
         }}
-        className={cn(
-          "min-h-40 w-full flex-1 resize-none rounded-md border bg-background p-2 font-mono text-2xs leading-relaxed",
-          !valid && "border-destructive",
-        )}
+        className="field-sizing-fixed min-h-40 flex-1 resize-none rounded-md p-2 font-mono text-2xs leading-relaxed"
       />
       {!valid && (
         <p className="text-xs text-destructive">Not one &lt;svg&gt; drawing yet; the last valid markup is kept.</p>

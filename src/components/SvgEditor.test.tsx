@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { type SvgOpen, useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { SvgEditor } from "./SvgEditor";
 
 const DECK = "/decks/talk/deck.html";
@@ -87,6 +88,8 @@ async function open(changes: Partial<SvgOpen> = {}) {
 /** The drawing as the canvas shows it, inside its shadow root. */
 const shown = () => screen.getByTestId("svg-drawing").shadowRoot!;
 const draft = () => useSvgEditor.getState().edit!.draft;
+/** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
+const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
 const press = (target: Element, x: number, y: number, type = "pointerDown") =>
   fireEvent[type as "pointerDown"](target, { button: 0, pointerId: 1, clientX: x, clientY: y, composed: true });
 
@@ -272,8 +275,10 @@ describe("SvgEditor", () => {
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
     tabs[0]!.focus();
     fireEvent.keyDown(tabs[0]!, { key: "ArrowRight" });
+    await settle();
     expect(document.activeElement).toBe(tabs[1]);
     fireEvent.keyDown(tabs[1]!, { key: "ArrowLeft" });
+    await settle();
     expect(document.activeElement).toBe(tabs[0]);
     expect(draft()).toBe(before);
   });
@@ -315,21 +320,58 @@ describe("SvgEditor", () => {
     await open();
     const accept = screen.getByRole("button", { name: /Apply to slide/ }) as HTMLButtonElement;
     const discard = screen.getByRole("button", { name: /Discard/ }) as HTMLButtonElement;
-    expect([accept.disabled, discard.disabled]).toEqual([true, true]);
+    expect([isOff(accept), isOff(discard)]).toEqual([true, true]);
     press(shown().querySelector("#box")!, 25, 25);
     fireEvent.keyDown(screen.getByTestId("svg-canvas"), { key: "ArrowDown" });
-    expect([accept.disabled, discard.disabled]).toEqual([false, false]);
+    expect([isOff(accept), isOff(discard)]).toEqual([false, false]);
     fireEvent.click(discard);
     expect(draft()).toBe(DRAWING);
     fireEvent.keyDown(screen.getByTestId("svg-canvas"), { key: "ArrowDown" });
     await act(async () => fireEvent.click(accept));
     const update = invoke.mock.calls.find(([c]) => c === "update_slide")![1] as { markup: string };
     expect(update.markup).toContain('transform="translate(0 1)"');
-    expect(accept.disabled).toBe(true);
+    expect(isOff(accept)).toBe(true);
   });
 
   it("does not accept into a deck other than the drawing's", async () => {
     await open({ deckId: "/decks/other/deck.html" });
     expect(screen.getByText(/in another deck/)).toBeTruthy();
+    const accept = screen.getByRole("button", { name: /Apply to slide/ }) as HTMLButtonElement;
+    expect(isOff(accept)).toBe(true);
+    expect(tooltipOf(accept)).toBe("Open the deck the drawing is in to save it");
+  });
+
+  it("says in its tooltips what a button does, with its keys, or why it is off", async () => {
+    await open();
+    const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
+    expect(tooltipOf(button("Undo"))).toBe("UndoCtrl+Z");
+    expect(tooltipOf(button("Redo"))).toBe("RedoCtrl+Shift+Z");
+    expect(tooltipOf(button(/Apply to slide/))).toBe("Nothing has changed in the drawing yet");
+    expect(tooltipOf(button(/Discard/))).toBe("Go back to the drawing on the slide");
+    press(shown().querySelector("#box")!, 25, 25);
+    expect(tooltipOf(button("Select the parent"))).toBe("Select the parentEsc");
+    expect(tooltipOf(button("Duplicate"))).toBe("DuplicateCtrl+D");
+    expect(tooltipOf(button("Delete"))).toBe("DeleteDelete");
+    fireEvent.keyDown(screen.getByTestId("svg-canvas"), { key: "ArrowDown" });
+    expect(tooltipOf(button(/Apply to slide/))).toBe("Save the drawing into the slideCtrl+S");
+    // The keys also show on the button itself.
+    expect(button(/Apply to slide/).textContent).toBe("Apply to slideCtrl+S");
+  });
+
+  it("shows one of the inspector's panels at a time, the tab picked", async () => {
+    await open();
+    expect(screen.getByRole("tablist", { name: "Inspector" })).toBeTruthy();
+    const selected = () =>
+      screen
+        .getAllByRole("tab")
+        .filter((tab) => tab.getAttribute("aria-selected") === "true")
+        .map((tab) => tab.textContent);
+    expect(selected()).toEqual(["properties"]);
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    // A press on a tab leaves the focus where it is, for the editor's keys.
+    expect(fireEvent.mouseDown(screen.getByRole("tab", { name: "markup" }))).toBe(false);
+    fireEvent.click(screen.getByRole("tab", { name: "markup" }));
+    expect(selected()).toEqual(["markup"]);
+    expect(within(screen.getByRole("tabpanel")).getByRole("textbox", { name: "Markup" })).toBeTruthy();
   });
 });

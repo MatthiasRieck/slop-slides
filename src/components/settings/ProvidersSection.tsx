@@ -1,17 +1,30 @@
 import { listen } from "@tauri-apps/api/event";
 import { RotateCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 
 import { type AgentEventEnvelope, api, errorMessage } from "../../lib/api";
 import { PROVIDER_IDS, PROVIDERS, type Provider, type ProviderInfo } from "../../lib/models";
 import type { EnvironmentCheck } from "../../lib/settings";
 import { cn } from "../../lib/utils";
 import { chatProvider, useApp } from "../../store";
-import { Button } from "../Button";
 import { InstallHint } from "../chat/InstallHint";
 import { ProviderIcon } from "../ProviderIcon";
-import { Switch } from "../Switch";
-import { SettingsGroup } from "./parts";
 import { providerStatus, type StatusTone, TONE_DOT } from "./providerStatus";
 
 /** What the Environment block calls each thing it checks. */
@@ -128,45 +141,68 @@ export function ProvidersSection() {
           The agents that can answer in the chat. One that is turned off leaves the model picker; its chats stay
           readable.
         </p>
-        <Button busy={checking} onClick={() => void check()} className="shrink-0">
-          {!checking && <RotateCw />}
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={checking}
+          aria-busy={checking || undefined}
+          onClick={() => void check()}
+        >
+          {checking ? <Spinner aria-hidden="true" data-icon="inline-start" /> : <RotateCw data-icon="inline-start" />}
           Check again
         </Button>
       </div>
-      <SettingsGroup>
-        {PROVIDER_IDS.map((id) => (
-          <ProviderRow
-            key={id}
-            provider={id}
-            info={providers?.find((p) => p.id === id)}
-            checking={checking}
-            on={enabled[id].enabled}
-            locked={enabled[id].enabled ? lockReason(id, enabledCount, working === id || busy.includes(id)) : null}
-            onToggle={(on) => void toggle(id, on)}
-          />
+      <ItemGroup className="gap-0 rounded-lg border bg-card">
+        {PROVIDER_IDS.map((id, index) => (
+          <Fragment key={id}>
+            {index > 0 && <ItemSeparator className="my-0" />}
+            <ProviderRow
+              provider={id}
+              info={providers?.find((p) => p.id === id)}
+              checking={checking}
+              on={enabled[id].enabled}
+              locked={enabled[id].enabled ? lockReason(id, enabledCount, working === id || busy.includes(id)) : null}
+              onToggle={(on) => void toggle(id, on)}
+            />
+          </Fragment>
         ))}
-      </SettingsGroup>
-      <SettingsGroup title="Environment">
+      </ItemGroup>
+      <section className="flex flex-col gap-2">
+        <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Environment</h4>
         {typeof environment === "string" ? (
-          <div className="px-4 py-3">
-            <StatusLine tone="destructive" headline="Could not check" detail={environment} />
-          </div>
-        ) : environment === null ? (
-          <div className="px-4 py-3">
-            <StatusLine tone="muted" headline="Checking…" detail={null} />
-          </div>
+          <Alert variant="destructive">
+            <AlertTitle>Could not check</AlertTitle>
+            <AlertDescription className="selectable text-xs break-words">{environment}</AlertDescription>
+          </Alert>
         ) : (
-          environment.map((item) => (
-            <div key={item.id} data-testid={`environment-${item.id}`} className="px-4 py-3">
-              <StatusLine
-                tone={item.ok ? "success" : "destructive"}
-                headline={ENVIRONMENT_LABELS[item.id] ?? item.id}
-                detail={item.detail}
-              />
-            </div>
-          ))
+          <ItemGroup className="gap-0 rounded-lg border bg-card has-data-[size=xs]:gap-0">
+            {environment === null ? (
+              <Item size="xs">
+                <ItemContent>
+                  <StatusBadge tone="muted" headline="Checking…" busy />
+                </ItemContent>
+              </Item>
+            ) : (
+              environment.map((item, index) => (
+                <Fragment key={item.id}>
+                  {index > 0 && <ItemSeparator className="my-0" />}
+                  <Item size="xs" data-testid={`environment-${item.id}`}>
+                    <ItemMedia className="mt-1">
+                      <StatusDot tone={item.ok ? "success" : "destructive"} />
+                    </ItemMedia>
+                    <ItemContent>
+                      <ItemTitle>{ENVIRONMENT_LABELS[item.id] ?? item.id}</ItemTitle>
+                      <ItemDescription className="selectable line-clamp-none break-words">
+                        {item.detail}
+                      </ItemDescription>
+                    </ItemContent>
+                  </Item>
+                </Fragment>
+              ))
+            )}
+          </ItemGroup>
         )}
-      </SettingsGroup>
+      </section>
     </div>
   );
 }
@@ -194,19 +230,21 @@ function ProviderRow(props: {
   const { cli } = PROVIDERS[provider];
   const status = providerStatus(info, props.checking);
   return (
-    <div data-testid={`provider-${provider}`} data-enabled={on} className="flex gap-3 px-4 py-3.5">
-      <ProviderIcon provider={provider} className={cn("mt-0.5 size-5 shrink-0", !on && "opacity-40 grayscale")} />
+    <Item data-testid={`provider-${provider}`} data-enabled={on} className="flex-nowrap items-start gap-3">
+      <ItemMedia>
+        <ProviderIcon provider={provider} className={cn("size-5 shrink-0", !on && "opacity-40 grayscale")} />
+      </ItemMedia>
       {/* A provider that is off is dimmed, its switch aside: that is how it comes back. */}
-      <div className={cn("flex min-w-0 flex-1 flex-col gap-1.5", !on && "opacity-60")}>
-        <div className="flex items-baseline gap-2">
-          <h4 className="text-sm font-medium">{cli}</h4>
+      <ItemContent className={cn("min-w-0 gap-1.5", !on && "opacity-60")}>
+        <ItemTitle>
+          <h4>{cli}</h4>
           {info?.version && (
-            <span data-testid="provider-version" className="selectable font-mono text-2xs text-muted-foreground">
+            <Badge variant="secondary" data-testid="provider-version" className="selectable font-mono text-2xs">
               {info.version}
-            </span>
+            </Badge>
           )}
-          {!on && <span className="text-2xs text-muted-foreground">Turned off</span>}
-        </div>
+          {!on && <Badge variant="outline">Turned off</Badge>}
+        </ItemTitle>
         {info?.path && (
           <span
             data-testid="provider-path"
@@ -216,40 +254,45 @@ function ProviderRow(props: {
             {info.path}
           </span>
         )}
-        <StatusLine tone={status.tone} headline={status.headline} detail={status.detail} />
+        <StatusBadge tone={status.tone} headline={status.headline} busy={status.headline === "Checking…"} />
+        {status.detail && (
+          <ItemDescription className="selectable line-clamp-none text-xs break-words">{status.detail}</ItemDescription>
+        )}
         {status.hint && (
           <p className="text-xs leading-relaxed text-muted-foreground">
             <InstallHint text={status.hint} />
           </p>
         )}
-      </div>
-      <div className="flex w-40 shrink-0 flex-col items-end gap-1.5">
+      </ItemContent>
+      <ItemActions className="w-40 shrink-0 flex-col items-end gap-1.5">
         <Switch
           checked={on}
-          label={cli}
+          aria-label={cli}
           disabled={locked !== null}
           aria-describedby={locked ? `provider-lock-${provider}` : undefined}
-          onChange={props.onToggle}
+          onCheckedChange={props.onToggle}
         />
         {locked && (
           <p id={`provider-lock-${provider}`} className="text-right text-2xs leading-snug text-muted-foreground">
             {locked}
           </p>
         )}
-      </div>
-    </div>
+      </ItemActions>
+    </Item>
   );
 }
 
-/** A status: a dot in the colour of its tone, what it is, and a line of detail under it. */
-function StatusLine({ tone, headline, detail }: { tone: StatusTone; headline: string; detail: string | null }) {
+/** A dot in the colour of a status's tone. */
+function StatusDot({ tone }: { tone: StatusTone }) {
+  return <span aria-hidden="true" data-tone={tone} className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} />;
+}
+
+/** A status at a glance: what it is, after a dot in the colour of its tone, or a spinner while it is looked up. */
+function StatusBadge({ tone, headline, busy }: { tone: StatusTone; headline: string; busy?: boolean }) {
   return (
-    <div className="flex gap-2 text-xs">
-      <span aria-hidden="true" data-tone={tone} className={cn("mt-1 size-2 shrink-0 rounded-full", TONE_DOT[tone])} />
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <span className="font-medium">{headline}</span>
-        {detail && <span className="selectable break-words text-muted-foreground">{detail}</span>}
-      </div>
-    </div>
+    <Badge variant={tone === "destructive" ? "destructive" : "outline"} className="gap-1.5">
+      {busy ? <Spinner aria-hidden="true" data-tone={tone} /> : <StatusDot tone={tone} />}
+      {headline}
+    </Badge>
   );
 }

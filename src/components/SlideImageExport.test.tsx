@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
@@ -64,11 +64,44 @@ describe("SlideImageExport", () => {
     expect(frame().getAttribute("src")).toContain("&static");
   });
 
+  it("shows how many slides are through on a progress bar", async () => {
+    render(<SlideImageExport />);
+    const bar = () => screen.getByRole("progressbar", { name: "Slide images saved" });
+    expect(bar().getAttribute("aria-valuenow")).toBe("0");
+    expect(bar().getAttribute("aria-valuemax")).toBe("3");
+    await loadSlide();
+    expect(bar().getAttribute("aria-valuenow")).toBe("1");
+    await loadSlide();
+    expect(bar().getAttribute("aria-valuenow")).toBe("2");
+  });
+
+  it("covers the whole window, always dark, with the focus on Cancel", async () => {
+    vi.useRealTimers();
+    render(<SlideImageExport />);
+    const dialog = screen.getByRole("dialog", { name: "Saving slide images" });
+    for (const name of ["dark", "inset-0", "rounded-none", "data-open:animate-none"]) {
+      expect(dialog.className.split(" ")).toContain(name);
+    }
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" })));
+  });
+
+  it("stays, the export going on, when the scrim around it is pressed", () => {
+    render(<SlideImageExport />);
+    const scrim = document.querySelector("[data-slot=dialog-overlay]")!;
+    fireEvent.pointerDown(scrim, { pointerType: "mouse", button: 0 });
+    fireEvent.click(scrim);
+    expect(useApp.getState().imageExport).not.toBeNull();
+  });
+
   it("keeps the spinner steady: own layer, and a progress label that does not resize it", () => {
     render(<SlideImageExport />);
     const spinner = document.querySelector(".animate-spin")!;
     expect(spinner.classList.contains("will-change-transform")).toBe(true);
     expect(spinner.classList.contains("shrink-0")).toBe(true);
+    // The line beside it says what goes on: the spinner is not announced as well.
+    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("status")).toBeNull();
     const label = screen.getByText("Saving slide 1 of 3…");
     expect((label as HTMLElement).style.minWidth).toBe("16ch");
   });

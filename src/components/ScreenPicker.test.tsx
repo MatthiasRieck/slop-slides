@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Screen } from "../lib/api";
 import { saveChoice } from "../lib/screens";
+import { tooltipOf } from "../test/ui";
 import { ScreenPicker } from "./ScreenPicker";
 
 const screens: Screen[] = [
@@ -32,6 +33,9 @@ const screens: Screen[] = [
 
 beforeEach(() => localStorage.clear());
 
+/** The checkbox that leaves the presenter view out. */
+const noPresenter = () => screen.getByRole("checkbox", { name: "No presenter view" });
+
 describe("ScreenPicker", () => {
   it("shows every screen and starts with the show on the last one", () => {
     const onStart = vi.fn();
@@ -55,7 +59,7 @@ describe("ScreenPicker", () => {
     expect(roles()).toEqual(["Presenter view", "Not used", "Slides"]);
     fireEvent.click(screen.getByLabelText("Slides on Projector"));
     expect(roles()).toEqual(["Presenter view", "Slides", "Not used"]);
-    fireEvent.click(screen.getByLabelText("No presenter view"));
+    fireEvent.click(noPresenter());
     expect(roles()).toEqual(["Not used", "Slides", "Not used"]);
   });
 
@@ -74,16 +78,19 @@ describe("ScreenPicker", () => {
   it("swaps the slides and the presenter view", () => {
     const onStart = vi.fn();
     render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
-    const swap = screen.getByRole("button", { name: "Swap" }) as HTMLButtonElement;
+    const swap = screen.getByRole("button", { name: "Swap" });
     fireEvent.click(swap);
     expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("presenter");
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 0, presenter: 1 });
     // Without a presenter view there is nothing to swap, and it says so.
-    fireEvent.click(screen.getByLabelText("No presenter view"));
-    expect(swap.disabled).toBe(true);
-    expect(swap.title).toMatch(/Pick a screen for the presenter view first/);
+    fireEvent.click(noPresenter());
+    expect(swap.getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(swap)).toMatch(/Pick a screen for the presenter view first/);
+    fireEvent.click(swap);
+    expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("");
   });
 
   it("starts with what was picked last for these screens", () => {
@@ -93,9 +100,35 @@ describe("ScreenPicker", () => {
     expect(screen.getByTestId("screen-1").dataset.role).toBe("presenter");
   });
 
-  it("has the focus on Start presenting, so Enter starts the show", () => {
+  it("has the focus on Start presenting, so Enter starts the show", async () => {
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
-    expect(document.activeElement).toBe(screen.getByText("Start presenting"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByText("Start presenting")));
+  });
+
+  it("is a dialog called Choose screens, under the heading that says what it asks", () => {
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
+    const dialog = screen.getByRole("dialog", { name: "Choose screens" });
+    expect(dialog.querySelector("h2")!.textContent).toBe("Present on");
+    // It has no close button of its own: Cancel and Escape close it.
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+  });
+
+  it("stays open on a press beside it, and cancels from its button", () => {
+    const onCancel = vi.fn();
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={onCancel} onWindows={() => {}} />);
+    const scrim = document.querySelector("[data-slot=dialog-overlay]")!;
+    fireEvent.pointerDown(scrim, { pointerType: "mouse", button: 0 });
+    fireEvent.click(scrim);
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("says what each button on a screen does, in its tooltip too", () => {
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
+    expect(tooltipOf(screen.getByRole("button", { name: "Swap" }))).toMatch(/Put the slides where the presenter view/);
+    expect(tooltipOf(screen.getByRole("button", { name: "Slides on Built-in" }))).toBe("Slides on Built-in");
+    expect(tooltipOf(screen.getByRole("button", { name: /Present in windows/ }))).toMatch(/share the slides' window/);
   });
 
   it("has each role on one screen", () => {
@@ -113,7 +146,7 @@ describe("ScreenPicker", () => {
     fireEvent.click(screen.getByLabelText("Slides on Built-in"));
     expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("");
-    expect((screen.getByLabelText("No presenter view") as HTMLInputElement).checked).toBe(true);
+    expect(noPresenter().getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByLabelText("Presenter view on Projector"));
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 0, presenter: 1 });
@@ -121,17 +154,17 @@ describe("ScreenPicker", () => {
 
   it("can't put the notes on the slides' screen", () => {
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
-    const button = screen.getByLabelText("Presenter view on Projector") as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    const button = screen.getByLabelText("Presenter view on Projector");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
     expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
-    expect((screen.getByLabelText("Presenter view on Built-in") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByLabelText("Presenter view on Built-in").getAttribute("aria-disabled")).toBeNull();
   });
 
   it("can go without a presenter view", () => {
     const onStart = vi.fn();
     render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
-    fireEvent.click(screen.getByLabelText("No presenter view"));
+    fireEvent.click(noPresenter());
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: null });
   });

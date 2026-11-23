@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck } from "../lib/api";
+import { describeSize, SIZE_PRESETS } from "../lib/slideSize";
 import { type DesignChange, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { tooltipOf } from "../test/ui";
 import { SlideSizeSettings } from "./SlideSize";
 
 const DECK = deckFor(DECK_HTML);
@@ -50,6 +52,20 @@ describe("slide size", () => {
     expect(resizeSlides).toHaveBeenCalledWith({ width: 1080, height: 1920, unit: "px" });
   });
 
+  it("offers the three orientations as one group, a press on the one the slides have changing nothing", () => {
+    render(<SlideSizeSettings />);
+    const group = screen.getByRole("group", { name: "Orientation" });
+    expect([...group.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      "Landscape",
+      "Portrait",
+      "Square",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Landscape" }));
+    expect(pressed("Landscape")).toBe("true");
+    expect(field("Width").value).toBe("1920");
+    expect(apply().disabled).toBe(true);
+  });
+
   it("makes the slides square", () => {
     render(<SlideSizeSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Square" }));
@@ -74,6 +90,9 @@ describe("slide size", () => {
 
   it("offers common sizes", () => {
     render(<SlideSizeSettings />);
+    // What a size is, on its button's tooltip.
+    const a4 = SIZE_PRESETS.find((preset) => preset.label === "A4")!;
+    expect(tooltipOf(screen.getByRole("button", { name: "A4" }))).toBe(describeSize(a4.size));
     fireEvent.click(screen.getByRole("button", { name: "A4" }));
     expect(unit().value).toBe("cm");
     expect(field("Width").value).toBe("21");
@@ -129,8 +148,10 @@ describe("slide size", () => {
     useApp.setState({ running: true });
     render(<SlideSizeSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Portrait" }));
-    expect(apply().disabled).toBe(true);
-    expect(apply().title).toContain("Wait for the agent");
+    // Its tooltip says why, so it stays under the pointer and takes no press.
+    expect(apply().getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(apply())).toContain("Wait for the agent");
+    fireEvent.click(apply());
     // Said beside the button too, not only in its tooltip.
     expect(screen.getByText("Wait for the agent to finish to change the slide size.")).toBeTruthy();
     fireEvent.submit(apply().closest("form")!);

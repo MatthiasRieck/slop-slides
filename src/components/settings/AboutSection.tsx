@@ -1,7 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 
-import { SettingRow, SettingsGroup } from "./parts";
+import { Badge } from "@/components/ui/badge";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item";
 
 /** The settings' About section: which version of the app this is. */
 export function AboutSection() {
@@ -22,14 +23,22 @@ export function AboutSection() {
   }, []);
 
   return (
-    <SettingsGroup>
-      <SettingRow title="Version" hint="A desktop slide editor you drive by chatting.">
+    <ItemGroup className="gap-0 rounded-lg border bg-card">
+      <Item>
+        <ItemContent>
+          <ItemTitle role="heading" aria-level={4}>
+            Version
+          </ItemTitle>
+          <ItemDescription className="text-xs">A desktop slide editor you drive by chatting.</ItemDescription>
+        </ItemContent>
         {version && (
-          <span data-testid="app-version" className="selectable shrink-0 text-sm tabular-nums text-muted-foreground">
-            SlopSlide {version}
-          </span>
+          <ItemActions>
+            <Badge variant="outline" data-testid="app-version" className="selectable tabular-nums">
+              SlopSlide {version}
+            </Badge>
+          </ItemActions>
         )}
-      </SettingRow>
-    </SettingsGroup>
+      </Item>
+    </ItemGroup>
   );
 }

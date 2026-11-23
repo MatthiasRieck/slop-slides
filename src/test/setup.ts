@@ -54,4 +54,14 @@ async function setUpDom() {
     unobserve() {}
     disconnect() {}
   };
+
+  // What the shadcn/ui components (Base UI) ask of a browser that jsdom leaves out: a pointer that
+  // can be captured (sliders, the select) and elements that scroll. `getAnimations` stays
+  // undefined on purpose: without it Base UI takes a popup away at once instead of waiting for
+  // its exit animation, so a closed popup is gone from the page as soon as it is closed.
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.scrollTo ??= () => {};
+  Element.prototype.scrollBy ??= () => {};
 }

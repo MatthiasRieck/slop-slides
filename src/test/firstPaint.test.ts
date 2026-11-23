@@ -82,7 +82,7 @@ describe("the motion of what opens over the app", () => {
   const ENTER = [".enter-below", ".enter-above", ".enter-pop", ".enter-fade", ".toast-enter"];
 
   it("animates opacity and transform only, briefly", () => {
-    for (const name of ["enter", "leave", "shimmer"]) {
+    for (const name of ["layer-enter", "layer-leave", "shimmer"]) {
       const frames = css.slice(css.indexOf(`@keyframes ${name} {`)).match(/\{([\s\S]*?)\n\}/)?.[1] ?? "";
       const animated = [...frames.matchAll(/^\s+([a-z-]+):/gm)].map((match) => match[1]);
       expect(animated.length).toBeGreaterThan(0);
@@ -90,7 +90,7 @@ describe("the motion of what opens over the app", () => {
     }
     const rule = css.match(/\.enter-below,[\s\S]*?\{([\s\S]*?)\}/);
     for (const selector of ENTER) expect(rule?.[0]).toContain(selector);
-    const ms = Number(rule?.[1]?.match(/animation: enter (\d+)ms/)?.[1]);
+    const ms = Number(rule?.[1]?.match(/animation: layer-enter (\d+)ms/)?.[1]);
     expect(ms).toBeGreaterThanOrEqual(120);
     expect(ms).toBeLessThanOrEqual(150);
   });

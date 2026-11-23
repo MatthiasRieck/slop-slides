@@ -50,6 +50,14 @@ export function wrapTab(root: HTMLElement, event: Pick<KeyboardEvent, "key" | "s
   return true;
 }
 
+/**
+ * An `onMouseDown` that keeps the keyboard focus (and the text selection) where it is when a
+ * button is pressed: in the slide, for the toolbars that work on what is selected there.
+ */
+export function keepFocus(event: { preventDefault: () => void }) {
+  event.preventDefault();
+}
+
 /** Whether a key was pressed last, rather than the pointer. */
 let keyboard = false;
 

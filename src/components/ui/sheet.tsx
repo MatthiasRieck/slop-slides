@@ -2,6 +2,7 @@ import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
 import type * as React from "react";
 import { Button } from "@/components/ui/button";
+import { keepKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
 import { cn } from "@/lib/utils";
 
 function Sheet({ ...props }: SheetPrimitive.Root.Props) {
@@ -38,6 +39,7 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  onKeyDown,
   ...props
 }: SheetPrimitive.Popup.Props & {
   side?: "top" | "right" | "bottom" | "left";
@@ -54,7 +56,9 @@ function SheetContent({
           className,
         )}
         {...props}
+        onKeyDown={keepKeys(onKeyDown)}
       >
+        <OverlayLayer />
         {children}
         {showCloseButton && (
           <SheetPrimitive.Close

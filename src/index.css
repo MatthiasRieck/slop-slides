@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./shadcn.css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 
@@ -26,7 +27,8 @@
   --popover-foreground: var(--foreground);
   --secondary: var(--color-neutral-100);
   --secondary-foreground: var(--color-neutral-900);
-  --muted: var(--color-neutral-50);
+  /* What a control turns under the pointer, and the quiet fills (a tab list, a key cap, a skeleton). */
+  --muted: var(--color-neutral-100);
   --muted-foreground: var(--color-neutral-500);
   --accent: var(--color-neutral-100);
   --accent-foreground: var(--color-neutral-900);
@@ -87,7 +89,7 @@
   --popover: color-mix(in srgb, var(--color-neutral-950) 94%, var(--color-white));
   --secondary: --alpha(var(--color-white) / 8%);
   --secondary-foreground: var(--color-neutral-100);
-  --muted: --alpha(var(--color-white) / 3%);
+  --muted: --alpha(var(--color-white) / 5%);
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
   --accent: --alpha(var(--color-white) / 5%);
   --accent-foreground: var(--color-neutral-100);
@@ -193,9 +195,9 @@
     user-select: text;
   }
   /*
-   * What the keyboard has the focus on shows it, the same way everywhere: components add no focus
-   * ring of their own. A field that marks its focus otherwise (a border, a ring around its box)
-   * takes `outline-none`.
+   * What the keyboard has the focus on shows it. The shadcn/ui components (src/components/ui)
+   * draw their own ring in the same color and take `outline-none`; everything else gets this
+   * outline, so nothing shows two. A field that marks its focus otherwise takes `outline-none`.
    */
   :focus-visible {
     outline: 2px solid var(--ring);
@@ -270,14 +272,17 @@
  * (`enter-pop`) on its fading scrim (`enter-fade`), a toast rising (`toast-enter`) and sinking
  * as it goes (`toast-exit`). Only opacity and transform animate, which the compositor does
  * without layout or paint; an element's own `translate` (Tailwind's) is left alone.
+ *
+ * The keyframes are not called `enter` and `leave`: tw-animate-css, which animates the shadcn/ui
+ * components, has an `enter` of its own, and the later of two keyframes of one name wins.
  */
-@keyframes enter {
+@keyframes layer-enter {
   from {
     opacity: 0;
     transform: translateY(var(--enter-y, 0)) scale(var(--enter-scale, 1));
   }
 }
-@keyframes leave {
+@keyframes layer-leave {
   to {
     opacity: 0;
     transform: translateY(var(--enter-y, 0)) scale(var(--enter-scale, 1));
@@ -289,7 +294,7 @@
 .enter-pop,
 .enter-fade,
 .toast-enter {
-  animation: enter 140ms var(--ease-drawer) backwards;
+  animation: layer-enter 140ms var(--ease-drawer) backwards;
 }
 .enter-below {
   --enter-y: -4px;
@@ -310,7 +315,7 @@
   --enter-y: 8px;
 }
 .toast-exit {
-  animation: leave 140ms ease-in forwards;
+  animation: layer-leave 140ms ease-in forwards;
   pointer-events: none;
 }
 
@@ -455,11 +460,3 @@
 .cm-editor .tok-punctuation,
 .cm-editor .tok-meta { color: var(--tok-punct); }
 .cm-editor .tok-invalid { color: var(--destructive); }
-
-/* Scrolls without showing a scrollbar, for strips that bring their own scroll buttons. */
-.no-scrollbar {
-  scrollbar-width: none;
-}
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}

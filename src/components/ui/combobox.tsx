@@ -3,6 +3,7 @@ import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { OverlayLayer } from "@/hooks/useOverlayLayer";
 import { cn } from "@/lib/utils";
 
 const Combobox = ComboboxPrimitive.Root;
@@ -76,6 +77,7 @@ function ComboboxContent({
   align = "start",
   alignOffset = 0,
   anchor,
+  children,
   ...props
 }: ComboboxPrimitive.Popup.Props &
   Pick<ComboboxPrimitive.Positioner.Props, "side" | "align" | "sideOffset" | "alignOffset" | "anchor">) {
@@ -97,7 +99,10 @@ function ComboboxContent({
             className,
           )}
           {...props}
-        />
+        >
+          <OverlayLayer />
+          {children}
+        </ComboboxPrimitive.Popup>
       </ComboboxPrimitive.Positioner>
     </ComboboxPrimitive.Portal>
   );

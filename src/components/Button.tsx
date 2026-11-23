@@ -1,13 +1,11 @@
 import { Loader2 } from "lucide-react";
 import type { ComponentProps } from "react";
 
+import { keepFocus } from "../lib/focus";
 import { formatKeys } from "../lib/keys";
 import { cn } from "../lib/utils";
 
-/** Keeps focus (and the text selection) in the slide when a toolbar button is pressed. */
-export function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
+export { keepFocus } from "../lib/focus";
 
 /**
  * How an icon button looks: `toolbar` in the editing toolbars, `panel` in the headers and bars of

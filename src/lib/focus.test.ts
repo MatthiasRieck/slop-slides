@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { focusableIn, focusTarget, restoreFocus, usingKeyboard, wrapTab } from "./focus";
+import { focusableIn, focusTarget, keepFocus, restoreFocus, usingKeyboard, wrapTab } from "./focus";
 
 function box(html: string): HTMLElement {
   const root = document.createElement("div");
@@ -134,5 +134,13 @@ describe("restoreFocus", () => {
     restoreFocus(root, null);
     restoreFocus(root, document.body);
     expect(document.activeElement?.id).toBe("in");
+  });
+});
+
+describe("keepFocus", () => {
+  it("keeps a press from moving the focus", () => {
+    const event = new MouseEvent("mousedown", { cancelable: true });
+    keepFocus(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 });

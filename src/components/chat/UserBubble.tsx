@@ -125,19 +125,20 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
           </BubbleContent>
         </Bubble>
         <MessageFooter className="px-0">
+          {/* Every message has these: they tell what they do as `CopyButton` does when it is `plain`. */}
           {!message.command && (
             <Button
               variant="tool"
               size="icon-xs"
               aria-label="Edit message"
-              tooltip="Edit: put this text back into the message box"
+              title="Edit: put this text back into the message box"
               onClick={() => useApp.getState().fillComposer(message.text)}
               className={ON_HOVER}
             >
               <Pencil />
             </Button>
           )}
-          <CopyButton text={message.text} label="Copy message" className={ON_HOVER} />
+          <CopyButton plain text={message.text} label="Copy message" className={ON_HOVER} />
         </MessageFooter>
         {(slideNumber > 0 ||
           message.sketch ||

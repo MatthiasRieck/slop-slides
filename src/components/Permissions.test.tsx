@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { hasOpenLayer } from "../lib/layers";
 import { forgetModes } from "../lib/permissions";
 import { type ChatPart, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -199,6 +201,53 @@ describe("permission picker", () => {
     expect(selected.querySelector(".lucide-check")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Approve for me/ }).querySelector(".lucide-check")).toBeNull();
     expect(screen.getAllByRole("menuitemradio", { checked: true })).toHaveLength(1);
+  });
+
+  it("is a menu of the modes, one of them checked, that counts as open while it is", async () => {
+    render(<PermissionPicker />);
+    expect(picker().getAttribute("aria-expanded")).toBe("false");
+    await openPicker();
+    expect(picker().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Permission modes" })).toBeTruthy();
+    expect(screen.getAllByRole("menuitemradio").map((item) => item.getAttribute("aria-checked"))).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+    expect(hasOpenLayer()).toBe(true);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(hasOpenLayer()).toBe(false);
+  });
+
+  it("picks a mode with the keyboard, and gives the keyboard back to its button", async () => {
+    const user = userEvent.setup();
+    render(<PermissionPicker />);
+    await user.click(picker());
+    const wanted = await screen.findByRole("menuitemradio", { name: /Approve for me/ });
+    for (let step = 0; step < 4 && document.activeElement !== wanted; step++) await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(wanted);
+    await user.keyboard("{Enter}");
+    expect(mode()).toBe("autoReview");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(picker()));
+  });
+
+  it("stays open, the old mode still checked, until Full access is confirmed", async () => {
+    let confirm!: (value: boolean) => void;
+    ask.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    render(<PermissionPicker />);
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
+    expect(screen.getByRole("menuitemradio", { name: /Ask for approval/, checked: true })).toBeTruthy();
+    await act(async () => confirm(true));
+    expect(mode()).toBe("fullAccess");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("makes Full access stand out from the modes that ask: a warning color, and its name always on show", () => {

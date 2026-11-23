@@ -73,6 +73,7 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
         {!streaming && message.parts.some((p) => p.kind === "text" && p.text.trim()) && (
           <MessageFooter className="px-0">
             <CopyButton
+              plain
               label="Copy message"
               className={ON_HOVER}
               text={message.parts

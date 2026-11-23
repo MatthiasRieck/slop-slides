@@ -359,6 +359,19 @@ describe("the conversation's own parts", () => {
     expect(renders).toEqual({ now: 1 });
   });
 
+  it("have no tooltip of their own per message: a long conversation would pay for each with every word", () => {
+    shown(transcript(15));
+    const messages = [...document.querySelectorAll<HTMLElement>("[data-slot=message-scroller-item]")];
+    expect(messages).toHaveLength(30);
+    for (const message of messages) {
+      expect(message.querySelector("[data-slot=tooltip-trigger]")).toBeNull();
+      // What its buttons do is said by the browser's own tooltip instead.
+      for (const button of message.querySelectorAll("button[aria-label]")) {
+        expect(button.getAttribute("title") ?? button.getAttribute("aria-label")).toBeTruthy();
+      }
+    }
+  });
+
   it("do not render when the reader scrolls: where they are is the scroller's to know, not React's", () => {
     const commits = shown(transcript(15));
     const viewport = screen.getByRole("region", { name: "Conversation" });

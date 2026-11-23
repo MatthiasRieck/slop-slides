@@ -3055,28 +3055,40 @@ describe("ChatPanel: what its controls say and are", () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     showMessages(user("u", "Make it blue"));
+    // One of hundreds in a long conversation: it tells what it does as the browser does, at no cost until then.
     const copy = screen.getByRole("button", { name: "Copy message" });
-    expect(tooltipOf(copy)).toBe("Copy message");
-    // A press puts the tooltip away until the pointer has left the button and come back.
-    const press = async () => {
-      await act(async () => fireEvent.click(copy));
-      fireEvent.mouseLeave(copy);
-      fireEvent.blur(copy);
-    };
-    await press();
+    expect(copy.title).toBe("Copy message");
+    expect(tooltipOf(copy)).toBeNull();
+    await act(async () => fireEvent.click(copy));
     expect(writeText).toHaveBeenCalledWith("Make it blue");
     expect(copy.getAttribute("aria-label")).toBe("Copied");
     expect(copy.querySelector(".lucide-check")).not.toBeNull();
-    expect(tooltipOf(copy)).toBe("Copied");
+    expect(copy.title).toBe("Copied");
 
     writeText.mockRejectedValueOnce(new Error("denied"));
-    await press();
-    expect(tooltipOf(copy)).toBe("Could not copy. Try again.");
+    await act(async () => fireEvent.click(copy));
+    expect(copy.title).toBe("Could not copy. Try again.");
+  });
+
+  it("copies a command of an install hint with a button that has a tooltip of its own", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "claude" ? { ...p, installed: false } : p)) });
+    render(<ChatPanel />);
+    const copy = within(screen.getByRole("alert")).getByRole("button", { name: /^Copy / });
+    expect(copy.title).toBe("");
+    expect(tooltipOf(copy)).toBe(copy.getAttribute("aria-label"));
+    // A press puts the tooltip away until the pointer has left the button and come back.
+    await act(async () => fireEvent.click(copy));
+    fireEvent.mouseLeave(copy);
+    fireEvent.blur(copy);
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(tooltipOf(copy)).toBe("Copied");
   });
 
   it("says what editing a sent message does", () => {
     showMessages(user("u", "Make it blue"));
-    expect(tooltipOf(screen.getByRole("button", { name: "Edit message" }))).toBe(
+    expect(screen.getByRole("button", { name: "Edit message" }).title).toBe(
       "Edit: put this text back into the message box",
     );
   });

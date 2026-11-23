@@ -7,8 +7,7 @@
 export const MESSAGE_ITEM = "-m-1 p-1";
 
 /** Shows on hovering its message (a `Message`), or with the keyboard focus on it. */
-export const ON_HOVER =
-  "opacity-0 transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100";
+export const ON_HOVER = "opacity-0 transition-opacity group-hover/message:opacity-100 focus-visible:opacity-100";
 
 /**
  * An `Attachment` as small as a chip: one line, 24px tall, as wide as its name and no wider than

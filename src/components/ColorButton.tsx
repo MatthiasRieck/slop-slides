@@ -105,12 +105,12 @@ export function ColorButton(props: {
         render={
           <Button
             variant="tool"
-            size="icon-xs"
+            size="xs"
             aria-label={props.label}
             tooltip={tooltip}
             disabled={props.disabled}
             onMouseDownCapture={keepFocus}
-            className="w-auto flex-col gap-0.5 px-1"
+            className="flex-col gap-0.5 px-1"
           />
         }
       >

@@ -127,7 +127,7 @@ function SearchField() {
           <Kbd>{formatKeys("mod+f")}</Kbd>
         </TooltipContent>
       </Tooltip>
-      <InputGroupAddon align="inline-end" className="gap-0.5 py-0 pr-0.5 font-normal">
+      <InputGroupAddon align="inline-end" className="gap-0.5 py-0 pr-0.5 font-normal has-[>button]:mr-0">
         {failed !== null ? (
           <span role="alert" title={failed} className="shrink-0 text-2xs text-destructive">
             Search failed

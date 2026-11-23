@@ -334,7 +334,9 @@ function AreaTool(props: {
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="tool" size="icon-2xs" tooltip="Area shape" className="h-6 w-4" />}
+          render={
+            <Button variant="tool" size="2xs" aria-label="Area shape" tooltip="Area shape" className="h-6 w-4 px-0" />
+          }
         >
           <ChevronDown className="size-3" />
         </DropdownMenuTrigger>

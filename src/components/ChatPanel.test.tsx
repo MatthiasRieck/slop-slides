@@ -809,6 +809,8 @@ describe("ChatPanel: composing", () => {
 
   it("closes the model menu on Escape, and gives the keyboard back to the picker", async () => {
     render(<ChatPanel />);
+    // Opened with the keys, the picker has the focus.
+    screen.getByRole("button", { name: /Claude Opus 5\.5/ }).focus();
     openModels();
     await settle();
     fireEvent.keyDown(modelSearch(), { key: "Escape" });
@@ -816,6 +818,25 @@ describe("ChatPanel: composing", () => {
     await settle();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
     expect(useApp.getState().selection.model).toBe("claude-opus-5-5");
+  });
+
+  it("gives the keyboard back to the message when the picker was pressed while typing it", async () => {
+    render(<ChatPanel />);
+    // WebKit leaves the focus in the message when a button is pressed, as a click here does.
+    textarea().focus();
+    openModels();
+    await settle();
+    expect(document.activeElement).toBe(modelSearch());
+    fireEvent.keyDown(modelSearch(), { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(textarea());
+
+    openModels();
+    await settle();
+    fireEvent.click(model(/Claude Sonnet 5/));
+    await settle();
+    expect(modelMenu()).toBeNull();
+    expect(document.activeElement).toBe(textarea());
   });
 
   it("limits provider tabs, search, and favorites to the current chat's provider", () => {
@@ -2897,6 +2918,8 @@ describe("ChatPanel: the chat's header", () => {
   it("closes the list on Escape, and gives the keyboard back to its button", async () => {
     threads(thread("a", "Alpha"));
     render(<ChatPanel />);
+    // Opened with the keys, the button has the focus.
+    screen.getByRole("button", { name: "Past chats" }).focus();
     await openList();
     await settle();
     fireEvent.keyDown(search(), { key: "Escape" });
@@ -2904,6 +2927,18 @@ describe("ChatPanel: the chat's header", () => {
     expect(selectChatThread).not.toHaveBeenCalled();
     await settle();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Past chats" }));
+  });
+
+  it("gives the keyboard back to the message when its button was pressed while typing it", async () => {
+    threads(thread("a", "Alpha"));
+    render(<ChatPanel />);
+    const message = textarea();
+    message.focus();
+    await openList();
+    await settle();
+    fireEvent.keyDown(search(), { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(message);
   });
 
   it("opens a deck's chat with its deck", async () => {

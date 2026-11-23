@@ -14,7 +14,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -345,25 +345,16 @@ function TimerSettings(props: {
   onChange: (change: Partial<Budget>) => void;
 }) {
   const [open, setOpen] = useState(false);
-  // What had the focus as the settings opened: the slide, when the button was pressed with the
-  // pointer (it leaves the focus there), and that is where the focus goes back to, so Space
-  // still advances the slide. Opened with the keys, that is the button itself.
-  const before = useRef<HTMLElement | null>(null);
   const { budget, sources } = props;
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        if (next) before.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        setOpen(next);
-      }}
-    >
+    // Closed, the focus goes back to where it was as the settings opened (the popover's own
+    // doing): the slide, when the button was pressed with the pointer, so Space still advances it.
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger render={<ShowButton size="icon-sm" tooltip="Timer settings" />}>
         <Settings2 />
       </PopoverTrigger>
       <PopoverContent
         align="end"
-        finalFocus={before}
         // Typing here must not move the slides.
         onKeyDown={keepKeys()}
         className="w-64 gap-3 p-3 text-xs"

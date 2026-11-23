@@ -3,6 +3,7 @@
 import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import type * as React from "react";
 import { OverlayLayer } from "@/hooks/useOverlayLayer";
+import { useReturnFocus } from "@/hooks/useReturnFocus";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -21,11 +22,13 @@ function PopoverContent({
   side = "bottom",
   sideOffset = 4,
   anchor,
+  finalFocus,
   children,
   ...props
 }: PopoverPrimitive.Popup.Props &
   Pick<PopoverPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "anchor">) {
   const scope = useScopeClass();
+  const focus = useReturnFocus(finalFocus);
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Positioner
@@ -43,9 +46,11 @@ function PopoverContent({
             scope,
             className,
           )}
+          finalFocus={focus.finalFocus}
           {...props}
         >
           <OverlayLayer />
+          {focus.mark}
           {children}
         </PopoverPrimitive.Popup>
       </PopoverPrimitive.Positioner>

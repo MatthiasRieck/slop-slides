@@ -2,6 +2,7 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import type * as React from "react";
 import { OverlayLayer } from "@/hooks/useOverlayLayer";
+import { useReturnFocus } from "@/hooks/useReturnFocus";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -49,10 +50,12 @@ function SelectContent({
   align = "center",
   alignOffset = 0,
   alignItemWithTrigger = true,
+  finalFocus,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<SelectPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger">) {
   const scope = useScopeClass();
+  const focus = useReturnFocus(finalFocus);
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Positioner
@@ -71,9 +74,11 @@ function SelectContent({
             scope,
             className,
           )}
+          finalFocus={focus.finalFocus}
           {...props}
         >
           <OverlayLayer />
+          {focus.mark}
           <SelectScrollUpButton />
           <SelectPrimitive.List>{children}</SelectPrimitive.List>
           <SelectScrollDownButton />

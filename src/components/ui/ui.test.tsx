@@ -207,6 +207,36 @@ describe("Tooltip", () => {
     expect(page).toHaveBeenCalledOnce();
     window.removeEventListener("keydown", page);
   });
+
+  it("hands Escape on unhandled, wherever it is pressed, and tells of closing once", () => {
+    // The app's shortcuts skip a key that something has already handled (`defaultPrevented`).
+    const handled: boolean[] = [];
+    const page = (event: KeyboardEvent) => handled.push(event.defaultPrevented);
+    window.addEventListener("keydown", page);
+    const onOpenChange = vi.fn();
+    render(
+      <Tooltip onOpenChange={onOpenChange}>
+        <TooltipTrigger render={<button type="button">Zoom</button>} />
+        <TooltipContent>Zoom in</TooltipContent>
+      </Tooltip>,
+    );
+    const button = screen.getByRole("button");
+    fireEvent.focus(button);
+    expect(screen.getByText("Zoom in")).toBeTruthy();
+    fireEvent.keyDown(button, { key: "Escape" });
+    expect(screen.queryByText("Zoom in")).toBeNull();
+    expect(handled).toEqual([false]);
+    expect(onOpenChange.mock.calls.map(([open]) => open)).toEqual([true, false]);
+
+    // A tooltip is up for the pointer too, whatever has the focus: the key is pressed elsewhere.
+    fireEvent.blur(button);
+    fireEvent.focus(button);
+    expect(screen.getByText("Zoom in")).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByText("Zoom in")).toBeNull();
+    expect(handled).toEqual([false, false]);
+    window.removeEventListener("keydown", page);
+  });
 });
 
 /** A dialog its button opens, with a field in it. */
@@ -446,6 +476,24 @@ describe("AlertDialog", () => {
   });
 });
 
+/** A popover opened from a field that a button in it takes away. */
+function Gone() {
+  const [there, setThere] = useState(true);
+  return (
+    <>
+      {there && <textarea aria-label="Message" />}
+      <Popover>
+        <PopoverTrigger render={<Button>Model</Button>} />
+        <PopoverContent>
+          <button type="button" onClick={() => setThere(false)}>
+            Clear
+          </button>
+        </PopoverContent>
+      </Popover>
+    </>
+  );
+}
+
 describe("Popover", () => {
   it("is a named dialog that closes on Escape and on a press outside, and counts as open", async () => {
     render(
@@ -500,6 +548,50 @@ describe("Popover", () => {
     expect(document.activeElement).toBe(field);
   });
 
+  it("gives the focus back to where it was when a press opened it without taking the focus", async () => {
+    // WebKit leaves the focus where it is when a button is pressed, as `fireEvent.click` does.
+    render(
+      <>
+        <textarea aria-label="Message" />
+        <Popover>
+          <PopoverTrigger render={<Button>Model</Button>} />
+          <PopoverContent>
+            <button type="button">Fast</button>
+          </PopoverContent>
+        </Popover>
+      </>,
+    );
+    const message = screen.getByLabelText("Message");
+    const opener = screen.getByRole("button", { name: "Model" });
+    message.focus();
+    fireEvent.click(opener);
+    await settle();
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await settle();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(message);
+
+    // Opened from the trigger itself (with the keys, or a press that focuses it), it goes there.
+    opener.focus();
+    fireEvent.click(opener);
+    await settle();
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("gives the focus to its trigger when what had it is gone", async () => {
+    render(<Gone />);
+    screen.getByLabelText("Message").focus();
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Model" }));
+  });
+
   it("closes on a press in a slide preview, in a window with the app's providers", async () => {
     render(
       <AppProviders>
@@ -551,6 +643,43 @@ describe("DropdownMenu", () => {
     expect(hasOpenLayer()).toBe(false);
   });
 
+  it("gives the focus back to where it was, on a choice and on Escape, or to a trigger that had it", async () => {
+    render(
+      <>
+        <textarea aria-label="Message" />
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button>File</Button>} />
+          <DropdownMenuContent>
+            <DropdownMenuItem>Save</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </>,
+    );
+    const message = screen.getByLabelText("Message");
+    const opener = screen.getByRole("button", { name: "File" });
+    message.focus();
+    fireEvent.click(opener);
+    await settle();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save" }));
+    await settle();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(message);
+
+    fireEvent.click(opener);
+    await settle();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await settle();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(message);
+
+    opener.focus();
+    fireEvent.click(opener);
+    await settle();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save" }));
+    await settle();
+    expect(document.activeElement).toBe(opener);
+  });
+
   it("opens at a point, with no trigger, for a menu something else asks for", async () => {
     const onOpenChange = vi.fn();
     render(
@@ -586,6 +715,30 @@ describe("ContextMenu", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(run).toHaveBeenCalledOnce();
   });
+
+  it("keeps its keys from the app's shortcuts, after its own handler, and still closes on Escape", () => {
+    const page = vi.fn();
+    window.addEventListener("keydown", page);
+    const own = vi.fn();
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger render={<li>Slide 1</li>} />
+        <ContextMenuContent onKeyDown={(event) => own(event.key)}>
+          <ContextMenuItem>Duplicate</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByText("Slide 1"));
+    const menu = screen.getByRole("menu");
+    fireEvent.keyDown(menu, { key: "d", metaKey: true });
+    fireEvent.keyDown(menu, { key: "ArrowUp", metaKey: true });
+    expect(own.mock.calls.map(([key]) => key)).toEqual(["d", "ArrowUp"]);
+    expect(page).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    window.removeEventListener("keydown", page);
+  });
 });
 
 describe("Select", () => {
@@ -616,6 +769,31 @@ describe("Select", () => {
     pickOption(screen.getByRole("option", { name: "Beta" }));
     expect(onValueChange.mock.calls[0]?.[0]).toBe("b");
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("gives the focus back to where it was when a press opened it without taking the focus", async () => {
+    render(
+      <>
+        <textarea aria-label="Message" />
+        <Select items={{ a: "Alpha", b: "Beta" }} defaultValue="a">
+          <SelectTrigger aria-label="Voice">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="a">Alpha</SelectItem>
+            <SelectItem value="b">Beta</SelectItem>
+          </SelectContent>
+        </Select>
+      </>,
+    );
+    const message = screen.getByLabelText("Message");
+    message.focus();
+    fireEvent.click(screen.getByRole("combobox", { name: "Voice" }));
+    await settle();
+    pickOption(screen.getByRole("option", { name: "Beta" }));
+    await settle();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(document.activeElement).toBe(message);
   });
 });
 
@@ -752,6 +930,16 @@ describe("the form controls", () => {
     expect(onValueChange.mock.calls[0]?.[0]).toBe(60);
   });
 
+  it("shows the keyboard's focus on its thumb, which the range input in it has", () => {
+    const { container } = render(<Slider aria-label="Volume" value={40} />);
+    const thumb = container.querySelector("[data-slot=slider-thumb]") as HTMLElement;
+    // The thumb itself never has the focus, and the input that does is clipped away, outline and all.
+    expect(thumb.tabIndex).toBe(-1);
+    expect(thumb.querySelector("input[type=range]")).toBeTruthy();
+    expect(classes(thumb)).toContain("has-[:focus-visible]:ring-3");
+    expect(classes(thumb).filter((name) => name.startsWith("focus-visible:"))).toEqual([]);
+  });
+
   it("draws one thumb for a single value, and two for a range or for no value at all", () => {
     const thumbs = (slider: React.ReactElement) => {
       const { container, unmount } = render(slider);
@@ -847,6 +1035,20 @@ describe("Tabs", () => {
     expect(onValueChange).not.toHaveBeenCalled();
     fireEvent.click(edit);
     expect(onValueChange.mock.calls[0]?.[0]).toBe("edit");
+  });
+
+  it("shows the keyboard's focus as a ring alone, with no outline beside it", () => {
+    render(
+      <Tabs value="view">
+        <TabsList>
+          <TabsTrigger value="view">View</TabsTrigger>
+        </TabsList>
+      </Tabs>,
+    );
+    const tab = classes(screen.getByRole("tab"));
+    expect(tab).toContain("focus-visible:ring-[3px]");
+    expect(tab).toContain("outline-none");
+    expect(tab.filter((name) => name.startsWith("focus-visible:outline-"))).toEqual([]);
   });
 });
 

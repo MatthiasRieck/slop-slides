@@ -2,6 +2,7 @@ import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
 import { OverlayLayer } from "@/hooks/useOverlayLayer";
+import { useReturnFocus } from "@/hooks/useReturnFocus";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -24,11 +25,13 @@ function DropdownMenuContent({
   sideOffset = 4,
   anchor,
   className,
+  finalFocus,
   children,
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<MenuPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset" | "anchor">) {
   const scope = useScopeClass();
+  const focus = useReturnFocus(finalFocus);
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
@@ -46,9 +49,11 @@ function DropdownMenuContent({
             scope,
             className,
           )}
+          finalFocus={focus.finalFocus}
           {...props}
         >
           <OverlayLayer />
+          {focus.mark}
           {children}
         </MenuPrimitive.Popup>
       </MenuPrimitive.Positioner>

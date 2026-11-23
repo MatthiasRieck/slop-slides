@@ -3,7 +3,7 @@
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import type * as React from "react";
-import { OverlayLayer } from "@/hooks/useOverlayLayer";
+import { keepKeys, OverlayLayer } from "@/hooks/useOverlayLayer";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +31,7 @@ function ContextMenuContent({
   alignOffset = 4,
   side = "right",
   sideOffset = 0,
+  onKeyDown,
   children,
   ...props
 }: ContextMenuPrimitive.Popup.Props &
@@ -52,6 +53,9 @@ function ContextMenuContent({
             scope,
             className,
           )}
+          // A key pressed in the menu is the menu's: ⌘D, ⌘C and the like do not reach the
+          // shortcuts of what it was opened on. Escape goes on, to close it.
+          onKeyDown={keepKeys(onKeyDown)}
           {...props}
         >
           <OverlayLayer />

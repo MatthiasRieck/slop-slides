@@ -1,4 +1,5 @@
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
+import { useImperativeHandle, useRef } from "react";
 import { useScopeClass } from "@/lib/darkScope";
 import { cn } from "@/lib/utils";
 
@@ -6,14 +7,28 @@ function TooltipProvider({ delay = 0, ...props }: TooltipPrimitive.Provider.Prop
   return <TooltipPrimitive.Provider data-slot="tooltip-provider" delay={delay} {...props} />;
 }
 
-function Tooltip({ onOpenChange, ...props }: TooltipPrimitive.Root.Props) {
+function Tooltip({ onOpenChange, actionsRef, ...props }: TooltipPrimitive.Root.Props) {
+  const actions = useRef<TooltipPrimitive.Root.Actions | null>(null);
+  const escaped = useRef<Event | null>(null);
+  useImperativeHandle(actionsRef, () => actions.current as TooltipPrimitive.Root.Actions, []);
   return (
     <TooltipPrimitive.Root
       data-slot="tooltip"
+      actionsRef={actions}
       onOpenChange={(open, details) => {
         // Escape puts the tooltip away and goes on: it is still the app's key (it deselects,
-        // ends a show…), which a tooltip that happens to be up must not swallow.
-        if (details.reason === "escape-key") details.allowPropagation();
+        // ends a show…), which a tooltip that happens to be up must not swallow. Base UI marks
+        // the key as handled (`preventDefault`) when it closes something on it, and the app's
+        // shortcuts skip a handled key; so the close on the key is called off, the key let
+        // through untouched, and the tooltip closed by hand, which comes back here. (The key
+        // let through is heard a second time, at the document, before the tooltip is gone.)
+        if (details.reason === "escape-key") {
+          details.cancel();
+          details.allowPropagation();
+          if (escaped.current !== details.event) actions.current?.close();
+          escaped.current = details.event;
+          return;
+        }
         onOpenChange?.(open, details);
       }}
       {...props}

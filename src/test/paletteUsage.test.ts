@@ -119,6 +119,26 @@ describe("palette", () => {
     for (const token of tokensIn(blockOf(css, ".dark"))) expect(light).toContain(token);
   });
 
+  it("names again, in the dark block, every token named after one the dark block changes", () => {
+    // `--popover-foreground: var(--foreground)` is worked out on the element that declares it, so
+    // a dark subtree in the light theme (the presenter's popups) would inherit the light color.
+    const values = new Map(
+      [...blockOf(css, ":root").matchAll(/^\s*(--[a-z-]+):\s*([^;]+);/gm)].map((m) => [m[1]!, m[2]!]),
+    );
+    const dark = new Set(tokensIn(blockOf(css, ".dark")));
+    const follows = (token: string, seen = new Set<string>()): boolean =>
+      [...(values.get(token) ?? "").matchAll(/var\((--[a-z-]+)/g)].some(([, named]) => {
+        if (dark.has(named!)) return true;
+        if (seen.has(named!)) return false;
+        return follows(named!, seen.add(named!));
+      });
+    // The check sees what it is for.
+    expect(follows("--popover-foreground")).toBe(true);
+    expect(follows("--tok-comment")).toBe(true);
+    expect(follows("--paper")).toBe(false);
+    expect([...values.keys()].filter((token) => follows(token) && !dark.has(token))).toEqual([]);
+  });
+
   it("pairs every fill with its foreground, in both themes", () => {
     const light = tokensIn(blockOf(css, ":root"));
     const dark = tokensIn(blockOf(css, ".dark"));

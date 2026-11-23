@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, onTestFinished as afterThis, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, FindMatch, Section } from "../lib/api";
 import { flushReviewSave, useApp } from "../store";
 import { lastError } from "../store/errors";
@@ -7,6 +7,7 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { settle, tooltipOf } from "../test/ui";
 import { SlideRail } from "./SlideRail";
+import { useSlideKeyboard } from "./stage/useSlideKeyboard";
 
 const DECK = deckFor(DECK_HTML);
 const withSlides = (...ids: string[]): Deck => ({
@@ -1173,6 +1174,12 @@ describe("a slide's row, for the keyboard and a screen reader", () => {
   });
 });
 
+/** The rail with the slides' shortcuts listening, as in the app. */
+function RailWithKeys() {
+  useSlideKeyboard();
+  return <SlideRail />;
+}
+
 describe("the menu of a right-click", () => {
   beforeEach(() => {
     useApp.setState({ railSelected: [] });
@@ -1215,6 +1222,36 @@ describe("the menu of a right-click", () => {
     fireEvent.contextMenu(thumb(3));
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps the keys pressed in it from the slides' shortcuts", () => {
+    const actions = {
+      duplicateSlides: vi.fn(),
+      copySlides: vi.fn(),
+      cutSlides: vi.fn(),
+      pasteSlides: vi.fn(),
+      moveSlides: vi.fn(),
+    };
+    const before = useApp.getState();
+    afterThis(() => useApp.setState(before, true));
+    for (const editing of [true, false]) {
+      useApp.setState({ ...actions, editing } as never);
+      const { unmount } = render(<RailWithKeys />);
+      // The press makes the rail the keys' place, as a right-click in the app does.
+      fireEvent.pointerDown(thumb(3));
+      // The shortcuts are heard: pressed on the slide's row, ⌘C copies it.
+      fireEvent.keyDown(thumb(3), { key: "c", metaKey: true });
+      expect(actions.copySlides).toHaveBeenCalledOnce();
+      actions.copySlides.mockClear();
+      fireEvent.contextMenu(thumb(3), { clientX: 30, clientY: 40 });
+      for (const key of ["d", "c", "x", "v", "ArrowUp", "ArrowDown"]) {
+        fireEvent.keyDown(screen.getByRole("menu"), { key, metaKey: true });
+        fireEvent.keyDown(choice(/^Duplicate/), { key, ctrlKey: true });
+      }
+      for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled();
+      expect(screen.getByRole("menu")).toBeTruthy();
+      unmount();
+    }
   });
 
   it("opens no menu for a right-click between the rows", () => {

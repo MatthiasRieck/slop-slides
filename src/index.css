@@ -78,12 +78,19 @@
   --thumbnail-shade: --alpha(var(--color-black) / 14%);
 }
 
+/*
+ * A token named after another (`--popover-foreground: var(--foreground)`) is worked out where it
+ * is declared, and handed down as that color. So the dark block names every such token again,
+ * for a dark subtree in the light theme (a popup of the presenter's) to get the dark one.
+ */
 .dark {
   color-scheme: dark;
   --background: var(--color-neutral-950);
   --foreground: var(--color-neutral-100);
   --card: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
+  --card-foreground: var(--foreground);
   --popover: color-mix(in srgb, var(--color-neutral-950) 94%, var(--color-white));
+  --popover-foreground: var(--foreground);
   --secondary: --alpha(var(--color-white) / 8%);
   --secondary-foreground: var(--color-neutral-100);
   --muted: --alpha(var(--color-white) / 5%);
@@ -106,8 +113,14 @@
   --info: var(--color-sky-400);
   --info-foreground: var(--color-neutral-950);
 
+  --tok-tag: var(--success);
+  --tok-attr: var(--info);
   --tok-string: var(--color-blue-300);
+  --tok-comment: var(--muted-foreground);
+  --tok-keyword: var(--destructive);
+  --tok-class: var(--warning);
   --tok-variable: var(--color-violet-300);
+  --tok-punct: var(--muted-foreground);
 
   /* A shadow barely shows on a near-black surface, so the edge turns light and does the lifting. */
   --thumbnail-edge: --alpha(var(--color-white) / 14%);
@@ -235,6 +248,20 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * shadcn's `shimmer` (the title of a running tool call, the name of a file being read) paints
+ * the text as a gradient behind a transparent fill, and derives the gradient's highlight from
+ * `currentColor` in relative color syntax. WebKit takes that only from Safari 18; before, the
+ * gradient is invalid, nothing is painted, and the text would be invisible. There the text is
+ * plain and stands still, through the utility's own two switches (neither is inherited).
+ */
+@supports not (color: oklch(from currentColor l c h)) {
+  * {
+    --shimmer-image: none;
+    --shimmer-text-fill: currentColor;
   }
 }
 

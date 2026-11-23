@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, listen, open as openDialog, revealItemInDir, save } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 
 const unlisten = vi.fn();
 
@@ -99,7 +101,11 @@ describe("deck actions", () => {
         "From current slideCtrl+Enter",
         "Present in windowsSlides in this window to share in a call; your notes in another",
       ]);
-      expect(presentButton().title).toBe("Present from the current slide (Ctrl+Enter)");
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(tooltipOf(presentButton())).toBe("Present from the current slideCtrl+Enter");
+      expect(tooltipOf(screen.getByRole("button", { name: "More ways to present" }))).toBe("More ways to present");
+      // The two are one control: a group, named for what it does.
+      expect(screen.getByRole("group", { name: "Present" }).contains(presentButton())).toBe(true);
     });
 
     it("presents from the beginning", async () => {
@@ -482,19 +488,40 @@ describe("deck actions", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("works the export menu from the keyboard", () => {
+  it("works the export menu from the keyboard", async () => {
+    const user = userEvent.setup();
     render(<DeckActions />);
     exportButton().focus();
-    fireEvent.keyDown(exportButton(), { key: " " });
-    fireEvent.click(exportButton());
+    await user.keyboard(" ");
+    await screen.findByRole("menu");
+    await settle();
     const items = screen.getAllByRole("menuitem");
     expect(document.activeElement).toBe(items[0]);
-    fireEvent.keyDown(items[0]!, { key: "ArrowUp" });
+    await user.keyboard("{End}");
     expect(document.activeElement).toBe(items.at(-1));
-    fireEvent.keyDown(items.at(-1)!, { key: "Home" });
+    await user.keyboard("{Home}");
     expect(document.activeElement).toBe(items[0]);
-    fireEvent.keyDown(items[0]!, { key: "Escape" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await settle();
     expect(document.activeElement).toBe(exportButton());
+  });
+
+  it("picks a way to present from the keyboard, and gives the focus back to the menu's button", async () => {
+    invoke.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<DeckActions />);
+    const more = screen.getByRole("button", { name: "More ways to present" });
+    expect(more.getAttribute("aria-haspopup")).toBe("menu");
+    more.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    await settle();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(more);
   });
 
   it("exports PNGs into a new folder named after the deck", async () => {
@@ -568,12 +595,18 @@ describe("deck actions", () => {
   it("cannot export or present an empty deck", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
     render(<DeckActions />);
-    expect(exportButton().disabled).toBe(true);
-    expect(presentButton().disabled).toBe(true);
-    // Both say what they wait for.
-    expect(exportButton().title).toBe("Add a slide first");
-    expect(presentButton().title).toBe("Add a slide first");
-    expect(screen.getByRole("button", { name: "More ways to present" }).title).toBe("Add a slide first");
+    const more = screen.getByRole("button", { name: "More ways to present" });
+    // Off, they still take the pointer and the focus, as they say what they wait for.
+    for (const button of [exportButton(), presentButton(), more]) {
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect(tooltipOf(button)).toBe("Add a slide first");
+    }
+    // Pressed all the same, they do nothing.
+    fireEvent.click(presentButton());
+    expect(invoke).not.toHaveBeenCalled();
+    fireEvent.click(exportButton());
+    fireEvent.click(more);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
@@ -624,7 +657,19 @@ describe("video export", () => {
     openPanel();
     const dialog = screen.getByRole("dialog", { name: "Export video" });
     expect(container.contains(dialog)).toBe(false);
-    expect(dialog.parentElement).toBe(document.body);
+    expect(document.body.contains(dialog)).toBe(true);
+  });
+
+  it("closes on Escape, with nothing exported", async () => {
+    render(<DeckActions />);
+    openPanel();
+    // The menu it was picked from gives the focus back to its button as it closes: the panel stays, the focus in it.
+    await settle();
+    const panel = screen.getByRole("dialog", { name: "Export video" });
+    expect(panel.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Export video" })).toBeNull();
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("remembers the last choice", async () => {
@@ -815,7 +860,8 @@ describe("video export", () => {
     expect(panel.textContent).toContain("Rendering video 45%");
     const bar = screen.getByRole("progressbar");
     expect(bar.getAttribute("aria-valuenow")).toBe("45");
-    expect((bar.firstElementChild as HTMLElement).style.width).toBe("45%");
+    expect(bar.getAttribute("aria-valuetext")).toBe("Rendering video 45%");
+    expect(bar.querySelector<HTMLElement>("[data-slot=progress-indicator]")!.style.width).toBe("45%");
     // It follows the export while open.
     act(() => progressListener()({ payload: { phase: "video", frame: 90, frames: 100 } as never }));
     expect(panel.textContent).toContain("Rendering video 90%");

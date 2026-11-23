@@ -2,12 +2,15 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { File, FileUp, FolderSearch, MonitorPlay } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import type { OpenedFile } from "../lib/api";
 import { isImage } from "../lib/drop";
 import { isPowerPoint } from "../lib/opening";
 import { basename, fileUrl, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
-import { Button } from "./Button";
 import { ImportPptxButton, NewDeckForm, usePptxImport } from "./Home";
 
 /**
@@ -36,7 +39,7 @@ function StartDeck() {
           disabled={pptx.importing !== null}
         />
         <div>
-          <ImportPptxButton job={pptx} size="lg" />
+          <ImportPptxButton job={pptx} size="xs" />
         </div>
       </div>
     </div>
@@ -48,10 +51,12 @@ function PageView({ file }: { file: OpenedFile }) {
   return (
     <div className="flex h-full flex-col">
       {file.kind === "slideshow" && (
-        <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-          <MonitorPlay className="size-3.5" />A slideshow made with another tool, shown as it is. Only SlopSlide decks
-          open in the slide editor.
-        </div>
+        <Alert role="note" className="shrink-0 rounded-none border-x-0 border-t-0 bg-muted/40 px-3 py-1.5">
+          <MonitorPlay />
+          <AlertDescription className="text-xs">
+            A slideshow made with another tool, shown as it is. Only SlopSlide decks open in the slide editor.
+          </AlertDescription>
+        </Alert>
       )}
       <iframe
         key={file.absolute}
@@ -80,8 +85,8 @@ function ImageView({ file }: { file: OpenedFile }) {
       </div>
       <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-3 py-1.5 text-xs">
         <span className="min-w-0 truncate text-muted-foreground">{file.path}</span>
-        <Button size="md" onClick={() => void revealItemInDir(file.absolute)} className="shrink-0">
-          <FolderSearch />
+        <Button variant="outline" size="xs" onClick={() => void revealItemInDir(file.absolute)}>
+          <FolderSearch data-icon="inline-start" />
           {revealLabel}
         </Button>
       </div>
@@ -108,30 +113,39 @@ function NoViewer({ file }: { file: OpenedFile }) {
   };
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <File className="size-6 text-muted-foreground" />
-      <p className="text-sm font-medium">{basename(file.path)}</p>
-      <p className="text-xs text-muted-foreground">
-        {powerPoint
-          ? "Import it to make an editable deck. This file stays as it is."
-          : "There is no preview for this kind of file yet."}
-      </p>
-      {powerPoint && (
-        <Button variant="primary" size="lg" busy={importing} onClick={() => void importDeck()} className="mt-1">
-          {importing ? (
-            `Importing ${basename(file.path)}…`
-          ) : (
-            <>
-              <FileUp className="size-3.5" />
-              Import as deck
-            </>
-          )}
+    <Empty className="h-full p-8">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <File />
+        </EmptyMedia>
+        <EmptyTitle>{basename(file.path)}</EmptyTitle>
+        <EmptyDescription className="text-xs">
+          {powerPoint
+            ? "Import it to make an editable deck. This file stays as it is."
+            : "There is no preview for this kind of file yet."}
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        {powerPoint && (
+          <Button size="xs" disabled={importing} aria-busy={importing || undefined} onClick={() => void importDeck()}>
+            {importing ? (
+              <>
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+                {`Importing ${basename(file.path)}…`}
+              </>
+            ) : (
+              <>
+                <FileUp data-icon="inline-start" />
+                Import as deck
+              </>
+            )}
+          </Button>
+        )}
+        <Button variant="outline" size="xs" onClick={() => void revealItemInDir(file.absolute)}>
+          <FolderSearch data-icon="inline-start" />
+          {revealLabel}
         </Button>
-      )}
-      <Button size="lg" onClick={() => void revealItemInDir(file.absolute)} className="mt-1">
-        <FolderSearch className="size-3.5" />
-        {revealLabel}
-      </Button>
-    </div>
+      </EmptyContent>
+    </Empty>
   );
 }

@@ -1,13 +1,13 @@
-import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, Sparkles, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleAlert, RefreshCw, Sparkles, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Spinner } from "@/components/ui/spinner";
 import type { LintIssue } from "../lib/api";
 import { basename, cn, plural } from "../lib/utils";
 import { lintFixPrompt, useApp } from "../store";
-import { Button } from "./Button";
-import { Popover } from "./Popover";
-
-const BASE = "flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium tabular-nums";
 
 /**
  * Lint result for the deck file, in the stage's footer: a spinner while it is checked, a checkmark
@@ -20,88 +20,95 @@ export function LintStatus() {
   const error = useApp((s) => s.lintError);
   const file = useApp((s) => basename(s.deck?.id ?? "") || "deck.html");
   const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
+  const ask = useRef<HTMLButtonElement>(null);
   const recheck = () => void useApp.getState().refreshLint();
 
   if (lint === null && error !== null) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         aria-label="Lint: the check failed. Check again"
-        title={`${file} could not be checked: ${error}\nClick to check again.`}
+        tooltip={
+          <span className="whitespace-pre-line">{`${file} could not be checked: ${error}\nClick to check again.`}</span>
+        }
         onClick={recheck}
-        className={cn(BASE, "text-warning hover:bg-accent")}
+        className="px-1.5 text-warning tabular-nums hover:text-warning"
       >
         <CircleAlert className="size-4" />
         Check failed
-      </button>
+      </Button>
     );
   }
 
   if (lint === null) {
     return (
-      <span
-        role="status"
-        title={`Checking ${file}…`}
-        aria-label="Lint: checking"
-        className={cn(BASE, "text-muted-foreground")}
-      >
-        <Loader2 className="size-4 animate-spin" />
+      <span title={`Checking ${file}…`} className="flex items-center px-1.5 py-1 text-muted-foreground">
+        <Spinner aria-label="Lint: checking" />
       </span>
     );
   }
 
   if (lint.length === 0) {
     return (
-      <button
-        type="button"
-        title={`${file} passes lint. Click to check again.`}
+      <Button
+        variant="ghost"
+        size="icon-xs"
         aria-label="Lint OK"
+        tooltip={`${file} passes lint. Click to check again.`}
         onClick={recheck}
-        className={cn(BASE, "text-success hover:bg-accent")}
+        className="text-success hover:text-success"
       >
         <CheckCircle2 className="size-4" />
-      </button>
+      </Button>
     );
   }
 
   const errors = lint.filter((i) => i.severity === "error").length;
   const summary = lintSummary(lint);
+  // Its color says how bad it is, open or not.
+  const tone =
+    errors > 0
+      ? "text-destructive hover:text-destructive aria-expanded:text-destructive"
+      : "text-warning hover:text-warning aria-expanded:text-warning";
   return (
-    <>
-      <button
-        ref={anchor}
-        type="button"
-        aria-label={`Lint: ${summary}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        title={`${summary} in ${file}. Click to see ${lint.length === 1 ? "it" : "them"}.`}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(BASE, "hover:bg-accent", errors > 0 ? "text-destructive" : "text-warning", open && "bg-accent")}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-label={`Lint: ${summary}`}
+            tooltip={`${summary} in ${file}. Click to see ${lint.length === 1 ? "it" : "them"}.`}
+            className={cn("px-1.5 tabular-nums", tone)}
+          />
+        }
       >
         {errors > 0 ? <XCircle className="size-4" /> : <AlertTriangle className="size-4" />}
         {plural(lint.length, "problem")}
-      </button>
-      {open && (
-        <Popover
-          anchor={anchor}
-          placement="above"
-          align="end"
-          width={440}
-          label="Problems in the deck file"
-          onClose={() => setOpen(false)}
-        >
-          <LintIssues issues={lint} file={file} onDone={() => setOpen(false)} onRecheck={recheck} />
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        aria-label="Problems in the deck file"
+        initialFocus={ask}
+        className="max-h-[min(28rem,var(--available-height))] w-[440px] max-w-(--available-width) gap-0 p-0"
+      >
+        <LintIssues issues={lint} file={file} askRef={ask} onDone={() => setOpen(false)} onRecheck={recheck} />
+      </PopoverContent>
+    </Popover>
   );
+}
+
+/** How many of `issues` are errors, and how many warnings. */
+function lintCounts(issues: LintIssue[]) {
+  const errors = issues.filter((i) => i.severity === "error").length;
+  return { errors, warnings: issues.length - errors };
 }
 
 /** "1 error, 2 warnings". */
 function lintSummary(issues: LintIssue[]): string {
-  const errors = issues.filter((i) => i.severity === "error").length;
-  const warnings = issues.length - errors;
+  const { errors, warnings } = lintCounts(issues);
   return [errors > 0 && plural(errors, "error"), warnings > 0 && plural(warnings, "warning")]
     .filter(Boolean)
     .join(", ");
@@ -109,12 +116,21 @@ function lintSummary(issues: LintIssue[]): string {
 
 /**
  * Every problem the lint found, errors first, each with its line: one on a slide goes to that
- * slide when pressed. Below them, the way to have the agent fix them and to check again.
+ * slide when pressed. Above them, how many there are of each kind; below them, the way to have
+ * the agent fix them and to check again.
  */
-function LintIssues(props: { issues: LintIssue[]; file: string; onDone: () => void; onRecheck: () => void }) {
+function LintIssues(props: {
+  issues: LintIssue[];
+  file: string;
+  /** The button the focus starts on. */
+  askRef: React.Ref<HTMLButtonElement>;
+  onDone: () => void;
+  onRecheck: () => void;
+}) {
   const { issues, file } = props;
   const running = useApp((s) => s.running);
   const slides = useApp((s) => s.deck?.slides);
+  const { errors, warnings } = lintCounts(issues);
   const sorted = [...issues].sort(
     (a, b) => Number(b.severity === "error") - Number(a.severity === "error") || a.line - b.line,
   );
@@ -124,9 +140,23 @@ function LintIssues(props: { issues: LintIssue[]; file: string; onDone: () => vo
   };
   return (
     <>
-      <p className="shrink-0 border-b px-3 py-2 text-xs font-medium">
-        {lintSummary(issues)} in {file}
-      </p>
+      <div className="flex shrink-0 items-center gap-1.5 border-b px-3 py-2">
+        <p className="mr-auto min-w-0 truncate text-xs font-medium">
+          {lintSummary(issues)} in {file}
+        </p>
+        {errors > 0 && (
+          <Badge variant="destructive" aria-hidden="true">
+            <XCircle />
+            {errors}
+          </Badge>
+        )}
+        {warnings > 0 && (
+          <Badge variant="outline" aria-hidden="true" className="text-warning">
+            <AlertTriangle />
+            {warnings}
+          </Badge>
+        )}
+      </div>
       <ul aria-label="Problems" className="min-h-0 flex-1 overflow-y-auto p-1 text-xs">
         {sorted.map((issue, i) => {
           const onSlide = issue.slide !== null && slides?.some((s) => s.id === issue.slide);
@@ -148,14 +178,15 @@ function LintIssues(props: { issues: LintIssue[]; file: string; onDone: () => vo
             // biome-ignore lint/suspicious/noArrayIndexKey: the list is rebuilt whole with every check
             <li key={i}>
               {onSlide ? (
-                <button
-                  type="button"
-                  title="Go to this slide"
+                <Button
+                  variant="ghost"
+                  tooltip="Go to this slide"
+                  tooltipSide="left"
                   onClick={() => useApp.getState().select(issue.slide)}
-                  className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                  className="h-auto w-full items-start justify-start gap-2 px-2 py-1.5 text-left text-xs font-normal whitespace-normal"
                 >
                   {row}
-                </button>
+                </Button>
               ) : (
                 <div className="flex items-start gap-2 px-2 py-1.5">{row}</div>
               )}
@@ -164,22 +195,22 @@ function LintIssues(props: { issues: LintIssue[]; file: string; onDone: () => vo
         })}
       </ul>
       <div className="flex shrink-0 items-center justify-end gap-2 border-t p-2">
-        <Button variant="ghost" onClick={props.onRecheck}>
-          <RefreshCw />
+        <Button variant="ghost" size="xs" onClick={props.onRecheck}>
+          <RefreshCw data-icon="inline-start" />
           Check again
         </Button>
         <Button
-          variant="primary"
-          data-autofocus
+          ref={props.askRef}
+          size="xs"
           disabled={running}
-          title={
+          tooltip={
             running
               ? "The agent is at work; ask once it is done"
               : "Puts a message asking for the fixes in the chat, for you to send"
           }
           onClick={ask}
         >
-          <Sparkles />
+          <Sparkles data-icon="inline-start" />
           Ask the agent to fix
         </Button>
       </div>

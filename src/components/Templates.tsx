@@ -1,7 +1,14 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Check, FolderSearch, Loader2, MessageSquare, Plus, Save } from "lucide-react";
+import { Check, FolderSearch, MessageSquare, Plus, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import type { TemplateSummary } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { loadText, trySaveText } from "../lib/storage";
@@ -80,35 +87,40 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
         {templates === undefined ? (
           <Loading />
         ) : !template ? (
-          <p className="text-xs text-muted-foreground">No templates found.</p>
+          <Empty className="p-2">
+            <EmptyHeader>
+              <EmptyDescription className="text-xs">No templates found.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           <ul className="grid grid-cols-3 gap-3">
             {props.onBlank && (
               <li>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   aria-label="Blank slide"
+                  // Its own tooltip for now: the slide rail's tests find the tile by it.
                   title="Add blank slide"
                   onClick={() => {
                     props.onBlank?.();
                     props.onDone();
                   }}
-                  className="group flex w-full flex-col gap-1 text-left"
+                  className={tile}
                 >
                   <div className="flex aspect-video w-full items-center justify-center rounded-md border border-dashed text-muted-foreground transition group-hover:border-primary group-hover:text-foreground">
                     <Plus className="size-5" />
                   </div>
                   <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">Blank</span>
-                </button>
+                </Button>
               </li>
             )}
             {template.slides.map((slide) => (
               <li key={`${template.id}/${slide}`}>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   aria-label={`${layoutLabel(slide)} layout`}
                   onClick={() => choose(slide)}
-                  className="group flex w-full flex-col gap-1 text-left"
+                  className={tile}
                 >
                   <div className="w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-hover:ring-2 group-hover:ring-primary">
                     <TemplateSlide template={template.id} slide={slide} size={pixelsOf(template)} />
@@ -116,7 +128,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                   <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">
                     {layoutLabel(slide)}
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -126,6 +138,13 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
     </div>
   );
 }
+
+/**
+ * A thumbnail to pick, with its name under it: a button that is all thumbnail, whose own look is
+ * only its focus ring; the thumbnail's frame is what answers the pointer.
+ */
+const tile =
+  "group h-auto w-full flex-col items-stretch gap-1 rounded-md p-0 text-left font-normal whitespace-normal hover:bg-transparent active:translate-y-0 aria-disabled:opacity-40 dark:hover:bg-transparent";
 
 /** Restyles the deck like a template, or saves the deck as a template. */
 export function StylePicker() {
@@ -156,6 +175,9 @@ export function RequestStatus({ children }: { children: string }) {
 }
 
 const STYLE_BUSY = "Wait for the agent to finish to restyle the deck";
+
+/** A badge small enough for the line under a thumbnail. */
+const tag = "h-4 rounded px-1 text-2xs";
 
 function StylePanel(props: {
   templates: TemplateSummary[] | undefined;
@@ -192,20 +214,23 @@ function StylePanel(props: {
           <ul className="grid grid-cols-3 gap-3">
             {templates.map((t) => (
               <li key={t.id}>
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   disabled={disabled}
-                  title={disabled ? STYLE_BUSY : undefined}
+                  // Disabled, it says what it waits for.
+                  {...(disabled && { tooltip: STYLE_BUSY })}
                   aria-label={`${t.title} style`}
                   aria-current={t.id === current || undefined}
                   data-requested={t.id === requested || undefined}
                   onClick={() => void pick(t.id)}
-                  className="group flex w-full flex-col gap-1 text-left disabled:cursor-default disabled:opacity-40"
+                  className={tile}
                 >
                   <div
                     className={cn(
-                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-enabled:group-hover:ring-2 group-enabled:group-hover:ring-input",
-                      t.id === current && "ring-2 ring-primary group-enabled:group-hover:ring-primary",
+                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition",
+                      !disabled && "group-hover:ring-2 group-hover:ring-input",
+                      t.id === current && "ring-2 ring-primary",
+                      t.id === current && !disabled && "group-hover:ring-primary",
                       t.id === requested && "ring-2 ring-primary/60 ring-offset-2 ring-offset-card",
                     )}
                   >
@@ -213,13 +238,15 @@ function StylePanel(props: {
                   </div>
                   <span className="flex items-center gap-1 text-2xs">
                     <span className="truncate">{t.title}</span>
-                    {!t.builtin && <span className="rounded bg-muted px-1 text-muted-foreground">Yours</span>}
-                    {t.id === current && <Check className="size-3 text-primary" />}
-                    {t.id === requested && (
-                      <span className="rounded bg-primary/10 px-1 font-medium text-primary">Requested</span>
+                    {!t.builtin && (
+                      <Badge variant="secondary" className={tag}>
+                        Yours
+                      </Badge>
                     )}
+                    {t.id === current && <Check className="size-3 text-primary" />}
+                    {t.id === requested && <Badge className={cn(tag, "bg-primary/10 text-primary")}>Requested</Badge>}
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -253,36 +280,38 @@ function SaveAsTemplate() {
     <div className="border-t px-3 py-2">
       {name === null ? (
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() => {
               setSaved(null);
               setName(title);
             }}
-            className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium hover:bg-accent"
+            className="px-1.5"
           >
-            <Save className="size-3.5" />
+            <Save data-icon="inline-start" />
             Save deck as template…
-          </button>
+          </Button>
           {saved && (
             <span className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground">
               <span className="truncate">Saved “{saved.title}”.</span>
               {saved.path && (
-                <button
-                  type="button"
-                  title="Show the template's folder"
+                <Button
+                  variant="ghost"
+                  size="icon-2xs"
+                  tooltip="Show the template's folder"
                   onClick={() => void revealItemInDir(`${saved.path}/deck.html`)}
-                  className="rounded p-0.5 hover:bg-accent hover:text-foreground"
                 >
                   <FolderSearch className="size-3.5" />
-                </button>
+                </Button>
               )}
             </span>
           )}
         </div>
       ) : (
         <form onSubmit={save} className="flex items-center gap-2">
-          <input
+          <Input
+            size="sm"
             autoFocus
             aria-label="Template name"
             value={name}
@@ -294,16 +323,12 @@ function SaveAsTemplate() {
                 setName(null);
               }
             }}
-            className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+            className="min-w-0 flex-1"
           />
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-          >
-            {saving && <Loader2 className="size-3 animate-spin" />}
+          <Button type="submit" size="sm" disabled={saving} aria-busy={saving || undefined}>
+            {saving && <Spinner aria-hidden="true" data-icon="inline-start" className="size-3" />}
             Save
-          </button>
+          </Button>
         </form>
       )}
       <p className="mt-1 text-2xs text-muted-foreground">
@@ -313,32 +338,62 @@ function SaveAsTemplate() {
   );
 }
 
-/** Style choice for a new deck. */
-export function TemplateSelect(props: { value: string | null; onChange: (template: string | null) => void }) {
+/** What the style choice calls leaving the style to the agent. */
+const ANY_STYLE = "";
+
+/**
+ * Style choice for a new deck: one of the templates, or any (null), which leaves it to the agent.
+ * A list that opens from its button: the arrows go through the styles, Enter picks one.
+ */
+export function TemplateSelect(props: {
+  value: string | null;
+  onChange: (template: string | null) => void;
+  id?: string;
+  disabled?: boolean;
+}) {
   const templates = useTemplates();
+  const items = [
+    { value: ANY_STYLE, label: "Any style" },
+    ...(templates ?? []).map((t) => ({ value: t.id, label: `${t.title}${t.builtin ? "" : " (yours)"}` })),
+  ];
   return (
-    <select
-      aria-label="Style"
-      value={props.value ?? ""}
-      onChange={(e) => props.onChange(e.target.value || null)}
-      className="h-10 rounded-lg border bg-card px-2 text-sm outline-none focus:border-input focus:ring-2 focus:ring-primary/20"
+    <Select
+      items={items}
+      value={props.value ?? ANY_STYLE}
+      onValueChange={(value) => props.onChange((value as string) || null)}
+      {...(props.disabled !== undefined && { disabled: props.disabled })}
     >
-      <option value="">Any style</option>
-      {(templates ?? []).map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.title}
-          {t.builtin ? "" : " (yours)"}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        {...(props.id !== undefined && { id: props.id })}
+        aria-label="Style"
+        className="min-w-36 bg-card data-[size=default]:h-10"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {items.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   );
 }
 
+/** The thumbnails' places, while the templates are read. */
 function Loading() {
   return (
-    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Loader2 className="size-3.5 animate-spin" />
-      Loading templates…
-    </p>
+    <div role="status" className="grid grid-cols-3 gap-3">
+      <span className="sr-only">Loading templates…</span>
+      {[0, 1, 2].map((i) => (
+        <div key={i} aria-hidden="true" className="flex flex-col gap-1">
+          <Skeleton className="aspect-video w-full" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      ))}
+    </div>
   );
 }

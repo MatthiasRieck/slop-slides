@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { placeElements } from "../test/intersection";
 import { invoke, revealItemInDir as reveal } from "../test/tauri";
+import { tooltipOf } from "../test/ui";
 import { SlideRail } from "./SlideRail";
 import { LayoutPicker, StylePicker } from "./Templates";
 
@@ -59,6 +60,9 @@ describe("LayoutPicker", () => {
     useApp.setState({ templates: undefined });
     render(<LayoutPicker mode="add" onDone={() => {}} />);
     expect(screen.getByText(/Loading templates/)).toBeTruthy();
+    // Said to a screen reader; for the eye, the thumbnails' places are held.
+    expect(screen.getByRole("status").textContent).toBe("Loading templates…");
+    expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0);
     await waitFor(() => expect(layoutNames()).toEqual(["Cover layout", "Pricing tiers layout"]));
     expect(invoke).toHaveBeenCalledWith("list_templates");
   });
@@ -308,13 +312,25 @@ describe("style picker", () => {
   it("disables restyling while the agent is working, and says what it waits for", () => {
     useApp.setState({ running: true });
     render(<StylePicker />);
-    const swiss = screen.getByRole("button", { name: "Swiss Design style" }) as HTMLButtonElement;
-    expect(swiss.disabled).toBe(true);
-    expect(swiss.title).toBe("Wait for the agent to finish to restyle the deck");
+    const swiss = () => screen.getByRole("button", { name: "Swiss Design style" });
+    // Off, a style still takes the pointer and the focus, to say what it waits for.
+    expect(swiss().getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(swiss())).toBe("Wait for the agent to finish to restyle the deck");
     expect(screen.getByText("Wait for the agent to finish to restyle the deck.")).toBeTruthy();
+    fireEvent.click(swiss());
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useApp.getState().composerFill ?? null).toBeNull();
     act(() => useApp.setState({ running: false }));
-    expect(swiss.disabled).toBe(false);
-    expect(swiss.title).toBe("");
+    expect(swiss().getAttribute("aria-disabled")).not.toBe("true");
+    expect(swiss().hasAttribute("disabled")).toBe(false);
+    expect(tooltipOf(swiss())).toBeNull();
+  });
+
+  it("tags the user's own styles, and the one asked of the agent", async () => {
+    render(<StylePicker />);
+    const mine = screen.getByRole("button", { name: `${MINE.title} style` });
+    expect(mine.querySelector("[data-slot=badge]")?.textContent).toBe("Yours");
+    expect(screen.getByRole("button", { name: "Swiss Design style" }).querySelector("[data-slot=badge]")).toBeNull();
   });
 
   it("saves the deck as a template under the name given", async () => {
@@ -338,7 +354,7 @@ describe("style picker", () => {
     expect(invoke).toHaveBeenCalledWith("create_template", { id: DECK.id, name: "Board" });
     expect(screen.getByText("Saved “Board”.")).toBeTruthy();
     expect(useApp.getState().templates?.[0]).toEqual(created);
-    fireEvent.click(screen.getByTitle("Show the template's folder"));
+    fireEvent.click(screen.getByRole("button", { name: "Show the template's folder" }));
     expect(reveal).toHaveBeenCalledWith("/home/.slopslides/templates/board/deck.html");
   });
 

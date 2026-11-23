@@ -1,17 +1,26 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { FileUp, Folder, FolderOpen, Library, Plus, Presentation, X } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
+import { Button, type ButtonProps } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { useShellKeys } from "../hooks/useShellKeys";
 import { api, type RecentDeck, type RecentWorkspace } from "../lib/api";
 import { type Openable, openableOf } from "../lib/opening";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { basename, cn, dirname, isMac, relativeTime } from "../lib/utils";
 import { showError, useApp } from "../store";
-import { Button, type ButtonSize, ToolButton, withShortcut } from "./Button";
 import { chooseDeck, chooseWorkspace, pickPptx } from "./openDialogs";
-import { SectionLabel } from "./SectionLabel";
 import { TemplateSelect } from "./Templates";
+
+/** The small muted label over a field of the new deck's form. */
+const fieldLabel = "text-xs text-muted-foreground";
+
+/** The small uppercase label over a section of the start screen. */
+const sectionLabel = "text-2xs font-medium uppercase tracking-wide text-muted-foreground";
 
 /** Opens the SlopSlide library as the workspace; false when it did not open. */
 async function openLibrary(): Promise<boolean> {
@@ -57,19 +66,30 @@ export function usePptxImport(beforeImport?: () => Promise<boolean>) {
 /** "Import PowerPoint…", saying which file while its import runs (see {@link usePptxImport}). */
 export function ImportPptxButton(props: {
   job: ReturnType<typeof usePptxImport>;
-  size?: ButtonSize;
+  size?: ButtonProps["size"];
   className?: string;
 }) {
   const { importing, choose } = props.job;
+  const busy = importing !== null;
   return (
-    <Button size={props.size} busy={importing !== null} onClick={() => void choose()} className={props.className}>
-      {importing === null ? (
+    <Button
+      variant="outline"
+      size={props.size ?? "xs"}
+      disabled={busy}
+      aria-busy={busy || undefined}
+      onClick={() => void choose()}
+      className={props.className}
+    >
+      {busy ? (
         <>
-          <FileUp />
-          Import PowerPoint…
+          <Spinner aria-hidden="true" data-icon="inline-start" />
+          {`Importing ${importing}…`}
         </>
       ) : (
-        `Importing ${importing}…`
+        <>
+          <FileUp data-icon="inline-start" />
+          Import PowerPoint…
+        </>
       )}
     </Button>
   );
@@ -193,26 +213,27 @@ export function Home() {
           />
 
           <section className="flex flex-col gap-2">
-            <SectionLabel as="h2">Open</SectionLabel>
+            <h2 className={sectionLabel}>Open</h2>
             <div className="flex flex-wrap gap-2">
               <Button
-                size="2xl"
-                title={withShortcut("Open a folder of decks", SHELL_SHORTCUTS.openFolder)}
+                variant="outline"
+                size="lg"
+                tooltip="Open a folder of decks"
+                shortcut={SHELL_SHORTCUTS.openFolder}
                 onClick={() => void chooseWorkspace()}
-                className="bg-card"
               >
-                <FolderOpen />
+                <FolderOpen data-icon="inline-start" />
                 Open folder…
               </Button>
-              <Button size="2xl" onClick={() => void chooseDeck()} className="bg-card">
-                <Presentation />
+              <Button variant="outline" size="lg" onClick={() => void chooseDeck()}>
+                <Presentation data-icon="inline-start" />
                 Open deck…
               </Button>
-              <Button size="2xl" onClick={() => void openLibrary()} className="bg-card">
-                <Library />
+              <Button variant="outline" size="lg" onClick={() => void openLibrary()}>
+                <Library data-icon="inline-start" />
                 SlopSlide library
               </Button>
-              <ImportPptxButton job={pptx} size="2xl" className="bg-card" />
+              <ImportPptxButton job={pptx} size="lg" />
             </div>
             {nothingRecent && (
               <p data-testid="first-run" className="text-xs text-muted-foreground">
@@ -224,12 +245,12 @@ export function Home() {
 
           {decks && decks.length > 0 && (
             <section className="flex flex-col gap-2">
-              <SectionLabel as="h2">Recent decks</SectionLabel>
-              <ul aria-label="Recent decks" className="flex flex-col divide-y rounded-lg border bg-card">
+              <h2 className={sectionLabel}>Recent decks</h2>
+              <ul aria-label="Recent decks" className={recentList}>
                 {decks.map((deck) => (
                   <RecentRow
                     key={deck.path}
-                    icon={<Presentation className="size-4 shrink-0 text-primary" />}
+                    icon={<Presentation className="text-primary" />}
                     name={deck.title || "Untitled"}
                     detail={dirname(deck.path)}
                     openedMs={deck.openedMs}
@@ -244,12 +265,12 @@ export function Home() {
 
           {folders && folders.length > 0 && (
             <section className="flex flex-col gap-2">
-              <SectionLabel as="h2">Recent folders</SectionLabel>
-              <ul aria-label="Recent folders" className="flex flex-col divide-y rounded-lg border bg-card">
+              <h2 className={sectionLabel}>Recent folders</h2>
+              <ul aria-label="Recent folders" className={recentList}>
                 {folders.map((workspace) => (
                   <RecentRow
                     key={workspace.path}
-                    icon={<Folder className="size-4 shrink-0 text-muted-foreground" />}
+                    icon={<Folder className="text-muted-foreground" />}
                     name={workspace.name}
                     detail={workspace.path}
                     openedMs={workspace.openedMs}
@@ -291,30 +312,36 @@ function RecentRow(props: {
 }) {
   return (
     <li className="group flex items-center">
-      <button
-        type="button"
-        onClick={props.onOpen}
-        className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left hover:bg-accent"
+      <Item
+        size="sm"
+        render={<button type="button" onClick={props.onOpen} />}
+        className="min-w-0 flex-1 flex-nowrap rounded-none border-0 px-3 py-2 text-left hover:bg-muted"
       >
-        {props.icon}
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate text-sm font-medium">{props.name}</span>
-          <span className="truncate text-xs text-muted-foreground">{props.detail}</span>
-        </span>
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(props.openedMs)}</span>
-      </button>
-      <ToolButton
-        variant="panel"
-        label={props.removeLabel}
-        title="Remove from this list"
+        <ItemMedia variant="icon" className="translate-y-0! self-center!">
+          {props.icon}
+        </ItemMedia>
+        <ItemContent className="min-w-0 gap-0">
+          <ItemTitle className="block w-full truncate">{props.name}</ItemTitle>
+          <ItemDescription className="line-clamp-none truncate text-xs">{props.detail}</ItemDescription>
+        </ItemContent>
+        <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(props.openedMs)}</span>
+      </Item>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        aria-label={props.removeLabel}
+        tooltip="Remove from this list"
         onClick={props.onRemove}
         className="mr-1.5 opacity-40 focus-visible:opacity-100 group-hover:opacity-100"
       >
-        <X className="size-3.5" />
-      </ToolButton>
+        <X />
+      </Button>
     </li>
   );
 }
+
+/** The box around a list of recent decks or folders, a line between its rows. */
+const recentList = "flex flex-col divide-y overflow-hidden rounded-lg border bg-card";
 
 /**
  * Title and style for a new deck, created in the open workspace. `beforeCreate` gets a
@@ -335,6 +362,8 @@ export function NewDeckForm(props: {
   const [creating, setCreating] = useState(false);
   /** Set at once, where the state only shows on the next render. */
   const busy = useRef(false);
+  const titleId = useId();
+  const styleId = useId();
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -354,29 +383,34 @@ export function NewDeckForm(props: {
     <form onSubmit={create} aria-busy={creating || undefined} className="flex flex-col gap-3">
       <h1 className="text-2xl font-semibold tracking-tight">{props.heading}</h1>
       <fieldset disabled={creating || props.disabled} className="flex min-w-0 items-end gap-2">
-        <label className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">Title</span>
-          <input
+        <Field className="min-w-0 flex-1 gap-1">
+          <FieldLabel htmlFor={titleId} className={fieldLabel}>
+            Title
+          </FieldLabel>
+          <Input
+            id={titleId}
             autoFocus={props.autoFocus}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Deck title, e.g. Series A pitch"
-            className="h-10 rounded-lg border bg-card px-3 text-sm outline-none focus:border-input focus:ring-2 focus:ring-primary/20"
+            className="h-10 bg-card px-3"
           />
-        </label>
-        <div className="flex flex-col gap-1">
-          {/* The select names itself; this is the same name for the eye. */}
-          <span aria-hidden className="text-xs font-medium text-muted-foreground">
+        </Field>
+        <Field className="w-auto gap-1">
+          <FieldLabel htmlFor={styleId} className={fieldLabel}>
             Style
-          </span>
-          <TemplateSelect value={template} onChange={setTemplate} />
-        </div>
-        <Button type="submit" variant="primary" size="3xl" busy={creating}>
+          </FieldLabel>
+          <TemplateSelect id={styleId} value={template} onChange={setTemplate} disabled={creating || props.disabled} />
+        </Field>
+        <Button type="submit" size="xl" disabled={creating} aria-busy={creating || undefined}>
           {creating ? (
-            "Creating…"
+            <>
+              <Spinner aria-hidden="true" data-icon="inline-start" />
+              Creating…
+            </>
           ) : (
             <>
-              <Plus />
+              <Plus data-icon="inline-start" />
               Create deck
             </>
           )}

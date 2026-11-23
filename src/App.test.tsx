@@ -15,11 +15,11 @@ vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="st
 import { invoke } from "@tauri-apps/api/core";
 import { App, SIDEBAR_MAX_SIZE } from "./App";
 import { preloadLazyParts } from "./components/lazy";
-import { TOAST_EXIT_MS } from "./components/Toasts";
 import { openSettings, showError, useApp } from "./store";
 import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 import { appWindow, ask, requestClose } from "./test/tauri";
+import { settle } from "./test/ui";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 
@@ -169,6 +169,24 @@ describe("App", () => {
     expect(useApp.getState().railOpen).toBe(false);
   });
 
+  it("lays the workbench out in resizable panels, with a handle between each two", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    const { unmount } = render(<App />);
+    // The window's (the deck beside the sidebar), and the deck's own (the rail beside the stage).
+    expect(document.querySelectorAll("[data-slot=resizable-panel-group]")).toHaveLength(2);
+    const panels = () => Array.from(document.querySelectorAll("[data-slot=resizable-panel]")).map((panel) => panel.id);
+    expect(panels()).toEqual(["main", "rail", "stage", "sidebar"]);
+    const handles = () => screen.getAllByRole("separator");
+    expect(handles()).toHaveLength(2);
+    for (const handle of handles()) expect(handle.getAttribute("data-slot")).toBe("resizable-handle");
+    unmount();
+    // Without a deck there is no rail to drag.
+    useApp.setState({ deck: null });
+    render(<App />);
+    expect(panels()).toEqual(["main", "stage", "sidebar"]);
+    expect(handles()).toHaveLength(1);
+  });
+
   it("overlays the presenter", () => {
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), presenting: true });
     render(<App />);
@@ -240,27 +258,38 @@ describe("App", () => {
     act(() => useApp.setState({ codeDirty: true }));
     // The question is the app's own dialog: save, don't save, or stay.
     const closing = requestClose();
-    const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
-    expect(dialog.textContent).toContain("Save the changes to deck.html?");
+    const dialog = await screen.findByRole("alertdialog", { name: "Save the changes to deck.html?" });
+    expect(dialog.textContent).toContain("Without saving, they are lost.");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await closing).toBe(false);
-    expect(screen.queryByRole("dialog", { name: "Unsaved changes" })).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(ask).not.toHaveBeenCalled();
     act(() => useApp.setState({ codeDirty: false }));
   });
 
-  it("shows errors in a dismissible toast", () => {
+  it("shows errors in a dismissible toast", async () => {
     render(<App />);
-    expect(screen.queryByText("deck not found: x")).toBeNull();
+    const shownText = () => screen.queryByText("deck not found: x", { selector: "[data-slot=toast-title]" });
+    expect(shownText()).toBeNull();
     act(() => showError("deck not found: x"));
-    expect(screen.getByRole("alert").textContent).toContain("deck not found: x");
-    vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    // The toaster shows it a moment later, among the notifications, as something that interrupts.
+    await settle();
+    const toast = shownText()!.closest("[data-slot=toast]")!;
+    expect(toast.getAttribute("role")).toBe("alertdialog");
+    expect(screen.getByRole("region", { name: "Notifications" }).contains(toast)).toBe(true);
+    // (An error is read out as it shows; its toast is in a screen reader's reach once the focus is in the toasts.)
+    const dismiss = toast.querySelector<HTMLElement>("[data-slot=toast-close]")!;
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss");
+    fireEvent.click(dismiss);
     expect(lastError(useApp.getState())).toBeNull();
-    // It takes a moment to leave.
-    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
-    vi.useRealTimers();
-    expect(screen.queryByText("deck not found: x")).toBeNull();
+    await settle();
+    expect(shownText()).toBeNull();
+  });
+
+  it("mounts one toaster, whatever is open", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    expect(document.querySelectorAll("[data-slot=toast-viewport]")).toHaveLength(1);
   });
 
   it("shows neither the start screen nor a folder until it knows what it starts with", () => {

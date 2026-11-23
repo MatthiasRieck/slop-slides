@@ -6,19 +6,23 @@ import {
   FolderOpen,
   FolderSearch,
   Globe,
-  Loader2,
   MonitorPlay,
   Presentation,
   RefreshCw,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { Item } from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { api, errorMessage, type FileKind, type WorkspaceEntry } from "../lib/api";
 import { absolutePath, ancestorsOf, foldersToReload, toggleFolder, treeMove, visibleRows } from "../lib/fileTree";
 import { loadJson, saveJson } from "../lib/storage";
 import { cn, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
-import { ToolButton } from "./Button";
 import { FileContextMenu } from "./FileContextMenu";
 
 const EXPANDED_KEY = "slopslide.expanded:";
@@ -224,19 +228,32 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
     rowElement(move.focus)?.focus();
   };
 
+  /** What the rows of every level share. */
+  const tree: TreeProps = {
+    folders,
+    errors,
+    expanded,
+    openedPath,
+    tabStop,
+    toggle,
+    onFocus: setFocused,
+    onMenu: setMenu,
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
         <span title={root} className="min-w-0 flex-1 truncate px-1 text-xs font-medium">
           {name}
         </span>
-        <ToolButton variant="panel" label={revealLabel} onClick={() => void revealItemInDir(root)}>
-          <FolderSearch className="size-3.5" />
-        </ToolButton>
-        <ToolButton variant="panel" label="Refresh" onClick={() => void refresh()}>
-          <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
-        </ToolButton>
+        <Button variant="tool" size="icon-xs" tooltip={revealLabel} onClick={() => void revealItemInDir(root)}>
+          <FolderSearch />
+        </Button>
+        <Button variant="tool" size="icon-xs" tooltip="Refresh" onClick={() => void refresh()}>
+          <RefreshCw className={cn(refreshing && "animate-spin")} />
+        </Button>
       </div>
+      {/* The tree scrolls by itself (the app's thin scrollbars): nothing here is a tab stop but its rows. */}
       <div
         ref={treeRef}
         role="tree"
@@ -245,46 +262,22 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
         className="min-h-0 flex-1 overflow-y-auto py-1"
       >
         {rootError ? (
-          <p className="px-3 py-2 text-xs text-destructive">{rootError}</p>
+          <Alert variant="destructive" className="rounded-none border-0 px-3 py-2">
+            <AlertDescription className="text-xs">{rootError}</AlertDescription>
+          </Alert>
         ) : !folders.has("") ? (
           <p className="flex items-center gap-1.5 px-3 py-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
+            <Spinner aria-hidden="true" className="size-3.5" />
             Loading…
           </p>
         ) : rows.length === 0 ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">This folder is empty.</p>
+          <Empty className="p-4">
+            <EmptyHeader>
+              <EmptyDescription className="text-xs">This folder is empty.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
-          rows.map(({ entry, depth }) => {
-            const isOpen = expanded.has(entry.path);
-            // A folder that could not be listed says why, where its entries would be.
-            const error = entry.kind === "directory" && isOpen ? errors.get(entry.path) : undefined;
-            return (
-              <Fragment key={entry.path}>
-                <TreeItem
-                  entry={entry}
-                  depth={depth}
-                  open={isOpen}
-                  selected={entry.path === openedPath}
-                  tabStop={entry.path === tabStop}
-                  onClick={() => open(entry)}
-                  onFocus={() => setFocused(entry.path)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setMenu({ entry, x: event.clientX, y: event.clientY });
-                  }}
-                />
-                {error && (
-                  <p
-                    role="alert"
-                    style={{ paddingLeft: INDENT_BASE + (depth + 1) * INDENT_STEP + 16 }}
-                    className="py-0.5 pr-2 text-xs text-destructive"
-                  >
-                    {error}
-                  </p>
-                )}
-              </Fragment>
-            );
-          })
+          <TreeLevel folder="" depth={0} tree={tree} />
         )}
       </div>
       {menu && (
@@ -306,45 +299,85 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
 const INDENT_BASE = 8;
 const INDENT_STEP = 12;
 
-function TreeItem(props: {
-  entry: WorkspaceEntry;
-  depth: number;
-  open: boolean;
-  selected: boolean;
+/** What every level of the tree is drawn from, and what its rows do. */
+interface TreeProps {
+  folders: ReadonlyMap<string, readonly WorkspaceEntry[]>;
+  errors: ReadonlyMap<string, string>;
+  expanded: ReadonlySet<string>;
+  openedPath: string | null;
   /** The one row Tab stops at; the arrows go to the others. */
-  tabStop: boolean;
-  onClick: () => void;
-  onFocus: () => void;
-  onContextMenu: (event: React.MouseEvent) => void;
-}) {
-  const { entry, depth, open, selected } = props;
-  const folder = entry.kind === "directory";
-  const Icon = entry.kind === "directory" ? (open ? FolderOpen : Folder) : ICONS[entry.kind];
-  return (
-    <button
-      type="button"
-      role="treeitem"
-      data-path={entry.path}
-      aria-level={depth + 1}
-      aria-expanded={folder ? open : undefined}
-      aria-selected={selected}
-      tabIndex={props.tabStop ? 0 : -1}
-      title={`${entry.path} · ${KIND_LABELS[entry.kind]}`}
-      onClick={props.onClick}
-      onFocus={props.onFocus}
-      onContextMenu={props.onContextMenu}
-      style={{ paddingLeft: INDENT_BASE + depth * INDENT_STEP }}
-      className={cn(
-        "flex w-full items-center gap-1 py-0.5 pr-2 text-left text-xs outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40",
-        selected && "bg-accent font-medium text-foreground",
+  tabStop: string | null;
+  toggle: (folder: string) => void;
+  onFocus: (path: string) => void;
+  onMenu: (menu: OpenMenu) => void;
+}
+
+/**
+ * The entries of one folder, `depth` folders down. A file is a row, which opens it; a folder is a
+ * collapsible: its row opens and closes it, and its entries (or why they could not be listed) are
+ * its content, there only while it is open.
+ */
+function TreeLevel({ folder, depth, tree }: { folder: string; depth: number; tree: TreeProps }) {
+  return (tree.folders.get(folder) ?? []).map((entry) => {
+    const selected = entry.path === tree.openedPath;
+    /** What a row is, whatever it holds. */
+    const row = {
+      size: "xs",
+      render: <button type="button" />,
+      role: "treeitem",
+      "data-path": entry.path,
+      "aria-level": depth + 1,
+      "aria-selected": selected,
+      tabIndex: entry.path === tree.tabStop ? 0 : -1,
+      title: `${entry.path} · ${KIND_LABELS[entry.kind]}`,
+      onFocus: () => tree.onFocus(entry.path),
+      onContextMenu: (event: React.MouseEvent) => {
+        event.preventDefault();
+        tree.onMenu({ entry, x: event.clientX, y: event.clientY });
+      },
+      style: { paddingLeft: INDENT_BASE + depth * INDENT_STEP },
+      className: cn(
+        "flex-nowrap gap-1 rounded-none border-0 py-0.5 pr-2 text-left text-xs hover:bg-muted focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset",
+        selected && "bg-muted font-medium text-foreground",
         !selected && entry.kind === "file" && "text-muted-foreground",
-      )}
-    >
-      <ChevronRight
-        className={cn("size-3 shrink-0 text-muted-foreground", !folder && "invisible", open && "rotate-90")}
-      />
-      <Icon className={cn("size-3.5 shrink-0", entry.kind === "deck" ? "text-primary" : "text-muted-foreground")} />
-      <span className="truncate">{entry.name}</span>
-    </button>
-  );
+      ),
+    } satisfies React.ComponentProps<typeof Item> & { "data-path": string };
+
+    if (entry.kind !== "directory") {
+      const Icon = ICONS[entry.kind];
+      return (
+        <Item key={entry.path} {...row} onClick={() => void useApp.getState().openPath(entry.path)}>
+          <ChevronRight className="invisible size-3 shrink-0" />
+          <Icon className={cn("size-3.5 shrink-0", entry.kind === "deck" ? "text-primary" : "text-muted-foreground")} />
+          <span className="truncate">{entry.name}</span>
+        </Item>
+      );
+    }
+
+    const open = tree.expanded.has(entry.path);
+    const Icon = open ? FolderOpen : Folder;
+    // A folder that could not be listed says why, where its entries would be.
+    const error = tree.errors.get(entry.path);
+    return (
+      <Collapsible key={entry.path} open={open} onOpenChange={() => tree.toggle(entry.path)}>
+        <CollapsibleTrigger render={<Item {...row} />}>
+          <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground", open && "rotate-90")} />
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{entry.name}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent role="group">
+          <TreeLevel folder={entry.path} depth={depth + 1} tree={tree} />
+          {error && (
+            <p
+              role="alert"
+              style={{ paddingLeft: INDENT_BASE + (depth + 1) * INDENT_STEP + 16 }}
+              className="py-0.5 pr-2 text-xs text-destructive"
+            >
+              {error}
+            </p>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    );
+  });
 }

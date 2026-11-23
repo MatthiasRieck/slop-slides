@@ -18,6 +18,7 @@ import { useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke, open as openDialog } from "../test/tauri";
+import { pickOption, tooltipOf } from "../test/ui";
 import { Home } from "./Home";
 
 const NOW = Date.now();
@@ -216,16 +217,53 @@ describe("Home", () => {
     expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
   });
 
+  /** The style the new deck's form shows as picked. */
+  const picked = () => document.querySelector("[data-slot=select-value]")?.textContent;
+
   it("offers the templates as styles for a new deck", async () => {
     useApp.setState({ templates: undefined });
     render(<Home />);
-    const style = screen.getByLabelText("Style") as HTMLSelectElement;
-    await waitFor(() => expect(style.options).toHaveLength(3));
-    expect([...style.options].map((o) => o.textContent)).toEqual(["Any style", "Mine (yours)", "Swiss Design"]);
-    fireEvent.change(style, { target: { value: "swiss" } });
+    // A list that opens from its button, which says the style picked: any, until one is.
+    const style = screen.getByRole("combobox", { name: "Style" });
+    expect(picked()).toBe("Any style");
+    await waitFor(() => expect(useApp.getState().templates).toHaveLength(2));
+    fireEvent.click(style);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Any style",
+      "Mine (yours)",
+      "Swiss Design",
+    ]);
+    pickOption(screen.getByRole("option", { name: "Swiss Design" }));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(picked()).toBe("Swiss Design");
     fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
     await act(async () => fireEvent.click(createButton()));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: "swiss" });
+  });
+
+  it("goes back to any style from a style picked", async () => {
+    render(<Home />);
+    const style = screen.getByRole("combobox", { name: "Style" });
+    await waitFor(() => expect(useApp.getState().templates).toHaveLength(2));
+    fireEvent.click(style);
+    pickOption(screen.getByRole("option", { name: "Swiss Design" }));
+    fireEvent.click(style);
+    pickOption(screen.getByRole("option", { name: "Any style" }));
+    expect(picked()).toBe("Any style");
+    await act(async () => fireEvent.click(createButton()));
+    expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
+  });
+
+  it("names the fields of the new deck's form by their labels", () => {
+    render(<Home />);
+    expect(screen.getByRole("textbox", { name: "Title" })).toBe(screen.getByPlaceholderText(/Deck title/));
+    const label = screen.getByText("Style", { selector: "label" }) as HTMLLabelElement;
+    expect(label.htmlFor).toBe(screen.getByRole("combobox", { name: "Style" }).id);
+  });
+
+  it("says in a tooltip what Open folder is for, and its keys", () => {
+    render(<Home />);
+    expect(tooltipOf(screen.getByRole("button", { name: "Open folder…" }))).toBe("Open a folder of decksCtrl+O");
   });
 
   it("imports a PowerPoint file into the library and opens the new deck", async () => {
@@ -281,6 +319,13 @@ describe("Home", () => {
       expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).closest("fieldset")!.disabled).toBe(
         true,
       );
+      // The style's list is off with the rest of the form, and does not open.
+      const style = screen.getByRole("combobox", { name: "Style" });
+      expect(style.hasAttribute("disabled") || style.getAttribute("aria-disabled") === "true").toBe(true);
+      fireEvent.click(style);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // A spinner beside what it says, not announced apart from it.
+      expect(createButton().querySelector("[data-slot=spinner]")?.getAttribute("aria-hidden")).toBe("true");
       await act(async () => fireEvent.submit(form));
       await act(async () => release());
       await waitFor(() => expect(useApp.getState().deck).not.toBeNull());
@@ -400,6 +445,22 @@ describe("Home", () => {
     expect(remove.className).toContain("opacity-40");
     expect(remove.className).not.toMatch(/(^| )opacity-0( |$)/);
     expect(remove.className).toContain("group-hover:opacity-100");
+    // Named for the row it takes off; its tooltip says the same in short.
+    expect(remove.getAttribute("aria-label")).toBe("Remove talks from recent folders");
+    expect(tooltipOf(remove)).toBe("Remove from this list");
+  });
+
+  it("lists what was opened before as rows that open it: its name over where it is", async () => {
+    render(<Home />);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    const list = screen.getByRole("list", { name: "Recent folders" });
+    const [first] = within(list).getAllByRole("listitem");
+    const open = within(first!).getAllByRole("button")[0]!;
+    expect(open.getAttribute("data-slot")).toBe("item");
+    expect(open.querySelector("[data-slot=item-title]")!.textContent).toBe("talks");
+    expect(open.querySelector("[data-slot=item-description]")!.textContent).toBe("/Users/me/talks");
+    await act(async () => fireEvent.click(open));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks" });
   });
 
   it("says how to start when nothing was opened before, and only then", async () => {

@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useChanges } from "../changesStore";
 import { deckMode, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { settle, tooltipOf } from "../test/ui";
 import { ModeTabs } from "./ModeTabs";
 
 const tab = (name: string) => screen.getByRole("tab", { name }) as HTMLButtonElement;
@@ -42,20 +44,38 @@ describe("ModeTabs", () => {
     expect(selected()).toEqual(["View"]);
   });
 
-  it("moves between the modes with the arrow keys, Tab stopping at the selected one", () => {
+  it("moves between the modes with the arrow keys, Tab stopping at the selected one", async () => {
     render(<ModeTabs />);
     expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([0, -1, -1]);
     tab("View").focus();
     fireEvent.keyDown(tab("View"), { key: "ArrowRight" });
+    await settle();
     expect(document.activeElement).toBe(tab("Edit"));
     fireEvent.keyDown(tab("Edit"), { key: "End" });
+    await settle();
     expect(document.activeElement).toBe(tab("Git"));
     fireEvent.keyDown(tab("Git"), { key: "ArrowRight" });
+    await settle();
     expect(document.activeElement).toBe(tab("View"));
     // Moving the focus changes no mode; a click (Enter, Space) does.
     expect(selected()).toEqual(["View"]);
+    expect(deckMode(useApp.getState())).toBe("view");
+    // With the focus elsewhere (in the slide, say), Tab comes back to the mode picked.
+    act(() => tab("View").blur());
     fireEvent.click(tab("Edit"));
+    expect(deckMode(useApp.getState())).toBe("edit");
+    await settle();
     expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it("takes a mode with Enter or Space on its tab", async () => {
+    const user = userEvent.setup();
+    render(<ModeTabs />);
+    tab("View").focus();
+    await user.keyboard("{ArrowRight}{Enter}");
+    expect(deckMode(useApp.getState())).toBe("edit");
+    await user.keyboard("{ArrowLeft} ");
+    expect(deckMode(useApp.getState())).toBe("view");
   });
 
   it("leaves the focus where it is when a mode is pressed, for the keys that work there", () => {
@@ -89,9 +109,11 @@ describe("ModeTabs", () => {
     for (const t of screen.getAllByRole("tab")) {
       expect(t.querySelector("svg")).not.toBeNull();
       expect(t.className).toContain("flex-col");
-      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Git");
-      // Filled too, so the selected mode differs by more than the color of its text.
-      expect(t.classList.contains("bg-primary/10")).toBe(t.textContent === "Git");
+      // The selected one is marked, which is what colors it and, so that it differs by more
+      // than the color of its text, fills it.
+      expect(t.hasAttribute("data-active")).toBe(t.textContent === "Git");
+      expect(t.className).toContain("data-active:text-primary");
+      expect(t.className).toContain("data-active:bg-primary/10");
     }
   });
 
@@ -109,19 +131,22 @@ describe("ModeTabs", () => {
 
   it("says in one short line what each mode is for, and the keys that go to it", () => {
     render(<ModeTabs />);
-    expect(screen.getAllByRole("tab").map((t) => t.title)).toEqual([
-      "View: present, play and comment (Ctrl+1)",
-      "Edit: change slides, their order and timing (Ctrl+2)",
-      "Git: see what changed since the last commit (Ctrl+3)",
+    const hints = screen.getAllByRole("tab").map((t) => tooltipOf(t));
+    expect(hints).toEqual([
+      "View: present, play and commentCtrl+1",
+      "Edit: change slides, their order and timingCtrl+2",
+      "Git: see what changed since the last commitCtrl+3",
     ]);
-    for (const t of screen.getAllByRole("tab")) expect(t.title.length).toBeLessThan(70);
+    for (const hint of hints) expect(hint!.length).toBeLessThan(70);
+    // The tooltip does not rename the tab.
+    expect(tabs()).toEqual(["View", "Edit", "Git"]);
   });
 
   it("enters Edit on a locked slide too, and says the slide is locked", () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)) });
     render(<ModeTabs />);
     expect(tab("Edit").disabled).toBe(false);
-    expect(tab("Edit").title).toBe("Edit: this slide is locked; unlock it to change it (Ctrl+2)");
+    expect(tooltipOf(tab("Edit"))).toBe("Edit: this slide is locked; unlock it to change itCtrl+2");
     fireEvent.click(tab("Edit"));
     expect(deckMode(useApp.getState())).toBe("edit");
   });

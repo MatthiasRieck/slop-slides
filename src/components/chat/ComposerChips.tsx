@@ -26,11 +26,19 @@ function Chip(props: {
   children: React.ReactNode;
   title?: string;
   sent?: boolean;
+  /** Still being saved: the chip says so, and is read out as it appears. */
+  uploading?: boolean;
   remove?: { label: string; tooltip?: string; onClick: () => void };
 }) {
   const { remove } = props;
   return (
-    <Attachment size="chip" title={props.title} className={props.sent ? CHIP_SENT : "text-muted-foreground"}>
+    <Attachment
+      size="chip"
+      title={props.title}
+      state={props.uploading ? "uploading" : undefined}
+      role={props.uploading ? "status" : undefined}
+      className={props.sent ? CHIP_SENT : "text-muted-foreground"}
+    >
       <AttachmentMedia>{props.icon}</AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle className="font-normal">{props.children}</AttachmentTitle>
@@ -155,10 +163,9 @@ export function ComposerChips(props: {
         );
       })}
       {pending > 0 && (
-        <Attachment size="chip" state="uploading" role="status" className="text-muted-foreground">
-          <Spinner aria-hidden="true" className="size-3" />
-          <AttachmentTitle className="font-normal">Attaching{pending > 1 ? ` ${pending} files` : ""}…</AttachmentTitle>
-        </Attachment>
+        <Chip uploading icon={<Spinner aria-hidden="true" className="size-3" />}>
+          Attaching{pending > 1 ? ` ${pending} files` : ""}…
+        </Chip>
       )}
     </AttachmentGroup>
   );

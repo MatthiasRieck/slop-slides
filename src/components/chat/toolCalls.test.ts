@@ -120,7 +120,7 @@ describe("toolName", () => {
 describe("groupParts", () => {
   const text = (value: string) => ({ kind: "text" as const, text: value });
   const kinds = (parts: Parameters<typeof groupParts>[0]) =>
-    groupParts(parts).map((group) => (group.kind === "steps" ? group.tools.map((t) => t.id) : group.part.kind));
+    groupParts(parts).map((group) => (group.kind === "part" ? group.part.kind : group.tools.map((t) => t.id)));
 
   it("puts tool calls in a row into one group of steps", () => {
     const parts = [
@@ -138,20 +138,27 @@ describe("groupParts", () => {
   const keys = (parts: Parameters<typeof groupParts>[0], fold?: boolean) =>
     groupParts(parts, fold).map((group) => (group.kind === "part" ? group.key : group.tools.map((t) => t.id)));
 
-  it("leaves a tool call on its own as it is, each part with a key of its own", () => {
+  it("leaves a tool call on its own a row, not a fold of steps, each text with a key of its own", () => {
     const groups = groupParts([text("First"), tool("a", {}), text("Then")]);
-    expect(groups.map((g) => g.kind)).toEqual(["part", "part", "part"]);
-    expect(keys([text("First"), tool("a", {}), text("Then")])).toEqual(["text-0", "a", "text-1"]);
+    expect(groups.map((g) => g.kind)).toEqual(["part", "tools", "part"]);
+    expect(keys([text("First"), tool("a", {}), text("Then")])).toEqual(["text-0", ["a"], "text-1"]);
   });
 
-  it("shows each tool call by itself while the reply comes in", () => {
-    expect(keys([text("First"), tool("a", {}), tool("b", {})], false)).toEqual(["text-0", "a", "b"]);
+  it("shows each tool call while the reply comes in, those in a row as the rows of one group", () => {
+    const groups = groupParts([text("First"), tool("a", {}), tool("b", {}), text("Then"), tool("c", {})], false);
+    expect(groups.map((g) => g.kind)).toEqual(["part", "tools", "part", "tools"]);
+    expect(keys([text("First"), tool("a", {}), tool("b", {}), text("Then"), tool("c", {})], false)).toEqual([
+      "text-0",
+      ["a", "b"],
+      "text-1",
+      ["c"],
+    ]);
   });
 
   it("keeps the key of a text when a blank text before it goes, as it does when the agent calls a tool", () => {
     const before = [text("First"), text(" "), tool("a", {}), text("Then")];
     const after = before.filter((part) => part.kind !== "text" || part.text.trim() !== "");
-    expect(keys(before, false)).toEqual(["text-0", "a", "text-1"]);
+    expect(keys(before, false)).toEqual(["text-0", ["a"], "text-1"]);
     expect(keys(after, false)).toEqual(keys(before, false));
   });
 

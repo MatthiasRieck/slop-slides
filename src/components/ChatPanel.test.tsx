@@ -921,7 +921,8 @@ describe("ChatPanel: composing", () => {
       expect(offered()).toEqual([expect.stringContaining("Claude Sonnet 5")]);
       fireEvent.change(modelSearch(), { target: { value: "astra" } });
       expect(offered()).toEqual([]);
-      expect(screen.getByText("No models match.")).toBeTruthy();
+      // Said as a list of commands says that it has nothing to show.
+      expect(screen.getByText("No models match.").dataset.slot).toBe("command-empty");
       fireEvent.keyDown(modelSearch(), { key: "Enter" });
       expect(useApp.getState().selection.provider).toBe("claude");
     });
@@ -1000,7 +1001,11 @@ describe("ChatPanel: composing", () => {
     useApp.setState({ providers: undefined });
     render(<ChatPanel />);
     fireEvent.click(screen.getByRole("button", { name: useApp.getState().selection.label }));
-    expect(screen.getByText("Looking for installed agents…")).toBeTruthy();
+    // As a list of commands says that it is loading: a progress bar by name, with a spinner to see.
+    const looking = screen.getByRole("progressbar", { name: "Looking for installed agents" });
+    expect(looking.dataset.slot).toBe("command-loading");
+    expect(looking.textContent).toBe("Looking for installed agents…");
+    expect(looking.querySelector("[data-slot=spinner]")).not.toBeNull();
     expect(models()).toHaveLength(0);
   });
 
@@ -2723,6 +2728,13 @@ describe("ChatPanel: attachments still being saved", () => {
     type("What is this?");
     await act(async () => paste([shot()]));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Attaching…"));
+    // A chip like the others: its spinner where their icons are, its words where their names are.
+    const attaching = screen.getByRole("status");
+    expect(attaching.dataset.state).toBe("uploading");
+    expect(attaching.querySelector("[data-slot=attachment-media] [data-slot=spinner]")).not.toBeNull();
+    expect(attaching.querySelector("[data-slot=attachment-content] [data-slot=attachment-title]")!.textContent).toBe(
+      "Attaching…",
+    );
     await save.asked();
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).not.toHaveBeenCalled();
@@ -2855,7 +2867,10 @@ describe("ChatPanel: the chat's header", () => {
     fireEvent.click(screen.getByRole("button", { name: "Past chats" }));
     expect(screen.getByRole("dialog", { name: "Past chats" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Past chats" }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Loading chats…")).toBeTruthy();
+    const loading = screen.getByRole("progressbar", { name: "Loading chats" });
+    expect(loading.dataset.slot).toBe("command-loading");
+    expect(loading.textContent).toBe("Loading chats…");
+    expect(loading.querySelector("[data-slot=spinner]")).not.toBeNull();
     await waitFor(() => expect(screen.queryByText("Loading chats…")).toBeNull());
     expect(document.body.textContent).not.toMatch(/conversation/i);
   });

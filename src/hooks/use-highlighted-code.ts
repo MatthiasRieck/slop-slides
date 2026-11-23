@@ -2,14 +2,26 @@ import * as React from "react";
 
 import { loadHighlighter } from "@/lib/highlighter";
 
-export function useHighlightedCode(value: string, language: string) {
+/** Code longer than this stays plain: coloring it would hold the page up for longer than it is worth. */
+export const HIGHLIGHT_LIMIT = 50_000;
+
+/**
+ * The lines of `value`, colored as `language` once its grammar is loaded, plain until then.
+ *
+ * Coloring is work on the main thread for every token, so it is only done where it shows: pass
+ * `enabled` false for code the user has not got to see yet (see `useSeen`), which then stays
+ * plain, while its grammar loads all the same and is ready when it is wanted. The first pass
+ * over code already there is a transition, which a key press or a click interrupts.
+ */
+export function useHighlightedCode(value: string, language: string, enabled = true) {
   // A trailing newline would render as an extra empty line.
   const code = value.endsWith("\n") ? value.slice(0, -1) : value;
+  const colored = enabled && code.length <= HIGHLIGHT_LIMIT;
   const [loaded, setLoaded] = React.useState<{
     language: string;
     highlighter: Awaited<ReturnType<typeof loadHighlighter>>;
   } | null>(null);
-  const highlighter = loaded?.language === language ? loaded.highlighter : null;
+  const highlighter = colored && loaded?.language === language ? loaded.highlighter : null;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -17,7 +29,7 @@ export function useHighlightedCode(value: string, language: string) {
     loadHighlighter(language)
       .then((next) => {
         if (!cancelled) {
-          setLoaded({ language, highlighter: next });
+          React.startTransition(() => setLoaded({ language, highlighter: next }));
         }
       })
       .catch(() => {});

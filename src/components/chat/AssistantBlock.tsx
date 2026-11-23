@@ -31,11 +31,27 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
   const streaming = message.status === "streaming";
   // While the agent works, each step shows as it happens.
   const groups = useMemo(() => groupParts(message.parts, !streaming), [message.parts, streaming]);
+  // What is under a reply, in the one footer a message has: its actions, and how the turn went.
+  const copyable = !streaming && message.parts.some((p) => p.kind === "text" && p.text.trim());
+  const stopped = message.status === "interrupted";
+  const took =
+    message.status === "done" && message.durationMs !== null
+      ? `${(message.durationMs / 1000).toFixed(1)}s${message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}`
+      : "";
   return (
     <Message>
       <MessageContent className="gap-2">
         {groups.map((group) => {
           if (group.kind === "steps") return <ToolSteps key={group.tools[0]!.id} tools={group.tools} />;
+          if (group.kind === "tools")
+            return (
+              // Tool calls that follow one another are the rows of one trace, which grows at its end.
+              <Trace key={group.tools[0]!.id}>
+                {group.tools.map((tool) => (
+                  <ToolRow key={tool.id} part={tool} />
+                ))}
+              </Trace>
+            );
           const { part, key } = group;
           return part.kind === "text" ? (
             <Bubble key={key} variant="ghost" className="w-full">
@@ -45,12 +61,8 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
             </Bubble>
           ) : part.kind === "approval" ? (
             <ApprovalCard key={key} part={part} />
-          ) : part.kind === "approvalReview" ? (
-            <ApprovalReview key={key} part={part} />
           ) : (
-            <Trace key={key}>
-              <ToolRow part={part} />
-            </Trace>
+            <ApprovalReview key={key} part={part} />
           );
         })}
         {message.compacted && (
@@ -70,22 +82,20 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
             </AlertDescription>
           </Alert>
         )}
-        {!streaming && message.parts.some((p) => p.kind === "text" && p.text.trim()) && (
-          <MessageFooter className="px-0">
-            <CopyButton
-              plain
-              label="Copy message"
-              className={ON_HOVER}
-              text={message.parts
-                .filter((p) => p.kind === "text")
-                .map((p) => p.text)
-                .join("\n\n")}
-            />
-          </MessageFooter>
-        )}
-        {(message.status === "interrupted" || retry) && (
-          <MessageFooter className="gap-2 px-0 text-2xs font-normal">
-            {message.status === "interrupted" && <span>Stopped</span>}
+        {(copyable || stopped || retry || took) && (
+          <MessageFooter className="gap-2 px-0">
+            {copyable && (
+              <CopyButton
+                plain
+                label="Copy message"
+                className={ON_HOVER}
+                text={message.parts
+                  .filter((p) => p.kind === "text")
+                  .map((p) => p.text)
+                  .join("\n\n")}
+              />
+            )}
+            {stopped && <span className="text-2xs font-normal">Stopped</span>}
             {retry && (
               <Button
                 variant="outline"
@@ -97,11 +107,7 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
                 Retry
               </Button>
             )}
-          </MessageFooter>
-        )}
-        {message.status === "done" && message.durationMs !== null && (
-          <MessageFooter className="px-0 text-2xs font-normal text-muted-foreground/70">
-            {(message.durationMs / 1000).toFixed(1)}s{message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}
+            {took && <span className="text-2xs font-normal text-muted-foreground/70">{took}</span>}
           </MessageFooter>
         )}
       </MessageContent>

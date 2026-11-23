@@ -1,5 +1,5 @@
-import { FileText, Pencil } from "lucide-react";
-import { memo, useState } from "react";
+import { ChevronDown, FileText, Pencil } from "lucide-react";
+import { memo, useId, useState } from "react";
 
 import {
   Attachment,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/attachment";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
 import { isImage } from "../../lib/drop";
 import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
@@ -57,13 +58,51 @@ function Thumbnail({ picture, workspace }: { picture: Picture; workspace: string
   );
 }
 
+/** What the user typed, as typed: marks in it are not formatting. */
+const TYPED = "whitespace-pre-wrap break-words";
+
+/**
+ * The text of a message. A long one is folded to its start, which fades out, with a trigger
+ * under it that shows the rest (the `Collapsible` of a `Bubble`, whose start stays in view). The
+ * whole text is in the page either way, to be selected and found.
+ */
+function UserText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  if (text.length <= 900 && text.split("\n").length <= 12) return <p className={TYPED}>{text}</p>;
+  return (
+    <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <p
+        id={id}
+        className={cn(
+          TYPED,
+          !expanded && "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
+        )}
+      >
+        {text}
+      </p>
+      <CollapsibleTrigger
+        aria-controls={id}
+        render={
+          <Button
+            variant="link"
+            size="2xs"
+            className="mt-2 gap-1 px-0 font-normal text-muted-foreground hover:text-foreground"
+          />
+        }
+      >
+        {expanded ? "Show less" : "Show full message"}
+        <ChevronDown data-icon="inline-end" className="group-data-panel-open/button:rotate-180" />
+      </CollapsibleTrigger>
+    </Collapsible>
+  );
+}
+
 /**
  * A message of the user's, long ones folded, with what went along with it. Of the deck, which
  * changes with every save, it takes only the number of the slide it was about.
  */
 export const UserBubble = memo(function UserBubble({ message }: { message: UserMessage }) {
-  const [expanded, setExpanded] = useState(false);
-  const collapsible = message.text.length > 900 || message.text.split("\n").length > 12;
   const workspace = useApp((s) => s.workspace?.path ?? "");
   const slideNumber = useApp((s) => slideNumberOf(s.deck, message.slide));
   const pictures = picturesOf(message);
@@ -94,28 +133,7 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
         )}
         <Bubble variant="secondary" align="end" className="max-w-[85%]">
           <BubbleContent className="selectable rounded-2xl p-3">
-            {/* What the user typed is shown as typed: marks in it are not formatting. */}
-            <p
-              className={cn(
-                "whitespace-pre-wrap break-words",
-                collapsible &&
-                  !expanded &&
-                  "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
-              )}
-            >
-              {message.text}
-            </p>
-            {collapsible && (
-              <Button
-                variant="link"
-                size="2xs"
-                aria-expanded={expanded}
-                onClick={() => setExpanded(!expanded)}
-                className="mt-2 px-0 font-normal text-muted-foreground hover:text-foreground"
-              >
-                {expanded ? "Show less" : "Show full message"}
-              </Button>
-            )}
+            <UserText text={message.text} />
           </BubbleContent>
         </Bubble>
         <MessageFooter className="px-0">
@@ -140,7 +158,7 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
           message.screenshot ||
           message.element ||
           message.reverted) && (
-          <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
+          <MessageFooter className="flex-wrap gap-1 px-0 text-2xs font-normal">
             {message.reverted && <span title="You undid what this turn changed in the deck">changes undone ·</span>}
             {slideNumber > 0 && <span>on slide {slideNumber}</span>}
             {message.sketch && <span>· with sketch</span>}
@@ -151,7 +169,7 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
             )}
             {message.element && <span>· about {message.element.name}</span>}
             {message.screenshot && <span>· with screenshot</span>}
-          </div>
+          </MessageFooter>
         )}
       </MessageContent>
     </Message>

@@ -2,7 +2,7 @@ import { History, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList, CommandLoading } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { api, errorMessage } from "../../lib/api";
@@ -110,9 +110,7 @@ export function ThreadNavigation({
               )}
               <CommandList label="Chats" className="mt-1">
                 {loading ? (
-                  <p role="status" className="p-2 text-xs text-muted-foreground">
-                    Loading chats…
-                  </p>
+                  <CommandLoading label="Loading chats">Loading chats…</CommandLoading>
                 ) : (
                   <>
                     <CommandEmpty className="p-2 text-left text-xs text-muted-foreground">

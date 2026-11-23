@@ -629,13 +629,14 @@ function Changes({ deck }: { deck: Deck }) {
   }
   if (!changes) {
     return (
-      <div
-        role="status"
-        className="flex h-full items-center justify-center gap-2 bg-canvas text-xs text-muted-foreground"
-      >
-        <Spinner aria-hidden="true" className="size-3.5" />
-        Reading changes…
-      </div>
+      <Empty role="status" className="h-full rounded-none bg-canvas">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Spinner aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyDescription className="text-xs/relaxed">Reading changes…</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
   // Without a repository the mode is about to close; see ModeTabs.tsx.

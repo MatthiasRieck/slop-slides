@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FieldError } from "@/components/ui/field";
-import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
+import { Item, ItemContent, ItemDescription, ItemFooter, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Kbd } from "@/components/ui/kbd";
 import { api, errorMessage } from "../lib/api";
 import { formatKeys } from "../lib/keys";
@@ -196,27 +196,35 @@ export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract
   const { decisions } = part.approval;
   const primary = decisions.includes("accept") ? "accept" : decisions.find((d) => d !== "decline");
   return (
-    <section
-      className={cn("rounded-lg border p-3 text-xs", active && "border-warning/60 bg-warning/5")}
-      aria-label="Approval request"
+    <Item
+      variant="outline"
+      size="xs"
+      render={<section aria-label="Approval request" />}
+      className={cn("items-start p-3 text-xs", active && "border-warning/60 bg-warning/5")}
     >
-      {/* Read out at once as it appears: the turn waits for the answer. */}
-      <p
-        role={active ? "status" : undefined}
-        aria-live={active ? "assertive" : undefined}
-        className="flex items-center gap-1.5 font-medium"
-      >
-        {active ? <ShieldAlert className="size-3.5 text-warning" /> : <Shield className="size-3.5" />}
-        {part.approval.title}
-      </p>
-      {part.approval.reason && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{part.approval.reason}</p>}
-      <CodeBlock size="sm" className="selectable my-2">
+      <ItemMedia variant="icon" className={cn(active && "text-warning")}>
+        {active ? <ShieldAlert className="size-3.5" /> : <Shield className="size-3.5" />}
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-2 group-data-[size=xs]/item:gap-2">
+        {/* Read out at once as it appears: the turn waits for the answer. */}
+        <ItemTitle
+          role={active ? "status" : undefined}
+          aria-live={active ? "assertive" : undefined}
+          className="line-clamp-none text-xs"
+        >
+          {part.approval.title}
+        </ItemTitle>
+        {part.approval.reason && (
+          <ItemDescription className="line-clamp-none whitespace-pre-wrap">{part.approval.reason}</ItemDescription>
+        )}
+      </ItemContent>
+      <CodeBlock size="sm" className="selectable basis-full">
         <CodeBlockContent wrap tabIndex={0} className="max-h-48 break-all">
           {part.approval.details}
         </CodeBlockContent>
       </CodeBlock>
       {active ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <ItemFooter className="flex-wrap justify-start">
           {decisions.map((d) => (
             <Button
               key={d}
@@ -246,24 +254,24 @@ export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract
           >
             Stop
           </Button>
-        </div>
+        </ItemFooter>
       ) : (
-        <p aria-live="polite" className="text-muted-foreground">
+        <ItemFooter aria-live="polite" className="justify-start text-muted-foreground">
           {part.status === "expired" || (!running && !submitted)
             ? "Request closed"
             : submitted
               ? `${labels[submitted]} · response sent`
               : "Request resolved"}
-        </p>
+        </ItemFooter>
       )}
       {error && (
-        <Alert variant="destructive" className="mt-2 border-destructive/30 bg-destructive/10 text-xs">
+        <Alert variant="destructive" className="basis-full border-destructive/30 bg-destructive/10 text-xs">
           <AlertDescription className="whitespace-pre-wrap break-words text-xs text-destructive">
             {error}
           </AlertDescription>
         </Alert>
       )}
-    </section>
+    </Item>
   );
 });
 

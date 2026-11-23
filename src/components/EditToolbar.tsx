@@ -66,7 +66,7 @@ import {
 import { memo, type ReactNode, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FieldLegend, FieldSet } from "@/components/ui/field";
+import { FieldError, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOptGroup, NativeSelectOption } from "@/components/ui/native-select";
@@ -909,6 +909,7 @@ function LinkButton(props: {
   // Nothing to link: it closes, and stays closed when a selection comes back.
   if (props.disabled && open) setOpen(false);
   const field = useRef<HTMLInputElement>(null);
+  const problemId = useId();
   const slideNow = linkedSlide(props.value);
   const [address, setAddress] = useState("");
   const [slide, setSlide] = useState("");
@@ -975,6 +976,7 @@ function LinkButton(props: {
             placeholder="https://… or someone@example.com"
             value={address}
             aria-invalid={invalid || undefined}
+            aria-describedby={invalid ? problemId : undefined}
             onChange={(event) => {
               setAddress(event.target.value);
               setSlide("");
@@ -995,7 +997,11 @@ function LinkButton(props: {
               setInvalid(false);
             }}
           />
-          {invalid && <p className="text-destructive">Enter a web address, an email address, or pick a slide.</p>}
+          {invalid && (
+            <FieldError id={problemId} className="text-xs">
+              Enter a web address, an email address, or pick a slide.
+            </FieldError>
+          )}
           <div className="flex justify-end gap-1">
             {props.value && (
               <Button variant="ghost" size="xs" onClick={() => finish(null)}>

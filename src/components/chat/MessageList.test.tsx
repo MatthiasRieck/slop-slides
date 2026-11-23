@@ -237,6 +237,80 @@ describe("the conversation's scroller", () => {
   });
 });
 
+const placeholder = <p data-testid="start">Ask for something</p>;
+
+/** The conversation as the chat's panel shows it: with something in its place while it has no message. */
+function Chat() {
+  const empty = useApp((s) => s.messages.length === 0);
+  return <MessageList>{empty ? placeholder : null}</MessageList>;
+}
+
+describe("a conversation with no message yet", () => {
+  /** `turns` questions and their answers, as a saved chat holds them. */
+  const turns = (count: number) =>
+    Array.from({ length: count }, (_, i) => [said(`u${i}`, "Hi"), reply("Hello", "done", `a${i}`)]).flat();
+
+  it("shows what stands in for it over the scroller, not among its messages", () => {
+    useApp.setState({ messages: [], running: false, workspace: null, deck: null });
+    render(<MessageList>{placeholder}</MessageList>);
+    const start = screen.getByTestId("start");
+    expect(start.closest("[data-slot=message-scroller]")).not.toBeNull();
+    expect(start.closest("[data-slot=message-scroller-content]")).toBeNull();
+    // The scroller's content holds messages and nothing else.
+    expect(screen.getByRole("log").querySelectorAll(":scope > :not([data-message-scroller-spacer])")).toHaveLength(0);
+  });
+
+  it("has nothing over the scroller once there are messages", () => {
+    conversation();
+    expect(document.querySelector("[data-slot=message-list-placeholder]")).toBeNull();
+    expect(
+      [...screen.getByRole("log").children].filter((child) => !child.hasAttribute("data-message-scroller-spacer")),
+    ).toEqual([...document.querySelectorAll("[data-slot=message-scroller-item]")]);
+  });
+
+  // A chat that loads shows empty first and gets its saved messages a moment later (see `loadChat`).
+  it.each([1, 2, 3, 5])("opens at the end when a saved chat of %i turns loads into it", async (count) => {
+    useApp.setState({ messages: [], running: false, workspace: null, deck: null });
+    render(<Chat />);
+    const list = layout.viewport();
+    await act(async () => useApp.setState({ messages: turns(count) }));
+    await resized();
+    expect(screen.queryByTestId("start")).toBeNull();
+    expect(list.scrollTop).toBe(count * 2 * 500 - 400);
+    expect(list.scrollTop).toBe(end(list));
+    expect(offered()).toBe(false);
+  });
+});
+
+describe("the way back to the end", () => {
+  /** The system asking for less motion, or not. */
+  const motion = (reduced: boolean) =>
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduced && query.includes("reduce") }));
+
+  it.each([
+    [true, "auto"],
+    [false, "smooth"],
+  ] as const)("jumps at once for those who asked for less motion (%s): %s", (reduced, behavior) => {
+    motion(reduced);
+    const { list } = conversation(1000);
+    layout.scroll(500);
+    const scrollTo = vi.mocked(list.scrollTo);
+    scrollTo.mockClear();
+    fireEvent.click(pill());
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior }));
+    expect(list.scrollTop).toBe(end(list));
+  });
+
+  it("is opaque in the dark too: it floats over the conversation", () => {
+    conversation();
+    const classes = pill().className.split(/\s+/);
+    expect(classes).toContain("dark:bg-popover");
+    expect(classes.some((name) => name.startsWith("dark:hover:bg-[color-mix(in_oklch,var(--popover)"))).toBe(true);
+    // What the outline button fills itself with in the dark is nearly clear.
+    expect(classes.filter((name) => /^dark:(hover:)?bg-input/.test(name))).toEqual([]);
+  });
+});
+
 describe("the conversation out of view", () => {
   /** The conversation in what hides it, as the chat's panel does. */
   const hidden = (mode: "visible" | "hidden") => <Activity mode={mode}>{<MessageList />}</Activity>;

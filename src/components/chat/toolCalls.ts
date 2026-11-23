@@ -180,21 +180,26 @@ export function editedSlide(ids: readonly string[], slides: ReadonlyMap<string, 
 }
 
 /**
- * A reply's parts as the transcript lays them out: tool calls in a row are one group of steps.
- * `key` tells a part from the others of its reply for as long as the reply lasts.
+ * A reply's parts as the transcript lays them out. Tool calls that follow one another are one
+ * group, the rows of one trace: `tools` shows each of them, `steps` folds them into one line.
+ * `key` tells a part from the others of its reply for as long as the reply lasts; a group of
+ * tool calls is told by the first of them, which stays as the group grows.
  */
-export type PartGroup = { kind: "part"; part: ChatPart; key: string } | { kind: "steps"; tools: ToolPart[] };
+export type PartGroup =
+  | { kind: "part"; part: Exclude<ChatPart, { kind: "tool" }>; key: string }
+  | { kind: "tools"; tools: ToolPart[] }
+  | { kind: "steps"; tools: ToolPart[] };
 
 /** What tells a part that has a name of its own from the others of its reply. */
-function partKey(part: Exclude<ChatPart, { kind: "text" }>): string {
+function partKey(part: Exclude<ChatPart, { kind: "text" | "tool" }>): string {
   return part.kind === "approval" ? part.approval.id : part.id;
 }
 
 /**
  * Lays out a reply's parts. With `fold`, tool calls that follow one another go into one group
  * of steps, so that a turn of thirty edits is one line; without it (while the reply comes in)
- * each shows as it happens. A tool call on its own stays as it is, as does everything else. Text
- * that is blank does not show, so it does not part two tool calls either.
+ * each shows as it happens, in a group of rows. A tool call on its own is a group of one row
+ * either way. Text that is blank does not show, so it does not part two tool calls either.
  *
  * A text has no name, so its key is its place among the texts that show. That place stays: text
  * only comes in at the end, while a blank text before it may go at any time (the agent takes it
@@ -205,13 +210,11 @@ export function groupParts(parts: ChatPart[], fold = true): PartGroup[] {
   let run: ToolPart[] = [];
   let texts = 0;
   const close = () => {
-    const [first] = run;
-    if (run.length > 1) groups.push({ kind: "steps", tools: run });
-    else if (first) groups.push({ kind: "part", part: first, key: first.id });
+    if (run.length > 0) groups.push({ kind: fold && run.length > 1 ? "steps" : "tools", tools: run });
     run = [];
   };
   for (const part of parts) {
-    if (part.kind === "tool" && fold) {
+    if (part.kind === "tool") {
       run.push(part);
     } else if (part.kind !== "text") {
       close();

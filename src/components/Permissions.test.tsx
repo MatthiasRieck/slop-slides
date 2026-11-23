@@ -356,6 +356,12 @@ describe("approval card", () => {
     const { rerender } = render(<ApprovalCard part={part()} />);
     const card = screen.getByRole("region", { name: "Approval request" });
     expect(card.className).toContain("border-warning");
+    // Built as the review beside it in the transcript is: an item, with its parts in their places.
+    expect(card.tagName).toBe("SECTION");
+    expect(card.dataset.slot).toBe("item");
+    expect(card.querySelector("[data-slot=item-media] svg")).not.toBeNull();
+    expect(screen.getByText("Run a command").dataset.slot).toBe("item-title");
+    expect(screen.getByRole("button", { name: "Stop" }).closest("[data-slot=item-footer]")).not.toBeNull();
     const title = screen.getByText("Run a command");
     expect(title.getAttribute("aria-live")).toBe("assertive");
     expect(title.getAttribute("role")).toBe("status");

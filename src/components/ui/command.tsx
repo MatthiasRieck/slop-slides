@@ -5,6 +5,7 @@ import { CheckIcon, SearchIcon } from "lucide-react";
 import type * as React from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
@@ -87,6 +88,26 @@ function CommandEmpty({ className, ...props }: React.ComponentProps<typeof Comma
   );
 }
 
+/**
+ * The row a list shows while what it lists is still being fetched: a spinner and, as `children`,
+ * what is awaited. cmdk tells it as a progress bar named by `label`, and hides what it shows from
+ * a screen reader, so `label` should say the same as the children.
+ */
+function CommandLoading({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive.Loading> & { className?: string }) {
+  return (
+    <CommandPrimitive.Loading data-slot="command-loading" {...props}>
+      <div className={cn("flex items-center gap-2 p-2 text-xs text-muted-foreground", className)}>
+        <Spinner aria-hidden="true" className="size-3.5" />
+        {children}
+      </div>
+    </CommandPrimitive.Loading>
+  );
+}
+
 function CommandGroup({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Group>) {
   return (
     <CommandPrimitive.Group
@@ -147,6 +168,7 @@ export {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandLoading,
   CommandSeparator,
   CommandShortcut,
 };

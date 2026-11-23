@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Item } from "@/components/ui/item";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -141,12 +142,18 @@ function ApiKey({ provider }: { provider: NarrationProvider }) {
     );
   }
   return (
-    <form
-      className="rounded-lg border bg-card p-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void save();
-      }}
+    <Item
+      variant="outline"
+      size="xs"
+      className="bg-card p-2"
+      render={
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        />
+      }
     >
       <Field className="gap-2">
         <FieldDescription id={`${id}-about`} className="text-xs">
@@ -171,6 +178,6 @@ function ApiKey({ provider }: { provider: NarrationProvider }) {
           </Button>
         </div>
       </Field>
-    </form>
+    </Item>
   );
 }

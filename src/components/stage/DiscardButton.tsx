@@ -49,7 +49,7 @@ export function DiscardButton() {
         tooltip="Undo the edits made since entering edit mode"
         tooltipSide="bottom"
         onClick={() => (others > 0 ? setAsking(true) : discardAll())}
-        className="absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-background px-3 shadow-md dark:bg-background"
+        className="absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-background px-3 shadow-md dark:bg-background dark:hover:bg-[color-mix(in_oklch,var(--background),var(--foreground)_8%)]"
       >
         <X data-icon="inline-start" />
         {discardLabel(edited, selected)}

@@ -2500,7 +2500,15 @@ describe("Stage", () => {
           const address = screen.getByLabelText("Link address");
           fireEvent.change(address, { target: { value: "javascript:alert(1)" } });
           fireEvent.click(button("Add link"));
-          expect(screen.getByText(/Enter a web address/)).toBeTruthy();
+          // Said as a field says what is wrong with it: read out, and tied to the field.
+          const problem = screen.getByText(/Enter a web address/);
+          expect(problem.dataset.slot).toBe("field-error");
+          expect(problem.getAttribute("role")).toBe("alert");
+          expect(address.getAttribute("aria-invalid")).toBe("true");
+          expect(address.getAttribute("aria-describedby")).toBe(problem.id);
+          fireEvent.change(address, { target: { value: "exam" } });
+          expect(screen.queryByText(/Enter a web address/)).toBeNull();
+          expect(address.hasAttribute("aria-describedby")).toBe(false);
           fireEvent.change(address, { target: { value: "example.com" } });
           fireEvent.click(button("Add link"));
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-link", href: "https://example.com" }, "*");

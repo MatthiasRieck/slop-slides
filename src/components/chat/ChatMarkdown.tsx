@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type ComponentProps, isValidElement, memo, useMemo } from "react";
+import { type ComponentProps, isValidElement, memo, useMemo, useRef } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -13,6 +13,7 @@ import {
   CodeBlockTitle,
 } from "@/components/ui/code-block";
 import { useHighlightedCode } from "@/hooks/use-highlighted-code";
+import { useSeen } from "../../hooks/useSeen";
 import { linkTarget, splitBlocks } from "../../lib/markdown";
 import { showError, useApp } from "../../store";
 
@@ -37,18 +38,20 @@ function ChatLink({ href, children, title }: ComponentProps<"a">) {
 /**
  * Code of a reply set off from its text (a fence, or lines indented): a block that scrolls,
  * names its language, colors the ones the app knows (see lib/highlighter.tsx) and copies itself.
- * While the reply comes in, only the lines that are new are colored.
+ * While the reply comes in, only the lines that are new are colored; and a block is only colored
+ * once it has come near what shows, so a long chat that opens does not color all its code at once.
  */
 function CodeFence({ children }: ComponentProps<"pre">) {
   // react-markdown hands over the `<code>` of the block, whose class names the language.
   const code = isValidElement<ComponentProps<"code">>(children) ? children.props : null;
   const text = typeof code?.children === "string" ? code.children : "";
   const language = /(?:^|\s)language-(\S+)/.exec(code?.className ?? "")?.[1] ?? "";
-  const lines = useHighlightedCode(text, language);
+  const block = useRef<HTMLDivElement>(null);
+  const lines = useHighlightedCode(text, language, useSeen(block));
   // The line break that ends the block is the fence's, not the code's.
   const copy = <CodeBlockCopyButton value={text.replace(/\n$/, "")} />;
   return (
-    <CodeBlock size="sm" data-language={language || undefined}>
+    <CodeBlock ref={block} size="sm" data-language={language || undefined}>
       {language ? (
         <CodeBlockHeader>
           <CodeBlockTitle className="font-mono font-normal text-muted-foreground">{language}</CodeBlockTitle>

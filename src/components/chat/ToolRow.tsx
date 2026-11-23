@@ -1,5 +1,5 @@
 import { Check, X } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,7 @@ import {
   TraceTitle,
 } from "@/components/ui/trace";
 import { useHighlightedCode } from "@/hooks/use-highlighted-code";
+import { useSeen } from "../../hooks/useSeen";
 import { slideNumbers } from "../../lib/slideNumbers";
 import { workspaceChatFileUrl } from "../../lib/utils";
 import { useApp } from "../../store";
@@ -58,10 +59,12 @@ export const ToolSteps = memo(function ToolSteps({ tools }: { tools: ToolPart[] 
             <TraceTitle>{stepsLabel(tools)}</TraceTitle>
           </TraceLine>
         </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent className="flex flex-col gap-2">
-          {tools.map((tool) => (
-            <ToolRow key={tool.id} part={tool} />
-          ))}
+        <TraceCollapsibleContent>
+          <Trace>
+            {tools.map((tool) => (
+              <ToolRow key={tool.id} part={tool} />
+            ))}
+          </Trace>
         </TraceCollapsibleContent>
       </TraceCollapsible>
     </Trace>
@@ -200,13 +203,15 @@ function ToolImage({ path, alt }: { path: string; alt: string }) {
 
 /**
  * Text of a tool call as it was written, as a block of code to scroll and copy: an argument
- * under its name (`title`), or the output. What reads as JSON is colored as such.
+ * under its name (`title`), or the output. What reads as JSON is colored as such, once it has
+ * come near what shows; a text as long as a whole deck stays plain (see `useHighlightedCode`).
  */
 function ToolText(props: { text: string; language: string; title?: string; error?: boolean }) {
   const { text, title, error } = props;
-  const lines = useHighlightedCode(text, props.language);
+  const block = useRef<HTMLDivElement>(null);
+  const lines = useHighlightedCode(text, props.language, useSeen(block));
   return (
-    <CodeBlock size="sm" variant={error ? "destructive" : "default"}>
+    <CodeBlock ref={block} size="sm" variant={error ? "destructive" : "default"}>
       {title ? (
         <CodeBlockHeader>
           <CodeBlockTitle className="font-mono font-normal text-muted-foreground">{title}</CodeBlockTitle>

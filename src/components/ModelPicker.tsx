@@ -3,7 +3,15 @@ import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Command, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandLoading,
+  CommandShortcut,
+} from "@/components/ui/command";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +25,6 @@ import {
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatKeys, isMod } from "../lib/keys";
@@ -216,18 +223,17 @@ function ModelMenu({ search, onClose }: { search: RefObject<HTMLInputElement | n
         <CommandInput ref={search} value={query} onValueChange={setQuery} placeholder="Search models..." />
         <CommandList label="Models" className="mt-1">
           {providers === undefined ? (
-            <p className="flex items-center justify-center gap-2 px-2 py-8 text-xs text-muted-foreground">
-              <Spinner aria-hidden="true" className="size-3.5" />
+            <CommandLoading label="Looking for installed agents" className="justify-center px-2 py-8">
               Looking for installed agents…
-            </p>
+            </CommandLoading>
           ) : turnedOff ? (
             <TurnedOff provider={turnedOff} onClose={onClose} />
           ) : status && status.models.length === 0 ? (
             <ProviderStatus info={status} onClose={onClose} />
           ) : rows.length === 0 ? (
-            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+            <CommandEmpty className="px-2 py-8 text-xs text-muted-foreground">
               {filter === "favorites" && !query ? "Star a model to pin it here." : "No models match."}
-            </p>
+            </CommandEmpty>
           ) : (
             rows.map((row, index) => {
               const key = modelKey(row.provider, row.id);

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The tabs' contents have their own tests.
@@ -31,6 +32,7 @@ import { provideCodeSave, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { answerUnsaved, unsavedAsked } from "../test/unsaved";
 import { CodePanel, SvgEditor } from "./lazy";
 import { Sidebar } from "./Sidebar";
@@ -57,10 +59,14 @@ beforeEach(() => {
 
 const tab = (name: string) => screen.getByRole("tab", { name });
 const tabNames = () => screen.queryAllByRole("tab").map((t) => t.textContent);
+/** The surface a choice of the + menu opens: its name, over what it is for. */
+const surface = (item: HTMLElement) => item.querySelector("span > span")?.textContent;
 /** On show: mounted, and not kept hidden behind the tab that shows (as the chat and the HTML are). */
 const shown = (id: string) => {
   const content = screen.queryByTestId(id);
-  return content !== null && !content.parentElement?.classList.contains("hidden");
+  // Each is in a tab panel; the panel of a tab that does not show is hidden.
+  const panel = content?.closest<HTMLElement>("[role=tabpanel]");
+  return content !== null && panel != null && !panel.hidden;
 };
 const mounted = (id: string) => screen.queryByTestId(id) !== null;
 
@@ -107,50 +113,76 @@ describe("Sidebar", () => {
     useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
-    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
-      "Chat",
-      "Narration",
-      "Notes",
-      "HTML",
-      "SVG",
-    ]);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
+    expect(screen.getAllByRole("menuitem").map(surface)).toEqual(["Chat", "Narration", "Notes", "HTML", "SVG"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Chat/ }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(tabNames()).toEqual(["Files", "Chat"]);
     expect(shown("chat")).toBe(true);
   });
 
-  it("works the + menu from the keyboard", () => {
+  it("works the + menu from the keyboard", async () => {
+    const user = userEvent.setup();
     useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
     const plus = screen.getByRole("button", { name: "Open a tab" });
     plus.focus();
-    fireEvent.keyDown(plus, { key: "Enter" });
-    fireEvent.click(plus);
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await settle();
     const items = screen.getAllByRole("menuitem");
     expect(document.activeElement).toBe(items[0]);
-    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    await user.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(items[1]);
-    fireEvent.keyDown(items[1]!, { key: "Escape" });
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
+    await settle();
     expect(document.activeElement).toBe(plus);
+    // And picks with Enter.
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await settle();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(tabNames()).toEqual(["Files", "Narration"]);
+    expect(useApp.getState().sidebarTab).toBe("narration");
   });
 
-  it("moves between its tabs with the arrow keys, Tab stopping at the one shown", () => {
+  it("says what each surface of the + menu is for", () => {
+    useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
+    // Under its name, in the menu: nothing to hover for.
+    const notes = screen.getByRole("menuitem", { name: /^Notes/ });
+    expect(notes.textContent).toBe("NotesSpeaker notes for the selected slide; only the presenter sees them");
+    expect(notes.hasAttribute("title")).toBe(false);
+  });
+
+  it("moves between its tabs with the arrow keys, Tab stopping at the one shown", async () => {
     useApp.setState({ sidebarTabs: ["chat", "files", "notes"], sidebarTab: "files" });
     render(<Sidebar />);
+    expect(screen.getByRole("tablist", { name: "Sidebar" })).toBeTruthy();
     const tabs = screen.getAllByRole("tab");
     expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
     tabs[1]!.focus();
     fireEvent.keyDown(tabs[1]!, { key: "ArrowRight" });
+    await settle();
     expect(document.activeElement).toBe(tabs[2]);
     fireEvent.keyDown(tabs[2]!, { key: "ArrowRight" });
+    await settle();
     expect(document.activeElement).toBe(tabs[0]);
     // Moving the focus picks nothing; a click (Enter, Space) does.
     expect(useApp.getState().sidebarTab).toBe("files");
     fireEvent.click(tabs[0]!);
     expect(useApp.getState().sidebarTab).toBe("chat");
     expect(screen.getAllByRole("tab").map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+  });
+
+  it("names the panel of the tab that shows after its tab, and keeps it out of the Tab order", () => {
+    render(<Sidebar />);
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBe(tab("Chat").id);
+    expect(tab("Chat").getAttribute("aria-controls")).toBe(panel.id);
+    // What is in the panel takes the focus, not the panel.
+    expect(panel.tabIndex).toBe(-1);
   });
 
   it("maximizes over the window and back", () => {
@@ -210,7 +242,12 @@ describe("Sidebar", () => {
   it("turns off + once every surface is open", () => {
     useApp.setState({ sidebarTabs: ["chat", "files", "narration", "notes", "code", "svg"] });
     render(<Sidebar />);
-    expect((screen.getByRole("button", { name: "Open a tab" }) as HTMLButtonElement).disabled).toBe(true);
+    const plus = screen.getByRole("button", { name: "Open a tab" });
+    // Off, it still says why.
+    expect(plus.getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(plus)).toBe("Every tab is open");
+    fireEvent.click(plus);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it.each([
@@ -220,7 +257,7 @@ describe("Sidebar", () => {
   ])("opens %s in a tab beside the slide, and closes it again", (name, id) => {
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
-    fireEvent.click(screen.getByRole("menuitem", { name }));
+    fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(`^${name}`) }));
     expect(tabNames()).toEqual(["Chat", "Files", name]);
     expect(tab(name).getAttribute("aria-selected")).toBe("true");
     expect(shown(id)).toBe(true);
@@ -269,7 +306,7 @@ describe("Sidebar", () => {
     fireEvent.click(tab("Chat"));
     expect(shown("chat")).toBe(true);
     expect(code().dataset.active).toBe("false");
-    expect(code().parentElement!.classList.contains("hidden")).toBe(true);
+    expect(code().closest<HTMLElement>("[role=tabpanel]")!.hidden).toBe(true);
     fireEvent.click(tab("HTML"));
     expect(code().dataset.active).toBe("true");
     expect(shown("chat")).toBe(false);

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import { cn } from "../lib/utils";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * A deck's title as a field. Enter commits what is typed (`onCommit`, which says whether it
  * took), and so does leaving the field with a title in it; Escape takes the typing back and
- * calls `onCancel`. An empty title is not committed: Enter says so, and leaving the field puts
- * the title back. With `selectOnMount` it takes the focus as it shows, its text selected.
+ * calls `onCancel`. An empty title is not committed: Enter says so (the field turns invalid and
+ * a tooltip says why), and leaving the field puts the title back. With `selectOnMount` it takes
+ * the focus as it shows, its text selected.
  */
 export function TitleField(props: {
   title: string;
@@ -61,46 +63,49 @@ export function TitleField(props: {
   };
 
   return (
-    <input
-      ref={ref}
-      id={props.id}
-      aria-label={props["aria-label"]}
-      aria-invalid={empty || undefined}
-      title={empty ? "A deck needs a title" : undefined}
-      value={draft}
-      // Not disabled, which would take the focus away: the field keeps it while the title is saved.
-      readOnly={saving}
-      placeholder="Deck title"
-      onChange={(event) => {
-        setDraft(event.target.value);
-        setEmpty(false);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          if (saving) return;
-          if (draft.trim()) void commit();
-          else setEmpty(true);
-        } else if (event.key === "Escape") {
-          // The field's own: nothing open around it closes on the same key.
-          event.preventDefault();
-          event.stopPropagation();
-          settled.current = true;
-          cancel();
-          event.currentTarget.blur();
-          settled.current = false;
+    // The tooltip is the field's complaint: it shows while the title is missing, and only then.
+    <Tooltip open={empty}>
+      <TooltipTrigger
+        render={
+          <Input
+            ref={ref}
+            {...(props.id !== undefined && { id: props.id })}
+            {...(props["aria-label"] !== undefined && { "aria-label": props["aria-label"] })}
+            aria-invalid={empty || undefined}
+            value={draft}
+            // Not disabled, which would take the focus away: the field keeps it while the title is saved.
+            readOnly={saving}
+            placeholder="Deck title"
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setEmpty(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                if (saving) return;
+                if (draft.trim()) void commit();
+                else setEmpty(true);
+              } else if (event.key === "Escape") {
+                // The field's own: nothing open around it closes on the same key.
+                event.preventDefault();
+                event.stopPropagation();
+                settled.current = true;
+                cancel();
+                event.currentTarget.blur();
+                settled.current = false;
+              }
+            }}
+            onBlur={() => {
+              if (settled.current) return;
+              if (draft.trim()) void commit();
+              else cancel();
+            }}
+            className={props.className}
+          />
         }
-      }}
-      onBlur={() => {
-        if (settled.current) return;
-        if (draft.trim()) void commit();
-        else cancel();
-      }}
-      className={cn(
-        "min-w-0 rounded-md border bg-background px-1.5 outline-none focus:border-input focus:ring-2 focus:ring-primary/20",
-        empty && "border-destructive focus:border-destructive",
-        props.className,
-      )}
-    />
+      />
+      <TooltipContent side="bottom">A deck needs a title</TooltipContent>
+    </Tooltip>
   );
 }

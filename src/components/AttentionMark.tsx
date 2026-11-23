@@ -1,5 +1,4 @@
-import { Loader2 } from "lucide-react";
-
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "../lib/utils";
 import type { ChatAttention } from "../store/attention";
 
@@ -18,7 +17,8 @@ export function AttentionMark({ attention, className }: { attention: ChatAttenti
   return (
     <span role="img" aria-label={label} title={label} data-attention={attention} className={cn("flex", className)}>
       {attention === "working" ? (
-        <Loader2 aria-hidden className="size-3 animate-spin text-primary" />
+        // The mark around it is what says so.
+        <Spinner aria-hidden="true" className="size-3 text-primary" />
       ) : (
         <span aria-hidden className="size-2 rounded-full bg-warning" />
       )}

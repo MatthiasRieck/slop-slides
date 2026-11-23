@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openLayer } from "../lib/layers";
 import { type DesignChange, deckMode, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { tooltipOf } from "../test/ui";
 import { DeckSettings } from "./DeckSettings";
 
 const applyStyle = vi.fn<() => Promise<DesignChange | null>>(async () => null);
@@ -58,7 +59,7 @@ describe("DeckSettings", () => {
       expect(deckMode(useApp.getState())).toBe("settings");
       render(<DeckSettings />);
       const done = screen.getByRole("button", { name: "Done" });
-      expect(done.title).toBe("Back to Edit (Esc)");
+      expect(tooltipOf(done)).toBe("Back to EditEsc");
       fireEvent.click(done);
       expect(deckMode(useApp.getState())).toBe("edit");
     });

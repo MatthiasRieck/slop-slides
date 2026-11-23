@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { LintStatus } from "./LintStatus";
 
 beforeEach(() => {
@@ -40,8 +41,9 @@ describe("lint status", () => {
     render(<LintStatus />);
     const button = screen.getByRole("button", { name: /Lint: the check failed/ });
     expect(button.textContent).toBe("Check failed");
-    expect(button.title).toContain("deck not found");
+    expect(tooltipOf(button)).toBe("deck.html could not be checked: deck not found\nClick to check again.");
     expect(screen.queryByTitle(/Checking/)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
     fireEvent.click(button);
     expect(refreshLint).toHaveBeenCalledOnce();
     useApp.setState({ lintError: null });
@@ -134,12 +136,55 @@ describe("lint status", () => {
   });
 
   it("still lists the problems while the agent works, but cannot ask it then", () => {
-    useApp.setState({ lint: issues, running: true });
+    useApp.setState({ lint: issues, running: true, composerFill: null });
     render(<LintStatus />);
     fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    const ask = screen.getByRole("button", { name: "Ask the agent to fix" }) as HTMLButtonElement;
-    expect(ask.disabled).toBe(true);
-    expect(ask.title).toContain("at work");
+    const ask = screen.getByRole("button", { name: "Ask the agent to fix" });
+    // Off, it still says why; pressed all the same, it fills nothing in.
+    expect(ask.getAttribute("aria-disabled")).toBe("true");
+    expect(tooltipOf(ask)).toContain("at work");
+    fireEvent.click(ask);
+    expect(useApp.getState().composerFill).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Problems in the deck file" })).toBeTruthy();
     useApp.setState({ running: false });
+  });
+
+  it("opens the list over the button, the focus on the way to the agent, and gives it back on Escape", async () => {
+    useApp.setState({ lint: issues, running: false });
+    render(<LintStatus />);
+    const button = screen.getByRole("button", { name: /Lint: 1 error/ });
+    expect(button.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(tooltipOf(button)).toBe("1 error, 1 warning in deck.html. Click to see them.");
+    button.focus();
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Ask the agent to fix" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("counts the errors and the warnings at the top of the list", () => {
+    useApp.setState({ lint: issues, running: false });
+    render(<LintStatus />);
+    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
+    const list = screen.getByRole("dialog", { name: "Problems in the deck file" });
+    expect(list.textContent).toContain("1 error, 1 warning in deck.html");
+    const badges = Array.from(list.querySelectorAll("[data-slot=badge]"));
+    // The line beside them says the same in words: the badges are for the eye.
+    expect(badges.map((badge) => [badge.textContent, badge.getAttribute("aria-hidden")])).toEqual([
+      ["1", "true"],
+      ["1", "true"],
+    ]);
+  });
+
+  it("is a status named for what it does while the file is checked", () => {
+    useApp.setState({ lint: null, lintError: null });
+    render(<LintStatus />);
+    expect(screen.getByRole("status", { name: "Lint: checking" })).toBeTruthy();
+    expect(screen.getByTitle("Checking deck.html…")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

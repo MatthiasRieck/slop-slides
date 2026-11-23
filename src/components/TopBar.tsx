@@ -18,20 +18,24 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { useDropdown } from "../hooks/useDropdown";
-import { useMenuKeys } from "../hooks/useMenuKeys";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { HistoryEntry, OpenedFile, WorkspaceInfo } from "../lib/api";
-import { formatKeys } from "../lib/keys";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn, isMac, revealLabel } from "../lib/utils";
 import { openSettings, useApp } from "../store";
 import { hiddenChatAttention } from "../store/attention";
 import { ATTENTION_LABELS, AttentionMark } from "./AttentionMark";
-import { ToolButton } from "./Button";
 import { DeckActions, MenuItem } from "./DeckActions";
 import { ModeTabs } from "./ModeTabs";
 import { chooseWorkspace } from "./openDialogs";
-import { SectionLabel } from "./SectionLabel";
 import { TitleField } from "./TitleField";
 
 /**
@@ -75,15 +79,16 @@ export function TopBar() {
         <div />
       )}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
-        <ToolButton
-          variant="panel"
-          size="md"
-          label="Settings"
+        <Button
+          variant="tool"
+          size="icon-sm"
+          tooltip="Settings"
           shortcut={SHELL_SHORTCUTS.appSettings}
+          tooltipSide="bottom"
           onClick={() => openSettings()}
         >
-          <Settings className="size-4" />
-        </ToolButton>
+          <Settings />
+        </Button>
         {hasDeck && (
           <div className="mr-2 flex items-center gap-1">
             <DeckActions />
@@ -100,12 +105,19 @@ export function TopBar() {
  * The workspace folder, then each folder of the open file's path, then the file. Small and muted
  * above a deck's title; otherwise it is the title.
  */
-function Breadcrumbs({ workspace, path, small }: { workspace: string; path: string | null; small: boolean }) {
+function Breadcrumbs(props: {
+  workspace: string;
+  path: string | null;
+  small: boolean;
+  /** Says the whole path on hover, where nothing around it does (the file's menu button has its own tooltip). */
+  hint?: boolean;
+}) {
+  const { workspace, path, small } = props;
   const crumbs = [workspace, ...(path ? path.split("/").filter(Boolean) : [])];
   return (
     <span
       data-breadcrumbs
-      title={path ?? workspace}
+      title={props.hint ? (path ?? workspace) : undefined}
       className={cn("flex min-w-0 items-center gap-1 px-1.5", small ? "text-2xs leading-4" : "text-sm")}
     >
       {crumbs.map((crumb, i) => {
@@ -139,20 +151,13 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
  */
 function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; deckTitle: string | null }) {
   const { workspace, file, deckTitle } = props;
-  const { open, setOpen, ref: menuRef } = useDropdown();
-  const menu = useMenuKeys();
   const [renaming, setRenaming] = useState(false);
   const isDeck = deckTitle !== null;
-
-  const choose = (action: () => void) => () => {
-    setOpen(false);
-    action();
-  };
 
   if (renaming && isDeck) {
     return (
       <div className="flex min-w-32 flex-col justify-center">
-        <Breadcrumbs workspace={workspace.name} path={file?.path ?? null} small />
+        <Breadcrumbs workspace={workspace.name} path={file?.path ?? null} small hint />
         <TitleField
           aria-label="Deck title"
           title={deckTitle}
@@ -160,100 +165,96 @@ function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; de
           onCommit={(title) => useApp.getState().renameDeck(title)}
           onDone={() => setRenaming(false)}
           onCancel={() => setRenaming(false)}
-          className="h-6 w-64 max-w-full text-sm font-medium"
+          className="h-6 w-64 max-w-full px-1.5 font-medium"
         />
       </div>
     );
   }
 
   return (
-    <div ref={menuRef} className="relative min-w-24">
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={file?.path ?? workspace.path}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "flex min-w-0 max-w-full items-center gap-1 rounded-md py-1 pr-1.5 text-left hover:bg-accent",
-          open && "bg-accent",
-        )}
-      >
-        <span className="flex min-w-0 flex-col justify-center">
-          <Breadcrumbs workspace={workspace.name} path={file?.path ?? null} small={isDeck} />
-          {isDeck && (
-            <span data-deck-title title={deckTitle} className="truncate px-1.5 text-sm font-medium leading-5">
-              {deckTitle || "Untitled"}
-            </span>
-          )}
-        </span>
-        <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-      </button>
-      {open && (
-        <div
-          role="menu"
-          {...menu}
-          className="enter-below absolute left-0 top-full z-20 mt-1 w-60 rounded-lg border bg-card p-1 shadow-lg outline-none"
+    <div className="min-w-24">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              // Where the file is, in full: the path in the button is cut short when the bar is narrow.
+              tooltip={file?.path ?? workspace.path}
+              tooltipSide="bottom"
+              className="h-auto max-w-full min-w-0 shrink justify-start gap-1 py-1 pr-1.5 pl-0 text-left font-normal"
+            />
+          }
         >
+          <span className="flex min-w-0 flex-col justify-center">
+            <Breadcrumbs workspace={workspace.name} path={file?.path ?? null} small={isDeck} />
+            {isDeck && (
+              <span data-deck-title className="truncate px-1.5 text-sm font-medium leading-5">
+                {deckTitle || "Untitled"}
+              </span>
+            )}
+          </span>
+          <ChevronDown className="size-3 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-60">
           {file && (
             <>
-              <SectionLabel className="block px-2 pb-0.5 pt-1.5">{isDeck ? "Deck" : "File"}</SectionLabel>
-              {isDeck && (
-                <>
-                  <MenuItem icon={PencilLine} label="Rename…" onClick={choose(() => setRenaming(true))} />
-                  <MenuItem
-                    icon={Settings2}
-                    label="Deck settings"
-                    hint="Its title, slide size and style"
-                    onClick={choose(() => useApp.getState().openDeckSettings())}
-                  />
-                </>
-              )}
-              <MenuItem
-                icon={FolderSearch}
-                label={revealLabel}
-                onClick={choose(() => void revealItemInDir(file.absolute))}
-              />
-              <MenuItem
-                icon={X}
-                label={isDeck ? "Close deck" : "Close file"}
-                hint={`Back to ${workspace.name}`}
-                onClick={choose(() => void useApp.getState().closeDeck())}
-              />
-              <hr className="my-1 border-border" />
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className={sectionLabel}>{isDeck ? "Deck" : "File"}</DropdownMenuLabel>
+                {isDeck && (
+                  <>
+                    <MenuItem icon={PencilLine} label="Rename…" onClick={() => setRenaming(true)} />
+                    <MenuItem
+                      icon={Settings2}
+                      label="Deck settings"
+                      hint="Its title, slide size and style"
+                      onClick={() => useApp.getState().openDeckSettings()}
+                    />
+                  </>
+                )}
+                <MenuItem icon={FolderSearch} label={revealLabel} onClick={() => void revealItemInDir(file.absolute)} />
+                <MenuItem
+                  icon={X}
+                  label={isDeck ? "Close deck" : "Close file"}
+                  hint={`Back to ${workspace.name}`}
+                  onClick={() => void useApp.getState().closeDeck()}
+                />
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
             </>
           )}
-          <SectionLabel className="block px-2 pb-0.5 pt-1.5">Folder</SectionLabel>
-          <MenuItem
-            icon={Files}
-            label="Show in Files"
-            hint={file ? "Where the file is in the folder" : "The folder's files, in the sidebar"}
-            onClick={choose(() => useApp.getState().setSidebarTab("files"))}
-          />
-          {!file && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className={sectionLabel}>Folder</DropdownMenuLabel>
             <MenuItem
-              icon={FolderSearch}
-              label={revealLabel}
-              onClick={choose(() => void revealItemInDir(workspace.path))}
+              icon={Files}
+              label="Show in Files"
+              hint={file ? "Where the file is in the folder" : "The folder's files, in the sidebar"}
+              onClick={() => useApp.getState().setSidebarTab("files")}
             />
-          )}
-          <MenuItem
-            icon={FolderOpen}
-            label="Open folder…"
-            hint={`Work on the decks of another folder (${formatKeys(SHELL_SHORTCUTS.openFolder)})`}
-            onClick={choose(() => void chooseWorkspace())}
-          />
-          <MenuItem
-            icon={FolderClosed}
-            label="Close folder"
-            hint="Back to the start screen"
-            onClick={choose(() => void useApp.getState().closeWorkspace())}
-          />
-        </div>
-      )}
+            {!file && (
+              <MenuItem icon={FolderSearch} label={revealLabel} onClick={() => void revealItemInDir(workspace.path)} />
+            )}
+            <MenuItem
+              icon={FolderOpen}
+              label="Open folder…"
+              hint="Work on the decks of another folder"
+              shortcut={SHELL_SHORTCUTS.openFolder}
+              onClick={() => void chooseWorkspace()}
+            />
+            <MenuItem
+              icon={FolderClosed}
+              label="Close folder"
+              hint="Back to the start screen"
+              onClick={() => void useApp.getState().closeWorkspace()}
+            />
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
+
+/** The small uppercase label over a section of a menu. */
+const sectionLabel = "px-2 pt-1.5 pb-0.5 text-2xs uppercase tracking-wide";
 
 /**
  * Undo and redo of the open deck's changes, whatever made them: edits, the slide rail, review
@@ -266,32 +267,38 @@ function EditHistory() {
   const app = useApp.getState;
   /** Said while the agent works, when the step has to wait. */
   const later = (step: string) => `${step}, once the agent is done`;
+  /** A step's tooltip: what it takes back or brings back, or why it cannot just now. Its keys show while it can. */
+  const hint = (name: string, entry: HistoryEntry | null) => {
+    if (!entry) return { tooltip: `Nothing to ${name.toLowerCase()}` };
+    const step = `${name} ${historyLabel(entry)}`;
+    return running ? { tooltip: later(step) } : { tooltip: step };
+  };
   return (
     <div className="flex items-center">
-      <ToolButton
-        variant="panel"
-        size="md"
-        label="Undo"
-        title={undo ? `Undo ${historyLabel(undo)}` : undefined}
-        shortcut="mod+z"
-        disabledReason={undo ? later(`Undo ${historyLabel(undo)}`) : "Nothing to undo"}
+      <Button
+        variant="tool"
+        size="icon-sm"
+        aria-label="Undo"
+        {...hint("Undo", undo)}
+        {...(undo && !running && { shortcut: "mod+z" })}
+        tooltipSide="bottom"
         disabled={!undo || running}
         onClick={() => void app().undo()}
       >
-        <Undo2 className="size-4" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        size="md"
-        label="Redo"
-        title={redo ? `Redo ${historyLabel(redo)}` : undefined}
-        shortcut="mod+shift+z"
-        disabledReason={redo ? later(`Redo ${historyLabel(redo)}`) : "Nothing to redo"}
+        <Undo2 />
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-sm"
+        aria-label="Redo"
+        {...hint("Redo", redo)}
+        {...(redo && !running && { shortcut: "mod+shift+z" })}
+        tooltipSide="bottom"
         disabled={!redo || running}
         onClick={() => void app().redo()}
       >
-        <Redo2 className="size-4" />
-      </ToolButton>
+        <Redo2 />
+      </Button>
     </div>
   );
 }
@@ -306,16 +313,17 @@ function RailToggle() {
   const railOpen = useApp((s) => s.railOpen);
   const Icon = railOpen ? PanelLeftClose : PanelLeftOpen;
   return (
-    <ToolButton
-      variant="panel"
-      size="md"
-      label={railOpen ? "Hide slides" : "Show slides"}
+    <Button
+      variant="tool"
+      size="icon-sm"
+      tooltip={railOpen ? "Hide slides" : "Show slides"}
       shortcut={SHELL_SHORTCUTS.rail}
-      active={railOpen}
+      tooltipSide="bottom"
+      aria-pressed={railOpen}
       onClick={() => useApp.getState().setRailOpen(!railOpen)}
     >
-      <Icon className="size-4" />
-    </ToolButton>
+      <Icon />
+    </Button>
   );
 }
 
@@ -331,17 +339,18 @@ export function SidebarToggle() {
   const label = sidebarOpen ? "Hide sidebar" : "Show sidebar";
   return (
     <span className="relative flex">
-      <ToolButton
-        variant="panel"
-        size="md"
-        label={label}
-        title={attention ? `${label}: ${ATTENTION_LABELS[attention].toLowerCase()}` : label}
+      <Button
+        variant="tool"
+        size="icon-sm"
+        aria-label={label}
+        tooltip={attention ? `${label}: ${ATTENTION_LABELS[attention].toLowerCase()}` : label}
         shortcut={SHELL_SHORTCUTS.sidebar}
-        active={sidebarOpen}
+        tooltipSide="bottom"
+        aria-pressed={sidebarOpen}
         onClick={() => useApp.getState().setSidebarOpen(!sidebarOpen)}
       >
-        <Icon className="size-4" />
-      </ToolButton>
+        <Icon />
+      </Button>
       {attention && (
         <AttentionMark
           attention={attention}

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
 import { invoke, open as openDialog, revealItemInDir } from "../test/tauri";
@@ -81,6 +81,44 @@ describe("FileViewer", () => {
       expect(revealItemInDir).toHaveBeenCalledWith(absolute);
     },
   );
+
+  it("says there is nothing to show for a file without a viewer, as an empty state with what can be done", () => {
+    useApp.setState({ openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" } });
+    render(<FileViewer />);
+    const empty = document.querySelector<HTMLElement>("[data-slot=empty]")!;
+    expect(empty.querySelector("[data-slot=empty-title]")!.textContent).toBe("notes.md");
+    expect(empty.querySelector("[data-slot=empty-description]")!.textContent).toBe(
+      "There is no preview for this kind of file yet.",
+    );
+    expect(
+      within(empty)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Show in folder"]);
+  });
+
+  it("spins beside what it says while a PowerPoint file is imported, without saying it twice", async () => {
+    let done!: () => void;
+    const importPptx = vi.fn(() => new Promise<void>((resolve) => (done = resolve)));
+    useApp.setState({ importPptx, openedFile: { path: "q3.pptx", absolute: "/ws/q3.pptx", kind: "file" } });
+    render(<FileViewer />);
+    fireEvent.click(screen.getByRole("button", { name: "Import as deck" }));
+    const busy = screen.getByRole("button", { name: "Importing q3.pptx…" });
+    expect(busy.querySelector("[data-slot=spinner]")?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("status")).toBeNull();
+    await act(async () => done());
+    expect(document.querySelector("[data-slot=spinner]")).toBeNull();
+  });
+
+  it("notes that a slideshow of another tool is shown as it is, without interrupting", () => {
+    useApp.setState({ openedFile: { path: "show.html", absolute: "/ws/show.html", kind: "slideshow" } });
+    render(<FileViewer />);
+    expect(screen.getByRole("note").textContent).toContain("Only SlopSlide decks open in the slide editor.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    // A plain page has no such note.
+    act(() => useApp.setState({ openedFile: { path: "site.html", absolute: "/ws/site.html", kind: "webpage" } }));
+    expect(screen.queryByRole("note")).toBeNull();
+  });
 
   it("uses the reveal icon, not the open folder's, for the file manager", () => {
     useApp.setState({ openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" } });

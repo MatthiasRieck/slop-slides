@@ -1,15 +1,17 @@
 import { ArrowLeft } from "lucide-react";
 import { useId, useLayoutEffect } from "react";
 
-import { formatKeys } from "../lib/keys";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { openLayer } from "../lib/layers";
 import { useApp } from "../store";
-import { Button } from "./Button";
 import { SlideSizeSettings } from "./SlideSize";
 import { StylePicker } from "./Templates";
 import { TitleField } from "./TitleField";
 
-const card = "flex flex-col overflow-hidden rounded-xl border bg-card text-foreground";
+/** A card of the settings: what is in it brings its own padding and dividers. */
+const card = "gap-0 py-0";
 
 /** How the header names the mode Done goes back to. */
 const MODE_NAMES = { view: "View", edit: "Edit", git: "Git" };
@@ -33,25 +35,20 @@ export function DeckSettings() {
         <header className="flex items-center gap-3">
           <h1 className="text-base font-semibold tracking-tight text-foreground">Deck settings</h1>
           <span className="flex-1" />
-          <Button
-            variant="primary"
-            size="xl"
-            title={`Back to ${MODE_NAMES[from]} (${formatKeys("escape")})`}
-            onClick={done}
-          >
-            <ArrowLeft />
+          <Button size="sm" tooltip={`Back to ${MODE_NAMES[from]}`} shortcut="escape" onClick={done}>
+            <ArrowLeft data-icon="inline-start" />
             Done
           </Button>
         </header>
-        <div className={card}>
+        <Card className={card}>
           <DeckTitle />
-        </div>
-        <div className={card}>
+        </Card>
+        <Card className={card}>
           <SlideSizeSettings />
-        </div>
-        <div className={card}>
+        </Card>
+        <Card className={card}>
           <StylePicker />
-        </div>
+        </Card>
       </div>
     </section>
   );
@@ -62,19 +59,19 @@ function DeckTitle() {
   const title = useApp((s) => s.deck?.title ?? "");
   const id = useId();
   return (
-    <div className="flex flex-col gap-1 p-3 text-xs">
-      <label htmlFor={id} className="font-medium">
+    <Field className="gap-1 p-3">
+      <FieldLabel htmlFor={id} className="text-xs">
         Title
-      </label>
+      </FieldLabel>
       <TitleField
         id={id}
         title={title}
         onCommit={(next) => useApp.getState().renameDeck(next)}
-        className="h-7 w-full text-sm"
+        className="h-7 w-full px-2"
       />
-      <p className="text-2xs text-muted-foreground">
+      <FieldDescription className="text-2xs">
         Shown in the top bar and the window, and what exports are named after. The deck's file keeps its name.
-      </p>
-    </div>
+      </FieldDescription>
+    </Field>
   );
 }

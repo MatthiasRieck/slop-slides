@@ -1,18 +1,20 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke, open as openDialog, revealItemInDir, save } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { answerUnsaved } from "../test/unsaved";
 import { TopBar } from "./TopBar";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
 
-/** The open file's path and title, the button that opens its menu. */
-const fileButton = () => document.querySelector<HTMLButtonElement>("header button[aria-haspopup=menu][title]")!;
 const crumbsEl = () => document.querySelector<HTMLElement>("[data-breadcrumbs]")!;
+/** The open file's path and title, the button that opens its menu. */
+const fileButton = () => crumbsEl().closest<HTMLButtonElement>("header button[aria-haspopup=menu]")!;
 const openFileMenu = () => fireEvent.click(fileButton());
 
 beforeEach(() => {
@@ -55,12 +57,12 @@ describe("slide rail toggle", () => {
 
   it("says its shortcut in the tooltip, not in its name", () => {
     render(<TopBar />);
-    expect(screen.getByRole("button", { name: "Hide slides" }).title).toBe("Hide slides (Ctrl+Shift+\\)");
+    expect(tooltipOf(screen.getByRole("button", { name: "Hide slides" }))).toBe("Hide slidesCtrl+Shift+\\");
   });
 });
 
 describe("undo and redo", () => {
-  it("step through the deck's history, naming the change, and are off while the agent works", () => {
+  it("step through the deck's history, naming the change, and are off while the agent works", async () => {
     const undo = vi.fn().mockResolvedValue(undefined);
     const redo = vi.fn().mockResolvedValue(undefined);
     const { undo: realUndo, redo: realRedo } = useApp.getState();
@@ -74,24 +76,35 @@ describe("undo and redo", () => {
     try {
       render(<TopBar />);
       const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
-      expect(button("Undo").disabled).toBe(true);
-      expect(button("Redo").disabled).toBe(true);
-      expect(button("Undo").title).toBe("Nothing to undo");
+      // Off, they still take the pointer and the focus, to say why.
+      const off = (name: string) => button(name).getAttribute("aria-disabled") === "true";
+      expect(off("Undo")).toBe(true);
+      expect(off("Redo")).toBe(true);
+      expect(tooltipOf(button("Undo"))).toBe("Nothing to undo");
+      expect(tooltipOf(button("Redo"))).toBe("Nothing to redo");
+      fireEvent.click(button("Undo"));
+      expect(undo).not.toHaveBeenCalled();
 
       act(() =>
         useApp.setState({
           history: { undo: entry("Bigger title", "chat"), redo: entry("Move slides", "rail"), current: "v2" },
         }),
       );
-      expect(button("Undo").title).toBe("Undo chat: “Bigger title” (Ctrl+Z)");
-      expect(button("Redo").title).toBe("Redo “Move slides” (Ctrl+Shift+Z)");
+      expect(off("Undo")).toBe(false);
+      expect(tooltipOf(button("Undo"))).toBe("Undo chat: “Bigger title”Ctrl+Z");
+      expect(tooltipOf(button("Redo"))).toBe("Redo “Move slides”Ctrl+Shift+Z");
       fireEvent.click(button("Undo"));
       fireEvent.click(button("Redo"));
       expect([undo, redo].map((f) => f.mock.calls.length)).toEqual([1, 1]);
 
       act(() => useApp.setState({ running: true }));
-      expect(button("Undo").disabled).toBe(true);
-      expect(button("Undo").title).toBe("Undo chat: “Bigger title”, once the agent is done");
+      expect(off("Undo")).toBe(true);
+      // (A tooltip stays away after its button was pressed, until the pointer or the focus has left it.)
+      fireEvent.mouseLeave(button("Undo"));
+      fireEvent.blur(button("Undo"));
+      expect(tooltipOf(button("Undo"))).toBe("Undo chat: “Bigger title”, once the agent is done");
+      fireEvent.click(button("Undo"));
+      expect(undo).toHaveBeenCalledOnce();
     } finally {
       useApp.setState({ undo: realUndo, redo: realRedo, history: null, running: false });
     }
@@ -142,12 +155,14 @@ describe("the sidebar toggle's mark", () => {
     render(<TopBar />);
     expect(mark()?.dataset.attention).toBe("working");
     expect(mark()?.getAttribute("aria-label")).toBe("The agent is working");
-    expect(screen.getByRole("button", { name: "Show sidebar" }).title).toBe(
-      "Show sidebar: the agent is working (Ctrl+\\)",
+    // The spinner is the mark's, not a status of its own.
+    expect(mark()?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(tooltipOf(screen.getByRole("button", { name: "Show sidebar" }))).toBe(
+      "Show sidebar: the agent is workingCtrl+\\",
     );
     act(() => useApp.setState({ running: false }));
     expect(mark()).toBeNull();
-    expect(screen.getByRole("button", { name: "Show sidebar" }).title).toBe("Show sidebar (Ctrl+\\)");
+    expect(tooltipOf(screen.getByRole("button", { name: "Show sidebar" }))).toBe("Show sidebarCtrl+\\");
   });
 
   it("is a warning dot while the agent waits for an approval", () => {
@@ -188,10 +203,15 @@ describe("workspace bar", () => {
       "Close folder",
     ]);
     const menu = screen.getByRole("menu");
-    expect(Array.from(menu.querySelectorAll("span.uppercase")).map((label) => label.textContent)).toEqual([
-      "Deck",
-      "Folder",
-    ]);
+    expect(
+      Array.from(menu.querySelectorAll("[data-slot=dropdown-menu-label]")).map((label) => label.textContent),
+    ).toEqual(["Deck", "Folder"]);
+    // Each label names its group of choices.
+    expect(
+      within(menu)
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-labelledby")),
+    ).toEqual(Array.from(menu.querySelectorAll("[data-slot=dropdown-menu-label]")).map((label) => label.id));
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -210,20 +230,35 @@ describe("workspace bar", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("works its menu from the keyboard: the arrows go through it and Escape gives the focus back", () => {
+  it("works its menu from the keyboard: the arrows go through it and Escape gives the focus back", async () => {
+    const user = userEvent.setup();
     render(<TopBar />);
     fileButton().focus();
-    fireEvent.keyDown(fileButton(), { key: "Enter" });
-    openFileMenu();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await settle();
     const items = screen.getAllByRole("menuitem");
     expect(document.activeElement).toBe(items[0]);
-    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    await user.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(items[1]);
-    fireEvent.keyDown(items[1]!, { key: "End" });
+    await user.keyboard("{End}");
     expect(document.activeElement).toBe(items.at(-1));
-    fireEvent.keyDown(items.at(-1)!, { key: "Escape" });
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).toBeNull();
+    await settle();
     expect(document.activeElement).toBe(fileButton());
+  });
+
+  it("picks a choice of its menu with Enter", async () => {
+    const user = userEvent.setup();
+    render(<TopBar />);
+    fileButton().focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("menu");
+    await settle();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(useApp.getState().slideMode).toBe("settings");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("opens the deck's settings from the file's menu, remembering the mode to go back to", () => {
@@ -261,6 +296,15 @@ describe("workspace bar", () => {
       expect(crumbsEl().textContent).toBe("decks/talk/deck.html");
     });
 
+    it("keeps the focus in the field once the menu it came from is gone", async () => {
+      const field = startRenaming();
+      // The menu gives the focus back to its button as it closes; the button is gone, and the field keeps it.
+      await settle();
+      expect(titleField()).toBe(field);
+      expect(document.activeElement).toBe(field);
+      expect(invoke).not.toHaveBeenCalledWith("rename_deck", expect.anything());
+    });
+
     it("takes the new title on Enter", async () => {
       const field = startRenaming();
       fireEvent.change(field, { target: { value: "  Board update " } });
@@ -286,11 +330,13 @@ describe("workspace bar", () => {
       await act(async () => fireEvent.keyDown(field, { key: "Enter" }));
       expect(titleField()).not.toBeNull();
       expect(field.getAttribute("aria-invalid")).toBe("true");
-      expect(field.title).toBe("A deck needs a title");
+      const complaint = () => document.querySelector("[data-slot=tooltip-content]")?.textContent;
+      expect(complaint()).toBe("A deck needs a title");
       expect(invoke).not.toHaveBeenCalledWith("rename_deck", expect.anything());
       // Typing again takes the complaint away.
       fireEvent.change(field, { target: { value: "B" } });
       expect(field.getAttribute("aria-invalid")).toBeNull();
+      expect(complaint()).toBeUndefined();
     });
 
     it("commits on leaving the field, and puts an emptied title back", async () => {
@@ -381,7 +427,7 @@ describe("workspace bar", () => {
     expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
       "Show in FilesThe folder's files, in the sidebar",
       "Show in folder",
-      "Open folder…Work on the decks of another folder (Ctrl+O)",
+      "Open folder…Work on the decks of another folderCtrl+O",
       "Close folderBack to the start screen",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
@@ -483,7 +529,7 @@ describe("layout", () => {
     // What the deck's actions are called is theirs to say (DeckActions); where they go is the bar's.
     expect(order()).toEqual([
       "Hide slides",
-      "talk/deck.html",
+      expect.stringContaining("talk/deck.html"),
       "Undo",
       "Redo",
       "Mode",
@@ -544,7 +590,7 @@ describe("the settings gear", () => {
     render(<TopBar />);
     expect(gear().nextElementSibling!.contains(screen.getByRole("button", { name: "Export" }))).toBe(true);
     expect(gear().nextElementSibling!.querySelector("button")).toBe(screen.getByRole("button", { name: "Export" }));
-    expect(gear().title).toBe("Settings (Ctrl+,)");
+    expect(tooltipOf(gear())).toBe("SettingsCtrl+,");
     // A button that opens a dialog, not a toggle.
     expect(gear().hasAttribute("aria-pressed")).toBe(false);
     fireEvent.click(gear());
@@ -591,6 +637,13 @@ describe("breadcrumbs", () => {
     expect(crumbs()).toEqual(["decks"]);
     expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
     // The folder's own menu: to open another folder, or close this one.
-    expect(fileButton().title).toBe("/decks");
+    expect(tooltipOf(fileButton())).toBe("/decks");
+  });
+
+  it("says the whole path of the open file in the tooltip of its menu button", () => {
+    render(<TopBar />);
+    expect(tooltipOf(fileButton())).toBe("talk/deck.html");
+    // One tooltip, not the browser's own beside it.
+    expect(crumbsEl().hasAttribute("title")).toBe(false);
   });
 });

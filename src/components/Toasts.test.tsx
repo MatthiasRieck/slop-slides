@@ -1,12 +1,43 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { toast } from "@/components/ui/toast";
 import { openLayer } from "../lib/layers";
 import { showError, showInfo, showSuccess, useApp } from "../store";
-import { TOAST_EXIT_MS, TOAST_MS, Toasts } from "./Toasts";
+import { MAX_TOASTS } from "../store/ui";
+import { TOAST_MS, Toasts } from "./Toasts";
 
 const texts = () => useApp.getState().toasts.map((toast) => toast.text);
 const pressEscape = (target: Element | Document = document.body) => fireEvent.keyDown(target, { key: "Escape" });
+
+/** Lets the toaster show what it was just given, or take away what was just closed. */
+const flush = () => act(() => void vi.advanceTimersByTime(20));
+
+/** The toasts on show, the oldest first, as elements. */
+const cards = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-slot=toast]")].sort(
+    (a, b) => Number(b.style.getPropertyValue("--toast-index")) - Number(a.style.getPropertyValue("--toast-index")),
+  );
+const card = (text: string) =>
+  screen.getByText(text, { selector: "[data-slot=toast-title]" }).closest("[data-slot=toast]")!;
+// An error is read out as it shows, and its toast is out of a screen reader's way until the focus
+// is in the toasts: its button is not found by role.
+const dismissButton = (text: string) => card(text).querySelector<HTMLElement>("[data-slot=toast-close]")!;
+
+/** The toasts with a dialog over the app, as the settings are. */
+function UnderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <>
+      <Toasts />
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent>
+          <DialogTitle>Settings</DialogTitle>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -15,93 +46,138 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("Toasts", () => {
-  it("shows nothing until there is something to say", () => {
+  it("shows no toast until there is something to say", () => {
     render(<Toasts />);
-    expect(screen.queryByTestId("toasts")).toBeNull();
+    flush();
+    expect(cards()).toEqual([]);
   });
 
-  it("stacks them at the bottom right over everything, the newest last", () => {
+  it("stacks them at the bottom right over everything, in the notifications region", () => {
     render(<Toasts />);
     act(() => {
       showError("disk full");
       showInfo("Imported");
     });
-    const stack = screen.getByTestId("toasts");
-    expect(stack.parentElement).toBe(document.body);
-    for (const name of ["fixed", "right-4", "bottom-4", "z-[70]"]) expect(stack.classList.contains(name)).toBe(true);
-    expect([...stack.children].map((toast) => toast.textContent)).toEqual(["disk full", "Imported"]);
+    flush();
+    const stack = document.querySelector<HTMLElement>("[data-slot=toast-viewport]")!;
+    // In the body, so that a dialog, which takes the rest of the app out of reach, leaves them in it.
+    expect(stack.closest("#root")).toBeNull();
+    expect(screen.getByRole("region", { name: "Notifications" })).toBe(stack);
+    for (const name of ["fixed", "bottom-4", "z-70"]) expect(stack.classList.contains(name)).toBe(true);
+    expect(
+      cards().map((toast) => within(toast).getByText(/./, { selector: "[data-slot=toast-title]" }).textContent),
+    ).toEqual(["disk full", "Imported"]);
   });
 
-  it("announces errors as alerts and the rest as status, in the colors of what they mean", () => {
+  it("shows each as a dialog of its kind, in the colors of what they mean", () => {
     render(<Toasts />);
     act(() => {
       showError("disk full");
       showInfo("Imported");
       showSuccess("Exported");
     });
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toBe("disk full");
-    expect(alert.className).toContain("border-destructive/30");
-    expect(screen.getByText("disk full").className).toContain("text-destructive");
-    const [info, success] = screen.getAllByRole("status");
-    expect(info!.textContent).toBe("Imported");
-    expect(info!.className).not.toContain("destructive");
-    expect(success!.querySelector("svg")?.getAttribute("class")).toContain("text-success");
+    flush();
+    const error = card("disk full");
+    // An error interrupts (an alert dialog); the rest are said when there is a pause.
+    expect(error.getAttribute("role")).toBe("alertdialog");
+    expect(card("Imported").getAttribute("role")).toBe("dialog");
+    expect(error.getAttribute("aria-modal")).toBe("false");
+    expect(error.getAttribute("data-type")).toBe("error");
+    expect(error.className).toContain("data-[type=error]:border-destructive/30");
+    expect(error.querySelector("[data-slot=toast-icon] svg")?.getAttribute("class")).toContain("text-destructive");
+    expect(card("Imported").getAttribute("data-type")).toBe("info");
+    expect(card("Imported").querySelector("[data-slot=toast-icon] svg")?.getAttribute("class")).toContain(
+      "text-primary",
+    );
+    expect(card("Exported").getAttribute("data-type")).toBe("success");
+    expect(card("Exported").querySelector("[data-slot=toast-icon] svg")?.getAttribute("class")).toContain(
+      "text-success",
+    );
   });
 
-  it("dismisses a toast with its labelled button, which has a tooltip", () => {
-    render(<Toasts />);
-    act(() => {
-      showError("disk full");
-      showError("busy");
-    });
-    const dismiss = screen.getAllByRole("button", { name: "Dismiss" });
-    expect(dismiss[0]!.getAttribute("title")).toBe("Dismiss");
-    fireEvent.click(dismiss[0]!);
-    expect(texts()).toEqual(["busy"]);
-  });
-
-  it("rises in, and sinks out for a moment once dismissed, out of reach meanwhile", () => {
+  it("says an error at once, and the rest when there is a pause", () => {
+    const add = vi.spyOn(toast, "add");
     render(<Toasts />);
     act(() => {
       showError("disk full");
       showInfo("Imported");
     });
-    const cards = () => [...screen.getByTestId("toasts").children] as HTMLElement[];
-    expect(cards().map((card) => card.classList.contains("toast-enter"))).toEqual([true, true]);
-    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]!);
-    expect(texts()).toEqual(["Imported"]);
-    // Still there, in its place, on its way out: not announced, not to be pressed.
-    expect(cards().map((card) => card.textContent)).toEqual(["disk full", "Imported"]);
-    const leaving = cards()[0]!;
-    expect(leaving.classList.contains("toast-exit")).toBe(true);
-    expect(leaving.classList.contains("pointer-events-auto")).toBe(false);
-    expect(leaving.hasAttribute("inert")).toBe(true);
-    expect(screen.queryByRole("alert")).toBeNull();
-    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
-    expect(cards().map((card) => card.textContent)).toEqual(["Imported"]);
-    // The last one takes the stack with it.
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.getByTestId("toasts")).toBeTruthy();
-    act(() => void vi.advanceTimersByTime(TOAST_EXIT_MS));
-    expect(screen.queryByTestId("toasts")).toBeNull();
+    expect(add.mock.calls.map(([options]) => [options.title, options.priority, options.timeout])).toEqual([
+      ["disk full", "high", 0],
+      ["Imported", "low", TOAST_MS],
+    ]);
+    add.mockRestore();
   });
 
-  it("is gone at once for those who asked for less motion", () => {
-    vi.spyOn(window, "matchMedia").mockImplementation(
-      (query) => ({ matches: query.includes("reduce") }) as MediaQueryList,
-    );
+  it("hands each toast to the toaster once, however often the store changes", () => {
+    const add = vi.spyOn(toast, "add");
     render(<Toasts />);
     act(() => showError("disk full"));
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByTestId("toasts")).toBeNull();
-    vi.restoreAllMocks();
+    act(() => showInfo("Imported"));
+    act(() => showSuccess("Exported"));
+    expect(add).toHaveBeenCalledTimes(3);
+    add.mockRestore();
   });
 
-  it("scrolls a long message rather than growing over the window", () => {
+  it("dismisses a toast with its labelled button", () => {
+    render(<Toasts />);
+    act(() => {
+      showError("disk full");
+      showError("busy");
+    });
+    flush();
+    expect(dismissButton("busy").getAttribute("aria-label")).toBe("Dismiss");
+    fireEvent.click(dismissButton("disk full"));
+    expect(texts()).toEqual(["busy"]);
+    flush();
+    expect(screen.queryByText("disk full", { selector: "[data-slot=toast-title]" })).toBeNull();
+    expect(card("busy")).toBeTruthy();
+  });
+
+  it("takes a toast away when the store drops it", () => {
+    render(<Toasts />);
+    act(() => {
+      showError("disk full");
+      showInfo("Imported");
+    });
+    flush();
+    const [first] = useApp.getState().toasts;
+    act(() => useApp.getState().dismissToast(first!.id));
+    flush();
+    expect(screen.queryByText("disk full", { selector: "[data-slot=toast-title]" })).toBeNull();
+    expect(card("Imported")).toBeTruthy();
+    // The last one leaves none behind.
+    fireEvent.click(dismissButton("Imported"));
+    flush();
+    expect(cards()).toEqual([]);
+    expect(texts()).toEqual([]);
+  });
+
+  it("leaves nothing in the toaster when it goes away itself", () => {
+    const close = vi.spyOn(toast, "close");
+    const { unmount } = render(<Toasts />);
+    act(() => showError("disk full"));
+    const [shown] = useApp.getState().toasts;
+    unmount();
+    expect(close).toHaveBeenCalledWith(String(shown!.id));
+    close.mockRestore();
+  });
+
+  it("shows no more at once than the store keeps", () => {
+    render(<Toasts />);
+    act(() => {
+      for (let i = 0; i <= MAX_TOASTS; i++) showError(`error ${i}`);
+    });
+    flush();
+    expect(texts()).toHaveLength(MAX_TOASTS);
+    expect(cards().filter((toast) => !toast.hasAttribute("data-limited"))).toHaveLength(MAX_TOASTS);
+  });
+
+  it("scrolls a long message rather than growing over the window, and lets it be selected", () => {
     render(<Toasts />);
     act(() => showError("x".repeat(5000)));
-    const text = screen.getByText("x".repeat(5000));
+    flush();
+    const text = screen.getByText("x".repeat(5000), { selector: "[data-slot=toast-title]" }).parentElement!;
     for (const name of ["max-h-40", "overflow-y-auto", "selectable"]) expect(text.classList.contains(name)).toBe(true);
   });
 
@@ -120,25 +196,24 @@ describe("Toasts", () => {
     expect(texts()).toEqual(["disk full"]);
   });
 
-  it("waits while the pointer is on a toast", () => {
+  it("waits while the pointer is on the toasts", () => {
     render(<Toasts />);
     act(() => showInfo("Imported"));
-    const toast = screen.getByRole("status");
-    act(() => void vi.advanceTimersByTime(TOAST_MS - 1));
-    fireEvent.pointerEnter(toast);
+    flush();
+    const stack = screen.getByRole("region", { name: "Notifications" });
+    fireEvent.mouseEnter(stack);
     act(() => void vi.advanceTimersByTime(TOAST_MS * 2));
     expect(texts()).toEqual(["Imported"]);
-    fireEvent.pointerLeave(toast);
-    act(() => void vi.advanceTimersByTime(TOAST_MS - 1));
-    expect(texts()).toEqual(["Imported"]);
-    act(() => void vi.advanceTimersByTime(1));
+    fireEvent.mouseLeave(stack);
+    act(() => void vi.advanceTimersByTime(TOAST_MS));
     expect(texts()).toEqual([]);
   });
 
   it("waits while the focus is in a toast", () => {
     render(<Toasts />);
     act(() => showInfo("Imported"));
-    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    flush();
+    const dismiss = dismissButton("Imported");
     act(() => dismiss.focus());
     act(() => void vi.advanceTimersByTime(TOAST_MS * 2));
     expect(texts()).toEqual(["Imported"]);
@@ -147,13 +222,51 @@ describe("Toasts", () => {
     expect(texts()).toEqual([]);
   });
 
+  it("names the button that dismisses a toast, in reach once the toasts are pointed at", () => {
+    render(<Toasts />);
+    act(() => showInfo("Imported"));
+    flush();
+    expect(within(card("Imported") as HTMLElement).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    fireEvent.mouseEnter(screen.getByRole("region", { name: "Notifications" }));
+    fireEvent.click(within(card("Imported") as HTMLElement).getByRole("button", { name: "Dismiss" }));
+    expect(texts()).toEqual([]);
+  });
+
+  it("stays in reach over a dialog, which a press on a toast does not close", () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(<UnderDialog open={false} onOpenChange={onOpenChange} />);
+    // One that was there before the dialog opened, and one that came while it was open.
+    act(() => showInfo("Imported"));
+    flush();
+    rerender(<UnderDialog open onOpenChange={onOpenChange} />);
+    flush();
+    act(() => showInfo("Exported"));
+    flush();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+    const stack = document.querySelector<HTMLElement>("[data-slot=toast-viewport]")!;
+    expect(stack.closest("[inert]")).toBeNull();
+    for (const text of ["Exported", "Imported"]) {
+      const dismiss = dismissButton(text);
+      fireEvent.pointerDown(dismiss, { pointerType: "mouse", button: 0 });
+      fireEvent.mouseDown(dismiss);
+      fireEvent.click(dismiss);
+      flush();
+    }
+    expect(texts()).toEqual([]);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeTruthy();
+  });
+
   it("runs a toast's action from its button, and takes the toast away", () => {
     const run = vi.fn();
     render(<Toasts />);
     act(() => showInfo("The agent made notes.html.", { label: "Open", run }));
+    flush();
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(run).toHaveBeenCalledOnce();
     expect(texts()).toEqual([]);
+    flush();
+    expect(cards()).toEqual([]);
   });
 
   it("dismisses the newest on Escape, one at a time, keeping the key from the page", () => {

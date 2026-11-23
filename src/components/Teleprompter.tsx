@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Item, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "@/components/ui/item";
+import { Progress, ProgressLabel } from "@/components/ui/progress";
+
 import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
@@ -8,6 +12,7 @@ import { scrollBehavior } from "../lib/motion";
 import { follow, type Piece, pieces, startTrack, toScript } from "../lib/teleprompter";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
+import { ShowButton } from "./presenter/ShowButton";
 import { ScriptMarkdown } from "./ScriptMarkdown";
 
 export type TeleprompterPhase = SpeechModelPhase | "following";
@@ -83,44 +88,47 @@ export function TeleprompterNotice({
   const { phase, modelBytes, progress, error } = teleprompter;
   if (error)
     return (
-      <p role="alert" className="shrink-0 rounded-lg bg-destructive/15 p-2 text-destructive text-xs">
-        {error}
-      </p>
+      <Alert variant="destructive" className="shrink-0 border-destructive/30 bg-destructive/15">
+        <AlertDescription className="text-xs text-destructive">{error}</AlertDescription>
+      </Alert>
     );
   if (phase === "offer")
     return (
-      <div className="shrink-0 rounded-lg bg-foreground/5 p-2 text-xs">
-        <p className="font-medium">Download the speech model?</p>
-        <p className="mt-1 text-foreground/60">
-          {purpose} The model ({formatBytes(modelBytes)}) is downloaded once to ~/.slopslides/models.
-        </p>
-        <div className="mt-2 flex justify-end gap-1.5">
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={teleprompter.decline}
-            className="rounded-md px-2 py-1 text-foreground/70 hover:bg-foreground/10 hover:text-foreground"
-          >
+      <Item variant="muted" size="xs" className="shrink-0">
+        <ItemContent className="gap-1">
+          <ItemTitle className="text-xs">Download the speech model?</ItemTitle>
+          <ItemDescription className="line-clamp-none text-xs">
+            {purpose} The model ({formatBytes(modelBytes)}) is downloaded once to ~/.slopslides/models.
+          </ItemDescription>
+        </ItemContent>
+        <ItemFooter className="justify-end gap-1.5">
+          <ShowButton variant="ghost" size="xs" onClick={teleprompter.decline}>
             Not now
-          </button>
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void teleprompter.download()}
-            className="rounded-md bg-foreground px-2 py-1 text-background hover:opacity-90"
-          >
+          </ShowButton>
+          <ShowButton variant="default" size="xs" onClick={() => void teleprompter.download()}>
             Download
-          </button>
-        </div>
-      </div>
+          </ShowButton>
+        </ItemFooter>
+      </Item>
     );
-  if (phase === "downloading")
+  if (phase === "downloading") {
+    // How much of the model is here, once the download says; until then it only shows that it runs.
+    const done = progress && progress.total > 0 ? Math.min(100, (100 * progress.received) / progress.total) : null;
     return (
-      <p className="shrink-0 rounded-lg bg-foreground/5 p-2 text-foreground/60 text-xs tabular-nums">
-        Downloading the speech model…
-        {progress ? ` ${formatBytes(progress.received)} of ${formatBytes(progress.total)}` : ""}
-      </p>
+      <Item variant="muted" size="xs" className="shrink-0">
+        <ItemContent>
+          <Progress value={done} className="gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
+            <ProgressLabel className="text-xs font-normal">Downloading the speech model…</ProgressLabel>
+            {progress && (
+              <span data-testid="download-progress" className="ml-auto tabular-nums">
+                {formatBytes(progress.received)} of {formatBytes(progress.total)}
+              </span>
+            )}
+          </Progress>
+        </ItemContent>
+      </Item>
     );
+  }
   return null;
 }
 

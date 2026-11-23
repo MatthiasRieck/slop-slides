@@ -11,6 +11,10 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
 import { useHandlers } from "../hooks/useHandlers";
 import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
 import { type TimedComment, timedComments } from "../lib/comments";
@@ -33,7 +37,6 @@ import {
   withTiming,
 } from "../lib/timeline";
 import { useApp } from "../store";
-import { Button, withShortcut } from "./Button";
 import { TimelineClip } from "./narration/TimelineClip";
 import { Playhead, TimeReadout, useFollowPlayhead, usePlayheadValue } from "./narration/TimelinePlayhead";
 import { TimelineSlide } from "./narration/TimelineSlide";
@@ -42,7 +45,6 @@ import { useDeckAudio } from "./narration/useDeckAudio";
 import { useTimelinePlayback } from "./narration/useTimelinePlayback";
 import { type Move, useTimingEdits } from "./narration/useTimingEdits";
 import { useVideoOptions } from "./narration/useVideoOptions";
-import { Popover } from "./Popover";
 
 /** The zoom steps of the track: how many times the width of the panel it is. */
 const ZOOMS = [1, 2, 4, 8, 16];
@@ -190,7 +192,8 @@ function Tracks(props: {
    */
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.metaKey || event.ctrlKey || event.altKey || isTextField(event.target)) return;
-    if ((event.target as Element).closest("[data-timeline-bar], [data-popover]")) return;
+    // The Timing popover opens in the page's body, but its keys still come up through here.
+    if ((event.target as Element).closest("[data-timeline-bar], [data-slot=popover-content]")) return;
     if (event.key === " ") play();
     else if (event.key === "ArrowLeft") step(event, -1);
     else if (event.key === "ArrowRight") step(event, 1);
@@ -260,39 +263,45 @@ function Tracks(props: {
           <TimingButton />
           {reset.length > 0 && (
             <Button
-              size="xs"
-              title="Let every slide follow its narration again"
+              variant="outline"
+              size="2xs"
+              tooltip="Let every slide follow its narration again"
               onClick={() => void useApp.getState().setSlideTiming(reset)}
             >
-              <RotateCcw />
+              <RotateCcw data-icon="inline-start" />
               Reset timing
             </Button>
           )}
+          <ButtonGroup aria-label="Zoom">
+            <Button
+              variant="outline"
+              size="icon-2xs"
+              aria-label="Zoom out"
+              tooltip={zoom === ZOOMS[0] ? "The whole timeline is in sight" : "Zoom out"}
+              disabled={zoom === ZOOMS[0]}
+              onClick={() => zoomTo(zoom / 2)}
+            >
+              <Minus className="size-3.5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon-2xs"
+              aria-label="Zoom in"
+              tooltip={zoom === ZOOMS[ZOOMS.length - 1] ? "Zoomed in all the way" : "Zoom in, around the playhead"}
+              disabled={zoom === ZOOMS[ZOOMS.length - 1]}
+              onClick={() => zoomTo(zoom * 2)}
+            >
+              <Plus className="size-3.5" />
+            </Button>
+          </ButtonGroup>
           <Button
-            size="xs"
-            aria-label="Zoom out"
-            title={zoom === ZOOMS[0] ? "The whole timeline is in sight" : "Zoom out"}
-            disabled={zoom === ZOOMS[0]}
-            onClick={() => zoomTo(zoom / 2)}
-          >
-            <Minus />
-          </Button>
-          <Button
-            size="xs"
-            aria-label="Zoom in"
-            title={zoom === ZOOMS[ZOOMS.length - 1] ? "Zoomed in all the way" : "Zoom in, around the playhead"}
-            disabled={zoom === ZOOMS[ZOOMS.length - 1]}
-            onClick={() => zoomTo(zoom * 2)}
-          >
-            <Plus />
-          </Button>
-          <Button
-            size="xs"
+            variant="outline"
+            size="icon-2xs"
             aria-label="Hide timeline"
-            title="Fold the timeline away, leaving the room to the slide"
+            tooltip="Fold the timeline away, leaving the room to the slide"
             onClick={() => useApp.getState().setTimelineOpen(false)}
           >
-            <ChevronDown />
+            <ChevronDown className="size-3.5" />
           </Button>
         </div>
       </div>
@@ -400,43 +409,51 @@ function Transport(props: {
   const atStart = usePlayheadValue(clock, (time) => Math.min(time, limit) <= 0);
   const atEnd = usePlayheadValue(clock, (time) => Math.min(time, limit) >= end);
   return (
-    <div data-testid="transport" className="flex items-center gap-1">
+    <ButtonGroup data-testid="transport" aria-label="Playback">
       <Button
-        size="xs"
+        variant="outline"
+        size="icon-2xs"
         aria-label="Back to start"
-        title={withShortcut("Back to the start", "home")}
+        tooltip="Back to the start"
+        shortcut="home"
         disabled={atStart}
         onClick={() => props.onFreeze(0)}
       >
-        <SkipBack />
+        <SkipBack className="size-3.5" />
       </Button>
       <Button
-        size="xs"
+        variant="outline"
+        size="icon-2xs"
         aria-label="Step back"
-        title={withShortcut("Step back a tenth of a second, the slide frozen there; with Shift, a second", "left")}
+        tooltip="Step back a tenth of a second, the slide frozen there; with Shift, a second"
+        shortcut="left"
         disabled={atStart}
         onClick={(event) => props.onStep(event, -1)}
       >
-        <StepBack />
+        <StepBack className="size-3.5" />
       </Button>
       <Button
-        size="xs"
-        title={withShortcut(playing ? "Pause" : "Play from the playhead", "space")}
+        variant="outline"
+        size="2xs"
+        tooltip={playing ? "Pause" : "Play from the playhead"}
+        shortcut="space"
         onClick={props.onPlay}
       >
-        {playing ? <Pause /> : <Play />}
+        {playing ? <Pause data-icon="inline-start" /> : <Play data-icon="inline-start" />}
         {playing ? "Pause" : "Play"}
       </Button>
       <Button
-        size="xs"
+        variant="outline"
+        size="icon-2xs"
         aria-label="Step forward"
-        title={withShortcut("Step forward a tenth of a second, the slide frozen there; with Shift, a second", "right")}
+        tooltip="Step forward a tenth of a second, the slide frozen there; with Shift, a second"
+        shortcut="right"
         disabled={atEnd}
         onClick={(event) => props.onStep(event, 1)}
       >
-        <StepForward />
+        <StepForward className="size-3.5" />
       </Button>
-    </div>
+    </ButtonGroup>
   );
 }
 
@@ -445,35 +462,24 @@ function Transport(props: {
  * shows, and the pauses around narration.
  */
 function TimingButton() {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
   return (
-    <>
-      <Button
-        ref={anchor}
-        size="xs"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        title="How long a slide without narration shows, and the pauses around narration"
-        onClick={() => setOpen((o) => !o)}
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="outline"
+            size="2xs"
+            tooltip="How long a slide without narration shows, and the pauses around narration"
+          />
+        }
       >
-        <Timer />
+        <Timer data-icon="inline-start" />
         Timing
-      </Button>
-      {open && (
-        <Popover
-          anchor={anchor}
-          placement="above"
-          align="end"
-          width={280}
-          portal
-          label="Timing"
-          onClose={() => setOpen(false)}
-        >
-          <TimingSettings />
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-70 gap-3 p-3">
+        <TimingSettings />
+      </PopoverContent>
+    </Popover>
   );
 }
 

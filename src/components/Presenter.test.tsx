@@ -12,10 +12,10 @@ listen.mockImplementation(async (name: string, handler: (event: { payload: unkno
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 const playNarration = vi.fn();
 vi.mock("../lib/narrationAudio", () => ({ playNarration: (...args: unknown[]) => playNarration(...args) }));
-// Counted, to tell when the show's bar renders: its buttons are these.
-vi.mock("./Button", async (original) => {
-  const actual = await original<typeof import("./Button")>();
-  return { ...actual, ToolButton: vi.fn(actual.ToolButton) };
+// Counted, to tell when the show's bar renders: its tools render with it.
+vi.mock("./PresenterTools", async (original) => {
+  const actual = await original<typeof import("./PresenterTools")>();
+  return { ...actual, InkTools: vi.fn(actual.InkTools) };
 });
 
 import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_GLOW, TRAIL_HOLD_MS } from "../lib/ink";
@@ -25,9 +25,10 @@ import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ToolButton } from "./Button";
+import { settle, tooltipOf } from "../test/ui";
 import { Presenter } from "./Presenter";
 import { fitWidth } from "./PresenterPanel";
+import { InkTools } from "./PresenterTools";
 import { PresenterWindow } from "./PresenterWindow";
 import { ZONE_PX } from "./presenter/useShowControls";
 
@@ -52,6 +53,10 @@ beforeEach(() => {
 });
 
 const frame = () => screen.getByTitle("Presentation") as HTMLIFrameElement;
+
+/** Whether a button cannot be pressed: one that says why in its tooltip stays focusable, and is `aria-disabled`. */
+const off = (button: Element) =>
+  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 
 function fromFrame(data: unknown, source: MessageEventSource | null = frame().contentWindow) {
   act(() => void window.dispatchEvent(new MessageEvent("message", { data, source })));
@@ -129,14 +134,14 @@ describe("Presenter", () => {
       fireEvent.keyDown(document.body, { key: "n" });
       // The bar goes once the pointer rests; after that nothing of the show changes by itself.
       act(() => void vi.advanceTimersByTime(3000));
-      vi.mocked(ToolButton).mockClear();
+      vi.mocked(InkTools).mockClear();
       for (let k = 1; k <= 30; k++) fromFrame({ type: "slop:zoom", x: -k, y: -k, k: 1 + k / 10 });
       expect(screen.getByTestId("annotation-zoom").style.width).toBe("400%");
-      expect(screen.getByTitle(/fit to the screen/).textContent).toBe("400%");
+      expect(screen.getByRole("button", { name: "400%" })).toBeTruthy();
       act(() => void vi.advanceTimersByTime(30_000));
       // The presenter view's clocks ran on meanwhile.
       expect(screen.getByRole("timer").textContent).toBe("0:33");
-      expect(ToolButton).not.toHaveBeenCalled();
+      expect(InkTools).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -166,14 +171,14 @@ describe("Presenter", () => {
       render(<Presenter />);
       const names = [...bar().querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent);
       expect(names).toEqual([
-        "Pointer (Esc)",
-        "Laser pointer (L)",
-        "Pen (P)",
-        "Highlighter (H)",
-        "Eraser (E)",
+        "Pointer",
+        "Laser pointer",
+        "Pen",
+        "Highlighter",
+        "Eraser",
         "Undo",
         "Redo",
-        "Clear slide (C)",
+        "Clear slide",
         "Previous slide",
         "Next slide",
         "Play",
@@ -188,7 +193,7 @@ describe("Presenter", () => {
       expect(screen.queryByText(/Exit presentation/)).toBeNull();
       const exits = screen.getAllByRole("button", { name: /End show|Exit/ });
       expect(exits).toHaveLength(1);
-      expect(exits[0]!.title).toBe("End show (Esc)");
+      expect(tooltipOf(exits[0]!)).toBe("End showEsc");
       const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
       exits[0]!.dispatchEvent(down);
       expect(down.defaultPrevented).toBe(true);
@@ -207,10 +212,40 @@ describe("Presenter", () => {
 
     it("names the keys of its buttons in their tooltips", () => {
       render(<Presenter />);
-      expect(screen.getByLabelText("Previous slide").title).toBe("Previous slide (←)");
-      expect(screen.getByLabelText("Next slide").title).toBe("Next slide (→)");
-      expect(screen.getByLabelText("Undo").title).toBe("Nothing to undo on this slide");
-      expect(screen.getByLabelText("Presenter view").title).toMatch(/\(N\)$/);
+      expect(tooltipOf(screen.getByLabelText("Previous slide"))).toBe("Previous slide←");
+      expect(tooltipOf(screen.getByLabelText("Next slide"))).toBe("Next slide→");
+      expect(tooltipOf(screen.getByLabelText("Undo"))).toBe("Nothing to undo on this slide");
+      expect(tooltipOf(screen.getByLabelText("Presenter view"))).toMatch(/the time\s*N$/);
+      // The tools' keys too, each in a key cap after the tool's name.
+      expect(
+        ["Pointer", "Laser pointer", "Pen", "Highlighter", "Eraser"].map((name) =>
+          tooltipOf(screen.getByRole("button", { name })),
+        ),
+      ).toEqual(["PointerEsc", "Laser pointerL", "PenP", "HighlighterH", "EraserE"]);
+      // No tooltip of the browser's own beside them.
+      expect([...bar().querySelectorAll("button")].filter((b) => b.hasAttribute("title"))).toEqual([]);
+    });
+
+    it("shows its tooltips dark, as the bar is in either theme, with the key in a key cap", () => {
+      render(<Presenter />);
+      fireEvent.focus(screen.getByLabelText("Next slide"));
+      const tooltip = document.querySelector("[data-slot=tooltip-content]")!;
+      // The tooltip opens in the page's body, outside the bar's dark subtree.
+      expect(bar().contains(tooltip)).toBe(false);
+      expect(tooltip.classList.contains("dark")).toBe(true);
+      expect(tooltip.querySelector("[data-slot=kbd]")?.textContent).toBe("→");
+    });
+
+    it("a button that cannot be pressed still says why, and does nothing", () => {
+      render(<Presenter />);
+      const undo = screen.getByLabelText("Undo") as HTMLButtonElement;
+      // Not `disabled`, which would hide it from the pointer and the tooltip with it.
+      expect(undo.disabled).toBe(false);
+      expect(undo.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(undo);
+      expect(
+        screen.getByRole("img", { name: "Presentation annotations" }).querySelectorAll("[data-stroke]"),
+      ).toHaveLength(0);
     });
 
     describe("coming and going", () => {
@@ -417,10 +452,36 @@ describe("Presenter", () => {
       expect(screen.getByRole("button", { name: /^Pointer/ }).getAttribute("aria-pressed")).toBe("true");
     });
 
+    it("is dark like the show, though it opens outside it, and shows the keys as key caps", () => {
+      render(<Presenter />);
+      fireEvent.keyDown(document.body, { key: "?" });
+      expect(list()!.classList.contains("dark")).toBe(true);
+      const row = [...list()!.querySelectorAll("dt")].find(
+        (dt) => dt.nextElementSibling?.textContent === "Next slide",
+      )!;
+      const caps = [...row.querySelectorAll("[data-slot=kbd]")].map((cap) => cap.textContent);
+      expect(caps.slice(0, 3)).toEqual(["→", "↓", "Space"]);
+      // What is said between the keys stays words.
+      expect(row.textContent).toContain("/");
+    });
+
+    it("? again closes them, and so does a press beside them; the show goes on", () => {
+      render(<Presenter />);
+      fireEvent.keyDown(document.body, { key: "?" });
+      fireEvent.keyDown(list()!, { key: "?" });
+      expect(list()).toBeNull();
+      fireEvent.keyDown(document.body, { key: "?" });
+      const beside = document.querySelector("[data-slot=dialog-overlay]")!;
+      fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+      fireEvent.click(beside);
+      expect(list()).toBeNull();
+      expect(useApp.getState().presenting).toBe(true);
+    });
+
     it("opens from the presenter view too", () => {
       localStorage.setItem("slopslide.presenterPanel", "true");
       render(<Presenter />);
-      fireEvent.click(screen.getByRole("button", { name: "Keys while presenting (?)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Keys while presenting" }));
       expect(list()).toBeTruthy();
     });
   });
@@ -591,7 +652,7 @@ describe("Presenter", () => {
       render(<Presenter />);
       const post = vi.spyOn(frame().contentWindow!, "postMessage");
       fromFrame({ type: "slop:slide", id: "intro", index: 0 });
-      expect(screen.getByLabelText("Play").title).toMatch(/speak each slide's narration/);
+      expect(tooltipOf(screen.getByLabelText("Play"))).toMatch(/speak each slide's narration/);
       fireEvent.click(screen.getByLabelText("Play"));
       await act(async () => vi.advanceTimersByTime(500));
       expect(playNarration).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", expect.any(Function));
@@ -650,10 +711,11 @@ describe("Presenter", () => {
 
   it("offers to fit the slide again once it is zoomed or panned", () => {
     render(<Presenter />);
-    const recenter = () => screen.queryByTitle(/fit to the screen/);
+    const recenter = () => screen.queryByRole("button", { name: /%$/ });
     expect(recenter()).toBeNull();
     fromFrame({ type: "slop:zoom", x: 10, y: 0, k: 1 });
     expect(recenter()!.textContent).toBe("100%");
+    expect(tooltipOf(recenter()!)).toBe("Back to the slide, fit to the screen0");
     fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
     expect(recenter()!.textContent).toBe("200%");
     const post = vi.spyOn(frame().contentWindow!, "postMessage");
@@ -883,13 +945,9 @@ describe("Presenter tools", () => {
     expect(screen.queryByRole("button", { name: /^Red$/ })).toBeNull();
     fireEvent.click(tool(/^Pen/));
     // Named, not numbered, for those who hear or hover them.
-    expect(["Red", "Yellow", "Green", "Blue", "White"].map((name) => tool(new RegExp(`^${name}$`)).title)).toEqual([
-      "Red",
-      "Yellow",
-      "Green",
-      "Blue",
-      "White",
-    ]);
+    expect(["Red", "Yellow", "Green", "Blue", "White"].map((name) => tooltipOf(tool(new RegExp(`^${name}$`))))).toEqual(
+      ["Red", "Yellow", "Green", "Blue", "White"],
+    );
     expect(screen.queryByRole("button", { name: /#/ })).toBeNull();
     fireEvent.click(tool(/^Blue$/));
     expect(tool(/^Blue$/).getAttribute("aria-pressed")).toBe("true");
@@ -913,7 +971,7 @@ describe("Presenter tools", () => {
 
   it("undo removes the last stroke, clear removes them all", () => {
     render(<Presenter />);
-    expect((tool(/^Undo/) as HTMLButtonElement).disabled).toBe(true);
+    expect(off(tool(/^Undo/))).toBe(true);
     fireEvent.click(tool(/^Pen/));
     draw([[10, 10]]);
     draw([[20, 20]]);
@@ -935,7 +993,7 @@ describe("Presenter tools", () => {
 
   it("undo brings back what clear removed, and redo clears again", () => {
     render(<Presenter />);
-    const disabled = (name: RegExp) => (tool(name) as HTMLButtonElement).disabled;
+    const disabled = (name: RegExp) => off(tool(name));
     fireEvent.click(tool(/^Pen/));
     draw([[10, 10]]);
     draw([[20, 20]]);
@@ -957,7 +1015,7 @@ describe("Presenter tools", () => {
     expect(strokes()).toHaveLength(2);
     fireEvent.click(tool(/^Redo/));
     expect(strokes()).toHaveLength(0);
-    expect(tool(/^Redo/).title).toBe("Nothing to redo on this slide");
+    expect(tooltipOf(tool(/^Redo/))).toBe("Nothing to redo on this slide");
   });
 
   it("undo brings back a stroke the eraser took, where it was", () => {
@@ -1001,7 +1059,7 @@ describe("Presenter tools", () => {
     draw([[10, 10]]);
     fireEvent.keyDown(document.body, { key: "c" });
     fromFrame({ type: "slop:slide", id: null, index: 1 });
-    expect((tool(/^Undo/) as HTMLButtonElement).disabled).toBe(true);
+    expect(off(tool(/^Undo/))).toBe(true);
     fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     expect(strokes()).toHaveLength(0);
     fromFrame({ type: "slop:slide", id: "intro", index: 0 });
@@ -1327,6 +1385,36 @@ describe("presenter view", () => {
     expect(useApp.getState().presenting).toBe(true);
   });
 
+  it("shows the timer's settings dark like the panel, though they open outside it", () => {
+    showPanel();
+    openTimerSettings();
+    const settings = screen.getByRole("dialog", { name: "Timer settings" });
+    expect(panel()!.contains(settings)).toBe(false);
+    expect(settings.classList.contains("dark")).toBe(true);
+    expect(tooltipOf(screen.getByRole("button", { name: "Timer settings" }))).toBe("Timer settings");
+  });
+
+  it("gives the focus back to where it was when the timer's settings close, not to their button", async () => {
+    showPanel();
+    // Pressed with the pointer, the button leaves the focus in the slide: Space still advances it.
+    frame().focus();
+    openTimerSettings();
+    await settle();
+    expect(screen.getByRole("dialog", { name: "Timer settings" }).contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await settle();
+    expect(screen.queryByRole("dialog", { name: "Timer settings" })).toBeNull();
+    expect(document.activeElement).toBe(frame());
+    // Opened with the keys from the button itself, the focus goes back to the button.
+    const button = screen.getByRole("button", { name: "Timer settings" });
+    button.focus();
+    fireEvent.click(button);
+    await settle();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
   it("typing a time moves no slide and picks no tool", () => {
     showPanel();
     openTimerSettings();
@@ -1426,11 +1514,11 @@ describe("presenter view", () => {
     fireEvent.click(smaller());
     fireEvent.click(smaller());
     expect(size()).toBe("text-sm");
-    expect(smaller().disabled).toBe(true);
-    expect(smaller().title).toBe("The notes are as small as they get");
+    expect(off(smaller())).toBe(true);
+    expect(tooltipOf(smaller())).toBe("The notes are as small as they get");
     for (let i = 0; i < 8; i++) fireEvent.click(larger());
     expect(size()).toBe("text-4xl");
-    expect(larger().disabled).toBe(true);
+    expect(off(larger())).toBe(true);
   });
 
   it("pressing the next slide's picture moves the show on to it", () => {
@@ -1551,17 +1639,18 @@ describe("presenter view", () => {
       open();
       const teleprompter = () => screen.getByRole("button", { name: /teleprompter/i }) as HTMLButtonElement;
       await act(async () => fireEvent.click(text()));
-      expect((audio() as HTMLButtonElement).disabled).toBe(true);
-      expect(audio().title).toBe("Stop the other recording first");
-      expect(teleprompter().disabled).toBe(true);
-      expect(teleprompter().title).toBe("Stop recording first");
+      expect(off(audio())).toBe(true);
+      expect(tooltipOf(audio())).toBe("Stop the other recording first");
+      expect(off(teleprompter())).toBe(true);
+      expect(tooltipOf(teleprompter())).toBe("Stop recording first");
       await act(async () => fireEvent.click(text()));
-      expect(audio().title).toMatch(/^Record the narration as audio/);
+      expect(off(audio())).toBe(false);
+      expect(tooltipOf(audio())).toMatch(/^Record the narration as audio/);
       await act(async () => fireEvent.click(teleprompter()));
-      expect((text() as HTMLButtonElement).disabled).toBe(true);
-      expect((audio() as HTMLButtonElement).disabled).toBe(true);
-      expect(text().title).toBe("Stop the teleprompter first");
-      expect(audio().title).toBe("Stop the teleprompter first");
+      expect(off(text())).toBe(true);
+      expect(off(audio())).toBe(true);
+      expect(tooltipOf(text())).toBe("Stop the teleprompter first");
+      expect(tooltipOf(audio())).toBe("Stop the teleprompter first");
     });
 
     it("is red only while recording; the teleprompter shows in the primary color", async () => {
@@ -1569,11 +1658,14 @@ describe("presenter view", () => {
       const teleprompter = () => screen.getByRole("button", { name: /teleprompter/i });
       await act(async () => fireEvent.click(teleprompter()));
       expect(teleprompter().getAttribute("aria-pressed")).toBe("true");
-      expect(teleprompter().className).toContain("text-primary");
-      expect(teleprompter().className).not.toContain("destructive");
+      // The color a pressed-in button takes.
+      const pressedIn = (button: Element) =>
+        button.className.split(/\s+/).filter((c) => c.startsWith("aria-pressed:text-"));
+      expect(pressedIn(teleprompter())).toEqual(["aria-pressed:text-primary"]);
       await act(async () => fireEvent.click(teleprompter()));
       await act(async () => fireEvent.click(audio()));
-      expect(audio().className).toContain("text-destructive");
+      expect(audio().getAttribute("aria-pressed")).toBe("true");
+      expect(pressedIn(audio())).toEqual(["aria-pressed:text-destructive"]);
     });
 
     it("goes on recording while the presenter view is closed, and says so over the slide", async () => {
@@ -1924,8 +2016,8 @@ describe("Presenter on several screens", () => {
     render(<Presenter />);
     await act(async () => {});
     const button = screen.getByRole("button", { name: "Presenter view" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.title).toBe("The presenter view is in a window of its own");
+    expect(off(button)).toBe(true);
+    expect(tooltipOf(button)).toBe("The presenter view is in a window of its own");
   });
 
   it("without a presenter view only moves the show", async () => {
@@ -2010,6 +2102,23 @@ describe("Presenter in windows", () => {
 });
 
 describe("PresenterWindow", () => {
+  it("says that it waits until the show tells it what is on screen", async () => {
+    render(<PresenterWindow />);
+    await act(async () => {});
+    expect(screen.getByText("Waiting for the show…")).toBeTruthy();
+    expect(screen.queryByRole("complementary")).toBeNull();
+    // The words say it; the spinner beside them is not announced as well.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelector("[data-slot=empty]")!.classList.contains("dark")).toBe(true);
+    act(() =>
+      listeners.get("presenter:state")?.({
+        payload: { deck: deckFor(DECK_HTML), slide: deckFor(DECK_HTML).slides[0]?.id, playing: false },
+      }),
+    );
+    expect(screen.queryByText("Waiting for the show…")).toBeNull();
+    expect(screen.getByRole("complementary")).toBeTruthy();
+  });
+
   /** The window with the show's state sent to it: the deck on its first slide unless told otherwise. */
   async function opened(state: { slide?: string; playing?: boolean } = {}) {
     const deck = deckFor(DECK_HTML);
@@ -2043,6 +2152,10 @@ describe("PresenterWindow", () => {
       "Play",
       "End show",
     ]);
+    // Their tooltips name the keys that do the same.
+    expect(tooltipOf(screen.getByRole("button", { name: "Previous" }))).toBe("Previous slide←");
+    expect(tooltipOf(screen.getByRole("button", { name: "Next" }))).toBe("Next slide→");
+    expect(tooltipOf(screen.getByRole("button", { name: "End show" }))).toBe("End showEsc");
     emit.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Previous" }));
     expect(emit).toHaveBeenLastCalledWith("presenter:key", { key: "ArrowLeft", shift: false });

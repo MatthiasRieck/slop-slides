@@ -1,35 +1,61 @@
-import { Dialog } from "../Dialog";
-import { keysLabel, SECTIONS } from "../settings/shortcuts";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
+import { formatKeys } from "@/lib/keys";
 
-/** The keys that close the list: Escape, and `?` again. */
-const CLOSE_KEYS = ["Escape", "?"];
+import { keysLabel, SECTIONS } from "../settings/shortcuts";
 
 /** The keys of a show, as the settings list them under Presenting. */
 export const showKeyRows = () => SECTIONS.find((section) => section.title === "Presenting")?.rows ?? [];
 
 /**
+ * A row's keys (see `ShortcutRow`): each `{spec}` a key cap, written as the platform writes it
+ * (see `formatKeys`); the words between them as they are.
+ */
+function Keys({ template }: { template: string }) {
+  let at = 0;
+  return template
+    .split(/(\{[^}]+\})/)
+    .filter((part) => part.trim() !== "")
+    .map((part) => {
+      const key = `${at}:${part}`;
+      at += part.length;
+      return part.startsWith("{") ? (
+        <Kbd key={key}>{formatKeys(part.slice(1, -1))}</Kbd>
+      ) : (
+        <span key={key}>{part.trim()}</span>
+      );
+    });
+}
+
+/**
  * The show's keys, in a small dialog over the show: `?` opens it there, where the app's whole
- * list of shortcuts would bury them under the editor's.
+ * list of shortcuts would bury them under the editor's. Escape closes it, and so do `?` again,
+ * its Close button and a press beside it. The show is dark in either theme, and so is this,
+ * which opens outside it.
  */
 export function ShowKeys({ onClose }: { onClose: () => void }) {
   return (
-    <Dialog
-      label="Keys while presenting"
-      onClose={onClose}
-      className="dark flex max-h-[calc(100vh-4rem)] w-[28rem] max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-foreground/10 bg-background p-4 text-xs text-foreground shadow-lg outline-none"
-      heading={<h2 className="text-sm font-medium">Keys while presenting</h2>}
-      closeKeys={CLOSE_KEYS}
-      closeOnBackdrop
-      closeButton
-    >
-      <dl className="grid min-h-0 grid-cols-[max-content_1fr] gap-x-3 gap-y-1 overflow-y-auto">
-        {showKeyRows().map(([keys, what]) => (
-          <div key={keys} className="contents">
-            <dt className="tabular-nums">{keysLabel(keys)}</dt>
-            <dd className="text-foreground/60">{keysLabel(what)}</dd>
-          </div>
-        ))}
-      </dl>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="dark flex max-h-[calc(100vh-4rem)] flex-col text-xs sm:max-w-md"
+        onKeyDown={(event) => {
+          if (event.key === "?") onClose();
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-sm">Keys while presenting</DialogTitle>
+        </DialogHeader>
+        <dl className="grid min-h-0 grid-cols-[max-content_1fr] items-center gap-x-3 gap-y-1.5 overflow-y-auto">
+          {showKeyRows().map(([keys, what]) => (
+            <div key={keys} className="contents">
+              <dt className="flex flex-wrap items-center gap-1">
+                <Keys template={keys} />
+              </dt>
+              <dd className="text-muted-foreground">{keysLabel(what)}</dd>
+            </div>
+          ))}
+        </dl>
+      </DialogContent>
     </Dialog>
   );
 }

@@ -2,8 +2,8 @@ import { Maximize } from "lucide-react";
 import { type RefObject, useEffect, useState } from "react";
 
 import { zoomBox } from "../../lib/ink";
-import { keepFocus } from "../Button";
 import { AnnotationLayer, type Annotations } from "../PresenterTools";
+import { ShowButton } from "./ShowButton";
 
 /** Asks the show's pasteboard to fit the slide to the screen again. */
 export function fitSlide(frame: HTMLIFrameElement | null) {
@@ -47,17 +47,18 @@ export function ShowZoom({
         <AnnotationLayer annotations={annotations} zoom={zoom.k} />
       </div>
       {moved && (
-        <button
-          type="button"
-          title="Back to the slide, fit to the screen (0)"
-          // Keep keyboard focus where it was, so Space still advances the slide.
-          onMouseDown={keepFocus}
+        // Outside the show's bar, so dark by itself. Pressing it leaves the focus where it was.
+        <ShowButton
+          size="sm"
+          tooltip="Back to the slide, fit to the screen"
+          shortcut="0"
+          tooltipSide="left"
           onClick={() => fitSlide(frame.current)}
-          className="dark absolute right-4 bottom-20 z-10 flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-overlay px-2.5 py-1.5 text-xs text-foreground/80 tabular-nums shadow-lg backdrop-blur hover:text-foreground [&_svg]:size-3.5"
+          className="dark absolute right-4 bottom-20 z-10 rounded-xl border-foreground/10 bg-overlay text-xs tabular-nums shadow-lg backdrop-blur hover:bg-overlay"
         >
           <Maximize />
           {Math.round(zoom.k * 100)}%
-        </button>
+        </ShowButton>
       )}
     </>
   );

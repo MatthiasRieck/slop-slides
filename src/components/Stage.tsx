@@ -1,6 +1,8 @@
 import { Lock, LockOpen, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
   defaultsFrom,
@@ -14,7 +16,6 @@ import {
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
 import { deckMode, editingSlide, searchHighlight, useApp } from "../store";
-import { Button } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
@@ -260,11 +261,11 @@ function ModeBar({ children }: { children: ReactNode }) {
 function LockedNote({ slide }: { slide: string }) {
   const unlock = () => useApp.getState().setSlidesLocked([slide], false);
   return (
-    <div role="status" className="flex flex-1 items-center gap-2 [&_svg]:size-3.5">
-      <Lock />
+    <div role="status" className="flex flex-1 items-center gap-2">
+      <Lock className="size-3.5" />
       <span>This slide is locked: neither you nor the agent can change it.</span>
-      <Button variant="ghost" size="sm" onClick={() => void unlock()}>
-        <LockOpen />
+      <Button variant="ghost" size="xs" onClick={() => void unlock()}>
+        <LockOpen data-icon="inline-start" />
         Unlock
       </Button>
     </div>
@@ -274,16 +275,20 @@ function LockedNote({ slide }: { slide: string }) {
 /** What the stage shows before the deck has slides. */
 function EmptyStage() {
   return (
-    <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-      <div className="rounded-full bg-accent p-3 text-muted-foreground">
-        <Sparkles className="size-5" />
-      </div>
-      <h2 className="text-base font-medium">Start with a conversation</h2>
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Tell the agent what the presentation is about, who it is for, and how long it should be. Slides appear here as
-        they are written.
-      </p>
-    </div>
+    <Empty className="flex-none p-0">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Sparkles />
+        </EmptyMedia>
+        <EmptyTitle>
+          <h2>Start with a conversation</h2>
+        </EmptyTitle>
+        <EmptyDescription>
+          Tell the agent what the presentation is about, who it is for, and how long it should be. Slides appear here as
+          they are written.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

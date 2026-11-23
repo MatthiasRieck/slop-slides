@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  Check,
   ChevronLeft,
   ChevronRight,
   EyeOff,
@@ -11,15 +10,25 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { memo, useRef, useState } from "react";
+import { memo, useState } from "react";
 
-import { useMenuKeys } from "../../hooks/useMenuKeys";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Slide } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
-import { Button, ToolButton, withShortcut } from "../Button";
 import { LintStatus } from "../LintStatus";
-import { Popover } from "../Popover";
 import { LayoutPicker } from "../Templates";
 import { useSlideReport } from "./editorState";
 import { isMoved, useShownView, useStageView } from "./stageView";
@@ -53,68 +62,77 @@ export const StageFooter = memo(function StageFooter(props: {
   return (
     <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
       <div className="flex items-center">
-        <ToolButton
-          variant="plain"
-          label="Find in the slides"
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          tooltip="Find in the slides"
           shortcut="mod+f"
           onClick={() => useApp.getState().openFind()}
         >
           <Search />
-        </ToolButton>
+        </Button>
       </div>
       <div className="flex items-center gap-2">
-        <ToolButton
-          variant="plain"
-          label="Previous slide"
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          tooltip="Previous slide"
           shortcut="left"
           onClick={() => useApp.getState().selectRelative(-1)}
           disabled={index <= 0}
         >
           <ChevronLeft className="size-4" />
-        </ToolButton>
+        </Button>
         <SlideCounter index={index} count={count} />
-        <ToolButton
-          variant="plain"
-          label="Next slide"
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          tooltip="Next slide"
           shortcut="right"
           onClick={() => useApp.getState().selectRelative(1)}
           disabled={index >= count - 1}
         >
           <ChevronRight className="size-4" />
-        </ToolButton>
+        </Button>
       </div>
       <div className="flex items-center justify-end">
         {slide && <ZoomControls onFit={props.onResetView} onZoomBy={props.onZoomBy} onZoomTo={props.onZoomTo} />}
         {overflow.length > 0 && (
-          <span
-            title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
-            className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-warning "
-          >
-            <AlertTriangle className="size-3.5" />
-            Overflow
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge variant="ghost" data-testid="overflow-mark" className="mr-1 text-warning hover:text-warning" />
+              }
+            >
+              <AlertTriangle data-icon="inline-start" />
+              Overflow
+            </TooltipTrigger>
+            <TooltipContent className="block whitespace-pre-line">
+              {`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
+            </TooltipContent>
+          </Tooltip>
         )}
         {slide?.hidden && (
           <Button
             variant="ghost"
-            size="sm"
-            title="Hidden: skipped when presenting. Click to show it again."
+            size="xs"
+            tooltip="Hidden: skipped when presenting. Click to show it again."
             onClick={() => void useApp.getState().setSlidesHidden([slide.id], false)}
             className="mr-1"
           >
-            <EyeOff />
+            <EyeOff data-icon="inline-start" />
             Hidden
           </Button>
         )}
         {slide && locked && (
           <Button
             variant="ghost"
-            size="sm"
-            title="Locked: neither you nor the agent can change this slide. Click to unlock it."
+            size="xs"
+            tooltip="Locked: neither you nor the agent can change this slide. Click to unlock it."
             onClick={() => void useApp.getState().setSlidesLocked([slide.id], false)}
             className="mr-1"
           >
-            <Lock />
+            <Lock data-icon="inline-start" />
             Locked
           </Button>
         )}
@@ -122,17 +140,17 @@ export const StageFooter = memo(function StageFooter(props: {
         {slide && (
           <Button
             variant="ghost"
-            size="sm"
-            title="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
+            size="xs"
+            tooltip="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
             disabled={running || locked}
             onClick={() => {
               props.onClearSelection();
               // Give the preview a frame to drop its selection outline before the screenshot.
               requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout(overflow)));
             }}
-            className={cn((slide.moved || overflow.length > 0) && "font-medium text-foreground")}
+            className={cn((slide.moved || overflow.length > 0) && "text-foreground")}
           >
-            <Wand2 className="size-3.5" />
+            <Wand2 data-icon="inline-start" />
             Tidy layout
           </Button>
         )}
@@ -158,21 +176,23 @@ function SlideCounter({ index, count }: { index: number; count: number }) {
   };
   if (!typing) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         aria-label={`Slide ${index + 1} of ${count}. Go to a slide…`}
-        title="Go to a slide: type its number"
+        tooltip="Go to a slide: type its number"
         disabled={count < 2}
         onClick={() => setTyping(true)}
-        className="rounded-md px-1.5 py-0.5 tabular-nums enabled:hover:bg-accent enabled:hover:text-foreground"
+        className="px-1.5 font-normal tabular-nums"
       >
         {index + 1} / {count}
-      </button>
+      </Button>
     );
   }
   return (
     <span className="flex items-center gap-1 tabular-nums">
-      <input
+      <Input
+        size="sm"
         autoFocus
         aria-label="Go to slide number"
         inputMode="numeric"
@@ -189,7 +209,7 @@ function SlideCounter({ index, count }: { index: number; count: number }) {
             setTyping(false);
           }
         }}
-        className="h-5 w-9 rounded border border-input bg-background px-1 text-center text-xs text-foreground outline-none focus:ring-1 focus:ring-ring"
+        className="h-6 w-9 bg-background px-1 text-center text-foreground"
       />
       / {count}
     </span>
@@ -209,110 +229,94 @@ function ZoomControls(props: { onFit: () => void; onZoomBy: (factor: number) => 
   // How far the view is zoomed once it is panned or zoomed; null while it shows the whole slide.
   const zoomed = useShownView((view) => (view && isMoved(view) ? view.k : null));
   const fitScale = useStageView((s) => s.fitScale);
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
-  const menu = useMenuKeys();
   const moved = zoomed !== null;
   const zoom = (zoomed ?? 1) * fitScale;
   const level = moved ? percent(zoom) : "Fit";
-  const item =
-    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5";
-  const pick = (go: () => void) => {
-    setOpen(false);
-    go();
-  };
   return (
-    // biome-ignore lint/a11y/useSemanticElements: a group of buttons, not a form's fieldset
-    <div role="group" aria-label="Zoom" className="mr-1 flex items-center">
-      <ToolButton variant="plain" label="Zoom out" shortcut="mod+-" onClick={() => props.onZoomBy(1 / ZOOM_STEP)}>
-        <ZoomOut className="size-3.5" />
-      </ToolButton>
-      <button
-        ref={anchor}
-        type="button"
-        aria-label={`Zoom: ${level}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={withShortcut("Zoom level. Fit shows the whole slide", "mod+0")}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "min-w-10 rounded-md px-1 py-1 text-center tabular-nums hover:bg-accent hover:text-foreground",
-          open && "bg-accent text-foreground",
-        )}
+    <ButtonGroup aria-label="Zoom" className="mr-1 items-center">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        tooltip="Zoom out"
+        shortcut="mod+-"
+        onClick={() => props.onZoomBy(1 / ZOOM_STEP)}
       >
-        {level}
-      </button>
-      <ToolButton variant="plain" label="Zoom in" shortcut="mod+plus" onClick={() => props.onZoomBy(ZOOM_STEP)}>
-        <ZoomIn className="size-3.5" />
-      </ToolButton>
-      {open && (
-        <Popover
-          anchor={anchor}
-          onClose={() => setOpen(false)}
-          width={150}
-          placement="above"
-          variant="menu"
-          portal
-          className="p-1"
+        <ZoomOut />
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-label={`Zoom: ${level}`}
+              tooltip="Zoom level. Fit shows the whole slide"
+              shortcut="mod+0"
+              className="min-w-10 px-1 font-normal tabular-nums"
+            />
+          }
         >
-          <div role="menu" aria-label="Zoom level" {...menu} className="outline-none">
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={!moved}
-              onClick={() => pick(props.onFit)}
-              className={item}
-            >
-              <span className="flex-1">Fit</span>
-              {!moved && <Check className="text-muted-foreground" />}
-            </button>
-            {ZOOM_LEVELS.map((to) => {
-              const here = moved && percent(zoom) === percent(to);
-              return (
-                <button
-                  key={to}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={here}
-                  onClick={() => pick(() => props.onZoomTo(to / fitScale))}
-                  className={item}
-                >
-                  <span className="flex-1">{percent(to)}</span>
-                  {here && <Check className="text-muted-foreground" />}
-                </button>
-              );
-            })}
-          </div>
-        </Popover>
-      )}
-    </div>
+          {level}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="top" align="center" aria-label="Zoom level" className="min-w-28">
+          {/* A level is gone to by its press, not by a change of value: the one shown can be gone back to once panned. */}
+          <DropdownMenuRadioGroup value={level}>
+            <DropdownMenuRadioItem value="Fit" closeOnClick onClick={props.onFit}>
+              Fit
+            </DropdownMenuRadioItem>
+            {ZOOM_LEVELS.map((to) => (
+              <DropdownMenuRadioItem
+                key={to}
+                value={percent(to)}
+                closeOnClick
+                onClick={() => props.onZoomTo(to / fitScale)}
+              >
+                {percent(to)}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        tooltip="Zoom in"
+        shortcut="mod+plus"
+        onClick={() => props.onZoomBy(ZOOM_STEP)}
+      >
+        <ZoomIn />
+      </Button>
+    </ButtonGroup>
   );
 }
 
 /** Opens the template layouts, to have the agent rebuild the current slide on one. */
 function ChangeLayoutButton(props: { disabled: boolean }) {
   const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
   return (
-    <>
-      <Button
-        ref={buttonRef}
-        variant="ghost"
-        size="sm"
-        title="Rebuild this slide on a template layout"
-        aria-expanded={open}
-        disabled={props.disabled}
-        onClick={() => setOpen((v) => !v)}
-        className="mr-1"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            tooltip="Rebuild this slide on a template layout"
+            disabled={props.disabled}
+            className="mr-1"
+          />
+        }
       >
-        <LayoutTemplate className="size-3.5" />
+        <LayoutTemplate data-icon="inline-start" />
         Layout
-      </Button>
-      {open && (
-        <Popover anchor={buttonRef} placement="above" width={560} label="Change layout" onClose={() => setOpen(false)}>
-          <LayoutPicker mode="change" onDone={() => setOpen(false)} />
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        aria-label="Change layout"
+        className="max-h-(--available-height) w-[560px] max-w-(--available-width) gap-0 overflow-hidden p-0"
+      >
+        <LayoutPicker mode="change" onDone={() => setOpen(false)} />
+      </PopoverContent>
+    </Popover>
   );
 }

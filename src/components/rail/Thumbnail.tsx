@@ -3,6 +3,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useSettled } from "../../hooks/useSettled";
 import type { Slide } from "../../lib/api";
 import { scrollBehavior } from "../../lib/motion";
@@ -181,16 +183,16 @@ export const Thumbnail = memo(function Thumbnail(props: {
         </RailMark>
         <div className="pointer-events-none absolute bottom-1 right-1 flex gap-1">
           {props.matches !== undefined && props.matches > 0 && (
-            <Badge testId="match-count" title={`${plural(props.matches, "match", "matches")} of the search`}>
+            <RailCount testId="match-count" title={`${plural(props.matches, "match", "matches")} of the search`}>
               <Search className="size-2.5" />
               {props.matches}
-            </Badge>
+            </RailCount>
           )}
           {comments > 0 && (
-            <Badge testId="comment-count" title={plural(comments, "comment")}>
+            <RailCount testId="comment-count" title={plural(comments, "comment")}>
               <MessageSquare className="size-2.5" />
               {comments}
-            </Badge>
+            </RailCount>
           )}
         </div>
         <div className="absolute right-1 top-1 hidden gap-0.5 group-focus-within:flex group-hover:flex">
@@ -221,15 +223,15 @@ export const Thumbnail = memo(function Thumbnail(props: {
 });
 
 /** A small count over a thumbnail's corner, with an icon saying of what. */
-function Badge(props: { testId: string; title: string; children: React.ReactNode }) {
+function RailCount(props: { testId: string; title: string; children: React.ReactNode }) {
   return (
-    <span
+    <Badge
       data-testid={props.testId}
       title={props.title}
-      className="pointer-events-auto flex items-center gap-0.5 rounded bg-overlay px-1 py-0.5 text-[10px] font-medium leading-none tabular-nums text-overlay-foreground"
+      className="pointer-events-auto h-auto gap-0.5 rounded bg-overlay px-1 py-0.5 text-[10px] leading-none tabular-nums text-overlay-foreground [&>svg]:size-2.5!"
     >
       {props.children}
-    </span>
+    </Badge>
   );
 }
 
@@ -279,10 +281,15 @@ function HiddenMark() {
   );
 }
 
+/**
+ * A quick action over a thumbnail. Its hint is the native one: a tooltip of its own for each of
+ * four buttons on every row is more than a rail of hundreds of slides should carry.
+ */
 function RailAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-2xs"
       aria-label={props.title}
       title={props.title}
       onPointerDown={(e) => e.stopPropagation()}
@@ -290,9 +297,9 @@ function RailAction(props: { title: string; onClick: () => void; children: React
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
+      className="rounded bg-overlay text-overlay-foreground hover:bg-overlay hover:text-overlay-foreground hover:opacity-90 dark:hover:bg-overlay"
     >
       {props.children}
-    </button>
+    </Button>
   );
 }

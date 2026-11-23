@@ -83,7 +83,9 @@ beforeEach(() => {
 });
 
 const row = (id: string) => within(screen.getByTestId(`provider-${id}`));
-const toggle = (name: string) => screen.getByRole("switch", { name }) as HTMLButtonElement;
+const toggle = (name: string) => screen.getByRole("switch", { name });
+/** Whether a provider's switch is locked: it says so, and takes no press. */
+const locked = (name: string) => toggle(name).getAttribute("aria-disabled") === "true";
 /** The section once its first check is through. */
 async function shown() {
   render(<ProvidersSection />);
@@ -106,10 +108,10 @@ describe("ProvidersSection", () => {
     expect(claude.getByTestId("provider-path").textContent).toBe("/usr/local/bin/claude");
     expect(claude.getByText("Ready")).toBeTruthy();
     expect(claude.getByText("Signed in · 2 models")).toBeTruthy();
-    expect(claude.getByText("Ready").closest("div")!.parentElement!.querySelector("[data-tone]")).toHaveProperty(
-      "className",
-      expect.stringContaining("bg-success"),
-    );
+    // The status is a badge, a dot in the colour of its tone before the word.
+    const ready = claude.getByText("Ready");
+    expect(ready.dataset.slot).toBe("badge");
+    expect(ready.querySelector("[data-tone]")).toHaveProperty("className", expect.stringContaining("bg-success"));
   });
 
   it("says what is missing, with the command to copy", async () => {
@@ -145,10 +147,17 @@ describe("ProvidersSection", () => {
     // Meanwhile every provider says so, and what was known stays in the store.
     expect(screen.getAllByText("Checking…").length).toBeGreaterThanOrEqual(3);
     expect(useApp.getState().providers).toBe(PROVIDERS);
-    expect((screen.getByRole("button", { name: "Check again" }) as HTMLButtonElement).disabled).toBe(true);
+    const again = screen.getByRole("button", { name: "Check again" }) as HTMLButtonElement;
+    expect(again.disabled).toBe(true);
+    // Busy, with a spinner that the button's name already speaks for.
+    expect(again.getAttribute("aria-busy")).toBe("true");
+    expect(again.querySelector("[data-slot=spinner]")!.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("status")).toBeNull();
     await waitFor(() => expect(calls("list_providers")).toHaveLength(1));
     await act(async () => answer(PROVIDERS));
     await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
+    expect(again.getAttribute("aria-busy")).toBeNull();
+    expect(again.querySelector("[data-slot=spinner]")).toBeNull();
     expect(calls("list_providers")).toHaveLength(1);
     expect(calls("busy_providers")).toHaveLength(1);
     expect(calls("check_environment")).toHaveLength(1);
@@ -188,12 +197,12 @@ describe("ProvidersSection", () => {
     await shown();
     const codex = screen.getByTestId("provider-codex");
     expect(codex.dataset.enabled).toBe("false");
-    expect(within(codex).getByText("Turned off")).toBeTruthy();
+    expect(within(codex).getByText("Turned off").dataset.slot).toBe("badge");
     expect(within(codex).getByText("Not signed in").closest(".opacity-60")).toBeTruthy();
     expect(within(codex).getByTestId("provider-path").textContent).toBe("/opt/bin/codex");
     // Its switch is not dimmed, and not locked: that is how it comes back.
     expect(toggle("Codex").closest(".opacity-60")).toBeNull();
-    expect(toggle("Codex").disabled).toBe(false);
+    expect(locked("Codex")).toBe(false);
     expect(screen.getByTestId("provider-claude").dataset.enabled).toBe("true");
     expect(row("claude").queryByText("Turned off")).toBeNull();
   });
@@ -201,12 +210,12 @@ describe("ProvidersSection", () => {
   it("locks the switch of the last provider that is on, saying why", async () => {
     serve({}, { providers: { codex: { enabled: false }, copilot: { enabled: false } } });
     await shown();
-    expect(toggle("Claude Code").disabled).toBe(true);
+    expect(locked("Claude Code")).toBe(true);
     expect(row("claude").getByText("At least one provider has to stay on.")).toBeTruthy();
     expect(toggle("Claude Code").getAttribute("aria-describedby")).toBe(
       row("claude").getByText("At least one provider has to stay on.").id,
     );
-    expect(toggle("Codex").disabled).toBe(false);
+    expect(locked("Codex")).toBe(false);
     fireEvent.click(toggle("Claude Code"));
     expect(patches()).toEqual([]);
   });
@@ -214,21 +223,21 @@ describe("ProvidersSection", () => {
   it("locks the switch of a provider working in a chat of another window, saying why", async () => {
     serve({ busy_providers: () => ["codex"] });
     await shown();
-    expect(toggle("Codex").disabled).toBe(true);
+    expect(locked("Codex")).toBe(true);
     expect(row("codex").getByText("Codex is working in a chat. Stop it or wait for it to finish.")).toBeTruthy();
-    expect(toggle("Claude Code").disabled).toBe(false);
+    expect(locked("Claude Code")).toBe(false);
     expect(row("claude").queryByText(/is working in a chat/)).toBeNull();
   });
 
   it("locks the switch of the provider working in this window's chat, without asking", async () => {
     serve();
     await shown();
-    expect(toggle("Claude Code").disabled).toBe(false);
+    expect(locked("Claude Code")).toBe(false);
     act(() => useApp.setState({ running: true, sessionProvider: "claude" }));
-    expect(toggle("Claude Code").disabled).toBe(true);
+    expect(locked("Claude Code")).toBe(true);
     expect(row("claude").getByText("Claude Code is working in a chat. Stop it or wait for it to finish.")).toBeTruthy();
     act(() => useApp.setState({ running: false }));
-    expect(toggle("Claude Code").disabled).toBe(false);
+    expect(locked("Claude Code")).toBe(false);
   });
 
   it("frees the switch as this window's turn ends, though the check found its provider busy", async () => {
@@ -237,10 +246,10 @@ describe("ProvidersSection", () => {
     serve({ busy_providers: () => busy });
     useApp.setState({ running: true, sessionProvider: "claude" });
     await shown();
-    expect(toggle("Claude Code").disabled).toBe(true);
+    expect(locked("Claude Code")).toBe(true);
     busy = [];
     act(() => useApp.setState({ running: false }));
-    await waitFor(() => expect(toggle("Claude Code").disabled).toBe(false));
+    await waitFor(() => expect(locked("Claude Code")).toBe(false));
     expect(row("claude").queryByText(/is working in a chat/)).toBeNull();
   });
 
@@ -248,7 +257,7 @@ describe("ProvidersSection", () => {
     let busy = ["codex"];
     serve({ busy_providers: () => busy });
     await shown();
-    expect(toggle("Codex").disabled).toBe(true);
+    expect(locked("Codex")).toBe(true);
     const agentEvent = (event: unknown) =>
       act(async () => {
         for (const [name, handler] of listen.mock.calls) {
@@ -261,7 +270,7 @@ describe("ProvidersSection", () => {
     expect(calls("busy_providers")).toHaveLength(asked);
     busy = [];
     await agentEvent({ type: "finished", interrupted: false });
-    await waitFor(() => expect(toggle("Codex").disabled).toBe(false));
+    await waitFor(() => expect(locked("Codex")).toBe(false));
   });
 
   it("keeps the newest answer of who is busy, whatever order the answers come in", async () => {
@@ -278,7 +287,7 @@ describe("ProvidersSection", () => {
     await waitFor(() => expect(asked).toBe(2));
     await act(async () => answerFirst(["claude"]));
     await waitFor(() => expect(screen.queryByText("Checking…")).toBeNull());
-    expect(toggle("Claude Code").disabled).toBe(false);
+    expect(locked("Claude Code")).toBe(false);
   });
 
   it("shows the backend's reason for a refused change, the switch staying on and locking", async () => {
@@ -297,7 +306,7 @@ describe("ProvidersSection", () => {
     expect(lastError(useApp.getState())).toBe(reason);
     expect(toggle("Codex").getAttribute("aria-checked")).toBe("true");
     expect(useApp.getState().settings.providers.codex.enabled).toBe(true);
-    await waitFor(() => expect(toggle("Codex").disabled).toBe(true));
+    await waitFor(() => expect(locked("Codex")).toBe(true));
   });
 
   it("shows what the agents need from the computer", async () => {
@@ -330,8 +339,9 @@ describe("ProvidersSection", () => {
     await shown();
     expect(screen.getByText("Could not check")).toBeTruthy();
     expect(screen.getByText("The home folder could not be located.")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe("Could not checkThe home folder could not be located.");
     expect(row("claude").getByText("Ready")).toBeTruthy();
-    expect(toggle("Claude Code").disabled).toBe(false);
+    expect(locked("Claude Code")).toBe(false);
   });
 });
 

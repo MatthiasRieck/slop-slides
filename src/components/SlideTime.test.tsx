@@ -4,6 +4,7 @@ import type { Deck } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { tooltipOf } from "../test/ui";
 import { SlideTime } from "./SlideTime";
 
 const withTimes = (times: Record<string, number>): Deck => {
@@ -110,5 +111,14 @@ describe("SlideTime", () => {
     const deck = withTimes({});
     render(<SlideTime deck={{ ...deck, slides: deck.slides.map((s) => ({ ...s, locked: true })) }} />);
     expect(field().disabled).toBe(true);
+    // Why, on what is around the field: a disabled field has nothing under the pointer.
+    expect(tooltipOf(field().parentElement!)).toMatch(/This slide is locked/);
+  });
+
+  it("says what the time is for in a tooltip, which typing in the field does not open", () => {
+    render(<SlideTime deck={withTimes({})} />);
+    expect(tooltipOf(field().parentElement!)).toMatch(/How long you plan to spend on this slide/);
+    fireEvent.focus(field());
+    expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull();
   });
 });

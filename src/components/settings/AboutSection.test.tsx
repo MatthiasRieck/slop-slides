@@ -12,8 +12,11 @@ describe("AboutSection", () => {
   it("says which version of the app this is", async () => {
     getVersion.mockResolvedValue("1.2.3");
     render(<AboutSection />);
-    expect((await screen.findByTestId("app-version")).textContent).toBe("SlopSlide 1.2.3");
-    expect(screen.getByRole("heading", { name: "Version" })).toBeTruthy();
+    const version = await screen.findByTestId("app-version");
+    expect(version.textContent).toBe("SlopSlide 1.2.3");
+    expect(version.dataset.slot).toBe("badge");
+    expect(screen.getByRole("heading", { level: 4, name: "Version" })).toBeTruthy();
+    expect(screen.getByText("A desktop slide editor you drive by chatting.")).toBeTruthy();
   });
 
   it("leaves the version out where there is none to read", async () => {

@@ -1,5 +1,5 @@
 import { ChevronRightIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +66,20 @@ function TraceDescription({ className, ...props }: React.ComponentProps<"span">)
   );
 }
 
+/**
+ * A trace of a long conversation holds hundreds of collapsibles, nearly all of them never opened.
+ * Until one is first opened it is plain markup (a button that says it is collapsed, and no
+ * panel): Base UI's collapsible keeps state and effects for each, which is what showing such a
+ * conversation again, or rendering it, would otherwise cost.
+ */
+const TraceCollapsibleContext = React.createContext<{
+  /** Not opened yet: the trigger is a plain button and there is no content. */
+  dormant: boolean;
+  wake: () => void;
+  /** The trigger that woke it had the focus, which the real trigger takes over. */
+  refocus: React.RefObject<boolean>;
+}>({ dormant: false, wake: () => {}, refocus: { current: false } });
+
 function TraceCollapsible({
   className,
   ...props
@@ -77,30 +91,95 @@ function TraceCollapsible({
         onOpenChange: NonNullable<React.ComponentProps<typeof Collapsible>["onOpenChange"]>;
       }
   )) {
+  const [woken, setWoken] = React.useState(false);
+  const refocus = React.useRef(false);
+  const dormant = !woken && !props.open && !props.defaultOpen;
+  const { onOpenChange } = props;
+  const context = React.useMemo(
+    () => ({
+      dormant,
+      wake: () => {
+        refocus.current = true;
+        setWoken(true);
+        (onOpenChange as ((open: boolean) => void) | undefined)?.(true);
+      },
+      refocus,
+    }),
+    [dormant, onOpenChange],
+  );
+  const classes = cn("flex w-full min-w-0 flex-col", className);
+  if (dormant) {
+    return (
+      <TraceCollapsibleContext.Provider value={context}>
+        <div data-slot="trace-collapsible" className={typeof classes === "string" ? classes : undefined}>
+          {props.children as React.ReactNode}
+        </div>
+      </TraceCollapsibleContext.Provider>
+    );
+  }
   return (
-    <Collapsible data-slot="trace-collapsible" className={cn("flex w-full min-w-0 flex-col", className)} {...props} />
+    <TraceCollapsibleContext.Provider value={context}>
+      <Collapsible
+        data-slot="trace-collapsible"
+        className={classes}
+        {...props}
+        // Woken by a press on its plain trigger, it starts open when it keeps its own state.
+        {...(props.open === undefined && woken && { defaultOpen: true })}
+      />
+    </TraceCollapsibleContext.Provider>
   );
 }
 
+const TRIGGER =
+  "group/trace-collapsible-trigger flex w-fit max-w-full min-w-0 cursor-pointer items-center gap-1 rounded-md text-left text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 has-[[data-status=error]]:text-destructive";
+
 function TraceCollapsibleTrigger({ className, children, ...props }: React.ComponentProps<typeof CollapsibleTrigger>) {
+  const { dormant, wake, refocus } = React.useContext(TraceCollapsibleContext);
+  const chevron = (
+    <TraceIcon className="transition-transform group-aria-expanded/trace-collapsible-trigger:rotate-90">
+      <ChevronRightIcon />
+    </TraceIcon>
+  );
+  const taken = React.useCallback(
+    (element: HTMLElement | null) => {
+      if (element && refocus.current) {
+        refocus.current = false;
+        element.focus({ preventScroll: true });
+      }
+    },
+    [refocus],
+  );
+  if (dormant) {
+    const { "aria-label": label, title, id, disabled, tabIndex } = props;
+    return (
+      <button
+        type="button"
+        data-slot="trace-collapsible-trigger"
+        aria-expanded={false}
+        aria-label={label}
+        title={title}
+        id={id}
+        disabled={disabled}
+        tabIndex={tabIndex}
+        className={cn(TRIGGER, typeof className === "string" ? className : undefined)}
+        onClick={wake}
+      >
+        {children}
+        {chevron}
+      </button>
+    );
+  }
   return (
-    <CollapsibleTrigger
-      data-slot="trace-collapsible-trigger"
-      className={cn(
-        "group/trace-collapsible-trigger flex w-fit max-w-full min-w-0 cursor-pointer items-center gap-1 rounded-md text-left text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 has-[[data-status=error]]:text-destructive",
-        className,
-      )}
-      {...props}
-    >
+    <CollapsibleTrigger ref={taken} data-slot="trace-collapsible-trigger" className={cn(TRIGGER, className)} {...props}>
       {children}
-      <TraceIcon className="transition-transform group-aria-expanded/trace-collapsible-trigger:rotate-90">
-        <ChevronRightIcon />
-      </TraceIcon>
+      {chevron}
     </CollapsibleTrigger>
   );
 }
 
 function TraceCollapsibleContent({ className, children, ...props }: React.ComponentProps<typeof CollapsibleContent>) {
+  const { dormant } = React.useContext(TraceCollapsibleContext);
+  if (dormant) return null;
   return (
     <CollapsibleContent
       data-slot="trace-collapsible-content"

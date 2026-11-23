@@ -128,6 +128,12 @@
 }
 
 @theme {
+  /*
+   * A control answers a press at once: a `transition-*` class that names no duration of its own
+   * takes none. shadcn/ui's components fade every change of state over 150ms by default, which
+   * on each button, tab and field makes the whole app feel a beat late.
+   */
+  --default-transition-duration: 0s;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }

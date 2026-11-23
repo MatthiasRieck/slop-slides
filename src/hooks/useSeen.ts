@@ -15,7 +15,10 @@ export function useSeen(ref: RefObject<Element | null>): boolean {
   useEffect(() => {
     const element = ref.current;
     if (seen || !element) return;
-    return watchIntersection(element, scrollerOf(element), AHEAD, (entry) => {
+    // The conversation's scroller is found by name: asking every element around a code block for
+    // its computed style, for each block of a long chat, is what showing the chat again would cost.
+    const scroller = element.closest("[data-slot=message-scroller-viewport]") ?? scrollerOf(element);
+    return watchIntersection(element, scroller, AHEAD, (entry) => {
       if (entry.isIntersecting) setSeen(true);
     });
   }, [ref, seen]);

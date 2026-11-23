@@ -110,8 +110,7 @@ function Conversation(props: {
         ref={props.viewport}
         aria-label="Conversation"
         onScroll={props.onScroll}
-        // The fade at the bottom is as tall as the room under the last message, and so never over it.
-        className="px-4 pt-4 [--scroll-fade-size:--spacing(6)]"
+        className="px-4 pt-4"
       >
         <MessageScrollerContent aria-busy={running || undefined} className="mx-auto w-full max-w-3xl gap-6 pb-6">
           {messages.map((message) => (

@@ -1090,3 +1090,40 @@ describe("Toaster", () => {
     expect(screen.queryByText("Saved")).toBeNull();
   });
 });
+
+describe("TraceCollapsible", () => {
+  it("is plain markup until it is first opened, then a collapsible that opens and closes", async () => {
+    const { TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } = await import("./trace");
+    render(
+      <TraceCollapsible>
+        <TraceCollapsibleTrigger aria-label="Steps">steps</TraceCollapsibleTrigger>
+        <TraceCollapsibleContent>the details</TraceCollapsibleContent>
+      </TraceCollapsible>,
+    );
+    const dormant = screen.getByRole("button", { name: "Steps" });
+    expect(dormant.getAttribute("aria-expanded")).toBe("false");
+    // No panel, and nothing of Base UI's, for a row nobody has opened.
+    expect(document.querySelector("[data-slot=trace-collapsible-content]")).toBeNull();
+    expect(screen.queryByText("the details")).toBeNull();
+    dormant.focus();
+    fireEvent.click(dormant);
+    const trigger = screen.getByRole("button", { name: "Steps" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(trigger);
+    expect(screen.getByText("the details")).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "Steps" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("starts as a collapsible when it starts open", async () => {
+    const { TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger } = await import("./trace");
+    render(
+      <TraceCollapsible defaultOpen>
+        <TraceCollapsibleTrigger aria-label="Steps">steps</TraceCollapsibleTrigger>
+        <TraceCollapsibleContent>the details</TraceCollapsibleContent>
+      </TraceCollapsible>,
+    );
+    expect(screen.getByRole("button", { name: "Steps" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("the details")).toBeTruthy();
+  });
+});

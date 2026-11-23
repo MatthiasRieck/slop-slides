@@ -229,6 +229,6 @@ function SidePanel(props: {
 function ResizeHandle() {
   return (
     // The line lights up under the pointer and while it is dragged.
-    <ResizableHandle className="transition-colors data-[separator=active]:bg-primary data-[separator=hover]:bg-primary/50" />
+    <ResizableHandle className="transition-colors duration-150 data-[separator=active]:bg-primary data-[separator=hover]:bg-primary/50" />
   );
 }

@@ -29,7 +29,12 @@ export function useHighlightedCode(value: string, language: string, enabled = tr
     loadHighlighter(language)
       .then((next) => {
         if (!cancelled) {
-          React.startTransition(() => setLoaded({ language, highlighter: next }));
+          // The same grammar again (the chat shown again runs this for every block) changes nothing.
+          React.startTransition(() =>
+            setLoaded((was) =>
+              was?.language === language && was.highlighter === next ? was : { language, highlighter: next },
+            ),
+          );
         }
       })
       .catch(() => {});

@@ -63,13 +63,33 @@ function getLanguage(language: string) {
 
 // Loads a language and returns a highlighter for it, or null for a language
 // that is not listed.
-export async function loadHighlighter(language: string) {
+/**
+ * The highlighter of each language, made once: every block of code in that language gets the
+ * same one, so a block that asks again (shown again after being hidden) is told nothing new and
+ * keeps the lines it has colored.
+ */
+const loaded = new Map<string, ReturnType<typeof makeHighlighter>>();
+
+export function loadHighlighter(language: string) {
   const lang = getLanguage(language);
 
   if (!lang) {
-    return null;
+    return Promise.resolve(null);
   }
 
+  let made = loaded.get(lang);
+
+  if (!made) {
+    made = makeHighlighter(lang);
+    loaded.set(lang, made);
+    // A grammar that failed to load is asked for again by the next block.
+    made.catch(() => loaded.delete(lang));
+  }
+
+  return made;
+}
+
+async function makeHighlighter(lang: NonNullable<ReturnType<typeof getLanguage>>) {
   const shiki = await getHighlighter();
 
   if (lang !== "ansi" && !shiki.getLoadedLanguages().includes(lang)) {

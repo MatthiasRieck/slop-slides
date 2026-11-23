@@ -60,7 +60,7 @@ describe("the stylesheet of the shadcn/ui components", () => {
     }
   });
 
-  it("styles every scrollbar in one place, and fades no code where the fade cannot follow the scrolling", () => {
+  it("styles every scrollbar in one place", () => {
     // A `scrollbar-width` or `scrollbar-color` on an element switches it to the platform's
     // scrollbar and off the `::-webkit-scrollbar` rules every other one is drawn by.
     expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--input\);/);
@@ -74,11 +74,23 @@ describe("the stylesheet of the shadcn/ui components", () => {
       ),
     );
     expect(found).toEqual([]);
-    // Without scroll-driven animations (WebKit before Safari 26) the fade is static, 40px wide
-    // over 12px of padding: it would dim the start of every line of code, scrolled or not.
-    const block = readFileSync("src/components/ui/code-block.tsx", "utf8");
-    expect(block).toMatch(/scroll-fade-x [^"]*not-supports-\[animation-timeline:scroll\(\)\]:scroll-fade-none/);
-    expect(shadcn).toMatch(/@utility scroll-fade-none \{\s*--scroll-fade-mask: none;/);
+  });
+
+  it("fades no scroller's edges with a mask", () => {
+    // A scroll-fade is a mask driven by a scroll timeline: an animation that never ends and a
+    // layer painted off screen, for every code block of a conversation and the conversation
+    // itself. In WebKit that made every repaint of the app slow.
+    const ui = readdirSync("src/components", { withFileTypes: true, recursive: true })
+      .filter((file) => file.isFile() && /\.tsx$/.test(file.name) && !/\.test\.tsx$/.test(file.name))
+      .map((file) => join(file.parentPath, file.name));
+    const found = ui.flatMap((path) =>
+      (readFileSync(path, "utf8").match(/(?<![\w-])scroll-fade-[\w-]+/g) ?? []).map((name) => `${path}: ${name}`),
+    );
+    expect(found).toEqual([]);
+  });
+
+  it("changes a control's state at once, unless a transition names its own duration", () => {
+    expect(css).toMatch(/@theme \{[^}]*--default-transition-duration: 0s;/);
   });
 
   it("gives a control under the pointer a fill that shows on every surface", () => {

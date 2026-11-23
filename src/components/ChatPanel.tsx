@@ -70,7 +70,7 @@ function Chat() {
     <div className="flex h-full flex-col bg-background">
       <ThreadNavigation switching={switching} setSwitching={setSwitching} />
       <div
-        className={cn("flex min-h-0 flex-1 flex-col transition-opacity", switching && "opacity-50")}
+        className={cn("flex min-h-0 flex-1 flex-col transition-opacity duration-150", switching && "opacity-50")}
         inert={switching}
         aria-busy={switching || undefined}
       >

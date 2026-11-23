@@ -1626,8 +1626,13 @@ describe("ChatPanel: transcript", () => {
     expect(screen.queryByText("Output")).toBeNull();
     const toggle = screen.getByRole("button", { name: "Show arguments and output of Ran ls assets" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.focus();
     fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    // Opened for the first time, the row becomes a real collapsible: its trigger is another
+    // element, which says it is open and keeps the focus the press was made with.
+    const opened = screen.getByRole("button", { name: "Hide arguments and output of Ran ls assets" });
+    expect(opened.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(opened);
     expect(screen.getByText("Arguments · Bash")).toBeTruthy();
     expect(argument("command")).toBe("ls assets");
     expect(argument("timeout")).toBe("5000");
@@ -2662,10 +2667,11 @@ describe("ChatPanel: steps of a reply", () => {
     expect(steps.title).toBe("Show each step");
     expect(toolLines()).toHaveLength(0);
     fireEvent.click(steps);
-    expect(steps.getAttribute("aria-expanded")).toBe("true");
-    expect(steps.title).toBe("Hide the steps");
+    const shown = screen.getByRole("button", { name: "12 steps" });
+    expect(shown.getAttribute("aria-expanded")).toBe("true");
+    expect(shown.title).toBe("Hide the steps");
     expect(toolLines()).toHaveLength(12);
-    fireEvent.click(steps);
+    fireEvent.click(shown);
     expect(toolLines()).toHaveLength(0);
   });
 

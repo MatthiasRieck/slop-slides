@@ -3,8 +3,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { Copy, Eye, EyeOff, Lock, LockOpen, MessageSquare, Search, Trash2 } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { useSettled } from "../../hooks/useSettled";
 import type { Slide } from "../../lib/api";
 import { scrollBehavior } from "../../lib/motion";
@@ -222,16 +220,20 @@ export const Thumbnail = memo(function Thumbnail(props: {
   );
 });
 
-/** A small count over a thumbnail's corner, with an icon saying of what. */
+/**
+ * A small count over a thumbnail's corner, with an icon saying of what. Plain markup, like the
+ * quick actions below: every row of the rail has these, and the rail renders again whenever the
+ * mode changes, so each is as light as it can be.
+ */
 function RailCount(props: { testId: string; title: string; children: React.ReactNode }) {
   return (
-    <Badge
+    <span
       data-testid={props.testId}
       title={props.title}
-      className="pointer-events-auto h-auto gap-0.5 rounded bg-overlay px-1 py-0.5 text-[10px] leading-none tabular-nums text-overlay-foreground [&>svg]:size-2.5!"
+      className="pointer-events-auto flex items-center gap-0.5 rounded bg-overlay px-1 py-0.5 text-[10px] font-medium leading-none tabular-nums text-overlay-foreground"
     >
       {props.children}
-    </Badge>
+    </span>
   );
 }
 
@@ -283,13 +285,13 @@ function HiddenMark() {
 
 /**
  * A quick action over a thumbnail. Its hint is the native one: a tooltip of its own for each of
- * four buttons on every row is more than a rail of hundreds of slides should carry.
+ * four buttons on every row is more than a rail of hundreds of slides should carry, and so is
+ * a component per button: it is a plain one.
  */
 function RailAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <Button
-      variant="ghost"
-      size="icon-2xs"
+    <button
+      type="button"
       aria-label={props.title}
       title={props.title}
       onPointerDown={(e) => e.stopPropagation()}
@@ -297,9 +299,9 @@ function RailAction(props: { title: string; onClick: () => void; children: React
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded bg-overlay text-overlay-foreground hover:bg-overlay hover:text-overlay-foreground hover:opacity-90 dark:hover:bg-overlay"
+      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90 [&_svg]:size-3"
     >
       {props.children}
-    </Button>
+    </button>
   );
 }

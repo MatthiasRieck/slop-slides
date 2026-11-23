@@ -1,7 +1,8 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Loader2, Pause, Play, Sparkles, Trash2, X } from "lucide-react";
+import { AudioLines, Pause, Play, Sparkles, Trash2, X } from "lucide-react";
 import { type MouseEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
-
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import type { Deck, SlideAudio } from "../../lib/api";
 import { formatDuration, type Playback, playNarration } from "../../lib/narrationAudio";
 import { playheadTransform } from "../../lib/playbackClock";
@@ -9,7 +10,6 @@ import { scrollToPlayhead } from "../../lib/timeline";
 import { cn } from "../../lib/utils";
 import { canSpeakWith, deckProvider, useNarration } from "../../narrationStore";
 import { showError, useApp } from "../../store";
-import { Button } from "../Button";
 import { usePeaks, useWords, Waveform, Words } from "../NarrationWave";
 
 /** How wide a second of audio is at least once its words are shown, in pixels, so they can be read. */
@@ -171,7 +171,7 @@ export function SlideAudioControls(props: {
         <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
           {busy ? (
             <>
-              <Loader2 className="size-3.5 animate-spin" />
+              <Spinner aria-hidden="true" className="size-3.5" />
               Generating audio…
             </>
           ) : (
@@ -181,19 +181,21 @@ export function SlideAudioControls(props: {
         <div className="flex shrink-0 gap-1">
           {props.hasText && !props.locked && (
             <Button
-              size="md"
+              variant="outline"
+              size="xs"
               onClick={() => void clean()}
-              title="Puts a request in the chat, for the agent to turn this slide's recorded words into clean, fluent sentences. It opens the chat; you send it."
+              tooltip="Puts a request in the chat, for the agent to turn this slide's recorded words into clean, fluent sentences. It opens the chat; you send it."
             >
               <Sparkles />
               Clean up
             </Button>
           )}
           <Button
-            size="md"
+            variant="outline"
+            size="xs"
             disabled={!audio?.seconds || busy}
             onClick={() => void toggle()}
-            title={
+            tooltip={
               playback
                 ? paused
                   ? "Play on from where it was paused"
@@ -208,10 +210,11 @@ export function SlideAudioControls(props: {
           </Button>
           {recorded ? (
             <Button
-              size="md"
+              variant="outline"
+              size="xs"
               disabled={props.locked}
               onClick={() => void remove()}
-              title={
+              tooltip={
                 audio?.imported ? "Remove the audio brought in for this slide" : "Delete your recording of this slide"
               }
             >
@@ -220,19 +223,21 @@ export function SlideAudioControls(props: {
             </Button>
           ) : busy ? (
             <Button
-              size="md"
+              variant="outline"
+              size="xs"
               onClick={() => void useNarration.getState().cancelRender()}
-              title="Stop generating the audio"
+              tooltip="Stop generating the audio"
             >
               <X />
               Cancel
             </Button>
           ) : (
             <Button
-              size="md"
+              variant="outline"
+              size="xs"
               disabled={!canSpeak || render !== null}
               onClick={() => void generate()}
-              title={
+              tooltip={
                 !canSpeak
                   ? `Add your ${provider?.name ?? "narration service's"} API key first`
                   : render !== null

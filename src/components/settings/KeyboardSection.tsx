@@ -1,10 +1,13 @@
-import { Search } from "lucide-react";
+import { Search, SearchX } from "lucide-react";
 import { Fragment, useState } from "react";
 
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Kbd } from "@/components/ui/kbd";
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+
 import { formatKeys } from "../../lib/keys";
-import { cn } from "../../lib/utils";
-import { inputClass } from "../Field";
-import { SectionLabel } from "../SectionLabel";
+import { SECTION_HEADING } from "../styles";
 import { keysLabel, SECTIONS, type ShortcutRow, type ShortcutSection } from "./shortcuts";
 
 /** Whether a row has `query` (in lower case) in its keys, as shown or as named (`shift`, `enter`), or in what they do. */
@@ -27,13 +30,10 @@ export function filterShortcuts(sections: ShortcutSection[], filter: string): Sh
 function Keys({ template }: { template: string }) {
   return template.split(/\{([^}]+)\}/).map((part, index) =>
     index % 2 === 1 ? (
-      <kbd
-        // biome-ignore lint/suspicious/noArrayIndexKey: the template is fixed
-        key={index}
-        className="inline-block min-w-5 rounded border border-b-2 bg-muted px-1 text-center font-sans text-2xs font-medium leading-4 text-foreground tabular-nums"
-      >
+      // biome-ignore lint/suspicious/noArrayIndexKey: the template is fixed
+      <Kbd key={index} className="border align-middle text-2xs text-foreground tabular-nums">
         {formatKeys(part)}
-      </kbd>
+      </Kbd>
     ) : (
       // biome-ignore lint/suspicious/noArrayIndexKey: the template is fixed
       <Fragment key={index}>{part}</Fragment>
@@ -42,10 +42,10 @@ function Keys({ template }: { template: string }) {
 }
 
 /**
- * The settings' Keyboard shortcuts section: every shortcut of the app, to read, in a card for
+ * The settings' Keyboard shortcuts section: every shortcut of the app, to read, in a table for
  * each place it works in, and a box on top that keeps the rows whose keys or description have
  * what is typed. The box takes the focus when the settings open here (on `?`), so typing filters
- * at once.
+ * at once (it is marked `data-autofocus`, which ./SettingsDialog.tsx looks for).
  */
 export function KeyboardSection() {
   const [filter, setFilter] = useState("");
@@ -55,41 +55,49 @@ export function KeyboardSection() {
       {/* Stays in sight over the list. A sticky box stops at the pane's content edge, below its padding,
           so it is held that padding higher (`-top-5`) and covers it: no row shows above the box. */}
       <div className="sticky -top-5 z-10 -mt-5 bg-background pb-1 pt-5">
-        <div className="relative">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-          />
-          <input
+        <InputGroup>
+          <InputGroupInput
             type="search"
             aria-label="Filter shortcuts"
             placeholder="Filter by keys or by what they do"
             data-autofocus
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
-            className={cn(inputClass, "h-8 pl-7 text-xs")}
+            className="text-xs"
           />
-        </div>
+          <InputGroupAddon>
+            <Search aria-hidden="true" className="size-3.5" />
+          </InputGroupAddon>
+        </InputGroup>
       </div>
       {sections.map((section) => (
         <section key={section.title} className="flex flex-col gap-2">
-          <SectionLabel as="h4">{section.title}</SectionLabel>
-          <dl className="divide-y rounded-lg border bg-card">
-            {section.rows.map(([keys, what]) => (
-              <div key={keys} className="flex items-baseline justify-between gap-6 px-3 py-1.5 text-xs">
-                <dt className="order-last max-w-[55%] shrink-0 text-right leading-6 text-muted-foreground">
-                  <Keys template={keys} />
-                </dt>
-                <dd className="min-w-0">{keysLabel(what)}</dd>
-              </div>
-            ))}
-          </dl>
+          <h4 className={SECTION_HEADING}>{section.title}</h4>
+          <div className="overflow-hidden rounded-lg border bg-card">
+            <Table className="text-xs">
+              <TableBody>
+                {section.rows.map(([keys, what]) => (
+                  <TableRow key={keys}>
+                    <TableCell className="px-3 py-1.5 whitespace-normal">{keysLabel(what)}</TableCell>
+                    <TableCell className="max-w-[55%] px-3 py-1.5 text-right leading-6 whitespace-normal text-muted-foreground">
+                      <Keys template={keys} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </section>
       ))}
       {sections.length === 0 && (
-        <p role="status" className="py-8 text-center text-xs text-muted-foreground">
-          No shortcut matches “{filter.trim()}”.
-        </p>
+        <Empty role="status">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <SearchX aria-hidden="true" />
+            </EmptyMedia>
+            <EmptyTitle>No shortcut matches “{filter.trim()}”.</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       )}
     </div>
   );

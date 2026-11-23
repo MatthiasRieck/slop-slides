@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn(async () => "1.2.3") }));
 
 import { openSettings, useApp } from "../../store";
 import { invoke } from "../../test/tauri";
+import { tooltipOf } from "../../test/ui";
 import { SettingsDialog } from "./SettingsDialog";
 
 beforeEach(() => {
@@ -81,32 +82,35 @@ describe("SettingsDialog", () => {
     expect(selected()).toEqual([tab("About")]);
   });
 
-  it("goes through the sections with the arrow keys, Tab stopping at the one shown only", () => {
+  it("goes through the sections with the arrow keys, Tab stopping at the one shown only", async () => {
     useApp.setState({ settingsSection: "providers" });
     render(<SettingsDialog />);
     expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([-1, 0, -1, -1]);
     // The focus starts on the section shown.
-    expect(document.activeElement).toBe(tab("Providers"));
-    fireEvent.keyDown(tab("Providers"), { key: "ArrowDown" });
-    expect(document.activeElement).toBe(tab("Keyboard shortcuts"));
-    fireEvent.keyDown(tab("Keyboard shortcuts"), { key: "ArrowUp" });
-    fireEvent.keyDown(tab("Providers"), { key: "ArrowUp" });
-    expect(document.activeElement).toBe(tab("General"));
-    fireEvent.keyDown(tab("General"), { key: "End" });
-    expect(document.activeElement).toBe(tab("About"));
+    await waitFor(() => expect(document.activeElement).toBe(tab("Providers")));
+    // (The focus follows a key a moment later.)
+    const press = async (from: string, key: string, to: string) => {
+      fireEvent.keyDown(tab(from), { key });
+      await waitFor(() => expect(document.activeElement).toBe(tab(to)));
+    };
+    await press("Providers", "ArrowDown", "Keyboard shortcuts");
+    await press("Keyboard shortcuts", "ArrowUp", "Providers");
+    await press("Providers", "ArrowUp", "General");
+    await press("General", "End", "About");
     // The arrows move the focus; Enter (a press of the button) picks.
     expect(useApp.getState().settingsSection).toBe("providers");
     fireEvent.click(tab("About"));
     expect(useApp.getState().settingsSection).toBe("about");
   });
 
-  it("starts in the filter box when opened on the keyboard shortcuts, so typing filters at once", () => {
+  it("starts in the filter box when opened on the keyboard shortcuts, so typing filters at once", async () => {
     useApp.setState({ settingsSection: "keyboard" });
     render(<SettingsDialog />);
-    expect(document.activeElement).toBe(screen.getByRole("searchbox", { name: "Filter shortcuts" }));
+    const box = screen.getByRole("searchbox", { name: "Filter shortcuts" });
+    await waitFor(() => expect(document.activeElement).toBe(box));
   });
 
-  it("closes on Escape and from the close button, and gives focus back", () => {
+  it("closes on Escape and from the close button, and gives focus back", async () => {
     render(
       <>
         <button type="button">Before</button>
@@ -114,29 +118,32 @@ describe("SettingsDialog", () => {
       </>,
     );
     const before = screen.getByText("Before");
-    const open = () => {
+    // The focus moves in a moment after it opens, and back a moment after it closes.
+    const open = async () => {
       before.focus();
       act(() => openSettings());
-      expect(dialog()!.contains(document.activeElement)).toBe(true);
+      await waitFor(() => expect(dialog()!.contains(document.activeElement)).toBe(true));
     };
-    const closed = () => {
+    const closed = async () => {
       expect(dialog()).toBeNull();
       expect(useApp.getState().settingsSection).toBeNull();
-      expect(document.activeElement).toBe(before);
+      await waitFor(() => expect(document.activeElement).toBe(before));
     };
-    open();
+    await open();
     fireEvent.keyDown(dialog()!, { key: "Escape" });
-    closed();
-    open();
+    await closed();
+    await open();
+    expect(tooltipOf(screen.getByRole("button", { name: "Close" }))).toBe("Close");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    closed();
+    await closed();
   });
 
   it("stays open when the backdrop is pressed, and on ? pressed in it", () => {
     useApp.setState({ settingsSection: "general" });
     render(<SettingsDialog />);
-    fireEvent.pointerDown(screen.getByTestId("settings-backdrop"));
-    fireEvent.click(screen.getByTestId("settings-backdrop"));
+    const backdrop = document.querySelector("[data-slot=dialog-overlay]")!;
+    fireEvent.pointerDown(backdrop, { pointerType: "mouse", button: 0 });
+    fireEvent.click(backdrop);
     fireEvent.keyDown(dialog()!, { key: "?" });
     expect(dialog()).toBeTruthy();
     expect(useApp.getState().settingsSection).toBe("general");

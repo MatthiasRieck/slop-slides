@@ -1,6 +1,11 @@
-import { ArrowUp, CornerDownRight, ListEnd, Loader2, Paperclip, PowerOff, Settings, Square } from "lucide-react";
+import { ArrowUp, CornerDownRight, ListEnd, Paperclip, PowerOff, Settings, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
+import { Kbd } from "@/components/ui/kbd";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { formatKeys } from "../../lib/keys";
 import { hasOpenLayer } from "../../lib/layers";
 import { PROVIDERS } from "../../lib/models";
@@ -8,7 +13,6 @@ import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
 import { openSettings, turnedOffProvider, useApp } from "../../store";
 import { lastSentText } from "../../store/messages";
-import { Button } from "../Button";
 import { EffortPicker, ModelPicker } from "../ModelPicker";
 import { COMPOSER_INPUT_ATTR, PermissionPicker } from "../Permissions";
 import { VoiceInput, type VoiceInputHandle } from "../VoiceInput";
@@ -26,7 +30,11 @@ import { useDictation } from "./useDictation";
 /** The key that steers the agent with the composer's message. */
 const STEER_KEY = formatKeys("mod+enter");
 /** What the send button says it does, with the keys of the message input. */
-export const SEND_TITLE = `Send (${formatKeys("enter")}) · New line (${formatKeys("shift+enter")})`;
+const SEND_TIP = (
+  <>
+    Send <Kbd>{formatKeys("enter")}</Kbd> · New line <Kbd>{formatKeys("shift+enter")}</Kbd>
+  </>
+);
 
 /**
  * Where the user writes (or dictates) to the agent, with what goes along with the message: the
@@ -53,6 +61,8 @@ export function Composer() {
   const { images, screenshot, element } = attachments;
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  /** What the composer stands in, which the grid of attached images opens over. */
+  const surface = useRef<HTMLDivElement>(null);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
   /** A message sent while attachments were being saved: it goes out once they are, if none failed. */
   const [held, setHeld] = useState<{ steer: boolean; failures: number } | null>(null);
@@ -158,7 +168,7 @@ export function Composer() {
     }
   };
 
-  const sendTitle = turnedOff
+  const sendTip = turnedOff
     ? `${PROVIDERS[turnedOff].cli} is turned off.`
     : dictation.dictating
       ? "Stop and send"
@@ -166,16 +176,17 @@ export function Composer() {
         ? "Sends once the attachment is saved"
         : attachments.pending > 0
           ? "Send (waits for the attachment being saved)"
-          : SEND_TITLE;
+          : SEND_TIP;
 
   return (
     <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
       <QueuedMessages onEdit={editQueued} />
-      <div className="relative">
+      <div ref={surface} className="relative">
         {workspacePath &&
           images.length > 0 &&
           (gridOpen ? (
             <ImageGrid
+              anchor={surface}
               workspacePath={workspacePath}
               images={images}
               onRemove={(path) => {
@@ -193,31 +204,31 @@ export function Composer() {
             />
           ))}
         <ContextMeter />
-        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: clicking padding focuses the keyboard-accessible textarea. */}
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: this is a focus convenience, not a separate control. */}
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users can tab directly to the textarea. */}
-        <div
+        {/* A press on the composer's own padding puts the keyboard in the message input. */}
+        <InputGroup
+          data-testid="composer"
           onClick={(e) => {
             if (e.target === e.currentTarget) textareaRef.current?.focus();
           }}
           className={cn(
-            "relative z-10 flex flex-col rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-ring/50",
+            "relative z-10 h-auto flex-col items-stretch rounded-2xl bg-card shadow-composer dark:bg-card",
             attachments.dragging && "border-primary ring-2 ring-primary/30",
           )}
         >
           {turnedOff && (
-            <div
+            <InputGroupAddon
+              align="block-start"
               role="status"
               data-testid="provider-turned-off"
-              className="flex items-center gap-2 border-b px-3.5 py-2 text-xs text-muted-foreground"
+              className="order-none cursor-default border-b px-3.5 py-2 text-xs font-normal"
             >
               <PowerOff aria-hidden="true" className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1">{PROVIDERS[turnedOff].cli} is turned off.</span>
-              <Button size="sm" onClick={() => openSettings("providers")} className="shrink-0">
-                <Settings />
+              <Button variant="outline" size="xs" onClick={() => openSettings("providers")} className="shrink-0">
+                <Settings data-icon="inline-start" />
                 Open Providers
               </Button>
-            </div>
+            </InputGroupAddon>
           )}
           <ComposerChips
             slideNumber={slideNumber}
@@ -231,7 +242,7 @@ export function Composer() {
             onRemove={attachments.remove}
             pending={attachments.pending}
           />
-          <textarea
+          <InputGroupTextarea
             ref={textareaRef}
             {...{ [COMPOSER_INPUT_ATTR]: "" }}
             value={dictation.shownDraft}
@@ -247,7 +258,8 @@ export function Composer() {
                   ? `Queue a message, or ${STEER_KEY} to steer the agent now…`
                   : "Ask for slides or changes…"
             }
-            className="block max-h-[max(64px,60vh)] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
+            // Its height is set by hand (see `fitInput`): it neither sizes itself nor takes the room left over.
+            className="block max-h-[max(64px,60vh)] min-h-16 flex-none px-3.5 pt-3 pb-0 leading-relaxed placeholder:text-muted-foreground/70"
           />
           {/* Drawn at the top, but after the input for the keyboard: Tab goes to the text first. */}
           <InputResizeHandle
@@ -256,13 +268,19 @@ export function Composer() {
             onResize={setInputHeight}
             className="order-first"
           />
-          <div className="@container px-2 pt-2 pb-2">
+          <InputGroupAddon
+            align="block-end"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) textareaRef.current?.focus();
+            }}
+            className="@container block px-2 pt-2 pb-2"
+          >
             <div className="relative flex flex-nowrap items-center gap-1">
               {/* While dictating, the waveform that VoiceInput shows takes the place of the options. */}
               {!dictation.dictating && (
                 <>
                   <ModelPicker />
-                  <div className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+                  <Separator orientation="vertical" className="mx-0.5 data-vertical:h-4 data-vertical:self-center" />
                   <EffortPicker />
                   <PermissionPicker />
                   <div className="min-w-0 flex-1" />
@@ -270,62 +288,71 @@ export function Composer() {
               )}
               <VoiceInput ref={voiceInput} {...dictation.handlers} />
               {!dictation.dictating && (
-                <button
-                  type="button"
+                <InputGroupButton
+                  size="icon-sm"
                   onClick={attachments.pickFiles}
-                  title="Attach images or files"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Attach images or files"
+                  tooltip="Attach images or files"
+                  className="shrink-0 rounded-full text-muted-foreground"
                 >
-                  <Paperclip className="size-4" />
-                </button>
+                  <Paperclip />
+                </InputGroupButton>
               )}
               {running && !dictation.dictating && draft.trim() && (
                 <>
-                  <button
-                    type="button"
+                  <InputGroupButton
+                    size="icon-sm"
                     onClick={() => submit(true)}
-                    title={`Steer: send into the agent's turn now (${STEER_KEY})`}
                     aria-label="Steer"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                    tooltip="Steer: send into the agent's turn now"
+                    shortcut="mod+enter"
+                    className="shrink-0 rounded-full text-muted-foreground"
                   >
-                    <CornerDownRight className="size-4" />
-                  </button>
-                  <button
-                    type="button"
+                    <CornerDownRight />
+                  </InputGroupButton>
+                  <InputGroupButton
+                    size="icon-sm"
                     onClick={() => submit()}
-                    title={`Queue: send when the agent finishes (${formatKeys("enter")})`}
                     aria-label="Queue"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                    tooltip="Queue: send when the agent finishes"
+                    shortcut="enter"
+                    className="shrink-0 rounded-full text-muted-foreground"
                   >
-                    <ListEnd className="size-4" />
-                  </button>
+                    <ListEnd />
+                  </InputGroupButton>
                 </>
               )}
               {running ? (
-                <button
-                  type="button"
+                <InputGroupButton
+                  variant="default"
+                  size="icon-sm"
                   onClick={() => useApp.getState().interrupt()}
-                  title={`Stop (${formatKeys("escape")} in the empty message box)`}
                   aria-label="Stop"
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+                  tooltip={
+                    <>
+                      Stop <Kbd>{formatKeys("escape")}</Kbd> in the empty message box
+                    </>
+                  }
+                  className="shrink-0 rounded-full"
                 >
                   <Square className="size-3 fill-current" />
-                </button>
+                </InputGroupButton>
               ) : (
-                <button
-                  type="button"
+                <InputGroupButton
+                  variant="default"
+                  size="icon-sm"
                   onClick={() => (dictation.dictating ? voiceInput.current?.finishAndSend() : submit())}
                   disabled={turnedOff !== null || (!dictation.dictating && (!draft.trim() || held !== null))}
-                  title={sendTitle}
                   aria-label={dictation.dictating ? "Stop and send" : "Send"}
                   aria-busy={held !== null || undefined}
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-40"
+                  tooltip={sendTip}
+                  className="shrink-0 rounded-full"
                 >
-                  {held ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-                </button>
+                  {held ? <Spinner aria-hidden="true" /> : <ArrowUp />}
+                </InputGroupButton>
               )}
             </div>
-          </div>
+          </InputGroupAddon>
           {attachments.dragging && (
             <div
               data-testid="drop-overlay"
@@ -335,7 +362,7 @@ export function Composer() {
               Drop to attach
             </div>
           )}
-        </div>
+        </InputGroup>
       </div>
     </div>
   );

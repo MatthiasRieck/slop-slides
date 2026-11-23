@@ -1,5 +1,8 @@
 import { type RefObject, useRef, useSyncExternalStore } from "react";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "../../lib/utils";
+
 /** The smallest the message input gets, in pixels. */
 export const MIN_INPUT_HEIGHT = 64;
 /** How much of the window's height the input may be dragged to. */
@@ -32,7 +35,7 @@ export function InputResizeHandle(props: {
   const resizeStart = useRef<{ y: number; height: number } | null>(null);
   const resize = (height: number) => props.onResize(Math.max(MIN_INPUT_HEIGHT, Math.min(max, height)));
   const current = () => textarea.current?.getBoundingClientRect().height ?? MIN_INPUT_HEIGHT;
-  return (
+  const grip = (
     // biome-ignore lint/a11y/useSemanticElements: a focusable window splitter supports resizing; hr cannot contain the grip.
     <div
       role="separator"
@@ -42,12 +45,10 @@ export function InputResizeHandle(props: {
       aria-valuemax={max}
       aria-valuenow={props.height ?? MIN_INPUT_HEIGHT}
       tabIndex={0}
-      title={
-        props.height === null
-          ? "Drag up to make the message input taller"
-          : "Drag to resize the message input; double-click to fit it to the text again"
-      }
-      className={`group flex h-4 w-full shrink-0 cursor-ns-resize touch-none items-center justify-center rounded-t-2xl ${props.className ?? ""}`}
+      className={cn(
+        "group/grip flex h-4 w-full shrink-0 cursor-ns-resize touch-none items-center justify-center rounded-t-2xl",
+        props.className,
+      )}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -81,8 +82,18 @@ export function InputResizeHandle(props: {
           props.onResize(null);
         }
       }}
-    >
-      <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
-    </div>
+    />
+  );
+  return (
+    <Tooltip>
+      <TooltipTrigger render={grip}>
+        <span className="h-1 w-8 rounded-full bg-border group-hover/grip:bg-muted-foreground group-focus-visible/grip:bg-primary" />
+      </TooltipTrigger>
+      <TooltipContent>
+        {props.height === null
+          ? "Drag up to make the message input taller"
+          : "Drag to resize the message input; double-click to fit it to the text again"}
+      </TooltipContent>
+    </Tooltip>
   );
 }

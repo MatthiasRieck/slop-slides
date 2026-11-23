@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from "react";
-import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
+import { type PanelSize, usePanelRef } from "react-resizable-panels";
 
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useChatShortcut } from "./components/chat/useChatShortcut";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
@@ -102,11 +103,11 @@ function Workbench() {
     useApp.getState().lintChanged();
   }, [deckVersion]);
   return (
-    <Group orientation="horizontal" className="h-full">
-      <Panel id="main" minSize={480}>
+    <ResizablePanelGroup orientation="horizontal">
+      <ResizablePanel id="main" minSize={480}>
         <div className="flex h-full flex-col">
           <TopBar />
-          <Group orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
             {hasDeck && (
               <>
                 <SidePanel
@@ -126,7 +127,7 @@ function Workbench() {
                 <ResizeHandle />
               </>
             )}
-            <Panel id="stage" minSize={360}>
+            <ResizablePanel id="stage" minSize={360}>
               {hasDeck ? (
                 <div className="flex h-full flex-col">
                   <div className="min-h-0 flex-1">
@@ -138,10 +139,10 @@ function Workbench() {
               ) : (
                 <FileViewer />
               )}
-            </Panel>
-          </Group>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </div>
-      </Panel>
+      </ResizablePanel>
       <ResizeHandle />
       <SidePanel
         id="sidebar"
@@ -157,7 +158,7 @@ function Workbench() {
           <Sidebar />
         </div>
       </SidePanel>
-    </Group>
+    </ResizablePanelGroup>
   );
 }
 
@@ -207,7 +208,7 @@ function SidePanel(props: {
     if (shown !== open) onOpenChange(shown);
   };
   return (
-    <Panel
+    <ResizablePanel
       id={id}
       panelRef={ref}
       collapsible
@@ -221,12 +222,13 @@ function SidePanel(props: {
       aria-hidden={!open}
     >
       {children}
-    </Panel>
+    </ResizablePanel>
   );
 }
 
 function ResizeHandle() {
   return (
-    <Separator className="relative w-px bg-border outline-none transition-colors after:absolute after:inset-y-0 after:-left-1 after:-right-1 data-[separator=active]:bg-primary data-[separator=hover]:bg-primary/50" />
+    // The line lights up under the pointer and while it is dragged.
+    <ResizableHandle className="transition-colors duration-150 data-[separator=active]:bg-primary data-[separator=hover]:bg-primary/50" />
   );
 }

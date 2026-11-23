@@ -12,15 +12,58 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
-import { useDropdown } from "../hooks/useDropdown";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isFrame } from "../lib/framePress";
+import { openLayer } from "../lib/layers";
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
-import { keepFocus, toolButtonClass } from "./Button";
 
-/** What pops up from a ribbon and is placed by it: a collapsed section's flyout, and the tools' own panels. */
+/**
+ * What pops up from a ribbon and is placed by it: a collapsed section's flyout. (The tools' own
+ * panels are popovers, which are not in the ribbon and place themselves against the window.)
+ */
 const FLYOUTS = "[data-flyout]";
-// A `Popover` places itself, against the window.
-const PANELS = "[role=dialog]:not([data-popover])";
+
+/** Where a shadcn/ui popup renders, in the body: a press in one opened from a flyout is not a press outside it. */
+const POPUPS = "[data-base-ui-portal]";
+
+/**
+ * Whether a collapsed section's flyout is open, and the ref of the section around it. It is no
+ * popover: a section's tools stay in the ribbon while it is collapsed (hidden, to be measured and
+ * to keep what they hold), and the flyout only shows them, under the section's button. A press
+ * outside the section closes it (one in a slide preview too, and none in a popup one of its tools
+ * opened); so does Escape, with nothing open over it. Not collapsed, it is closed.
+ */
+function useFlyout(collapsed: boolean) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLFieldSetElement>(null);
+  if (!collapsed && open) setOpen(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target || ref.current?.contains(target) || target.closest?.(POPUPS)) return;
+      close();
+    };
+    // A press in a slide preview never reaches this window, but it is a press outside all the same.
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "slop:press" && isFrame(event.source)) close();
+    };
+    // Before anything else sees the press, so that nothing which keeps it to itself keeps the flyout open.
+    document.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("message", onMessage);
+    const closeLayer = openLayer(close);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("message", onMessage);
+      closeLayer();
+    };
+  }, [open]);
+  return { open, setOpen, ref };
+}
 
 /**
  * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
@@ -58,12 +101,8 @@ export function useRibbonFit() {
       for (const el of shifted) el.style.marginLeft = "";
       shifted.clear();
       const flyouts = [...ribbon.querySelectorAll<HTMLElement>(FLYOUTS)];
-      const panels = [...ribbon.querySelectorAll<HTMLElement>(PANELS)];
-      if (flyouts.length + panels.length === 0) return;
-      const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
-      // The flyouts first: a panel in one moves with it.
-      shift(flyouts, bounds);
-      shift(panels, bounds);
+      if (flyouts.length === 0) return;
+      shift(flyouts, (ribbon.parentElement ?? ribbon).getBoundingClientRect());
     };
     const fitSections = () => {
       const width = ribbon.clientWidth;
@@ -114,7 +153,7 @@ export function RibbonSection(props: {
   children: ReactNode;
 }) {
   const { collapsed } = props;
-  const { open, setOpen, ref } = useDropdown<HTMLFieldSetElement>({ disabled: !collapsed });
+  const { open, setOpen, ref } = useFlyout(collapsed);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `closeOn` is only what to watch
   useEffect(() => setOpen(false), [props.closeOn]);
   const collapsedNow = useRef(collapsed);
@@ -130,21 +169,18 @@ export function RibbonSection(props: {
       className={cn("relative flex h-16 min-w-0 shrink-0 border-r last:border-r-0", collapsed && "w-10")}
     >
       {collapsed && (
-        <button
-          type="button"
+        <Button
+          variant="tool"
           aria-label={`${props.title} tools`}
-          title={props.title}
+          tooltip={props.title}
           aria-expanded={open}
-          onMouseDown={keepFocus}
+          keepFocus
           onClick={() => setOpen(!open)}
-          className={cn(
-            "mr-1 flex flex-1 flex-col items-center justify-center gap-1 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4",
-            open && "bg-accent text-foreground",
-          )}
+          className="mr-1 h-auto flex-1 flex-col gap-1 rounded-md px-0 [&_svg]:size-4"
         >
           {props.icon}
-          <ChevronDown className="!size-3" />
-        </button>
+          <ChevronDown className="size-3!" />
+        </Button>
       )}
       <div
         data-ribbon-body=""
@@ -183,48 +219,63 @@ export function RibbonSelect({
   className,
   title,
   ...rest
-}: Omit<ComponentProps<"select">, "onChange"> & {
+}: Omit<ComponentProps<"select">, "onChange" | "size"> & {
   label?: string;
   disabledReason?: string;
   onPick: (value: string) => void;
   onDone?: () => void;
 }) {
-  return (
-    <select
+  const tooltip = rest.disabled && disabledReason ? disabledReason : (title ?? label);
+  // `className` sizes the box around the list, which fills it.
+  const box = cn("block w-fit", className);
+  const list = (
+    <NativeSelect
+      size="sm"
       aria-label={label}
-      title={rest.disabled && disabledReason ? disabledReason : (title ?? label)}
       {...rest}
       onChange={(event) => {
         onPick(event.target.value);
         onDone?.();
       }}
-      className={cn(
-        "h-6 rounded-md bg-transparent px-1 text-xs disabled:cursor-default disabled:opacity-40",
-        className,
-      )}
+      // The row of a ribbon is 24px high.
+      className="w-full [&_select]:h-6 [&_select]:py-0 [&_select]:pr-5 [&_select]:pl-1.5 [&_select]:text-xs [&_svg]:right-1 [&_svg]:size-3"
     />
+  );
+  if (!tooltip) return <span className={box}>{list}</span>;
+  return (
+    <Tooltip>
+      {/* The tooltip is the box's: a disabled list is nothing under the pointer, and could not say why it is off. */}
+      <TooltipTrigger render={<span className={box} />}>{list}</TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 
-/** A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the one made. */
+/**
+ * A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the
+ * one made. `label` says in full what it does, as its name and its tooltip; disabled, the tooltip
+ * is `disabledReason`, saying what it waits for (its label, if it has none to give).
+ */
 export function RibbonToggle(props: {
   label: string;
   active?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="tool"
+      size="xs"
       aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      disabled={props.disabled}
+      tooltip={(props.disabled && props.disabledReason) || props.label}
+      {...(props.active !== undefined && { "aria-pressed": props.active })}
+      {...(props.disabled !== undefined && { disabled: props.disabled })}
       onClick={props.onClick}
-      className={cn(toolButtonClass("toolbar", "sm", props.active), "flex flex-1 items-center gap-1 px-1.5 text-xs")}
+      className="flex-1 justify-start px-1.5 font-normal [&_svg:not([class*='size-'])]:size-4"
     >
       {props.children}
-    </button>
+    </Button>
   );
 }

@@ -38,7 +38,10 @@
       "a11y": {
         "preset": "recommended",
         "noAutofocus": "off",
-        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftInput"] } },
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": { "inputComponents": ["DraftInput", "Checkbox", "Switch"] }
+        },
         "noNoninteractiveElementInteractions": "error"
       },
       "style": {
@@ -46,6 +49,22 @@
       }
     }
   },
+  "overrides": [
+    {
+      "includes": ["src/components/ui/**", "src/lib/highlighter.tsx", "src/hooks/use-highlighted-code.ts"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off",
+            "noLabelWithoutControl": "off",
+            "noNoninteractiveElementInteractions": "off",
+            "useKeyWithClickEvents": "off"
+          },
+          "suspicious": { "noArrayIndexKey": "off" }
+        }
+      }
+    }
+  ],
   "assist": {
     "enabled": true,
     "actions": {

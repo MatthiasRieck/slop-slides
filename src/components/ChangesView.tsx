@@ -4,7 +4,6 @@ import {
   GitBranch,
   GitCompare,
   ListFilter,
-  Loader2,
   Minus,
   Plus,
   RefreshCw,
@@ -13,8 +12,30 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Item, ItemActions, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type CompareView, useChanges, visibleRows } from "../changesStore";
 import { useContentSize } from "../hooks/useContentSize";
 import type { Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
@@ -24,7 +45,6 @@ import { scrollBehavior } from "../lib/motion";
 import { pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl, plural } from "../lib/utils";
 import { lintKey, useApp } from "../store";
-import { Button, ToolButton } from "./Button";
 import {
   actionsOf,
   branchLabel,
@@ -45,27 +65,22 @@ import {
   stageTitle,
   stylesActions,
 } from "./changes/changeRows";
-import { Dialog } from "./Dialog";
-import { Popover } from "./Popover";
-import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { SECTION_HEADING } from "./styles";
 
 /** A kind of change in the header, with how many slides have it. Every badge has the same height and icon box. */
 function CountBadge(props: { mark: Mark; title: string; count?: number }) {
   const { icon: Icon, color } = props.mark;
   return (
-    <span
+    <Badge
       data-testid="count-badge"
       title={props.title}
-      className={cn(
-        "flex h-4 shrink-0 items-center gap-0.5 rounded px-1 text-2xs font-medium leading-none tabular-nums",
-        color,
-      )}
+      className={cn("h-4 gap-0.5 rounded px-1 text-2xs leading-none tabular-nums", color)}
     >
-      <Icon className="size-3 shrink-0" />
+      <Icon />
       {props.count}
-    </span>
+    </Badge>
   );
 }
 
@@ -111,25 +126,27 @@ export function ChangesRail() {
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
-          {counts.length === 0 && !stylesChanged && <SectionLabel className="truncate">Changes</SectionLabel>}
+          {counts.length === 0 && !stylesChanged && <span className={cn("truncate", SECTION_HEADING)}>Changes</span>}
           {stylesChanged && <CountBadge mark={STYLES} title="The shared styles changed" />}
           {counts.map(({ status, count }) => {
             const mark = MARKS[status];
             return <CountBadge key={status} mark={mark} title={`${count} ${mark.label.toLowerCase()}`} count={count} />;
           })}
         </div>
-        <ToolButton
-          variant="panel"
-          title={onlyChanges ? "Show every slide" : "Show only the slides that changed"}
-          active={onlyChanges}
+        <Button
+          variant="tool"
+          size="icon-xs"
+          aria-label="Show only the slides that changed"
+          tooltip={onlyChanges ? "Show every slide" : "Show only the slides that changed"}
+          aria-pressed={onlyChanges}
           onClick={() => useChanges.getState().setOnlyChanges(!onlyChanges)}
         >
           <ListFilter className="size-4" />
-        </ToolButton>
+        </Button>
       </div>
       {!changes && (
         <p role="status" className="flex items-center gap-1.5 px-3 pb-3 text-xs text-muted-foreground">
-          <Loader2 className="size-3 animate-spin" />
+          <Spinner aria-hidden="true" className="size-3" />
           Reading changes…
         </p>
       )}
@@ -146,6 +163,13 @@ export function ChangesRail() {
       )}
       {changes && !clean && changes.tracking !== "noRepository" && <CommitBox deck={deck} changes={changes} />}
       <ol className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-4 pt-1.5">
+        {!changes &&
+          [0, 1, 2].map((n) => (
+            <li key={n} aria-hidden="true" data-testid="change-skeleton" className="flex gap-2">
+              <span className="w-4 shrink-0" />
+              <Skeleton className="aspect-video min-w-0 flex-1" />
+            </li>
+          ))}
         {changes && stylesChanged && <StylesRow deck={deck.id} changes={changes} canStage={canStage} />}
         {rows.map((row) => (
           <ChangeRow
@@ -198,7 +222,7 @@ function CommitBox({ deck, changes }: { deck: Deck; changes: DeckChanges }) {
   return (
     <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 pb-3">
       <Branch changes={changes} className="text-2xs" />
-      <textarea
+      <Textarea
         aria-label="Commit message"
         placeholder="Commit message"
         rows={2}
@@ -207,35 +231,36 @@ function CommitBox({ deck, changes }: { deck: Deck; changes: DeckChanges }) {
         onKeyDown={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void commit();
         }}
-        className="w-full resize-none rounded border border-input bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+        className="min-h-12 resize-none bg-background px-1.5 py-1 text-xs"
       />
       <Button
-        variant="primary"
-        busy={committing}
-        disabled={waitsFor !== null}
-        title={
-          waitsFor ??
-          `${all ? "Stage everything in this deck and commit it" : "Commit what is staged"} (${formatKeys("mod+enter")})`
-        }
+        size="xs"
+        disabled={waitsFor !== null || committing}
+        aria-busy={committing || undefined}
+        tooltip={waitsFor ?? (all ? "Stage everything in this deck and commit it" : "Commit what is staged")}
+        shortcut={waitsFor ? undefined : "mod+enter"}
         onClick={() => void commit()}
-        className="justify-center"
+        className="w-full"
       >
+        {committing && <Spinner aria-hidden="true" data-icon="inline-start" />}
         <span className="truncate">
           {all ? "Commit all" : `Commit${stagedFiles > 0 ? ` ${plural(stagedFiles, "file")}` : ""}`}
         </span>
       </Button>
       <div className="flex flex-wrap items-center gap-1">
         <Button
-          size="sm"
-          title="Stage everything in this deck"
+          variant="outline"
+          size="xs"
+          tooltip="Stage everything in this deck"
           disabled={!hasUnstaged}
           onClick={() => void useChanges.getState().stageAll(deck.id)}
         >
           Stage all
         </Button>
         <Button
-          size="sm"
-          title="Unstage everything in this deck's folder"
+          variant="outline"
+          size="xs"
+          tooltip="Unstage everything in this deck's folder"
           disabled={stagedFiles === stagedElsewhere}
           onClick={() => void useChanges.getState().unstageAll(deck.id)}
         >
@@ -243,10 +268,10 @@ function CommitBox({ deck, changes }: { deck: Deck; changes: DeckChanges }) {
         </Button>
         {canDiscardAll(changes) && (
           <Button
-            size="sm"
+            size="xs"
             variant="destructive"
             disabled={locked !== null}
-            title={
+            tooltip={
               locked !== null
                 ? `Slide ${locked} is locked; unlock it to discard its changes`
                 : "Put the whole deck back as it was committed"
@@ -287,32 +312,30 @@ function lockedChange(deck: Deck, changes: DeckChanges): number | null {
 function DiscardAllDialog(props: { changes: DeckChanges; onClose: () => void; onDiscard: () => void }) {
   const { commit } = props.changes;
   return (
-    <Dialog
-      label="Discard all changes"
-      onClose={props.onClose}
-      className="flex w-[26rem] max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-      heading={<h2 className="text-base font-semibold">Discard all changes to this deck?</h2>}
-    >
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Every slide and the shared styles go back to how they were at the last commit
-        {commit ? (
-          <>
-            {" "}
-            (<code>{commit.hash}</code> {commit.subject})
-          </>
-        ) : null}
-        : new slides are taken out, removed ones come back, and what is staged of the deck is unstaged.{" "}
-        {formatKeys("mod+z")} brings the changes back.
-      </p>
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="xl" data-autofocus onClick={props.onClose}>
-          Cancel
-        </Button>
-        <Button variant="destructive" size="xl" onClick={props.onDiscard}>
-          Discard all changes
-        </Button>
-      </div>
-    </Dialog>
+    <AlertDialog open onOpenChange={(open) => !open && props.onClose()}>
+      <AlertDialogContent className="data-[size=default]:sm:max-w-[26rem]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Discard all changes to this deck?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Every slide and the shared styles go back to how they were at the last commit
+            {commit ? (
+              <>
+                {" "}
+                (<code>{commit.hash}</code> {commit.subject})
+              </>
+            ) : null}
+            : new slides are taken out, removed ones come back, and what is staged of the deck is unstaged.{" "}
+            {formatKeys("mod+z")} brings the changes back.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" size="sm" onClick={props.onDiscard}>
+            Discard all changes
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -388,25 +411,36 @@ function MoveRow(props: { row: SlideChange; number?: number; deck: string; actio
   const from = row.oldNumber === null || number === undefined ? "Moved" : `${row.oldNumber} → ${number}`;
   const title = row.oldNumber === null ? "Moved" : `Moved from slide ${row.oldNumber} to slide ${number ?? "?"}`;
   return (
-    <div
+    <Item
       data-testid="move-row"
-      className="flex flex-wrap items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
+      variant="outline"
+      size="xs"
+      className="justify-between gap-1.5 border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
     >
-      <span className="flex min-w-0 items-center gap-1" title={title}>
-        {row.moveStaged && (
-          <span
-            data-testid="staged-mark"
-            title="Staged"
-            className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
-          >
-            <Check className="size-2.5" />
-          </span>
-        )}
+      <ItemContent title={title} className="min-w-0 flex-row items-center gap-1">
+        {row.moveStaged && <StagedDot />}
         <MarkBadge mark={MARKS.moved} small />
         <span className="truncate tabular-nums">{from}</span>
-      </span>
-      {actions && <MarkActionsRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} />}
-    </div>
+      </ItemContent>
+      {actions && (
+        <ItemActions>
+          <MarkActionsRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} />
+        </ItemActions>
+      )}
+    </Item>
+  );
+}
+
+/** The check beside the name of what is staged, in a row of its own. */
+function StagedDot() {
+  return (
+    <span
+      data-testid="staged-mark"
+      title="Staged"
+      className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+    >
+      <Check className="size-2.5" />
+    </span>
   );
 }
 
@@ -428,24 +462,24 @@ function StylesRow({ deck, changes, canStage }: { deck: string; changes: DeckCha
   return (
     <li data-testid="styles-row" className="flex gap-2">
       <span className="w-4 shrink-0" />
-      <div className="relative flex min-w-0 flex-1 flex-wrap items-center justify-between gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-        <span className="flex min-w-0 items-center gap-1.5">
-          {changes.stylesStaged && (
-            <span
-              data-testid="staged-mark"
-              title="Staged"
-              className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
-            >
-              <Check className="size-2.5" />
-            </span>
-          )}
+      <Item
+        variant="outline"
+        size="xs"
+        className="w-auto min-w-0 flex-1 justify-between gap-1.5 border-dashed px-2 py-1.5 text-xs text-muted-foreground"
+      >
+        {changes.stylesStaged && <StagedDot />}
+        <ItemMedia>
           <MarkBadge mark={STYLES} small />
-          <span className="truncate">Shared styles</span>
-        </span>
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle className="truncate text-xs font-normal">Shared styles</ItemTitle>
+        </ItemContent>
         {canStage && (
-          <MarkActionsRow mark={STYLES} deck={deck} actions={stylesActions(changes.stylesStaged)} locked={false} />
+          <ItemActions>
+            <MarkActionsRow mark={STYLES} deck={deck} actions={stylesActions(changes.stylesStaged)} locked={false} />
+          </ItemActions>
         )}
-      </div>
+      </Item>
     </li>
   );
 }
@@ -488,23 +522,25 @@ function MarkActionsRow(props: {
   return (
     <fieldset aria-label={props.label ?? mark.label} className="flex min-w-0 flex-wrap items-center gap-1">
       <Button
-        size="xs"
-        title={stageTitle(actions)}
+        variant="outline"
+        size="2xs"
+        tooltip={stageTitle(actions)}
         onClick={() => void (actions.staged ? unstage : stage)(deck, actions.change)}
         className="bg-background"
       >
-        {actions.staged ? <Minus className="size-3" /> : <Plus className="size-3" />}
+        {actions.staged ? <Minus data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
         {actions.staged ? "Unstage" : "Stage"}
       </Button>
       <Button
-        size="xs"
+        size="2xs"
         variant={undo.destructive ? "destructive" : "outline"}
-        title={locked ? "This slide is locked; unlock it first" : `${undo.title} (${formatKeys("mod+z")} undoes it)`}
+        tooltip={locked ? "This slide is locked; unlock it first" : undo.title}
+        shortcut={locked ? undefined : "mod+z"}
         disabled={locked}
         onClick={() => void restore(deck, actions.change)}
-        className="bg-background"
+        className={cn(!undo.destructive && "bg-background")}
       >
-        {undo.destructive ? <Trash2 className="size-3" /> : <Undo2 className="size-3" />}
+        {undo.destructive ? <Trash2 data-icon="inline-start" /> : <Undo2 data-icon="inline-start" />}
         {undo.label}
       </Button>
     </fieldset>
@@ -582,22 +618,25 @@ function Changes({ deck }: { deck: Deck }) {
     return (
       <Message title="Could not read the changes" role="alert">
         <span className="selectable whitespace-pre-wrap break-words">{error}</span>
-        <Button className="mx-auto mt-3" onClick={() => void useChanges.getState().refresh(deck.id)}>
-          <RefreshCw />
-          Retry
-        </Button>
+        <EmptyContent className="mt-3">
+          <Button variant="outline" size="xs" onClick={() => void useChanges.getState().refresh(deck.id)}>
+            <RefreshCw data-icon="inline-start" />
+            Retry
+          </Button>
+        </EmptyContent>
       </Message>
     );
   }
   if (!changes) {
     return (
-      <div
-        role="status"
-        className="flex h-full items-center justify-center gap-2 bg-canvas text-xs text-muted-foreground"
-      >
-        <Loader2 className="size-3.5 animate-spin" />
-        Reading changes…
-      </div>
+      <Empty role="status" className="h-full rounded-none bg-canvas">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Spinner aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyDescription className="text-xs/relaxed">Reading changes…</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
   // Without a repository the mode is about to close; see ModeTabs.tsx.
@@ -622,11 +661,15 @@ function Changes({ deck }: { deck: Deck }) {
 
 function Message({ title, role, children }: { title: string; role?: "alert"; children: React.ReactNode }) {
   return (
-    <div role={role} className="flex h-full flex-col items-center justify-center gap-2 bg-canvas p-6 text-center">
-      <GitCompare className="size-6 text-muted-foreground" />
-      <p className="text-sm font-medium">{title}</p>
-      <div className="max-w-sm text-xs leading-relaxed text-muted-foreground">{children}</div>
-    </div>
+    <Empty role={role} className="h-full rounded-none bg-canvas">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <GitCompare />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription className="text-xs/relaxed">{children}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -656,25 +699,35 @@ function ComparisonBar({ changes, deck, enabled }: { changes: DeckChanges; deck:
           "Not committed yet"
         )}
       </span>
-      <fieldset aria-label="Show" className="flex shrink-0 overflow-hidden rounded-md border">
-        {VIEWS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            aria-pressed={view === option.id}
+      <Tooltip disabled={enabled}>
+        {/* Why the choice is off, on what is around it: the choices let the pointer through while they are. */}
+        <TooltipTrigger render={<span className="shrink-0" />}>
+          <ToggleGroup
+            aria-label="Show"
+            variant="outline"
+            size="xs"
+            spacing={0}
             disabled={!enabled}
-            title={enabled ? option.title : "This slide has one version to show"}
-            onClick={() => useChanges.getState().setView(option.id)}
-            className="px-2 py-1 font-medium enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-40 aria-pressed:enabled:bg-accent aria-pressed:enabled:text-foreground"
+            value={[view]}
+            // One of them always shows: pressing the one that does leaves it so.
+            onValueChange={([next]) => next && useChanges.getState().setView(next as CompareView)}
           >
-            {option.label}
-          </button>
-        ))}
-      </fieldset>
+            {VIEWS.map((option) => (
+              <Tooltip key={option.id}>
+                <TooltipTrigger render={<ToggleGroupItem value={option.id} className="px-2 font-medium" />}>
+                  {option.label}
+                </TooltipTrigger>
+                <TooltipContent>{option.title}</TooltipContent>
+              </Tooltip>
+            ))}
+          </ToggleGroup>
+        </TooltipTrigger>
+        <TooltipContent>This slide has one version to show</TooltipContent>
+      </Tooltip>
       <DividerSettings enabled={enabled && view === "split"} />
-      <ToolButton variant="plain" label="Refresh" onClick={() => void useChanges.getState().refresh(deck)}>
-        <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-      </ToolButton>
+      <Button variant="ghost" size="icon-xs" tooltip="Refresh" onClick={() => void useChanges.getState().refresh(deck)}>
+        <RefreshCw className={cn(loading && "animate-spin")} />
+      </Button>
     </div>
   );
 }
@@ -684,56 +737,54 @@ function DividerSettings({ enabled }: { enabled: boolean }) {
   const divider = useChanges((s) => s.divider);
   const { setDivider, resetDivider } = useChanges.getState();
   const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
-  const close = useCallback(() => setOpen(false), []);
   if (!enabled && open) setOpen(false);
   return (
-    <>
-      <button
-        ref={anchor}
-        type="button"
-        aria-expanded={open}
-        disabled={!enabled}
-        title={enabled ? "The divider's angle and feather" : "The divider shows in the split view"}
-        onClick={() => setOpen(!open)}
-        className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 enabled:hover:bg-accent enabled:hover:text-foreground disabled:opacity-40 aria-expanded:bg-accent aria-expanded:text-foreground"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={!enabled}
+            tooltip={enabled ? "The divider's angle and feather" : "The divider shows in the split view"}
+            className="shrink-0"
+          />
+        }
       >
-        <SlidersHorizontal className="size-3.5" />
+        <SlidersHorizontal data-icon="inline-start" />
         Divider
-      </button>
-      {open && (
-        <Popover anchor={anchor} onClose={close} width={280} align="end" label="Divider" className="p-3">
-          <div className="flex flex-col gap-3 text-xs text-muted-foreground">
-            <ValueSlider
-              label="Angle"
-              unit="°"
-              min={-180}
-              max={180}
-              value={divider.angle}
-              disabled={!enabled}
-              onChange={(angle) => setDivider({ angle: normalAngle(angle) })}
-            />
-            <ValueSlider
-              label="Feather"
-              unit="px"
-              min={0}
-              max={MAX_FEATHER}
-              value={divider.feather}
-              disabled={!enabled}
-              onChange={(feather) => setDivider({ feather })}
-            />
-            <Button
-              className="self-start"
-              title="Put the divider back in the middle, without a feather"
-              onClick={resetDivider}
-            >
-              <RotateCcw />
-              Reset divider
-            </Button>
-          </div>
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent align="end" aria-label="Divider" className="w-[280px] gap-3 p-3 text-xs text-muted-foreground">
+        <ValueSlider
+          label="Angle"
+          unit="°"
+          min={-180}
+          max={180}
+          value={divider.angle}
+          disabled={!enabled}
+          onChange={(angle) => setDivider({ angle: normalAngle(angle) })}
+        />
+        <ValueSlider
+          label="Feather"
+          unit="px"
+          min={0}
+          max={MAX_FEATHER}
+          value={divider.feather}
+          disabled={!enabled}
+          onChange={(feather) => setDivider({ feather })}
+        />
+        <Button
+          variant="outline"
+          size="xs"
+          className="self-start"
+          tooltip="Put the divider back in the middle, without a feather"
+          onClick={resetDivider}
+        >
+          <RotateCcw data-icon="inline-start" />
+          Reset divider
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -750,22 +801,24 @@ function ValueSlider(props: {
   const { label, unit, min, max, value, disabled, onChange } = props;
   // What is being typed, which may not be a number yet.
   const [draft, setDraft] = useState<string | null>(null);
+  const id = useId();
   const clamped = (n: number) => Math.min(max, Math.max(min, Math.round(n)));
   return (
     <div className="flex items-center gap-1.5">
-      <span className={cn("w-12 shrink-0", disabled && "opacity-40")}>{label}</span>
-      <input
-        type="range"
-        aria-label={label}
-        title={label}
+      <span id={id} className={cn("w-12 shrink-0", disabled && "opacity-40")}>
+        {label}
+      </span>
+      <Slider
+        aria-labelledby={id}
         min={min}
         max={max}
         value={value}
         disabled={disabled}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="h-1 min-w-0 flex-1 accent-primary disabled:opacity-40"
+        onValueChange={(next) => onChange(Array.isArray(next) ? (next[0] ?? value) : next)}
+        className="min-w-0 flex-1"
       />
-      <input
+      <Input
+        size="sm"
         type="number"
         aria-label={`${label} in ${unit === "°" ? "degrees" : "pixels"}`}
         min={min}
@@ -778,7 +831,7 @@ function ValueSlider(props: {
           if (text !== "" && Number.isFinite(Number(text))) onChange(clamped(Number(text)));
         }}
         onBlur={() => setDraft(null)}
-        className="h-6 w-14 rounded border border-input bg-background px-1 text-right tabular-nums text-foreground outline-none focus:ring-1 focus:ring-primary disabled:opacity-40"
+        className="h-6 w-14 bg-background px-1 text-right tabular-nums text-foreground"
       />
       <span className={cn("w-4 shrink-0", disabled && "opacity-40")}>{unit}</span>
     </div>

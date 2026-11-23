@@ -1,11 +1,15 @@
-import { Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
+import { DarkScope } from "@/lib/darkScope";
 import { useContentSize } from "../hooks/useContentSize";
 import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { basename, plural } from "../lib/utils";
 import { showError, useApp } from "../store";
-import { Dialog } from "./Dialog";
 import { showSaved } from "./exportSaved";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -26,7 +30,45 @@ export function SlideImageExport() {
   return <ExportRun key={job.dir} dir={job.dir} slides={job.slides} deck={deck} />;
 }
 
-function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck: Deck }) {
+/** The cover over the whole window an export runs in. Closing it (Escape, Cancel) ends the export. */
+function ExportRun(props: { dir: string; slides: string[]; deck: Deck }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  return (
+    <DarkScope>
+      <Dialog
+        open
+        disablePointerDismissal
+        onOpenChange={(open) => {
+          // Escape cancels, as the button does.
+          if (!open) useApp.getState().endImageExport();
+        }}
+      >
+        {/* Always dark, and there at once: nothing of it may still be moving when a slide is captured. */}
+        <DialogContent
+          aria-label="Saving slide images"
+          showCloseButton={false}
+          initialFocus={cancelRef}
+          className="inset-0 top-0 left-0 flex h-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none bg-background p-0 text-foreground ring-0 sm:max-w-none data-closed:animate-none data-open:animate-none"
+        >
+          <ExportStage {...props} cancelRef={cancelRef} />
+        </DialogContent>
+      </Dialog>
+    </DarkScope>
+  );
+}
+
+/** What the cover shows: the slide being saved, and under it how far the export is. */
+function ExportStage({
+  dir,
+  slides,
+  deck,
+  cancelRef,
+}: {
+  dir: string;
+  slides: string[];
+  deck: Deck;
+  cancelRef: RefObject<HTMLButtonElement | null>;
+}) {
   const [index, setIndex] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
   const slideRef = useRef<HTMLDivElement>(null);
@@ -87,12 +129,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   };
 
   return (
-    // Escape cancels, as the button does.
-    <Dialog
-      label="Saving slide images"
-      onClose={cancel}
-      className="dark fixed inset-0 flex flex-col bg-background text-foreground outline-none"
-    >
+    <>
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
           <div ref={slideRef} style={{ width }}>
@@ -107,19 +144,17 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
         )}
       </div>
       <div className="flex h-12 shrink-0 items-center justify-center gap-3 text-sm text-foreground/80">
-        <Loader2 className="size-4 shrink-0 animate-spin will-change-transform" />
+        <Spinner aria-hidden="true" className="shrink-0 will-change-transform" />
         <span className="tabular-nums" style={{ minWidth: `${14 + 2 * String(total).length}ch` }}>
           Saving slide {Math.min(index + 1, total)} of {total}…
         </span>
-        <button
-          type="button"
-          onClick={cancel}
-          className="rounded-md border border-foreground/20 px-2.5 py-1 text-xs font-medium hover:bg-foreground/10"
-        >
+        {/* How many slides are through: the one on show is still being saved. */}
+        <Progress aria-label="Slide images saved" value={index} max={total} className="w-32" />
+        <Button ref={cancelRef} variant="outline" size="xs" onClick={cancel}>
           Cancel
-        </button>
+        </Button>
       </div>
-    </Dialog>
+    </>
   );
 }
 

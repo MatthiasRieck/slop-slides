@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
+import { settle } from "../test/ui";
 import { RewindDialog } from "./RewindDialog";
 
 const TURN: HistoryEntry = { id: "e1", source: "chat", label: "Bigger title", time: 0, message: "u1" };
@@ -22,7 +23,7 @@ describe("RewindDialog", () => {
   it("shows nothing until a turn's changes are undone", () => {
     useApp.setState({ rewindAsk: null });
     render(<RewindDialog />);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("does not look through the messages until then, however often they change", () => {
@@ -43,14 +44,20 @@ describe("RewindDialog", () => {
 
   it("says what happened and asks what becomes of the chat", () => {
     render(<RewindDialog />);
-    const dialog = screen.getByRole("dialog", { name: "Undo chat changes" });
+    // A question with fixed answers: named by what it asks, and not closed by a press beside it.
+    const dialog = screen.getByRole("alertdialog", { name: "You undid the agent's changes. What about the chat?" });
     expect(screen.getByRole("heading").textContent).toBe("You undid the agent's changes. What about the chat?");
+    const beside = document.querySelector("[data-slot=alert-dialog-overlay]")!;
+    fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+    fireEvent.click(beside);
+    expect(answerRewind).not.toHaveBeenCalled();
     expect(dialog.textContent).toContain("“Bigger title”");
   });
 
-  it("rewinds the chat with its main button, which has the focus", () => {
+  it("rewinds the chat with its main button, which has the focus", async () => {
     render(<RewindDialog />);
     const rewind = screen.getByRole("button", { name: /^Rewind the chat too/ });
+    await settle();
     expect(document.activeElement).toBe(rewind);
     expect(rewind.className).toContain("bg-primary");
     expect(rewind.textContent).toContain("returns to the message box");
@@ -62,8 +69,9 @@ describe("RewindDialog", () => {
     render(<RewindDialog />);
     const remember = screen.getByRole("checkbox", { name: /^Don't ask again/ });
     // Where to take the answer back is said beside it.
-    expect(remember.closest("label")!.textContent).toContain("You can change this in Settings › General.");
+    expect(remember.closest("[data-slot=field]")!.textContent).toContain("You can change this in Settings › General.");
     fireEvent.click(remember);
+    expect(remember.getAttribute("aria-checked")).toBe("true");
     const keep = screen.getByRole("button", { name: /^Keep the chat, tell the agent/ });
     expect(keep.textContent).toContain("Your next message tells the agent");
     fireEvent.click(keep);
@@ -79,13 +87,25 @@ describe("RewindDialog", () => {
 
   it("does nothing on Escape", () => {
     render(<RewindDialog />);
-    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
     expect(answerRewind).toHaveBeenCalledWith(null, false);
+  });
+
+  it("keeps the keys pressed in it from the app's shortcuts", () => {
+    const heard = vi.fn();
+    window.addEventListener("keydown", heard);
+    try {
+      render(<RewindDialog />);
+      fireEvent.keyDown(screen.getByRole("button", { name: "Do nothing" }), { key: "z", metaKey: true });
+      expect(heard).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", heard);
+    }
   });
 
   it("shows nothing once the message is gone from the chat", () => {
     useApp.setState({ messages: [] });
     render(<RewindDialog />);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

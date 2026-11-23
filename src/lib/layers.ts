@@ -5,12 +5,16 @@
 // Escape pressed in a text field is the field's first (it takes the typing back, say): the layer
 // gets it once the field and what is around it have seen it, unless they keep it to themselves
 // (`stopPropagation`). Pressed anywhere else, the layer gets it before anything does.
+
+import { isFrame } from "./framePress";
 import { isTextField } from "./keys";
 
 interface Layer {
   close: () => void;
   /** Under every other layer, whenever it opened: the toasts, which Escape dismisses last. */
   base: boolean;
+  /** It closes itself on an Escape pressed in this window (see `openLayer`). */
+  own: boolean;
 }
 
 const layers: Layer[] = [];
@@ -43,9 +47,14 @@ export function dismissTopLayer(event?: Event): boolean {
  * Puts a layer on the stack while it is open: `close` runs when Escape is pressed with it on top
  * (it need not close: a layer that stays open still keeps the key from what is under it).
  * Returns what takes it off again. A `base` layer stays under all the others.
+ *
+ * An `own` layer sees to Escape itself, as the shadcn/ui popups do (Base UI closes them): an
+ * Escape pressed in this window is left to it, and `close` only runs for an Escape that came
+ * another way (one a slide preview hands over). It still counts as open, for `hasOpenLayer` and
+ * for the previews.
  */
-export function openLayer(close: () => void, options: { base?: boolean } = {}): () => void {
-  const layer: Layer = { close, base: options.base ?? false };
+export function openLayer(close: () => void, options: { base?: boolean; own?: boolean } = {}): () => void {
+  const layer: Layer = { close, base: options.base ?? false, own: options.own ?? false };
   const covered = hasOpenLayer();
   if (layers.length === 0) listen(true);
   layers.push(layer);
@@ -63,6 +72,7 @@ export function openLayer(close: () => void, options: { base?: boolean } = {}): 
 function onKeyDown(event: KeyboardEvent) {
   // Escape that ends composing a character (an input method's) is not for the app.
   if (event.key !== "Escape" || event.isComposing || isTextField(event.target)) return;
+  if (top()?.own) return;
   if (!dismissTopLayer(event)) return;
   event.preventDefault();
   event.stopPropagation();
@@ -73,13 +83,11 @@ function onFieldKeyDown(event: KeyboardEvent) {
   if (event.key !== "Escape" || event.isComposing || !isTextField(event.target)) return;
   // What lies under everything (a toast) only takes an Escape the field had no use for.
   if (!hasOpenLayer() && event.defaultPrevented) return;
+  if (top()?.own) return;
   if (!dismissTopLayer(event)) return;
   event.preventDefault();
   event.stopPropagation();
 }
-
-const isFrame = (source: MessageEventSource | null) =>
-  Array.from(document.querySelectorAll("iframe")).some((frame) => frame.contentWindow === source);
 
 /** Escape pressed in a slide preview that was told something is open here. */
 function onMessage(event: MessageEvent) {

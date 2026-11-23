@@ -84,6 +84,74 @@ export function toolArguments(part: ToolPart): { name: string; value: string }[]
     .map(([name, value]) => ({ name, value: typeof value === "string" ? value : JSON.stringify(value, null, 2) }));
 }
 
+/** A line of what an edit changed: taken out, put in, or (`default`) left as it was around the change. */
+export type EditLine = { text: string; change: "added" | "removed" | "default" };
+
+/**
+ * What an edit changed, line by line: the lines its old text and its new text start and end
+ * with alike stay as they are, what is between them was taken out and put in. Null for a tool
+ * call that is not an edit of one text for another.
+ */
+export function editLines(part: ToolPart): EditLine[] | null {
+  const { old_string: before, new_string: after } = part.input;
+  if (typeof before !== "string" || typeof after !== "string") return null;
+  const lines = (text: string) => (text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+  const old = lines(before);
+  const next = lines(after);
+  let head = 0;
+  while (head < old.length && head < next.length && old[head] === next[head]) head++;
+  let tail = 0;
+  while (
+    tail < old.length - head &&
+    tail < next.length - head &&
+    old[old.length - 1 - tail] === next[next.length - 1 - tail]
+  )
+    tail++;
+  const as = (change: EditLine["change"]) => (text: string) => ({ text, change });
+  return [
+    ...old.slice(0, head).map(as("default")),
+    ...old.slice(head, old.length - tail).map(as("removed")),
+    ...next.slice(head, next.length - tail).map(as("added")),
+    ...old.slice(old.length - tail).map(as("default")),
+  ];
+}
+
+/** The languages the transcript colors (see lib/highlighter.tsx), by what a file's name ends with. */
+const LANGUAGES: Record<string, string> = {
+  html: "html",
+  htm: "html",
+  svg: "html",
+  css: "css",
+  js: "javascript",
+  mjs: "javascript",
+  jsx: "jsx",
+  ts: "typescript",
+  tsx: "tsx",
+  json: "json",
+  md: "markdown",
+  py: "python",
+  sh: "bash",
+  sql: "sql",
+  yml: "yaml",
+  yaml: "yaml",
+};
+
+/**
+ * The language to color a text of a tool call in, "" for none: a command is a shell's, the
+ * content written to a file (`path`) is that file's, and anything that reads as JSON is JSON.
+ * `name` is the argument's name, "" for the output.
+ */
+export function textLanguage(name: string, text: string, path: string): string {
+  if (name === "command") return "bash";
+  if (name === "content") {
+    const byName = LANGUAGES[/\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? ""];
+    if (byName) return byName;
+  }
+  const trimmed = text.trim();
+  const json = (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+  return json ? "json" : "";
+}
+
 /** No ids: what {@link editedIds} gives for every tool call that is not an edit of the deck file. */
 const NO_IDS: readonly string[] = [];
 
@@ -112,21 +180,26 @@ export function editedSlide(ids: readonly string[], slides: ReadonlyMap<string, 
 }
 
 /**
- * A reply's parts as the transcript lays them out: tool calls in a row are one group of steps.
- * `key` tells a part from the others of its reply for as long as the reply lasts.
+ * A reply's parts as the transcript lays them out. Tool calls that follow one another are one
+ * group, the rows of one trace: `tools` shows each of them, `steps` folds them into one line.
+ * `key` tells a part from the others of its reply for as long as the reply lasts; a group of
+ * tool calls is told by the first of them, which stays as the group grows.
  */
-export type PartGroup = { kind: "part"; part: ChatPart; key: string } | { kind: "steps"; tools: ToolPart[] };
+export type PartGroup =
+  | { kind: "part"; part: Exclude<ChatPart, { kind: "tool" }>; key: string }
+  | { kind: "tools"; tools: ToolPart[] }
+  | { kind: "steps"; tools: ToolPart[] };
 
 /** What tells a part that has a name of its own from the others of its reply. */
-function partKey(part: Exclude<ChatPart, { kind: "text" }>): string {
+function partKey(part: Exclude<ChatPart, { kind: "text" | "tool" }>): string {
   return part.kind === "approval" ? part.approval.id : part.id;
 }
 
 /**
  * Lays out a reply's parts. With `fold`, tool calls that follow one another go into one group
  * of steps, so that a turn of thirty edits is one line; without it (while the reply comes in)
- * each shows as it happens. A tool call on its own stays as it is, as does everything else. Text
- * that is blank does not show, so it does not part two tool calls either.
+ * each shows as it happens, in a group of rows. A tool call on its own is a group of one row
+ * either way. Text that is blank does not show, so it does not part two tool calls either.
  *
  * A text has no name, so its key is its place among the texts that show. That place stays: text
  * only comes in at the end, while a blank text before it may go at any time (the agent takes it
@@ -137,13 +210,11 @@ export function groupParts(parts: ChatPart[], fold = true): PartGroup[] {
   let run: ToolPart[] = [];
   let texts = 0;
   const close = () => {
-    const [first] = run;
-    if (run.length > 1) groups.push({ kind: "steps", tools: run });
-    else if (first) groups.push({ kind: "part", part: first, key: first.id });
+    if (run.length > 0) groups.push({ kind: fold && run.length > 1 ? "steps" : "tools", tools: run });
     run = [];
   };
   for (const part of parts) {
-    if (part.kind === "tool" && fold) {
+    if (part.kind === "tool") {
       run.push(part);
     } else if (part.kind !== "text") {
       close();

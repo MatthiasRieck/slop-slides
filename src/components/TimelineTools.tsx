@@ -17,6 +17,7 @@ export function TimelineTools({ collapsed }: { collapsed: boolean }) {
           label={open ? "Hide the timeline under the slide" : "Show the timeline under the slide"}
           active={open}
           disabled={!playable}
+          disabledReason="Every slide is hidden: there is nothing to play"
           onClick={() => useApp.getState().setTimelineOpen(!open)}
         >
           <Film />

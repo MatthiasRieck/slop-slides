@@ -1,26 +1,62 @@
-import { FileText, Loader2, MousePointerClick, PenLine, Presentation, Undo2, X } from "lucide-react";
+import { FileText, MousePointerClick, PenLine, Presentation, Undo2, X } from "lucide-react";
 
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import type { EditElement } from "../../lib/editTools";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { ComposerComments } from "../Comments";
+import { CHIP_SENT } from "./messageStyles";
 
-/** A chip that goes along with the message. */
-const CHIP = "flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs";
-const SENT = "border-primary/30 bg-primary/10 text-primary";
-
-/** The button on a chip that leaves it out of the message: a target of its own, as tall as the chip. */
-function ChipRemove(props: { label: string; title?: string; onClick: () => void }) {
+/**
+ * A chip that goes along with the message: what it is (`icon`, and its name as `children`), with
+ * a button that leaves it out of the message when `remove` names one. `title` says more of it.
+ */
+function Chip(props: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  title?: string;
+  sent?: boolean;
+  /** Still being saved: the chip says so, and is read out as it appears. */
+  uploading?: boolean;
+  remove?: { label: string; tooltip?: string; onClick: () => void };
+}) {
+  const { remove } = props;
   return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.title ?? props.label}
-      onClick={props.onClick}
-      className="-mr-1 flex size-5 shrink-0 items-center justify-center rounded hover:bg-foreground/10 hover:text-foreground"
+    <Attachment
+      size="chip"
+      title={props.title}
+      state={props.uploading ? "uploading" : undefined}
+      role={props.uploading ? "status" : undefined}
+      className={props.sent ? CHIP_SENT : "text-muted-foreground"}
     >
-      <X className="size-3" />
-    </button>
+      <AttachmentMedia>{props.icon}</AttachmentMedia>
+      <AttachmentContent>
+        <AttachmentTitle className="font-normal">{props.children}</AttachmentTitle>
+      </AttachmentContent>
+      {remove && (
+        <AttachmentActions className="-mr-1">
+          <AttachmentAction
+            size="icon-2xs"
+            aria-label={remove.label}
+            tooltip={remove.tooltip ?? remove.label}
+            onClick={remove.onClick}
+            className="hover:bg-foreground/10"
+          >
+            <X />
+          </AttachmentAction>
+        </AttachmentActions>
+      )}
+    </Attachment>
   );
 }
 
@@ -51,72 +87,86 @@ export function ComposerChips(props: {
   const revertNotes = useApp((s) => s.revertNotes);
   if (!(files.length > 0 || slideNumber > 0 || element || revertNotes.length > 0 || pending > 0)) return null;
   return (
-    <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
+    <AttachmentGroup className="@container w-full flex-wrap gap-1 overflow-visible px-3.5 pt-3 pb-0 mask-none!">
       {slideNumber > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="xs"
           aria-pressed={includeSlide}
           onClick={onToggleSlide}
-          title={
+          tooltip={
             includeSlide
               ? "The agent will know which slide you are on. Click to leave it out."
               : "Not referencing the current slide. Click to include it."
           }
-          className={cn(CHIP, "shrink-0", includeSlide ? SENT : "text-muted-foreground line-through")}
+          className={cn(
+            "rounded-md px-1.5 font-normal",
+            includeSlide
+              ? cn(
+                  CHIP_SENT,
+                  "aria-pressed:bg-primary/10 aria-pressed:text-primary hover:bg-primary/15 hover:text-primary",
+                )
+              : "bg-transparent text-muted-foreground line-through",
+          )}
         >
-          <Presentation className="size-3 shrink-0" />
+          <Presentation className="size-3" />
           Slide {slideNumber}
-        </button>
+        </Button>
       )}
       {element && (
-        <span title={`The agent gets this element's markup:\n${element.path}`} className={cn(CHIP, SENT)}>
-          <MousePointerClick className="size-3 shrink-0" />
-          <span className="truncate">{element.name}</span>
-          <ChipRemove label="Don't send element" onClick={onDropElement} />
-        </span>
+        <Chip
+          sent
+          icon={<MousePointerClick className="size-3" />}
+          title={`The agent gets this element's markup:\n${element.path}`}
+          remove={{ label: "Don't send element", onClick: onDropElement }}
+        >
+          {element.name}
+        </Chip>
       )}
       {sendsSketch && (
-        <span
+        <Chip
+          sent
+          icon={<PenLine className="size-3" />}
           title="A screenshot of the slide with your marks is sent along; the marks stay on the slide as a review"
-          className={cn(CHIP, SENT)}
+          remove={{
+            label: "Don't send sketch",
+            tooltip: "Don't send these marks; they stay on the slide",
+            onClick: () => selected && useApp.getState().skipSketch(selected),
+          }}
         >
-          <PenLine className="size-3 shrink-0" />
           Sketch
-          <ChipRemove
-            label="Don't send sketch"
-            title="Don't send these marks; they stay on the slide"
-            onClick={() => selected && useApp.getState().skipSketch(selected)}
-          />
-        </span>
+        </Chip>
       )}
       <ComposerComments />
       {revertNotes.map((note) => (
-        <span
+        <Chip
           key={note.message}
+          sent
+          icon={<Undo2 className="size-3" />}
           title={`The agent is told that you undid what its turn for ${note.label} changed in the deck`}
-          className={cn(CHIP, SENT)}
+          remove={{ label: "Don't tell the agent", onClick: () => useApp.getState().dropRevertNote(note.message) }}
         >
-          <Undo2 className="size-3 shrink-0" />
-          <span className="truncate">Undone: {note.label}</span>
-          <ChipRemove label="Don't tell the agent" onClick={() => useApp.getState().dropRevertNote(note.message)} />
-        </span>
+          Undone: {note.label}
+        </Chip>
       ))}
       {files.map((a) => {
         const name = a.replace(/^assets\//, "");
         return (
-          <span key={a} title={a} className={cn(CHIP, "text-muted-foreground")}>
-            <FileText className="size-3 shrink-0" />
-            <span className="truncate">{name}</span>
-            <ChipRemove label={`Remove ${name}`} onClick={() => onRemove(a)} />
-          </span>
+          <Chip
+            key={a}
+            icon={<FileText className="size-3" />}
+            title={a}
+            remove={{ label: `Remove ${name}`, onClick: () => onRemove(a) }}
+          >
+            {name}
+          </Chip>
         );
       })}
       {pending > 0 && (
-        <span role="status" className={cn(CHIP, "border-dashed text-muted-foreground")}>
-          <Loader2 className="size-3 shrink-0 animate-spin" />
+        <Chip uploading icon={<Spinner aria-hidden="true" className="size-3" />}>
           Attaching{pending > 1 ? ` ${pending} files` : ""}…
-        </span>
+        </Chip>
       )}
-    </div>
+    </AttachmentGroup>
   );
 }

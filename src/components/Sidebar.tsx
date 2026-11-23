@@ -12,11 +12,13 @@ import {
   StickyNote,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { useDropdown } from "../hooks/useDropdown";
-import { useMenuKeys } from "../hooks/useMenuKeys";
-import { useRovingTabs } from "../hooks/useRovingTabs";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { keepFocus } from "@/lib/focus";
 import { scrollBehavior } from "../lib/motion";
 import { cn, isMac } from "../lib/utils";
 import { SIDEBAR_TABS, type SidebarTab, settleUnsavedEdits, useApp } from "../store";
@@ -24,8 +26,8 @@ import { hiddenChatAttention } from "../store/attention";
 import { selectedSlideNarrated } from "../store/chrome";
 import { useSvgEditor } from "../svgStore";
 import { AttentionMark } from "./AttentionMark";
-import { keepFocus, ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
+import { MenuItem } from "./DeckActions";
 import { FileTree } from "./FileTree";
 import { CodePanel, SvgEditor } from "./lazy";
 import { NarrationPanel } from "./NarrationPanel";
@@ -107,7 +109,11 @@ export function Sidebar() {
   const maximized = useApp((s) => s.sidebarMaximized);
   const mounted = useMountedTabs(tabs, active);
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <Tabs
+      value={active}
+      onValueChange={(value) => useApp.getState().setSidebarTab(value as SidebarTab)}
+      className="h-full min-h-0 gap-0 bg-background"
+    >
       <div
         data-tauri-drag-region
         className={cn(
@@ -118,26 +124,29 @@ export function Sidebar() {
       >
         <TabStrip tabs={tabs} active={active} />
         <div data-tauri-drag-region className="flex-1" />
-        <ToolButton
-          variant="panel"
-          size="md"
-          label={maximized ? "Restore the sidebar" : "Maximize the sidebar over the slides"}
-          active={maximized}
+        <Button
+          variant="tool"
+          size="icon-sm"
+          tooltip={maximized ? "Restore the sidebar" : "Maximize the sidebar over the slides"}
+          tooltipSide="bottom"
+          aria-pressed={maximized}
           onClick={() => useApp.getState().setSidebarMaximized(!maximized)}
         >
-          {maximized ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-        </ToolButton>
+          {maximized ? <Minimize2 /> : <Maximize2 />}
+        </Button>
         <SidebarToggle />
       </div>
-      <div role="tabpanel" className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1">
         {mounted.map((id) => (
-          <div key={id} className={cn("h-full", id !== active && "hidden")}>
+          // Behind the tab that shows, those that stay mounted are hidden, not gone. The panel
+          // is no stop of its own for Tab: what is in it is.
+          <TabsContent key={id} value={id} keepMounted tabIndex={-1} className="h-full text-base">
             {TABS[id].render(id === active)}
-          </div>
+          </TabsContent>
         ))}
         {!active && <NoTabs />}
       </div>
-    </div>
+    </Tabs>
   );
 }
 
@@ -161,12 +170,13 @@ interface Overflow {
 }
 
 /**
- * The open tabs, then `+`. When they don't fit, the strip scrolls without a scrollbar: its cut-off
- * ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls into view.
+ * The open tabs, then `+`. The arrows go from tab to tab, Home and End to the ends; a click,
+ * Enter or Space shows the tab. When they don't fit, the strip scrolls without a scrollbar: its
+ * cut-off ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls
+ * into view.
  */
 function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | null }) {
-  const roving = useRovingTabs();
-  const ref = roving.ref;
+  const ref = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState<Overflow>({ left: 0, right: 0 });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures, and watches the new tabs, when tabs open or close
@@ -204,40 +214,40 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
 
   return (
     <>
-      <div
+      <TabsList
         ref={ref}
-        role="tablist"
         aria-label="Sidebar"
-        onKeyDown={roving.onKeyDown}
-        className="no-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto"
+        className="no-scrollbar w-auto min-w-0 justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 group-data-horizontal/tabs:h-auto"
         data-fade={[overflow.left && "left", overflow.right && "right"].filter(Boolean).join(" ") || undefined}
         style={overflowing ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
       >
         {tabs.map((id) => (
           <Tab key={id} id={id} active={id === active} />
         ))}
-      </div>
+      </TabsList>
       <OpenTabMenu open={tabs} />
       {overflowing && (
         <div className="flex shrink-0 items-center">
-          <ToolButton
-            variant="panel"
-            size="sm"
-            label="Scroll tabs left"
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Scroll tabs left"
+            tooltipSide="bottom"
             disabled={!overflow.left}
             onClick={() => scroll(-1)}
           >
             <ChevronLeft className="size-4" />
-          </ToolButton>
-          <ToolButton
-            variant="panel"
-            size="sm"
-            label="Scroll tabs right"
+          </Button>
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Scroll tabs right"
+            tooltipSide="bottom"
             disabled={!overflow.right}
             onClick={() => scroll(1)}
           >
             <ChevronRight className="size-4" />
-          </ToolButton>
+          </Button>
         </div>
       )}
     </>
@@ -261,119 +271,109 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
   return (
     <div
       className={cn(
-        "group flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
-        active && "bg-accent text-foreground",
+        "group flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground",
+        active && "bg-muted text-foreground",
       )}
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={active}
+      <TabsTrigger
+        value={id}
         // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
         // (The middle button would start scrolling otherwise; here it closes the tab.)
         onMouseDown={keepFocus}
-        onClick={() => useApp.getState().setSidebarTab(id)}
         onAuxClick={(event) => {
           if (event.button !== 1) return;
           event.preventDefault();
           closeTab();
         }}
-        className="flex items-center gap-1.5 py-1 pl-2 pr-1"
+        className="h-auto flex-none gap-1.5 border-0 py-1 pr-1 pl-2 text-xs text-inherit data-active:bg-transparent data-active:text-inherit data-active:shadow-none dark:text-inherit dark:data-active:bg-transparent dark:data-active:text-inherit [&_svg:not([class*='size-'])]:size-3.5"
       >
-        <Icon className="size-3.5" />
+        <Icon />
         {label}
         {mark && (
           <span data-testid={`${id}-mark`} title={mark} aria-hidden className="size-1.5 rounded-full bg-primary" />
         )}
         {attention && <AttentionMark attention={attention} />}
-      </button>
-      <button
-        type="button"
-        aria-label={`Close ${label}`}
-        title={`Close ${label}`}
+      </TabsTrigger>
+      <Button
+        variant="ghost"
+        size="icon-2xs"
+        tooltip={`Close ${label}`}
+        tooltipSide="bottom"
         onClick={closeTab}
         className={cn(
-          "mr-1 flex size-4.5 items-center justify-center rounded-sm opacity-0 hover:bg-foreground/10 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100",
+          "mr-1 size-4.5 rounded-sm opacity-0 hover:bg-foreground/10 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [&_svg:not([class*='size-'])]:size-3.5",
           active && "opacity-100",
         )}
       >
-        <X className="size-3.5" />
-      </button>
+        <X />
+      </Button>
     </div>
   );
 }
 
 /** `+`: a menu of the surfaces not open in a tab yet. */
 function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
-  const { open, setOpen, ref: menuRef } = useDropdown();
-  const menu = useMenuKeys();
   const closed = SIDEBAR_TABS.filter((id) => !openTabs.includes(id));
+  const none = closed.length === 0;
   return (
-    <div ref={menuRef} className="relative shrink-0">
-      <ToolButton
-        variant="panel"
-        size="md"
-        label="Open a tab"
-        title={closed.length ? "Open a tab" : "Every tab is open"}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={!closed.length}
-        onClick={() => setOpen((v) => !v)}
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        disabled={none}
+        render={
+          <Button
+            variant="tool"
+            size="icon-sm"
+            aria-label="Open a tab"
+            disabled={none}
+            tooltip={none ? "Every tab is open" : "Open a tab"}
+            tooltipSide="bottom"
+            className="shrink-0"
+          />
+        }
       >
-        <Plus className="size-4" />
-      </ToolButton>
-      {open && closed.length > 0 && (
-        <div
-          role="menu"
-          {...menu}
-          className="enter-below absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg outline-none"
-        >
-          {closed.map((id) => {
-            const { label, hint, icon: Icon } = TABS[id];
-            return (
-              <button
-                key={id}
-                type="button"
-                role="menuitem"
-                title={hint}
-                onClick={() => {
-                  setOpen(false);
-                  useApp.getState().setSidebarTab(id);
-                }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-              >
-                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+        <Plus />
+      </DropdownMenuTrigger>
+      {/* Each surface with what it is for under its name, as the other menus of the shell say it. */}
+      <DropdownMenuContent align="start" className="w-64">
+        {closed.map((id) => (
+          <MenuItem
+            key={id}
+            icon={TABS[id].icon}
+            label={TABS[id].label}
+            hint={TABS[id].hint}
+            onClick={() => useApp.getState().setSidebarTab(id)}
+          />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 /** Every tab is closed: what can open in one. */
 function NoTabs() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-      <h2 className="text-sm font-medium">Open a tab</h2>
-      <div className="flex w-full max-w-56 flex-col gap-0.5">
+    <Empty className="h-full">
+      <EmptyHeader>
+        <EmptyTitle>
+          <h2>Open a tab</h2>
+        </EmptyTitle>
+      </EmptyHeader>
+      <EmptyContent className="max-w-56 items-stretch gap-0.5">
         {SIDEBAR_TABS.map((id) => {
           const { label, icon: Icon } = TABS[id];
           return (
-            <button
+            <Button
               key={id}
-              type="button"
+              variant="ghost"
               onClick={() => useApp.getState().setSidebarTab(id)}
-              className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+              className="justify-start gap-2.5 px-2 font-normal"
             >
-              <Icon className="size-4 text-muted-foreground" />
+              <Icon className="text-muted-foreground" />
               {label}
-            </button>
+            </Button>
           );
         })}
-      </div>
-    </div>
+      </EmptyContent>
+    </Empty>
   );
 }

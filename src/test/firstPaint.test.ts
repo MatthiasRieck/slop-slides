@@ -78,21 +78,11 @@ describe("the window before the app's code has loaded", () => {
   });
 });
 
-describe("the motion of what opens over the app", () => {
-  const ENTER = [".enter-below", ".enter-above", ".enter-pop", ".enter-fade", ".toast-enter"];
-
-  it("animates opacity and transform only, briefly", () => {
-    for (const name of ["enter", "leave", "shimmer"]) {
-      const frames = css.slice(css.indexOf(`@keyframes ${name} {`)).match(/\{([\s\S]*?)\n\}/)?.[1] ?? "";
-      const animated = [...frames.matchAll(/^\s+([a-z-]+):/gm)].map((match) => match[1]);
-      expect(animated.length).toBeGreaterThan(0);
-      expect(animated.filter((property) => property !== "opacity" && property !== "transform")).toEqual([]);
-    }
-    const rule = css.match(/\.enter-below,[\s\S]*?\{([\s\S]*?)\}/);
-    for (const selector of ENTER) expect(rule?.[0]).toContain(selector);
-    const ms = Number(rule?.[1]?.match(/animation: enter (\d+)ms/)?.[1]);
-    expect(ms).toBeGreaterThanOrEqual(120);
-    expect(ms).toBeLessThanOrEqual(150);
+describe("the app's own motion", () => {
+  it("leaves what opens over the app to the shadcn/ui components, with no animation classes of its own", () => {
+    // The popups animate themselves (tw-animate-css); the old `enter-*` and `toast-*` classes are gone.
+    expect(css).not.toMatch(/@keyframes/);
+    expect(css).not.toMatch(/^\s*animation(-name)?:/m);
   });
 
   it("transitions no layout property anywhere in the stylesheet", () => {
@@ -101,15 +91,8 @@ describe("the motion of what opens over the app", () => {
 
   it("stands still for those who asked for less motion", () => {
     const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    for (const selector of [...ENTER, ".toast-exit"]) expect(reduced).toContain(selector);
-    expect(reduced).toMatch(/\.toast-exit \{\s*animation: none !important;/);
-    expect(reduced).toMatch(/\.shimmer-text::after \{\s*display: none;/);
-  });
-
-  it("moves the thinking text's shimmer with a transform, on a layer of its own", () => {
-    const veil = blockOf(css, ".shimmer-text::after");
-    expect(veil).toContain("will-change: transform;");
-    expect(veil).toContain("animation: shimmer");
-    expect(blockOf(css, ".shimmer-text")).not.toContain("animation");
+    expect(reduced).toMatch(/\*,\s*::before,\s*::after \{[^}]*animation-duration: 0\.01ms !important;/);
+    expect(reduced).toMatch(/animation-iteration-count: 1 !important;/);
+    expect(reduced).toMatch(/transition-duration: 0\.01ms !important;/);
   });
 });

@@ -7,7 +7,6 @@ import {
   FileText,
   Film,
   Images,
-  Loader2,
   Play,
   Presentation,
   Share,
@@ -16,8 +15,18 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { useDropdown } from "../hooks/useDropdown";
-import { useMenuKeys } from "../hooks/useMenuKeys";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 import { api, type Deck, errorMessage, type PptxSlides, type Slide } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { basename } from "../lib/utils";
@@ -30,10 +39,8 @@ import {
   videoPhaseShort,
 } from "../lib/video";
 import { reportingErrors, showError, useApp } from "../store";
-import { Button, withShortcut } from "./Button";
 import { showSaved } from "./exportSaved";
 import { VideoExportPanel } from "./lazy";
-import { Popover } from "./Popover";
 import { PRESENT_KEYS, usePresent } from "./presenter/present";
 import { ScreenPicker } from "./ScreenPicker";
 
@@ -168,67 +175,58 @@ function Actions({ deck }: { deck: Deck }) {
  * first two from anywhere (see `usePresentKeys`).
  */
 function PresentButton({ empty }: { empty: boolean }) {
-  const { open, setOpen, ref: menuRef } = useDropdown();
-  const menu = useMenuKeys();
-  const choose = (action: () => void) => () => {
-    setOpen(false);
-    action();
-  };
   const present = usePresent.getState();
-
   return (
-    <div ref={menuRef} className="relative flex">
+    <ButtonGroup aria-label="Present" className="gap-px">
       <Button
-        variant="primary"
-        size="xl"
+        size="sm"
         disabled={empty}
-        title={empty ? EMPTY_DECK : withShortcut("Present from the current slide", PRESENT_KEYS.current)}
+        tooltip={empty ? EMPTY_DECK : "Present from the current slide"}
+        {...(!empty && { shortcut: PRESENT_KEYS.current })}
+        tooltipSide="bottom"
         onClick={() => void present.present("current")}
-        className="rounded-r-none shadow-sm"
       >
-        <Play className="size-3.5 fill-current" />
+        <Play className="fill-current" data-icon="inline-start" />
         Present
       </Button>
-      <Button
-        variant="primary"
-        size="xl"
-        disabled={empty}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="More ways to present"
-        title={empty ? EMPTY_DECK : "More ways to present"}
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-l-none border-l border-primary-foreground/20 px-1.5 shadow-sm"
-      >
-        <ChevronDown className="size-3" />
-      </Button>
-      {open && (
-        <div
-          role="menu"
-          {...menu}
-          className="enter-below absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg outline-none"
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          disabled={empty}
+          render={
+            <Button
+              size="icon-sm"
+              disabled={empty}
+              aria-label="More ways to present"
+              tooltip={empty ? EMPTY_DECK : "More ways to present"}
+              tooltipSide="bottom"
+              className="w-6"
+            />
+          }
         >
+          <ChevronDown className="size-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64">
           <MenuItem
             icon={SkipBack}
             label="From the beginning"
             shortcut={PRESENT_KEYS.start}
-            onClick={choose(() => void present.present("start"))}
+            onClick={() => void present.present("start")}
           />
           <MenuItem
             icon={Play}
             label="From current slide"
             shortcut={PRESENT_KEYS.current}
-            onClick={choose(() => void present.present("current"))}
+            onClick={() => void present.present("current")}
           />
           <MenuItem
             icon={AppWindow}
             label="Present in windows"
             hint="Slides in this window to share in a call; your notes in another"
-            onClick={choose(() => present.presentInWindows("current"))}
+            onClick={() => present.presentInWindows("current")}
           />
-        </div>
-      )}
-    </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
   );
 }
 
@@ -253,144 +251,146 @@ function ExportMenu(props: {
   onImages: () => void;
   onVideo: (options: VideoOptions) => void;
 }) {
-  const { open, setOpen, ref: menuRef } = useDropdown();
-  const menu = useMenuKeys();
   const [videoOpen, setVideoOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const { video } = props;
   const status = video ? videoPhaseShort(video.progress) : props.busy ? "Exporting…" : null;
   if (!video && progressOpen) setProgressOpen(false);
 
-  const choose = (action: () => void) => () => {
-    setOpen(false);
-    action();
-  };
+  // Writing a file, it only waits; recording a video, it opens how far that has got.
+  const disabled = props.empty || (props.busy && !video);
+  const name = video ? `Exporting video: ${videoPhase(video.progress)}` : status ? null : "Export";
+  const tooltip = props.empty
+    ? EMPTY_DECK
+    : video
+      ? "Show the video export's progress"
+      : status
+        ? undefined
+        : "Export the deck";
+  const button = (
+    <Button
+      ref={buttonRef}
+      variant="outline"
+      size="sm"
+      disabled={disabled}
+      {...(name && { "aria-label": name })}
+      tooltip={tooltip}
+      tooltipSide="bottom"
+    />
+  );
+  const face = (
+    <>
+      {props.busy ? (
+        <Spinner aria-hidden="true" data-icon="inline-start" className="size-3.5" />
+      ) : (
+        <Share data-icon="inline-start" />
+      )}
+      {/* Idle, its name shows where the window is wide enough for it. */}
+      {status ? <span className="tabular-nums">{status}</span> : <span className="hidden xl:inline">Export</span>}
+      <ChevronDown data-icon="inline-end" className="size-3 text-muted-foreground" />
+    </>
+  );
+
+  if (video) {
+    return (
+      <Popover open={progressOpen} onOpenChange={setProgressOpen}>
+        <PopoverTrigger render={button}>{face}</PopoverTrigger>
+        <PopoverContent align="end" aria-label="Video export" initialFocus={cancelRef} className="w-[280px] gap-0 p-0">
+          <VideoProgressPanel run={video} cancelRef={cancelRef} />
+        </PopoverContent>
+      </Popover>
+    );
+  }
 
   return (
-    <div ref={menuRef} className="relative">
-      <Button
-        ref={buttonRef}
-        size="xl"
-        // Writing a file, it only waits; recording a video, it opens how far that has got.
-        disabled={props.empty || (props.busy && !video)}
-        aria-haspopup={video ? "dialog" : "menu"}
-        aria-expanded={video ? progressOpen : open}
-        aria-label={video ? `Exporting video: ${videoPhase(video.progress)}` : status ? undefined : "Export"}
-        title={props.empty ? EMPTY_DECK : video ? "Show the video export's progress" : status ? undefined : "Export"}
-        onClick={() => (video ? setProgressOpen((v) => !v) : setOpen((v) => !v))}
-      >
-        {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
-        {/* Idle, its name shows where the window is wide enough for it. */}
-        {status ? <span className="tabular-nums">{status}</span> : <span className="hidden xl:inline">Export</span>}
-        <ChevronDown className="size-3 text-muted-foreground" />
-      </Button>
-      {open && !video && (
-        <div
-          role="menu"
-          {...menu}
-          className="enter-below absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border bg-card p-1 shadow-lg outline-none"
-        >
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger disabled={disabled} render={button}>
+          {face}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-72">
           <MenuItem
             icon={FileCode2}
             label="HTML file…"
             hint="One self-contained file to share. Hidden slides stay in it; the show skips them"
-            onClick={choose(props.onHtml)}
+            onClick={props.onHtml}
           />
           <MenuItem
             icon={FileText}
             label="PDF…"
             hint="One page per slide, for printing or sharing. Hidden slides are left out"
-            onClick={choose(props.onPdf)}
+            onClick={props.onPdf}
           />
           <MenuItem
             icon={Presentation}
             label="PowerPoint…"
             hint="Editable slides; some effects are simplified, and text needs its fonts installed. Hidden slides are left out"
-            onClick={choose(() => props.onPptx("elements"))}
+            onClick={() => props.onPptx("elements")}
           />
           <MenuItem
             icon={Presentation}
             label="PowerPoint, as pictures…"
             hint="Every slide one picture: looks the same everywhere, but cannot be edited. Hidden slides are left out"
-            onClick={choose(() => props.onPptx("pictures"))}
+            onClick={() => props.onPptx("pictures")}
           />
           <MenuItem
             icon={Images}
             label="PNG images…"
             hint="One image per slide, in a new folder. Hidden slides are included"
-            onClick={choose(props.onImages)}
+            onClick={props.onImages}
           />
           <MenuItem
             icon={Film}
             label="Video…"
             hint="An MP4 that plays the animations and speaks the narration. Hidden slides are left out"
-            onClick={choose(() => setVideoOpen(true))}
+            onClick={() => setVideoOpen(true)}
           />
-        </div>
-      )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {videoOpen && (
-        <Popover
-          anchor={buttonRef}
-          placement="below"
-          align="end"
-          width={300}
-          portal
-          label="Export video"
-          onClose={() => setVideoOpen(false)}
-        >
-          <VideoExportPanel
-            slides={props.shownSlides}
-            onCancel={() => setVideoOpen(false)}
-            onExport={(options) => {
-              setVideoOpen(false);
-              props.onVideo(options);
-            }}
-          />
+        <Popover open onOpenChange={(open) => !open && setVideoOpen(false)}>
+          <PopoverContent anchor={buttonRef} align="end" aria-label="Export video" className="w-[300px] gap-0 p-0">
+            <VideoExportPanel
+              slides={props.shownSlides}
+              onCancel={() => setVideoOpen(false)}
+              onExport={(options) => {
+                setVideoOpen(false);
+                props.onVideo(options);
+              }}
+            />
+          </PopoverContent>
         </Popover>
       )}
-      {video && progressOpen && (
-        <Popover
-          anchor={buttonRef}
-          placement="below"
-          align="end"
-          width={280}
-          portal
-          label="Video export"
-          onClose={() => setProgressOpen(false)}
-        >
-          <VideoProgressPanel run={video} />
-        </Popover>
-      )}
-    </div>
+    </>
   );
 }
 
 /** A video export under way: the file it writes, what it is doing, how far along, and a way to cancel it. */
-function VideoProgressPanel({ run }: { run: VideoRun }) {
+function VideoProgressPanel({ run, cancelRef }: { run: VideoRun; cancelRef: React.Ref<HTMLButtonElement> }) {
   const percent = videoPercent(run.progress);
+  const phase = videoPhase(run.progress);
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
-      <div className="truncate text-sm font-medium" title={run.dest}>
-        {basename(run.dest)}
-      </div>
-      <div role="status" className="text-muted-foreground tabular-nums">
-        {videoPhase(run.progress)}
-      </div>
-      <div
-        role="progressbar"
-        aria-label="Video export"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-        aria-valuetext={videoPhase(run.progress)}
-        className="h-1.5 overflow-hidden rounded-full bg-muted"
+      {/* The file names the bar, and the phase is what it reads as: "Rendering video 45%", not a bare 45%. */}
+      <Progress
+        value={percent}
+        getAriaValueText={() => phase}
+        className="gap-x-2 gap-y-1.5 [&_[data-slot=progress-track]]:h-1.5"
       >
-        <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
-      </div>
+        <ProgressLabel className="min-w-0 basis-full truncate" title={run.dest}>
+          {basename(run.dest)}
+        </ProgressLabel>
+        <ProgressValue className="ml-0 basis-full text-xs">{() => phase}</ProgressValue>
+      </Progress>
+      {/* The value shown is hidden from assistive tech (the bar says it); this announces each new phase. */}
+      <span role="status" className="sr-only">
+        {phase}
+      </span>
       <div className="flex justify-end">
-        <Button size="lg" data-autofocus onClick={() => void api.cancelVideoExport()}>
-          <X />
+        <Button ref={cancelRef} variant="outline" size="xs" onClick={() => void api.cancelVideoExport()}>
+          <X data-icon="inline-start" />
           Cancel export
         </Button>
       </div>
@@ -399,8 +399,9 @@ function VideoProgressPanel({ run }: { run: VideoRun }) {
 }
 
 /**
- * One choice of a top bar menu: an icon, a label and, optionally, a hint under it and the keys
- * that do the same (`shortcut`, a `formatKeys` spec) at its end.
+ * One choice of a menu of the shell (the top bar's, the file tree's): an icon, a label and,
+ * optionally, a hint under it and the keys that do the same (`shortcut`, a `formatKeys` spec) at
+ * its end. For use inside a `DropdownMenuContent`.
  */
 export function MenuItem(props: {
   icon: typeof Share;
@@ -411,22 +412,17 @@ export function MenuItem(props: {
 }) {
   const Icon = props.icon;
   return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={props.onClick}
-      className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-    >
-      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+    <DropdownMenuItem onClick={props.onClick} className="items-start gap-2.5 px-2 py-1.5">
+      <Icon className="mt-0.5 text-muted-foreground" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-xs font-medium">{props.label}</span>
         {props.hint && <span className="text-2xs text-muted-foreground">{props.hint}</span>}
       </span>
       {props.shortcut && (
-        <kbd className="shrink-0 font-sans text-2xs text-muted-foreground tabular-nums">
+        <DropdownMenuShortcut className="text-2xs tracking-normal tabular-nums">
           {formatKeys(props.shortcut)}
-        </kbd>
+        </DropdownMenuShortcut>
       )}
-    </button>
+    </DropdownMenuItem>
   );
 }

@@ -1,6 +1,7 @@
 import { GripVertical } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, type ReactNode, useRef } from "react";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChanges } from "../changesStore";
 import {
   angleTowards,
@@ -132,33 +133,45 @@ export function SlideComparison(props: {
       >
         <Name at={sideLabelAt(divider, box, -1, LABEL_DISTANCE)}>Old</Name>
         <Name at={sideLabelAt(divider, box, 1, LABEL_DISTANCE)}>New</Name>
-        <button
-          type="button"
-          role="slider"
-          aria-label="Move the divider"
-          aria-valuenow={Math.round((divider.angle % 180 === 0 ? divider.x : divider.y) * 100)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          title="Drag to move the divider"
-          onKeyDown={onMoveKey}
-          style={{ left: point.x, top: point.y, rotate: `${divider.angle}deg` }}
-          className="absolute flex size-8 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40"
-        >
-          <GripVertical className="size-4" />
-        </button>
-        <button
-          type="button"
-          role="slider"
-          aria-label="Rotate the divider"
-          aria-valuenow={divider.angle}
-          aria-valuemin={-180}
-          aria-valuemax={180}
-          title="Drag to rotate the divider; hold Shift for steps of 15°"
-          onKeyDown={onRotateKey}
-          onPointerDown={(event) => start(event, { kind: "rotate", side })}
-          style={{ left: knob.x, top: knob.y }}
-          className="absolute size-5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-handle bg-primary shadow-md"
-        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                role="slider"
+                aria-label="Move the divider"
+                aria-valuenow={Math.round((divider.angle % 180 === 0 ? divider.x : divider.y) * 100)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                onKeyDown={onMoveKey}
+                style={{ left: point.x, top: point.y, rotate: `${divider.angle}deg` }}
+                className="absolute flex size-8 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40"
+              />
+            }
+          >
+            <GripVertical className="size-4" />
+          </TooltipTrigger>
+          <TooltipContent>Drag to move the divider</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                role="slider"
+                aria-label="Rotate the divider"
+                aria-valuenow={divider.angle}
+                aria-valuemin={-180}
+                aria-valuemax={180}
+                onKeyDown={onRotateKey}
+                onPointerDown={(event) => start(event, { kind: "rotate", side })}
+                style={{ left: knob.x, top: knob.y }}
+                className="absolute size-5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-handle bg-primary shadow-md"
+              />
+            }
+          />
+          <TooltipContent>Drag to rotate the divider; hold Shift for steps of 15°</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );

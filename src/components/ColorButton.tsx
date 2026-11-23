@@ -1,15 +1,21 @@
 import { Ban } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
-import { useDropdown } from "../hooks/useDropdown";
+import { Button } from "@/components/ui/button";
+import { FieldLegend, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { quietFocus } from "@/lib/focus";
 import { type DeckColor, EDIT_COLORS } from "../lib/editTools";
 import { colorLabel, parseHexInput, SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import type { EditPanel } from "../store/editing";
-import { keepFocus, toolButtonClass } from "./Button";
 import { useEditPanelAsk } from "./editPanelAsk";
-import { DropdownPanel } from "./Popover";
+import { QUIET_LABEL } from "./styles";
+import { TOOLBAR_POPUP } from "./toolProps";
 
 /** What a color well holds: a color, none at all, or something that is not one color. */
 export type ColorState = "color" | "none" | "other";
@@ -26,6 +32,8 @@ function stateLabel(value: string | null, other: boolean): string {
  * the color, a struck-through bar for none, or stripes when it is `other` than one plain color
  * (a gradient, or several elements that differ). Disabled, its tooltip is `disabledReason`.
  * With `panel`, it also opens when that popover is asked for from outside the toolbar.
+ *
+ * Its popover leaves the focus, and with it the text selection, in the slide.
  */
 export function ColorButton(props: {
   label: string;
@@ -42,8 +50,9 @@ export function ColorButton(props: {
   /** Hands the keyboard focus back after a typed value. */
   onDone?: () => void;
 }) {
-  const { open, setOpen, ref, toggle } = useDropdown({ disabled: props.disabled });
-  const custom = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  // What it works on went away: it closes, and stays closed when that comes back.
+  if (props.disabled && open) setOpen(false);
   const recent = useApp((s) => s.recentColors);
   const [hex, setHex] = useState("");
   const [invalid, setInvalid] = useState(false);
@@ -57,15 +66,14 @@ export function ColorButton(props: {
   const pickRef = useRef(pick);
   pickRef.current = pick;
 
-  // The system color picker reports every color the user passes over; only the one they settle on counts.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
-  useEffect(() => {
-    const input = custom.current;
+  // The system color picker reports every color the user passes over; only the one they settle
+  // on counts, which the browser's own `change` says (React's `onChange` is its `input`).
+  const custom = useCallback((input: HTMLInputElement | null) => {
     if (!input) return;
     const settle = () => pickRef.current(input.value);
     input.addEventListener("change", settle);
     return () => input.removeEventListener("change", settle);
-  }, [open]);
+  }, []);
 
   // The field starts on the current color each time the popover opens.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only opening resets what was typed
@@ -94,155 +102,171 @@ export function ColorButton(props: {
       : `${props.label}: ${stateLabel(props.value, !!props.other)}`;
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label={props.label}
-        title={tooltip}
-        aria-expanded={open}
-        disabled={props.disabled}
-        onMouseDown={keepFocus}
-        onClick={toggle}
-        className={cn(toolButtonClass("toolbar", "xs", open), "flex flex-col items-center px-1 [&_svg]:!size-3.5")}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="tool"
+            size="xs"
+            aria-label={props.label}
+            tooltip={tooltip}
+            disabled={props.disabled}
+            keepFocus
+            className="flex-col gap-0.5 px-1"
+          />
+        }
       >
         {props.icon}
         <span
           data-testid={`${props.label} swatch`}
           data-state={state}
           className={cn(
-            "mt-0.5 h-1 w-4 rounded-sm border border-foreground/20",
+            "h-1 w-4 rounded-sm border border-foreground/20",
             state === "none" &&
               "bg-[linear-gradient(to_top_right,transparent_42%,currentColor_42%,currentColor_58%,transparent_58%)]",
             state === "other" && "bg-[repeating-linear-gradient(90deg,currentColor_0_2px,transparent_2px_4px)]",
           )}
           style={props.value ? { background: props.value } : undefined}
         />
-      </button>
-      {open && (
-        <DropdownPanel role="dialog" aria-label={props.label} className="flex w-max flex-col gap-2">
-          {state === "other" && (
-            <p className="max-w-40 text-xs text-muted-foreground">
-              Mixed, or not a plain color. Pick one to replace it.
-            </p>
-          )}
-          {!!props.deck?.length && (
-            <SwatchRow label="Deck colors">
-              {props.deck.map((color) => (
-                <Swatch
-                  key={color.name}
-                  color={color.value}
-                  label={`Deck color ${color.name}`}
-                  title={`${color.name} (${color.value})`}
-                  picked={props.value === color.value}
-                  onPick={() => pick(color.value)}
-                />
-              ))}
-            </SwatchRow>
-          )}
-          {recent.length > 0 && (
-            <SwatchRow label="Recent">
-              {recent.map((color) => (
-                <Swatch
-                  key={color}
-                  color={color}
-                  label={`Recent color ${colorLabel(color)}`}
-                  title={colorLabel(color)}
-                  picked={false}
-                  onPick={() => pick(color)}
-                />
-              ))}
-            </SwatchRow>
-          )}
-          <SwatchRow label="Colors">
-            {props.none && (
-              <button
-                type="button"
-                aria-label="None"
-                title={`No ${props.label.toLowerCase()}`}
-                aria-pressed={state === "none"}
-                onMouseDown={keepFocus}
-                onClick={() => pick(null)}
-                className={cn(
-                  "flex size-5 items-center justify-center rounded-full border text-muted-foreground [&_svg]:size-3.5",
-                  state === "none" && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
-                )}
-              >
-                <Ban />
-              </button>
-            )}
-            {EDIT_COLORS.map((color) => (
+      </PopoverTrigger>
+      <PopoverContent
+        {...TOOLBAR_POPUP}
+        aria-label={props.label}
+        align="start"
+        initialFocus={false}
+        finalFocus={false}
+        className="w-max gap-2 p-2"
+      >
+        {state === "other" && (
+          <p className="max-w-40 text-xs text-muted-foreground">Mixed, or not a plain color. Pick one to replace it.</p>
+        )}
+        {!!props.deck?.length && (
+          <SwatchRow label="Deck colors">
+            {props.deck.map((color) => (
+              <Swatch
+                key={color.name}
+                color={color.value}
+                label={`Deck color ${color.name}`}
+                tooltip={`${color.name} (${color.value})`}
+                picked={props.value === color.value}
+                onPick={() => pick(color.value)}
+              />
+            ))}
+          </SwatchRow>
+        )}
+        {recent.length > 0 && (
+          <SwatchRow label="Recent">
+            {recent.map((color) => (
               <Swatch
                 key={color}
                 color={color}
-                label={colorLabel(color)}
-                title={colorLabel(color)}
-                picked={props.value === color}
+                label={`Recent color ${colorLabel(color)}`}
+                tooltip={colorLabel(color)}
+                picked={false}
                 onPick={() => pick(color)}
               />
             ))}
           </SwatchRow>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input
-              aria-label={`${props.label} as a hex value`}
-              title="A hex color, six digits or three; Enter applies it"
-              placeholder="#rrggbb"
-              spellCheck={false}
-              value={hex}
-              onChange={(event) => {
-                setHex(event.target.value);
-                setInvalid(false);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                applyHex();
-              }}
-              aria-invalid={invalid || undefined}
+        )}
+        <SwatchRow label="Colors">
+          {props.none && (
+            <Button
+              variant="outline"
+              size="icon-2xs"
+              aria-label="None"
+              tooltip={`No ${props.label.toLowerCase()}`}
+              aria-pressed={state === "none"}
+              keepFocus
+              onClick={() => pick(null)}
               className={cn(
-                "h-6 w-20 rounded border bg-transparent px-1 text-foreground tabular-nums",
-                invalid && "border-destructive",
+                "rounded-full text-muted-foreground",
+                state === "none" && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-popover",
               )}
+            >
+              <Ban />
+            </Button>
+          )}
+          {EDIT_COLORS.map((color) => (
+            <Swatch
+              key={color}
+              color={color}
+              label={colorLabel(color)}
+              tooltip={colorLabel(color)}
+              picked={props.value === color}
+              onPick={() => pick(color)}
             />
-            <label className="flex items-center gap-1">
-              <input
-                ref={custom}
-                type="color"
-                aria-label={`Custom ${props.label.toLowerCase()}`}
-                defaultValue={props.value ?? SWATCHES.ink}
-                className="h-5 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
+          ))}
+        </SwatchRow>
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Input
+                aria-label={`${props.label} as a hex value`}
+                placeholder="#rrggbb"
+                spellCheck={false}
+                value={hex}
+                onChange={(event) => {
+                  setHex(event.target.value);
+                  setInvalid(false);
+                }}
+                // The hint is for the pointer: it does not stay up while the value is typed.
+                onFocus={quietFocus}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  applyHex();
+                }}
+                aria-invalid={invalid || undefined}
+                className="h-6 w-20 rounded-md px-1 py-0 text-xs tabular-nums"
               />
-              Custom
-            </label>
-          </div>
-        </DropdownPanel>
-      )}
-    </div>
+            </TooltipTrigger>
+            <TooltipContent>A hex color, six digits or three; Enter applies it</TooltipContent>
+          </Tooltip>
+          <Label className={cn("gap-1", QUIET_LABEL)}>
+            <Input
+              ref={custom}
+              type="color"
+              aria-label={`Custom ${props.label.toLowerCase()}`}
+              defaultValue={props.value ?? SWATCHES.ink}
+              className="h-5 w-8 cursor-pointer rounded-sm border-0 p-0"
+            />
+            Custom
+          </Label>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
 /** A captioned row of swatches in a color well. */
 function SwatchRow(props: { label: string; children: ReactNode }) {
   return (
-    <fieldset aria-label={props.label} className="flex flex-col gap-1">
-      <span className="text-[10px] leading-3 text-muted-foreground">{props.label}</span>
+    <FieldSet className="gap-1">
+      <FieldLegend
+        variant="label"
+        className="mb-0 leading-3 font-normal text-muted-foreground data-[variant=label]:text-[10px]"
+      >
+        {props.label}
+      </FieldLegend>
       <div className="grid w-max grid-cols-6 gap-1">{props.children}</div>
-    </fieldset>
+    </FieldSet>
   );
 }
 
 /** One color to pick in a color well, ringed while it is the one picked. */
-function Swatch(props: { color: string; label: string; title: string; picked: boolean; onPick: () => void }) {
+function Swatch(props: { color: string; label: string; tooltip: string; picked: boolean; onPick: () => void }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
+      size="icon-2xs"
       aria-label={props.label}
-      title={props.title}
+      tooltip={props.tooltip}
       aria-pressed={props.picked}
-      onMouseDown={keepFocus}
+      keepFocus
       onClick={props.onPick}
       className={cn(
-        "size-5 rounded-full border border-foreground/20",
-        props.picked && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
+        "rounded-full border-foreground/20 dark:border-foreground/20",
+        props.picked && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-popover",
       )}
       style={{ background: props.color }}
     />

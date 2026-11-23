@@ -1,6 +1,20 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, Shield, ShieldAlert } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, Shield, ShieldAlert } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { CodeBlock, CodeBlockContent } from "@/components/ui/code-block";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { FieldError } from "@/components/ui/field";
+import { Item, ItemContent, ItemDescription, ItemFooter, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { Kbd } from "@/components/ui/kbd";
 import { api, errorMessage } from "../lib/api";
 import { formatKeys } from "../lib/keys";
 import { PROVIDERS } from "../lib/models";
@@ -13,8 +27,9 @@ import {
 } from "../lib/permissions";
 import { cn } from "../lib/utils";
 import { type ChatPart, useApp } from "../store";
-import { Button } from "./Button";
-import { Popover } from "./Popover";
+
+/** What goes wrong in the permission menu, as a line of it: one look for each of its complaints. */
+const MENU_ERROR = "p-2 text-xs";
 
 /** Marks the chat's message input, which an approval may take the keyboard focus from while it is empty. */
 export const COMPOSER_INPUT_ATTR = "data-composer-input";
@@ -32,8 +47,6 @@ export function PermissionPicker() {
   const [open, setOpen] = useState(false);
   const [modes, setModes] = useState<PermissionMode[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const root = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
   useEffect(() => {
     // Asked when opened: Codex answers by starting its app-server.
     if (!open || !deckId) return;
@@ -79,64 +92,59 @@ export function PermissionPicker() {
   };
   const full = mode === "fullAccess";
   return (
-    <div ref={root} className="min-w-0 shrink-0">
-      <button
-        type="button"
-        aria-label="Permissions"
-        title={`${name} permissions: ${PERMISSION_MODES[mode].label}`}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className={cn(
-          "flex h-7 items-center gap-1 rounded-md px-1.5 text-xs hover:bg-accent disabled:opacity-40",
-          full ? "font-medium text-warning" : "text-muted-foreground hover:text-foreground",
-        )}
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Permissions"
+            tooltip={`${name} permissions: ${PERMISSION_MODES[mode].label}`}
+            className={cn(
+              "h-7 min-w-0 shrink-0 gap-1 rounded-md px-1.5 text-xs",
+              full ? "font-medium text-warning hover:text-warning" : "font-normal text-muted-foreground",
+            )}
+          />
+        }
       >
         {full ? <ShieldAlert className="size-3.5 shrink-0" /> : <Shield className="size-3.5 shrink-0" />}
         <span className={cn("whitespace-nowrap", !full && "hidden @[26rem]:inline")}>
           {PERMISSION_MODES[mode].label}
         </span>
         <ChevronDown className="hidden size-3 @[22rem]:block" />
-      </button>
-      {open && (
-        <Popover anchor={root} onClose={close} width={256} variant="menu" portal follow className="p-1.5">
-          <fieldset aria-label="Permission modes">
-            {error ? (
-              <p role="alert" className="p-2 text-xs text-destructive">
-                {error}
-              </p>
-            ) : modes.length === 0 ? (
-              <p className="p-2 text-xs text-muted-foreground">Checking {name} permissions…</p>
-            ) : (
-              modes.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  aria-pressed={mode === m}
-                  onClick={() => void choose(m)}
-                  className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className={cn("font-medium", m === "fullAccess" && "text-warning")}>
-                      {PERMISSION_MODES[m].label}
-                    </span>
-                    <span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="end" className="w-64">
+        {error ? (
+          <FieldError className={MENU_ERROR}>{error}</FieldError>
+        ) : modes.length === 0 ? (
+          <p className="p-2 text-xs text-muted-foreground">Checking {name} permissions…</p>
+        ) : (
+          // The menu stays until the mode is set: full access is asked about first.
+          <DropdownMenuRadioGroup
+            aria-label="Permission modes"
+            value={mode}
+            onValueChange={(next) => void choose(next as PermissionMode)}
+          >
+            {modes.map((m) => (
+              <DropdownMenuRadioItem key={m} value={m} className="items-start py-1.5 text-xs">
+                <span className="min-w-0 flex-1">
+                  <span className={cn("font-medium", m === "fullAccess" && "text-warning!")}>
+                    {PERMISSION_MODES[m].label}
                   </span>
-                  {mode === m && <Check aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" />}
-                </button>
-              ))
-            )}
-            {running && provider === "codex" && modes.length > 0 && (
-              <p className="p-2 text-xs text-muted-foreground">Codex applies a change from your next message.</p>
-            )}
-            {modes.length > 0 && !modes.includes(mode) && (
-              <p role="alert" className="p-2 text-xs text-destructive">
-                The saved mode is unavailable. Select another mode.
-              </p>
-            )}
-          </fieldset>
-        </Popover>
-      )}
-    </div>
+                  <span className="mt-0.5 block text-muted-foreground!">{PERMISSION_MODES[m].description}</span>
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        )}
+        {running && provider === "codex" && modes.length > 0 && (
+          <p className="p-2 text-xs text-muted-foreground">Codex applies a change from your next message.</p>
+        )}
+        {modes.length > 0 && !modes.includes(mode) && (
+          <FieldError className={MENU_ERROR}>The saved mode is unavailable. Select another mode.</FieldError>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -188,31 +196,41 @@ export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract
   const { decisions } = part.approval;
   const primary = decisions.includes("accept") ? "accept" : decisions.find((d) => d !== "decline");
   return (
-    <section
-      className={cn("rounded-lg border p-3 text-xs", active && "border-warning/60 bg-warning/5")}
-      aria-label="Approval request"
+    <Item
+      variant="outline"
+      size="xs"
+      render={<section aria-label="Approval request" />}
+      className={cn("items-start p-3 text-xs", active && "border-warning/60 bg-warning/5")}
     >
-      {/* Read out at once as it appears: the turn waits for the answer. */}
-      <p
-        role={active ? "status" : undefined}
-        aria-live={active ? "assertive" : undefined}
-        className="flex items-center gap-1.5 font-medium"
-      >
-        {active ? <ShieldAlert className="size-3.5 text-warning" /> : <Shield className="size-3.5" />}
-        {part.approval.title}
-      </p>
-      {part.approval.reason && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{part.approval.reason}</p>}
-      <pre className="selectable my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-xs">
-        {part.approval.details}
-      </pre>
+      <ItemMedia variant="icon" className={cn(active && "text-warning")}>
+        {active ? <ShieldAlert className="size-3.5" /> : <Shield className="size-3.5" />}
+      </ItemMedia>
+      <ItemContent className="min-w-0 gap-2 group-data-[size=xs]/item:gap-2">
+        {/* Read out at once as it appears: the turn waits for the answer. */}
+        <ItemTitle
+          role={active ? "status" : undefined}
+          aria-live={active ? "assertive" : undefined}
+          className="line-clamp-none text-xs"
+        >
+          {part.approval.title}
+        </ItemTitle>
+        {part.approval.reason && (
+          <ItemDescription className="line-clamp-none whitespace-pre-wrap">{part.approval.reason}</ItemDescription>
+        )}
+      </ItemContent>
+      <CodeBlock size="sm" className="selectable basis-full">
+        <CodeBlockContent wrap tabIndex={0} className="max-h-48 break-all">
+          {part.approval.details}
+        </CodeBlockContent>
+      </CodeBlock>
       {active ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <ItemFooter className="flex-wrap justify-start">
           {decisions.map((d) => (
             <Button
               key={d}
               ref={d === primary ? primaryRef : undefined}
-              variant={d === primary ? "primary" : d === "decline" ? "ghost" : "outline"}
-              size="xl"
+              variant={d === primary ? "default" : d === "decline" ? "ghost" : "outline"}
+              size="sm"
               onFocus={d === primary ? () => setOnPrimary(true) : undefined}
               onBlur={d === primary ? () => setOnPrimary(false) : undefined}
               onClick={() => void respond(d)}
@@ -223,34 +241,37 @@ export const ApprovalCard = memo(function ApprovalCard({ part }: { part: Extract
           ))}
           {onPrimary && primary && (
             <span className="text-2xs text-muted-foreground">
-              {formatKeys("enter")} to {labels[primary].toLowerCase()}
+              <Kbd>{formatKeys("enter")}</Kbd> to {labels[primary].toLowerCase()}
             </span>
           )}
           <span className="flex-1" />
-          <button
-            type="button"
-            title="Stop the agent's turn"
+          <Button
+            variant="link"
+            size="xs"
+            tooltip="Stop the agent's turn"
             onClick={() => useApp.getState().interrupt()}
-            className="rounded px-1 py-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className="px-1 font-normal text-muted-foreground hover:text-foreground"
           >
             Stop
-          </button>
-        </div>
+          </Button>
+        </ItemFooter>
       ) : (
-        <p aria-live="polite" className="text-muted-foreground">
+        <ItemFooter aria-live="polite" className="justify-start text-muted-foreground">
           {part.status === "expired" || (!running && !submitted)
             ? "Request closed"
             : submitted
               ? `${labels[submitted]} · response sent`
               : "Request resolved"}
-        </p>
+        </ItemFooter>
       )}
       {error && (
-        <p role="alert" className="mt-2 text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive" className="basis-full border-destructive/30 bg-destructive/10 text-xs">
+          <AlertDescription className="whitespace-pre-wrap break-words text-xs text-destructive">
+            {error}
+          </AlertDescription>
+        </Alert>
       )}
-    </section>
+    </Item>
   );
 });
 
@@ -271,9 +292,11 @@ export const ApprovalReview = memo(function ApprovalReview(props: {
       } as Record<string, string>
     )[part.status] ?? part.status;
   return (
-    <div className="rounded-lg border p-2.5 text-xs" aria-live="polite">
-      <p className="font-medium">Automatic review · {status}</p>
-      {part.detail && <p className="mt-1 text-muted-foreground">{part.detail}</p>}
-    </div>
+    <Item variant="outline" size="xs" aria-live="polite">
+      <ItemContent>
+        <ItemTitle className="text-xs">Automatic review · {status}</ItemTitle>
+        {part.detail && <ItemDescription className="line-clamp-none">{part.detail}</ItemDescription>}
+      </ItemContent>
+    </Item>
   );
 });

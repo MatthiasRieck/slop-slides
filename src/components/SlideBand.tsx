@@ -1,6 +1,8 @@
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
 import type { Deck, Slide } from "../lib/api";
 import { ScriptPreviewToggle } from "./ScriptMarkdown";
 
@@ -19,9 +21,13 @@ export function SlideBand(props: {
   const { deck, slide, noun } = props;
   if (!deck || !slide) {
     return (
-      <p className="p-4 text-sm text-muted-foreground">
-        {deck ? `Add a slide to write its ${noun}.` : `Open a deck to write ${noun} for its slides.`}
-      </p>
+      <Empty className="flex-none items-start p-4 text-left">
+        <EmptyHeader className="items-start">
+          <EmptyDescription>
+            {deck ? `Add a slide to write its ${noun}.` : `Open a deck to write ${noun} for its slides.`}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
   return (
@@ -52,10 +58,10 @@ export function SlideBandHeader(props: {
       {props.children}
       <ScriptPreviewToggle preview={props.preview} onChange={props.onPreview} />
       {slide.locked && (
-        <span className="flex shrink-0 items-center gap-1">
+        <Badge variant="secondary" className="self-center">
           <Lock className="size-3" />
           Locked
-        </span>
+        </Badge>
       )}
     </div>
   );

@@ -232,7 +232,8 @@ export function useSlideEditing(
     };
     // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
     // text; the toolbar restyles the text being typed (see assets/editor/), and a press in the
-    // slide is the editor's to see.
+    // slide is the editor's to see. The toolbar's popups render into the body, and are marked as
+    // the toolbar's (`TOOLBAR_POPUP` in ../toolProps.ts).
     const onPress = (event: PointerEvent) => {
       if (!editingSlide(useApp.getState())) return;
       if ((event.target as Element | null)?.closest?.("[data-edit-toolbar], iframe")) return;

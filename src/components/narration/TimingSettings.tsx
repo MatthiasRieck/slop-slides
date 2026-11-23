@@ -1,5 +1,8 @@
 import { useState } from "react";
 
+import { FieldDescription, FieldError, FieldGroup } from "@/components/ui/field";
+import { PopoverHeader, PopoverTitle } from "@/components/ui/popover";
+
 import {
   loadVideoOptions,
   MAX_PAUSE,
@@ -9,13 +12,15 @@ import {
   saveVideoOptions,
   secondsProblem,
 } from "../../lib/video";
-import { NumberField } from "../Field";
+import { NumberField } from "../fields";
 
 /**
  * The times the deck is laid out with wherever it plays by itself: on the timeline, in the show's
  * Play and in a video. How long a slide without narration shows, and the pauses before and after
  * a slide's narration. They are the video export's options (see `loadVideoOptions`), saved as
  * they are typed, each once it is a time the backend takes; what is not says why.
+ *
+ * It is what the timeline's Timing popover holds, and its title names that popover.
  */
 export function TimingSettings() {
   const [initial] = useState(loadVideoOptions);
@@ -37,38 +42,48 @@ export function TimingSettings() {
     };
 
   return (
-    <div className="flex flex-col gap-3 p-3 text-xs">
-      <div className="text-sm font-medium">Timing</div>
-      <NumberField
-        label="Seconds per slide without narration"
-        aria-label="Seconds per slide without narration"
-        min={MIN_SECONDS}
-        max={MAX_SECONDS}
-        value={seconds}
-        onChange={change(setSeconds, secondsProblem, "secondsPerSlide")}
-      />
-      <div className="flex gap-2">
+    <>
+      <PopoverHeader>
+        <PopoverTitle>Timing</PopoverTitle>
+      </PopoverHeader>
+      <FieldGroup className="gap-3 text-xs">
         <NumberField
-          label="Pause before (s)"
-          aria-label="Pause before narration"
-          min={0}
-          max={MAX_PAUSE}
-          value={before}
-          onChange={change(setBefore, pauseProblem, "pauseBefore")}
+          label="Seconds per slide without narration"
+          aria-label="Seconds per slide without narration"
+          min={MIN_SECONDS}
+          max={MAX_SECONDS}
+          value={seconds}
+          invalid={secondsProblem(seconds) !== null}
+          onChange={change(setSeconds, secondsProblem, "secondsPerSlide")}
         />
-        <NumberField
-          label="Pause after (s)"
-          aria-label="Pause after narration"
-          min={0}
-          max={MAX_PAUSE}
-          value={after}
-          onChange={change(setAfter, pauseProblem, "pauseAfter")}
-        />
-      </div>
-      <p role={problem ? "alert" : undefined} className={problem ? "text-destructive" : "text-muted-foreground"}>
-        {problem ??
-          "Used by the timeline, the show's Play and a video. A slide timed on the timeline keeps its own length."}
-      </p>
-    </div>
+        <div className="flex gap-2">
+          <NumberField
+            label="Pause before (s)"
+            aria-label="Pause before narration"
+            min={0}
+            max={MAX_PAUSE}
+            value={before}
+            invalid={pauseProblem(before) !== null}
+            onChange={change(setBefore, pauseProblem, "pauseBefore")}
+          />
+          <NumberField
+            label="Pause after (s)"
+            aria-label="Pause after narration"
+            min={0}
+            max={MAX_PAUSE}
+            value={after}
+            invalid={pauseProblem(after) !== null}
+            onChange={change(setAfter, pauseProblem, "pauseAfter")}
+          />
+        </div>
+        {problem ? (
+          <FieldError className="text-xs">{problem}</FieldError>
+        ) : (
+          <FieldDescription className="text-xs">
+            Used by the timeline, the show's Play and a video. A slide timed on the timeline keeps its own length.
+          </FieldDescription>
+        )}
+      </FieldGroup>
+    </>
   );
 }

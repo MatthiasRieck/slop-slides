@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
 import type { Slide } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
 import { layoutTimeline, spokenSeconds } from "../lib/timeline";
-import { cn } from "../lib/utils";
 import {
   FRAME_RATES,
   loadVideoOptions,
@@ -17,9 +20,9 @@ import {
 } from "../lib/video";
 import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
-import { Button } from "./Button";
-import { CheckboxRow, Field, NumberField, selectClass } from "./Field";
+import { CheckField, NumberField } from "./fields";
 import { useDeckAudio } from "./narration/useDeckAudio";
+import { QUIET_LABEL } from "./styles";
 
 /**
  * Picks how a video export is made: how long each slide is shown, the frame rate, whether
@@ -45,6 +48,7 @@ export function VideoExportPanel(props: {
   const deck = openDeck?.id;
   const audio = useDeckAudio(deck);
   const speech = useNarration((s) => s.speech);
+  const id = useId();
   useEffect(() => {
     void useNarration.getState().loadSpeech();
   }, []);
@@ -103,34 +107,31 @@ export function VideoExportPanel(props: {
       <div className="flex items-end gap-2">
         <NumberField
           label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
-          aria-label={speaks ? "Seconds per slide without narration" : "Seconds per slide"}
           min={MIN_SECONDS}
           max={MAX_SECONDS}
           value={seconds}
           onChange={setSeconds}
         />
-        <Field label="Frame rate" className="flex flex-col gap-1">
-          <select
-            aria-label="Frame rate"
-            value={fps}
-            onChange={(event) => setFps(Number(event.target.value))}
-            className={selectClass}
-          >
+        <Field className="w-auto gap-1">
+          <FieldLabel htmlFor={`${id}-fps`} className={QUIET_LABEL}>
+            Frame rate
+          </FieldLabel>
+          <NativeSelect id={`${id}-fps`} size="sm" value={fps} onChange={(event) => setFps(Number(event.target.value))}>
             {FRAME_RATES.map((rate) => (
-              <option key={rate} value={rate}>
+              <NativeSelectOption key={rate} value={rate}>
                 {rate} fps
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </Field>
       </div>
-      <CheckboxRow
+      <CheckField
         title="Play animations"
         description="Entrances, slide fades and morphs, as when presenting. Off, each slide is a still of its final frame."
         checked={animate}
         onChange={setAnimate}
       />
-      <CheckboxRow
+      <CheckField
         title="Speak narration"
         description={
           narrated.length === 0
@@ -160,17 +161,16 @@ export function VideoExportPanel(props: {
           />
         </div>
       )}
-      <p
-        role={problem ? "alert" : undefined}
-        className={cn("min-h-4 text-2xs", problem ? "text-destructive" : "text-muted-foreground")}
-      >
-        {problem ?? summary}
-      </p>
+      {problem ? (
+        <FieldError className="min-h-4 text-2xs">{problem}</FieldError>
+      ) : (
+        <FieldDescription className="min-h-4 text-2xs">{summary}</FieldDescription>
+      )}
       <div className="flex justify-end gap-2">
-        <Button size="lg" onClick={props.onCancel}>
+        <Button variant="outline" size="xs" onClick={props.onCancel}>
           Cancel
         </Button>
-        <Button variant="primary" size="lg" type="submit" disabled={!!problem}>
+        <Button size="xs" type="submit" disabled={!!problem}>
           Save video…
         </Button>
       </div>

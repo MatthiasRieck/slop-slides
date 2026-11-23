@@ -1,13 +1,15 @@
 import { Eye, GitCompare, Pencil } from "lucide-react";
 import { useEffect } from "react";
 
+import { Kbd } from "@/components/ui/kbd";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { keepFocus } from "@/lib/focus";
 import { useChanges } from "../changesStore";
-import { useRovingTabs } from "../hooks/useRovingTabs";
+import { formatKeys } from "../lib/keys";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
-import { cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
 import { selectedSlideLocked } from "../store/chrome";
-import { keepFocus, withShortcut } from "./Button";
 
 /** The modes with a tab. The deck's settings open from the file menu instead (TopBar). */
 type TabMode = Exclude<DeckMode, "settings">;
@@ -46,43 +48,51 @@ function useInRepository() {
  * to the row under it. View changes nothing in the deck but its review; Edit changes the slides,
  * their order and their timing. The deck's timeline opens under the slide in either, and the
  * slide's narration and notes and the deck's HTML are tabs of the sidebar. The tab of the mode
- * the deck is in is filled; with the deck's settings open, none is.
+ * the deck is in is filled; with the deck's settings open, none is. The arrows go from tab to
+ * tab; a click, Enter or Space takes the mode.
  */
 export function ModeTabs() {
   const mode = useApp(deckMode);
   const locked = useApp(selectedSlideLocked);
   const inRepository = useInRepository();
 
-  /** One line each: what the mode is for, then the keys that go to it. */
-  const titles: Record<TabMode, string> = {
+  /** One line each: what the mode is for. Its keys follow it in the tooltip. */
+  const hints: Record<TabMode, string> = {
     view: "View: present, play and comment",
     edit: locked ? "Edit: this slide is locked; unlock it to change it" : "Edit: change slides, their order and timing",
     git: "Git: see what changed since the last commit",
   };
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
-  const tabs = useRovingTabs();
 
   return (
-    <div role="tablist" aria-label="Mode" {...tabs} className="flex items-center gap-1 self-stretch">
-      {modes.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={mode === id}
-          title={withShortcut(titles[id], SHELL_SHORTCUTS[id])}
-          // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
-          onMouseDown={keepFocus}
-          onClick={() => useApp.getState().setMode(id)}
-          className={cn(
-            "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
-            mode === id && "bg-primary/10 font-medium text-primary hover:bg-primary/15 hover:text-primary",
-          )}
-        >
-          <Icon className="size-5" strokeWidth={1.75} />
-          {label}
-        </button>
-      ))}
-    </div>
+    <Tabs
+      value={mode === "settings" ? null : mode}
+      onValueChange={(value) => useApp.getState().setMode(value as TabMode)}
+      className="justify-center self-stretch"
+    >
+      <TabsList aria-label="Mode" className="gap-1 bg-transparent p-0 group-data-horizontal/tabs:h-auto">
+        {modes.map(({ id, label, icon: Icon }) => (
+          <Tooltip key={id}>
+            <TooltipTrigger
+              render={
+                <TabsTrigger
+                  value={id}
+                  // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
+                  onMouseDown={keepFocus}
+                  className="h-auto min-w-14 flex-none flex-col gap-0.5 px-2 py-1 text-xs font-normal text-muted-foreground hover:bg-muted data-active:bg-primary/10 data-active:font-medium data-active:text-primary data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-primary/10 dark:data-active:text-primary [&_svg:not([class*='size-'])]:size-5"
+                />
+              }
+            >
+              <Icon strokeWidth={1.75} />
+              {label}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {hints[id]}
+              <Kbd>{formatKeys(SHELL_SHORTCUTS[id])}</Kbd>
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </TabsList>
+    </Tabs>
   );
 }

@@ -18,10 +18,16 @@ function staticImports(source: string): string[] {
   return found;
 }
 
+/** Whether `specifier` names a file of the app (relative, or by the `@/` alias of src/) and not a package. */
+function ofTheApp(specifier: string): boolean {
+  return specifier.startsWith(".") || specifier.startsWith("@/");
+}
+
 /** The source file `specifier` names, seen from `from`; null for a package. */
 function sourceFile(from: string, specifier: string): string | null {
-  if (!specifier.startsWith(".")) return null;
-  const base = resolve(dirname(from), specifier);
+  if (!ofTheApp(specifier)) return null;
+  // `@/` is src/ (see vite.config.ts and tsconfig.json).
+  const base = specifier.startsWith("@/") ? join(ROOT, "src", specifier.slice(2)) : resolve(dirname(from), specifier);
   const candidates = [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")];
   return candidates.find((path) => existsSync(path) && /\.(tsx?|css)$/.test(path)) ?? null;
 }
@@ -47,7 +53,7 @@ function eagerGraph(entry: string) {
     for (const specifier of staticImports(readFileSync(file, "utf8"))) {
       const next = sourceFile(file, specifier);
       if (next) visit(next);
-      else if (!specifier.startsWith(".")) packages.add(specifier);
+      else if (!ofTheApp(specifier)) packages.add(specifier);
     }
   };
   visit(entry);
@@ -72,6 +78,16 @@ describe("what the window loads before it shows anything", () => {
     expect(graph.files).toContain("src/components/ChatPanel.tsx");
     expect(graph.files).toContain("src/components/SlideRail.tsx");
     expect(graph.packages).toContain("react-markdown");
+  });
+
+  it("follows the imports written with the `@/` alias, which name files and not packages", () => {
+    expect(graph.files).toContain("src/components/ui/button.tsx");
+    expect(graph.files).toContain("src/lib/highlighter.tsx");
+    expect(graph.packages.filter((name) => name.startsWith("@/"))).toEqual([]);
+  });
+
+  it("leaves out the syntax highlighter, loaded with the first code block", () => {
+    expect(graph.packages.filter((name) => name.startsWith("shiki"))).toEqual([]);
   });
 
   it("leaves out the code editor", () => {

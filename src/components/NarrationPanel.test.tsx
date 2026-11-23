@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
 import { forgetNarration } from "../lib/narrationCache";
@@ -8,6 +8,7 @@ import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { isOff, pickOption, tooltipOf } from "../test/ui";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
 
 const playNarration = vi.fn();
@@ -23,6 +24,20 @@ vi.mock("../lib/waveform", async (original) => {
 });
 
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
+
+/** Whether a button cannot be pressed: one that says why in its tooltip stays focusable, and is `aria-disabled`. */
+
+/** The voice picker: what it shows as picked, and the voices it lists once opened. */
+const voicePicker = () => screen.getByRole("combobox", { name: "Narration voice" });
+const pickedVoice = () => voicePicker().querySelector("[data-slot=select-value]")?.textContent;
+function listedVoices(): string[] {
+  fireEvent.click(voicePicker());
+  const voices = within(screen.getByRole("listbox"))
+    .getAllByRole("option")
+    .map((option) => option.textContent ?? "");
+  fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+  return voices;
+}
 
 function deckWith(narration: Record<string, string>, locked: string[] = []): Deck {
   const deck = deckFor(DECK_HTML);
@@ -269,7 +284,7 @@ describe("NarrationPanel audio", () => {
     // The line stays where it stopped.
     expect(screen.getByTestId("wave-playhead")).toBeTruthy();
     const resume = screen.getByRole("button", { name: "Resume" });
-    expect(resume.title).toBe("Play on from where it was paused");
+    expect(tooltipOf(resume)).toBe("Play on from where it was paused");
     await act(async () => fireEvent.click(resume));
     expect(playback.resume).toHaveBeenCalledOnce();
     expect(playNarration).toHaveBeenCalledTimes(1);
@@ -389,12 +404,15 @@ describe("NarrationPanel speech", () => {
       setNarrationLanguage,
     });
     await show();
-    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     const language = screen.getByRole("combobox", { name: "Narration language" }) as HTMLSelectElement;
-    expect(voice.value).toBe("coral");
+    // The field shows the voice's name; the list says how each voice sounds, too.
+    expect(pickedVoice()).toBe("Coral");
     expect(language.value).toBe("ko");
-    expect(screen.getByRole("option", { name: "Coral — Warm, friendly voice" })).toBeTruthy();
-    fireEvent.change(voice, { target: { value: "marin" } });
+    fireEvent.click(voicePicker());
+    const coral = screen.getByRole("option", { name: "Coral — Warm, friendly voice" });
+    expect(coral.getAttribute("aria-selected")).toBe("true");
+    pickOption(screen.getByRole("option", { name: /^Marin/ }));
+    expect(screen.queryByRole("listbox")).toBeNull();
     fireEvent.change(language, { target: { value: "en" } });
     expect(setNarrationVoice).toHaveBeenCalledWith("marin");
     expect(setNarrationLanguage).toHaveBeenCalledWith("en");
@@ -423,14 +441,13 @@ describe("NarrationPanel speech", () => {
       deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "coral", language: "en" } },
     });
     await show();
-    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
-    expect(voice.value).toBe("coral");
-    expect([...voice.options].map((o) => o.value)).toEqual(["marin", "coral"]);
+    expect(pickedVoice()).toBe("Coral");
+    expect(listedVoices().map((voice) => voice.split(" — ")[0])).toEqual(["Marin", "Coral"]);
     // There is no voice model to download any more.
     expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
     const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
-    expect(generate.disabled).toBe(true);
-    expect(generate.title).toBe("Add your OpenAI API key first");
+    expect(isOff(generate)).toBe(true);
+    expect(tooltipOf(generate)).toBe("Add your OpenAI API key first");
     const key = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
     expect(key.type).toBe("password");
     const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
@@ -439,7 +456,7 @@ describe("NarrationPanel speech", () => {
     await act(async () => fireEvent.click(save));
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: "sk-test" });
     expect(screen.getByText("OpenAI API key saved")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
     backend(SPEECH, { set_speech_key: withKey("openai", null) });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Remove/ })));
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: null });
@@ -453,7 +470,7 @@ describe("NarrationPanel speech", () => {
     });
     await show();
     expect(screen.getByText(/OPENAI_API_KEY from your environment/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
   });
 
   it("lists the voices of the ElevenLabs account, keeping the deck's own voice pickable", async () => {
@@ -470,23 +487,18 @@ describe("NarrationPanel speech", () => {
     });
     await show();
     expect(invoke).toHaveBeenCalledWith("speech_voices", { provider: "elevenlabs" });
-    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
-    expect(voice.value).toBe("zzzzzzzzzzzzzzzzzzzz");
-    expect([...voice.options].map((o) => o.text)).toEqual([
-      "zzzzzzzzzzzzzzzzzzzz",
-      "George — male, british",
-      "Me — Your voice",
-    ]);
+    expect(pickedVoice()).toBe("zzzzzzzzzzzzzzzzzzzz");
+    expect(listedVoices()).toEqual(["zzzzzzzzzzzzzzzzzzzz", "George — male, british", "Me — Your voice"]);
   });
 
   it("tells whether the slide's audio is there and up to date", async () => {
     backend(SPEECH);
     await show();
     expect(screen.getByText("No audio yet")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: /Play/ }))).toBe(true);
     act(() => audioOf([{ slide: "intro", state: "ready", seconds: 12.4 }]));
     expect(screen.getByText("Audio 0:12")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Play/ }))).toBe(false);
     expect(screen.getByRole("button", { name: /Regenerate/ })).toBeTruthy();
     act(() => audioOf([{ slide: "intro", state: "stale", seconds: 75 }]));
     expect(screen.getByText("Audio 1:15, out of date")).toBeTruthy();
@@ -530,9 +542,11 @@ describe("NarrationPanel speech", () => {
     expect(screen.getByText(/Generating audio for slide 2 of 2/)).toBeTruthy();
     // Slide 1 is not the one being generated: its own button waits, saying why.
     expect(screen.getAllByRole("button", { name: /Cancel/ })).toHaveLength(1);
-    expect((screen.getByRole("button", { name: /Regenerate|Generate$/ }) as HTMLButtonElement).title).toBe(
+    expect(tooltipOf(screen.getByRole("button", { name: /Regenerate|Generate$/ }))).toBe(
       "Audio is being generated for another slide",
     );
+    // How far it has got, as a bar too.
+    expect(screen.getByRole("progressbar", { name: "Audio generated" }).getAttribute("aria-valuenow")).toBe("50");
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(invoke).toHaveBeenCalledWith("cancel_narration");
   });
@@ -550,7 +564,7 @@ describe("NarrationPanel speech", () => {
     expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
     // Right where Generate was, not only at the bottom of the tab.
     const cancel = [...controls().querySelectorAll("button")].find((b) => b.textContent === "Cancel")!;
-    expect(cancel.title).toBe("Stop generating the audio");
+    expect(tooltipOf(cancel)).toBe("Stop generating the audio");
     invoke.mockClear();
     fireEvent.click(cancel);
     expect(invoke).toHaveBeenCalledWith("cancel_narration");
@@ -579,11 +593,12 @@ describe("NarrationPanel speech", () => {
         : Promise.resolve(command === "voice_status" ? { modelReady: true } : SPEECH),
     );
     const sync = screen.getByRole("button", { name: "Sync words to audio" });
-    expect(sync.title).toMatch(/when each word is said/);
+    expect(tooltipOf(sync)).toMatch(/when each word is said/);
     await act(async () => fireEvent.click(sync));
     expect(invoke).toHaveBeenCalledWith("time_narration", { id: deckFor(DECK_HTML).id, slides: null });
     act(() => useNarration.setState({ timing: { deck: deckFor(DECK_HTML).id, slide: "intro", done: 0, total: 1 } }));
     expect(screen.getByText("Syncing words of slide 1 of 1…")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Words synced" }).getAttribute("aria-valuenow")).toBe("0");
     await act(async () =>
       finish([
         { slide: "intro", state: "ready", seconds: 1, timed: true },
@@ -666,8 +681,10 @@ describe("NarrationPanel speech", () => {
       useApp.setState({ cleanNarration });
       await act(async () => void render(<NarrationPanel />));
       // Both say that they put a request in the chat rather than change anything by themselves.
-      expect(screen.getByRole("button", { name: "Clean up" }).title).toMatch(/Puts a request in the chat.*you send it/);
-      expect(screen.getByRole("button", { name: "Clean up all narration" }).title).toMatch(
+      expect(tooltipOf(screen.getByRole("button", { name: "Clean up" }))).toMatch(
+        /Puts a request in the chat.*you send it/,
+      );
+      expect(tooltipOf(screen.getByRole("button", { name: "Clean up all narration" }))).toMatch(
         /Puts a request in the chat.*you send it/,
       );
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up" })));

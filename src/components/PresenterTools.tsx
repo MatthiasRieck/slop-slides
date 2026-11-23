@@ -1,4 +1,14 @@
-import { CircleDot, Eraser, Highlighter, MousePointer2, PenLine, Redo2, Trash2, Undo2 } from "lucide-react";
+import {
+  CircleDot,
+  Eraser,
+  Highlighter,
+  type LucideIcon,
+  MousePointer2,
+  PenLine,
+  Redo2,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import {
   memo,
   type PointerEvent as ReactPointerEvent,
@@ -9,6 +19,10 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { keepFocus } from "@/lib/focus";
 
 import {
   appendStrokePath,
@@ -44,7 +58,7 @@ import {
   visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
-import { ToolButton } from "./Button";
+import { ShowButton } from "./presenter/ShowButton";
 
 const laserShadow = LASER_GLOW.map((g) => `0 0 ${g.blur}px ${g.spread}px rgb(${LASER_RGB} / ${g.opacity})`).join(", ");
 
@@ -550,98 +564,74 @@ export function InkTools({ annotations }: { annotations: Annotations }) {
 
   return (
     <>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Pointer (Esc)"
-        active={tool === "pointer"}
-        onClick={() => setTool("pointer")}
-      >
-        <MousePointer2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Laser pointer (L)"
-        active={tool === "laser"}
-        onClick={() => setTool("laser")}
-      >
-        <CircleDot />
-      </ToolButton>
-      <ToolButton variant="presenter" keepFocus label="Pen (P)" active={tool === "pen"} onClick={() => setTool("pen")}>
-        <PenLine />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Highlighter (H)"
-        active={tool === "highlighter"}
-        onClick={() => setTool("highlighter")}
-      >
-        <Highlighter />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Eraser (E)"
-        active={tool === "eraser"}
-        onClick={() => setTool("eraser")}
-      >
-        <Eraser />
-      </ToolButton>
+      {TOOLS.map(({ tool: id, name, keys, icon: Icon }) => (
+        <ShowButton key={id} tooltip={name} shortcut={keys} aria-pressed={tool === id} onClick={() => setTool(id)}>
+          <Icon />
+        </ShowButton>
+      ))}
       {inking && (
         <div className="mx-1 flex items-center gap-1">
           {INK_COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              aria-label={inkColorName(color)}
-              title={inkColorName(color)}
-              aria-pressed={colors[tool] === color}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setColor(color)}
-              className={cn(
-                "size-5 rounded-full border border-foreground/20",
-                colors[tool] === color && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
-              )}
-              style={{ background: color }}
-            />
+            <Tooltip key={color}>
+              {/* A swatch is its color, which no variant of a button is: it stays a plain one. */}
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={inkColorName(color)}
+                    aria-pressed={colors[tool] === color}
+                    onMouseDown={keepFocus}
+                    onClick={() => setColor(color)}
+                    className={cn(
+                      "size-5 rounded-full border border-foreground/20",
+                      colors[tool] === color && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
+                    )}
+                    style={{ background: color }}
+                  />
+                }
+              />
+              <TooltipContent>{inkColorName(color)}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
       )}
-      <div className="mx-1 h-5 w-px bg-foreground/15" />
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Undo"
-        shortcut="mod+z"
+      <Separator orientation="vertical" className="mx-1 bg-foreground/15 data-vertical:h-5 data-vertical:self-center" />
+      <ShowButton
+        aria-label="Undo"
+        tooltip={canUndo ? "Undo" : "Nothing to undo on this slide"}
+        shortcut={canUndo ? "mod+z" : undefined}
         disabled={!canUndo}
-        disabledReason="Nothing to undo on this slide"
         onClick={undo}
       >
         <Undo2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Redo"
-        shortcut="mod+shift+z"
+      </ShowButton>
+      <ShowButton
+        aria-label="Redo"
+        tooltip={canRedo ? "Redo" : "Nothing to redo on this slide"}
+        shortcut={canRedo ? "mod+shift+z" : undefined}
         disabled={!canRedo}
-        disabledReason="Nothing to redo on this slide"
         onClick={redo}
       >
         <Redo2 />
-      </ToolButton>
-      <ToolButton
-        variant="presenter"
-        keepFocus
-        label="Clear slide (C)"
+      </ShowButton>
+      <ShowButton
+        aria-label="Clear slide"
+        tooltip={strokes.length > 0 ? "Clear slide" : "No ink on this slide"}
+        shortcut={strokes.length > 0 ? "c" : undefined}
         disabled={strokes.length === 0}
-        disabledReason="No ink on this slide"
         onClick={clear}
       >
         <Trash2 />
-      </ToolButton>
+      </ShowButton>
     </>
   );
 }
+
+/** The tools of the show's bar, in its order: what each is called, and the key that picks it. */
+const TOOLS: { tool: Tool; name: string; keys: string; icon: LucideIcon }[] = [
+  { tool: "pointer", name: "Pointer", keys: "escape", icon: MousePointer2 },
+  { tool: "laser", name: "Laser pointer", keys: "l", icon: CircleDot },
+  { tool: "pen", name: "Pen", keys: "p", icon: PenLine },
+  { tool: "highlighter", name: "Highlighter", keys: "h", icon: Highlighter },
+  { tool: "eraser", name: "Eraser", keys: "e", icon: Eraser },
+];

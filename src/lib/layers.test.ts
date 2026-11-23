@@ -4,7 +4,7 @@ import { dismissTopLayer, hasOpenLayer, openLayer } from "./layers";
 
 const closers: (() => void)[] = [];
 /** A layer whose `close` is a spy; taken off the stack after the test. */
-function layer(options?: { base?: boolean }) {
+function layer(options?: { base?: boolean; own?: boolean }) {
   const close = vi.fn();
   const remove = openLayer(close, options);
   closers.push(remove);
@@ -106,6 +106,38 @@ describe("Escape in the window", () => {
     expect(inner).toHaveBeenCalledTimes(2);
     expect(page).toHaveBeenCalledTimes(2);
     window.removeEventListener("keydown", page);
+  });
+
+  it("leaves Escape to a layer that closes itself, which still counts as open", () => {
+    const page = vi.fn();
+    const field = document.createElement("input");
+    document.body.append(field);
+    window.addEventListener("keydown", page);
+    const under = layer();
+    const { close, remove } = layer({ own: true });
+    expect(hasOpenLayer()).toBe(true);
+    // Pressed in the window, the key is the layer's own to act on: it goes on, to whatever closes it.
+    expect(press(document.body).defaultPrevented).toBe(false);
+    expect(press(field).defaultPrevented).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+    expect(under.close).not.toHaveBeenCalled();
+    expect(page).toHaveBeenCalledTimes(2);
+    // Handed over by a slide preview, it has to be closed from here.
+    expect(dismissTopLayer()).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    // Once it is gone, the layer under it takes the key again.
+    remove();
+    expect(press(document.body).defaultPrevented).toBe(true);
+    expect(under.close).toHaveBeenCalledOnce();
+    window.removeEventListener("keydown", page);
+  });
+
+  it("tells the slide previews of a layer that closes itself", () => {
+    const { post } = frame();
+    const { remove } = layer({ own: true });
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:layer", open: true }, "*");
+    remove();
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:layer", open: false }, "*");
   });
 
   it("leaves Escape that ends composing a character alone", () => {

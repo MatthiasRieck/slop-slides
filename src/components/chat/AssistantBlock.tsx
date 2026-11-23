@@ -1,13 +1,18 @@
 import { AlertTriangle, FoldVertical, RotateCw } from "lucide-react";
 import { memo, useMemo } from "react";
 
-import { cn } from "../../lib/utils";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Button } from "@/components/ui/button";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
+import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
+import { Trace, TraceDescription, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { type AssistantMessage, useApp } from "../../store";
 import { ApprovalCard, ApprovalReview } from "../Permissions";
 import { formatElapsed, replyActivity } from "./activity";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { CopyButton } from "./CopyButton";
-import { MESSAGE, ON_HOVER } from "./messageStyles";
+import { ON_HOVER } from "./messageStyles";
 import { ToolRow, ToolSteps } from "./ToolRow";
 import { groupParts } from "./toolCalls";
 import { useElapsed } from "./useElapsed";
@@ -26,85 +31,103 @@ export const AssistantBlock = memo(function AssistantBlock(props: { message: Ass
   const streaming = message.status === "streaming";
   // While the agent works, each step shows as it happens.
   const groups = useMemo(() => groupParts(message.parts, !streaming), [message.parts, streaming]);
+  // What is under a reply, in the one footer a message has: its actions, and how the turn went.
+  const copyable = !streaming && message.parts.some((p) => p.kind === "text" && p.text.trim());
+  const stopped = message.status === "interrupted";
+  const took =
+    message.status === "done" && message.durationMs !== null
+      ? `${(message.durationMs / 1000).toFixed(1)}s${message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}`
+      : "";
   return (
-    <div className={cn(MESSAGE, "gap-2")}>
-      {groups.map((group) => {
-        if (group.kind === "steps") return <ToolSteps key={group.tools[0]!.id} tools={group.tools} />;
-        const { part, key } = group;
-        return part.kind === "text" ? (
-          <div key={key} className="markdown selectable">
-            <ChatMarkdown>{part.text}</ChatMarkdown>
-          </div>
-        ) : part.kind === "approval" ? (
-          <ApprovalCard key={key} part={part} />
-        ) : part.kind === "approvalReview" ? (
-          <ApprovalReview key={key} part={part} />
-        ) : (
-          <ToolRow key={key} part={part} />
-        );
-      })}
-      {message.compacted && (
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <FoldVertical className="size-3.5 shrink-0" />
-          Conversation compacted
-        </span>
-      )}
-      {streaming && <ReplyStatus message={message} />}
-      {message.error && (
-        <div className="selectable flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs leading-relaxed text-destructive">
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span className="whitespace-pre-wrap break-words">{message.error}</span>
-        </div>
-      )}
-      {!streaming && message.parts.some((p) => p.kind === "text" && p.text.trim()) && (
-        <div>
-          <CopyButton
-            label="Copy message"
-            className={ON_HOVER}
-            text={message.parts
-              .filter((p) => p.kind === "text")
-              .map((p) => p.text)
-              .join("\n\n")}
-          />
-        </div>
-      )}
-      {(message.status === "interrupted" || retry) && (
-        <div className="flex items-center gap-2 text-2xs text-muted-foreground">
-          {message.status === "interrupted" && <span>Stopped</span>}
-          {retry && (
-            <button
-              type="button"
-              title="Send the message again, with its slide and attachments"
-              onClick={() => void useApp.getState().retryLast()}
-              className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-foreground hover:bg-accent"
-            >
-              <RotateCw className="size-3" />
-              Retry
-            </button>
-          )}
-        </div>
-      )}
-      {message.status === "done" && message.durationMs !== null && (
-        <span className="text-2xs text-muted-foreground/70">
-          {(message.durationMs / 1000).toFixed(1)}s{message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}
-        </span>
-      )}
-    </div>
+    <Message>
+      <MessageContent className="gap-2">
+        {groups.map((group) => {
+          if (group.kind === "steps") return <ToolSteps key={group.tools[0]!.id} tools={group.tools} />;
+          if (group.kind === "tools")
+            return (
+              // Tool calls that follow one another are the rows of one trace, which grows at its end.
+              <Trace key={group.tools[0]!.id}>
+                {group.tools.map((tool) => (
+                  <ToolRow key={tool.id} part={tool} />
+                ))}
+              </Trace>
+            );
+          const { part, key } = group;
+          return part.kind === "text" ? (
+            <Bubble key={key} variant="ghost" className="w-full">
+              <BubbleContent className="markdown selectable w-full overflow-visible">
+                <ChatMarkdown>{part.text}</ChatMarkdown>
+              </BubbleContent>
+            </Bubble>
+          ) : part.kind === "approval" ? (
+            <ApprovalCard key={key} part={part} />
+          ) : (
+            <ApprovalReview key={key} part={part} />
+          );
+        })}
+        {message.compacted && (
+          <Marker className="text-xs">
+            <MarkerIcon>
+              <FoldVertical className="size-3.5" />
+            </MarkerIcon>
+            <MarkerContent>Conversation compacted</MarkerContent>
+          </Marker>
+        )}
+        {streaming && <ReplyStatus message={message} />}
+        {message.error && (
+          <Alert variant="destructive" className="selectable border-destructive/30 bg-destructive/10 text-xs">
+            <AlertTriangle className="size-3.5" />
+            <AlertDescription className="whitespace-pre-wrap break-words text-xs text-destructive">
+              {message.error}
+            </AlertDescription>
+          </Alert>
+        )}
+        {(copyable || stopped || retry || took) && (
+          <MessageFooter className="gap-2 px-0">
+            {copyable && (
+              <CopyButton
+                plain
+                label="Copy message"
+                className={ON_HOVER}
+                text={message.parts
+                  .filter((p) => p.kind === "text")
+                  .map((p) => p.text)
+                  .join("\n\n")}
+              />
+            )}
+            {stopped && <span className="text-2xs font-normal">Stopped</span>}
+            {retry && (
+              <Button
+                variant="outline"
+                size="xs"
+                tooltip="Send the message again, with its slide and attachments"
+                onClick={() => void useApp.getState().retryLast()}
+              >
+                <RotateCw data-icon="inline-start" />
+                Retry
+              </Button>
+            )}
+            {took && <span className="text-2xs font-normal text-muted-foreground/70">{took}</span>}
+          </MessageFooter>
+        )}
+      </MessageContent>
+    </Message>
   );
 });
 
-/** The last line of a reply coming in: what the agent is doing, read out as it changes, and for how long. */
+/**
+ * The last line of a reply coming in, as the line of its trace that is running: what the agent
+ * is doing, read out as it changes, and for how long.
+ */
 function ReplyStatus({ message }: { message: AssistantMessage }) {
   const elapsed = useElapsed(message.createdAt, true);
   return (
-    <div data-testid="reply-status" className="flex items-center gap-2 text-xs">
-      <span aria-live="polite" className="shimmer-text">
-        {replyActivity(message)}
-      </span>
-      {/* Counting is for the eye only: read out, it would never stop. */}
-      <span aria-hidden className="tabular-nums text-muted-foreground/70">
-        {formatElapsed(elapsed)}
-      </span>
-    </div>
+    <Trace>
+      <TraceLine status="running" data-testid="reply-status" className="text-xs text-foreground">
+        <TraceTitle aria-live="polite">{replyActivity(message)}</TraceTitle>
+        {/* Counting is for the eye only: read out, it would never stop. */}
+        <TraceDescription aria-hidden>{formatElapsed(elapsed)}</TraceDescription>
+      </TraceLine>
+    </Trace>
   );
 }

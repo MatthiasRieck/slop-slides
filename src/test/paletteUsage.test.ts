@@ -30,7 +30,12 @@ const sources = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true, recursive: true })
     .filter((f) => f.isFile() && /\.tsx?$/.test(f.name) && !/\.test\.tsx?$/.test(f.name))
     .map((f) => join(f.parentPath, f.name).replaceAll("\\", "/"))
-    .filter((path) => !path.startsWith("src/test") && !path.endsWith("src/lib/palette.ts"));
+    // src/components/ui is shadcn/ui's own source, kept as the registry ships it: it names only the
+    // palette's tokens through the theme, and its few literal colors are its own.
+    .filter(
+      (path) =>
+        !path.startsWith("src/test") && !path.startsWith("src/components/ui/") && !path.endsWith("src/lib/palette.ts"),
+    );
 
 const tokensIn = (css: string) => [...css.matchAll(/^\s*(--[a-z-]+):/gm)].map((m) => m[1]!);
 const blockOf = (css: string, selector: string) => {
@@ -56,7 +61,7 @@ describe("palette", () => {
       [...source.matchAll(NAMED_COLOR)].filter(([, , name]) => !defined.has(name!) && !NOT_A_TOKEN.has(name!));
     // The check sees a made-up token, with variants and an opacity, and passes the real ones.
     expect(
-      unknown("hover:bg-popover/50 focus:ring-ringg border-b text-xs bg-card ring-offset-background"),
+      unknown("hover:bg-popoverr/50 focus:ring-ringg border-b text-xs bg-card ring-offset-background"),
     ).toHaveLength(2);
     const found = sources("src").flatMap((path) => unknown(readFileSync(path, "utf8")).map((m) => `${path}: ${m[0]}`));
     expect(found).toEqual([]);
@@ -73,7 +78,6 @@ describe("palette", () => {
     const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(reduced).toMatch(/animation-duration: 0\.01ms !important;/);
     expect(reduced).toMatch(/transition-duration: 0\.01ms !important;/);
-    expect(reduced).toMatch(/\.shimmer-text \{\s*animation: none !important;/);
   });
 
   it("keeps raw colors out of the components", () => {
@@ -113,6 +117,26 @@ describe("palette", () => {
   it("names every token the theme overrides", () => {
     const light = tokensIn(blockOf(css, ":root"));
     for (const token of tokensIn(blockOf(css, ".dark"))) expect(light).toContain(token);
+  });
+
+  it("names again, in the dark block, every token named after one the dark block changes", () => {
+    // `--popover-foreground: var(--foreground)` is worked out on the element that declares it, so
+    // a dark subtree in the light theme (the presenter's popups) would inherit the light color.
+    const values = new Map(
+      [...blockOf(css, ":root").matchAll(/^\s*(--[a-z-]+):\s*([^;]+);/gm)].map((m) => [m[1]!, m[2]!]),
+    );
+    const dark = new Set(tokensIn(blockOf(css, ".dark")));
+    const follows = (token: string, seen = new Set<string>()): boolean =>
+      [...(values.get(token) ?? "").matchAll(/var\((--[a-z-]+)/g)].some(([, named]) => {
+        if (dark.has(named!)) return true;
+        if (seen.has(named!)) return false;
+        return follows(named!, seen.add(named!));
+      });
+    // The check sees what it is for.
+    expect(follows("--popover-foreground")).toBe(true);
+    expect(follows("--tok-comment")).toBe(true);
+    expect(follows("--paper")).toBe(false);
+    expect([...values.keys()].filter((token) => follows(token) && !dark.has(token))).toEqual([]);
   });
 
   it("pairs every fill with its foreground, in both themes", () => {

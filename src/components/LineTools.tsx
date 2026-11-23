@@ -1,5 +1,13 @@
 import { Spline } from "lucide-react";
-import { useDropdown } from "../hooks/useDropdown";
+import { useId, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { keepFocus } from "@/lib/focus";
 import {
   DASHES,
   type Dash,
@@ -10,10 +18,9 @@ import {
   LINE_ROUTES,
   type LineRoute,
 } from "../lib/editTools";
-import { cn } from "../lib/utils";
-import { keepFocus, ToolButton } from "./Button";
-import { DropdownPanel } from "./Popover";
 import { RibbonSelect } from "./Ribbon";
+import { QUIET_LABEL } from "./styles";
+import { TOOLBAR_POPUP } from "./toolProps";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
 const HEAD_LABELS: Record<HeadKind, string> = { arrow: "Arrow", triangle: "Triangle", bar: "Bar", dot: "Dot" };
@@ -43,9 +50,9 @@ export function DashSelect(props: {
       className="w-20 enabled:hover:bg-accent"
     >
       {DASHES.map((d) => (
-        <option key={d} value={d}>
+        <NativeSelectOption key={d} value={d}>
           {DASH_LABELS[d]}
-        </option>
+        </NativeSelectOption>
       ))}
     </RibbonSelect>
   );
@@ -62,14 +69,18 @@ export function LineButton(props: {
   onDone: () => void;
 }) {
   const line = props.selection?.line ?? null;
-  const { open, ref, toggle } = useDropdown({ disabled: !line });
+  const [open, setOpen] = useState(false);
+  // Only a line has ends: with anything else selected the panel closes, and stays closed.
+  if (!line && open) setOpen(false);
+  const id = useId();
   const change = (changes: EditStyle) => {
     props.onChange(changes);
     props.onDone();
   };
   const head = (end: "start" | "end") => (
-    <select
-      id={`edit-line-${end}`}
+    <NativeSelect
+      id={`${id}-${end}`}
+      size="sm"
       value={line?.[end] ?? ""}
       onChange={(event) =>
         change(
@@ -78,65 +89,69 @@ export function LineButton(props: {
             : { headEnd: (event.target.value || null) as HeadKind | null },
         )
       }
-      className="h-6 rounded border bg-transparent px-1"
     >
-      <option value="">None</option>
+      <NativeSelectOption value="">None</NativeSelectOption>
       {HEAD_KINDS.map((k) => (
-        <option key={k} value={k}>
+        <NativeSelectOption key={k} value={k}>
           {HEAD_LABELS[k]}
-        </option>
+        </NativeSelectOption>
       ))}
-    </select>
+    </NativeSelect>
   );
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Line ends and route"
-        title="Arrowheads at either end, and how the line goes"
-        aria-expanded={open}
-        disabled={!line}
-        disabledReason="Select a line"
-        onClick={toggle}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="tool"
+            size="icon-xs"
+            aria-label="Line ends and route"
+            tooltip={line ? "Arrowheads at either end, and how the line goes" : "Select a line"}
+            disabled={!line}
+            keepFocus
+          />
+        }
       >
         <Spline />
-      </ToolButton>
-      {open && line && (
-        <DropdownPanel
-          role="dialog"
+      </PopoverTrigger>
+      {line && (
+        <PopoverContent
+          {...TOOLBAR_POPUP}
           aria-label="Line ends and route"
-          className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs"
+          initialFocus={false}
+          finalFocus={false}
+          className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 p-2 text-xs"
         >
-          <label htmlFor="edit-line-start" className="text-muted-foreground">
+          <Label htmlFor={`${id}-start`} className={QUIET_LABEL}>
             Start
-          </label>
+          </Label>
           {head("start")}
-          <label htmlFor="edit-line-end" className="text-muted-foreground">
+          <Label htmlFor={`${id}-end`} className={QUIET_LABEL}>
             End
-          </label>
+          </Label>
           {head("end")}
-          <span className="text-muted-foreground">Route</span>
-          <fieldset aria-label="Route" className="flex rounded-md border p-0.5">
+          <span className={QUIET_LABEL}>Route</span>
+          <ToggleGroup
+            aria-label="Route"
+            size="xs"
+            variant="outline"
+            spacing={0}
+            value={[line.route]}
+            // Pressing the route it has changes nothing: a line always has one.
+            onValueChange={([route]) => route && change({ route: route as LineRoute })}
+          >
             {LINE_ROUTES.map((r) => (
-              <button
-                key={r}
-                type="button"
-                aria-pressed={line.route === r}
-                title={ROUTE_LABELS[r].title}
-                onMouseDown={keepFocus}
-                onClick={() => change({ route: r })}
-                className={cn(
-                  "rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground",
-                  line.route === r && "bg-accent text-foreground",
-                )}
-              >
-                {ROUTE_LABELS[r].label}
-              </button>
+              <Tooltip key={r}>
+                <TooltipTrigger render={<ToggleGroupItem value={r} onMouseDownCapture={keepFocus} />}>
+                  {ROUTE_LABELS[r].label}
+                </TooltipTrigger>
+                <TooltipContent>{ROUTE_LABELS[r].title}</TooltipContent>
+              </Tooltip>
             ))}
-          </fieldset>
-        </DropdownPanel>
+          </ToggleGroup>
+        </PopoverContent>
       )}
-    </div>
+    </Popover>
   );
 }
 

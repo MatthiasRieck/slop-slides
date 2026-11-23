@@ -16,6 +16,12 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import type { Deck } from "../lib/api";
 import {
   dropRows,
@@ -30,16 +36,14 @@ import {
   sectionStarts,
   startsSection,
 } from "../lib/sections";
-import { plural } from "../lib/utils";
+import { cn, plural } from "../lib/utils";
 import { railSelection, useApp } from "../store";
-import { ToolButton } from "./Button";
-import { Popover } from "./Popover";
-import { ContextMenu, type MenuEntry } from "./rail/ContextMenu";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
-import { SEARCH_REORDER, sectionMenu, slideMenu } from "./rail/menus";
+import { type MenuEntry, SEARCH_REORDER, sectionMenu, slideMenu } from "./rail/menus";
+import { RailMenuItems } from "./rail/RailMenu";
 import { SectionHeader } from "./rail/SectionHeader";
 import { Thumbnail } from "./rail/Thumbnail";
-import { SectionLabel } from "./SectionLabel";
+import { SECTION_HEADING } from "./styles";
 import { LayoutPicker } from "./Templates";
 
 /**
@@ -95,8 +99,8 @@ function useRailRows(deck: Deck | null) {
   }, [slides, sections]);
 }
 
-/** A right-click's menu, where it was asked for. */
-type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
+/** What a right-click's menu is about, and its choices. */
+type OpenMenu = { label: string; entries: MenuEntry[] };
 
 /**
  * The deck's slides and sections, to go through, pick from and change: adding, duplicating,
@@ -117,9 +121,19 @@ export function SlideRail() {
   const editing = useApp((s) => s.editing);
   const [editingSection, setEditingSection] = useState<number | null>(null);
   const [addingSlide, setAddingSlide] = useState(false);
-  const addButton = useRef<HTMLButtonElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, POINTER_DRAG), useSensor(KeyboardSensor, KEYBOARD_DRAG));
+  // One menu for the whole list (see `ContextMenu` below): the row right-clicked says what it holds.
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  /** A row took the right-click that is on its way up to the list, and has set the menu for it. */
+  const menuAsked = useRef(false);
+  /**
+   * The section the menu's Rename is about. Its title is typed once the menu is gone: a field
+   * that took the focus while the menu was open would lose it to the menu again. Nor does the
+   * menu, going, hand the focus back to where it was while a title is being typed.
+   */
+  const renameAfterMenu = useRef<number | null>(null);
+  const typingTitle = useRef(false);
+  typingTitle.current = editingSection !== null;
   // The slides going along with the one being dragged, itself included; empty when it goes alone.
   const [dragged, setDragged] = useState<string[]>([]);
   const matches = useApp((s) => s.search.matches);
@@ -204,7 +218,8 @@ export function SlideRail() {
           startSection: (at) => void startSection(at),
         },
       );
-      setMenu({ label: "Slide", x: event.clientX, y: event.clientY, entries });
+      menuAsked.current = true;
+      setMenu({ label: "Slide", entries });
     },
     [startSection],
   );
@@ -219,13 +234,16 @@ export function SlideRail() {
     event.preventDefault();
     const { section } = row;
     const entries = sectionMenu(key, sectionBlocks(items), collapsedSections, {
-      rename: () => setEditingSection(section.index),
+      rename: () => {
+        renameAfterMenu.current = section.index;
+      },
       setCollapsed: (first, folded) => app().toggleSection(first, folded),
       setAllCollapsed: (firsts, folded) => app().setSectionsCollapsed(firsts, folded),
       select: (slides) => app().pickSlides(slides),
       remove: () => void app().removeSection(section.index),
     });
-    setMenu({ label: "Section", x: event.clientX, y: event.clientY, entries });
+    menuAsked.current = true;
+    setMenu({ label: "Section", entries });
   }, []);
 
   const keys = useSameKeys(moving ? blockKeys : itemKeys);
@@ -285,33 +303,24 @@ export function SlideRail() {
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <SectionLabel>{railTitle(deck.slides.length, found?.size, hiddenCount)}</SectionLabel>
+        <span className={SECTION_HEADING}>{railTitle(deck.slides.length, found?.size, hiddenCount)}</span>
         <div className="flex items-center gap-0.5">
           <StartSectionButton deck={deck} onStart={startSection} />
-          <ToolButton
-            ref={addButton}
-            variant="panel"
-            label="New slide"
-            onClick={() => setAddingSlide((open) => !open)}
-            aria-expanded={addingSlide}
-            aria-haspopup="dialog"
-          >
-            <Plus className="size-4" />
-          </ToolButton>
+          <Popover open={addingSlide} onOpenChange={setAddingSlide}>
+            <PopoverTrigger render={<Button variant="tool" size="icon-xs" tooltip="New slide" />}>
+              <Plus className="size-4" />
+            </PopoverTrigger>
+            <PopoverContent
+              side="bottom"
+              align="start"
+              aria-label="New slide"
+              className="max-h-(--available-height) w-[560px] max-w-(--available-width) gap-0 overflow-hidden p-0"
+            >
+              <LayoutPicker mode="add" onBlank={() => void app().addSlide()} onDone={() => setAddingSlide(false)} />
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
-      {addingSlide && (
-        <Popover
-          anchor={addButton}
-          placement="below"
-          width={560}
-          label="New slide"
-          onClose={() => setAddingSlide(false)}
-        >
-          <LayoutPicker mode="add" onBlank={() => void app().addSlide()} onDone={() => setAddingSlide(false)} />
-        </Popover>
-      )}
-      {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
       <OpenSelectedFold />
       <BulkActions deck={deck} />
       {/*
@@ -321,9 +330,9 @@ export function SlideRail() {
       */}
       <div data-rail-scroller className="min-h-0 flex-1 overflow-y-scroll px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
-          <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
+          <RailNote>
             No slides yet. Describe your presentation in the chat, or add a blank slide with the + above.
-          </p>
+          </RailNote>
         ) : (
           <DndContext
             sensors={sensors}
@@ -335,46 +344,74 @@ export function SlideRail() {
             onDragEnd={onDragEnd}
             onDragCancel={onDragCancel}
           >
-            {found?.size === 0 && (
-              <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
-            )}
+            {found?.size === 0 && <RailNote>No slide contains this text.</RailNote>}
             <Remeasure handle={remeasure} />
             <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
-              <ol ref={list} className="flex flex-col gap-3">
-                {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
-                {items.map((item) =>
-                  item.kind === "slide" ? (
-                    <Thumbnail
-                      key={item.key}
-                      deckId={deck.id}
-                      slide={item.slide}
-                      index={item.index}
-                      editing={editing}
-                      filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
-                      folded={!!moving}
-                      still={!!moving || settling}
-                      draggedAlong={dragged.length > 1 && dragged.includes(item.slide.id)}
-                      matches={found?.get(item.slide.id)}
-                      onMenu={openSlideMenu}
-                    />
-                  ) : (
-                    <SectionHeader
-                      key={item.key}
-                      itemKey={item.key}
-                      section={item.section}
-                      filteredOut={!!found}
-                      still={!!moving || settling}
-                      slides={moving ? sizes.get(item.key) : undefined}
-                      first={starts.get(item.key)}
-                      collapsed={collapsed.includes(starts.get(item.key) ?? "")}
-                      count={sizes.get(item.key) ?? 0}
-                      editing={editingSection === item.section.index}
-                      onEditing={setEditingSection}
-                      onMenu={openSectionMenu}
-                    />
-                  ),
-                )}
-              </ol>
+              {/*
+                One menu for every row: a row right-clicked sets what it holds (`openSlideMenu`,
+                `openSectionMenu`) before the click reaches the list, which opens it at the pointer.
+                A right-click between the rows opens none, and while a section's title is typed
+                the field keeps its own.
+              */}
+              <ContextMenu
+                disabled={editingSection !== null}
+                onOpenChangeComplete={(open) => {
+                  const section = renameAfterMenu.current;
+                  if (open || section === null) return;
+                  renameAfterMenu.current = null;
+                  typingTitle.current = true;
+                  setEditingSection(section);
+                }}
+              >
+                <ContextMenuTrigger
+                  render={<ol ref={list} className="flex flex-col gap-3" />}
+                  onContextMenu={(event) => {
+                    if (!menuAsked.current) event.preventBaseUIHandler();
+                    menuAsked.current = false;
+                  }}
+                >
+                  {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
+                  {items.map((item) =>
+                    item.kind === "slide" ? (
+                      <Thumbnail
+                        key={item.key}
+                        deckId={deck.id}
+                        slide={item.slide}
+                        index={item.index}
+                        editing={editing}
+                        filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
+                        folded={!!moving}
+                        still={!!moving || settling}
+                        draggedAlong={dragged.length > 1 && dragged.includes(item.slide.id)}
+                        matches={found?.get(item.slide.id)}
+                        onMenu={openSlideMenu}
+                      />
+                    ) : (
+                      <SectionHeader
+                        key={item.key}
+                        itemKey={item.key}
+                        section={item.section}
+                        filteredOut={!!found}
+                        still={!!moving || settling}
+                        slides={moving ? sizes.get(item.key) : undefined}
+                        first={starts.get(item.key)}
+                        collapsed={collapsed.includes(starts.get(item.key) ?? "")}
+                        count={sizes.get(item.key) ?? 0}
+                        editing={editingSection === item.section.index}
+                        onEditing={setEditingSection}
+                        onMenu={openSectionMenu}
+                      />
+                    ),
+                  )}
+                </ContextMenuTrigger>
+                <ContextMenuContent
+                  aria-label={menu?.label}
+                  className="min-w-56"
+                  finalFocus={() => renameAfterMenu.current === null && !typingTitle.current}
+                >
+                  <RailMenuItems entries={menu?.entries ?? []} />
+                </ContextMenuContent>
+              </ContextMenu>
             </SortableContext>
             {/* Follows the pointer on its own: the rail scrolls and moves under it as the slides fold. */}
             {moving && (
@@ -383,8 +420,8 @@ export function SlideRail() {
                   data-testid="section-overlay"
                   className="flex items-center gap-2 rounded bg-sidebar pb-1 pl-6 pr-1 pt-1 ring-1 ring-border"
                 >
-                  <SectionLabel className="min-w-0 truncate">{sectionTitle(items, moving.key)}</SectionLabel>
-                  <span className="h-px flex-1 bg-border" />
+                  <span className={cn(SECTION_HEADING, "min-w-0 truncate")}>{sectionTitle(items, moving.key)}</span>
+                  <Separator className="flex-1 data-horizontal:w-auto" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
                     {plural(sizes.get(moving.key) ?? 0, "slide")}
                   </span>
@@ -394,12 +431,9 @@ export function SlideRail() {
             {/* Rides on the slide being dragged, to say that the other picked ones go along. */}
             {!moving && dragged.length > 1 && (
               <DragOverlay dropAnimation={null} className="pointer-events-none">
-                <span
-                  data-testid="drag-count"
-                  className="absolute -right-1 -top-2 rounded-full bg-primary px-2 py-0.5 text-2xs font-semibold text-primary-foreground shadow-md"
-                >
+                <Badge data-testid="drag-count" className="absolute -right-1 -top-2 text-2xs font-semibold shadow-md">
                   {plural(dragged.length, "slide")}
-                </span>
+                </Badge>
               </DragOverlay>
             )}
           </DndContext>
@@ -427,15 +461,22 @@ function StartSectionButton(props: { deck: Deck; onStart: (slide: string) => voi
   const selected = useApp((s) => s.selected);
   const index = deck.slides.findIndex((s) => s.id === selected);
   return (
-    <ToolButton
-      variant="panel"
-      label="Start a section at this slide"
+    <Button
+      variant="tool"
+      size="icon-xs"
+      aria-label="Start a section at this slide"
+      tooltip={
+        index < 0
+          ? "Select a slide to start a section"
+          : startsSection(deck, index)
+            ? "This slide already starts a section"
+            : "Start a section at this slide"
+      }
       onClick={() => selected && props.onStart(selected)}
       disabled={index < 0 || startsSection(deck, index)}
-      disabledReason={index < 0 ? "Select a slide to start a section" : "This slide already starts a section"}
     >
       <SquareSplitVertical className="size-4" />
-    </ToolButton>
+    </Button>
   );
 }
 
@@ -457,56 +498,73 @@ function BulkActions({ deck }: { deck: Deck }) {
   return (
     <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
       <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
-      <ToolButton
-        variant="panel"
-        label="Move up"
-        shortcut="mod+up"
-        disabledReason={SEARCH_REORDER}
+      <Button
+        variant="tool"
+        size="icon-xs"
+        aria-label="Move up"
+        tooltip={searching ? SEARCH_REORDER : "Move up"}
+        shortcut={searching ? undefined : "mod+up"}
         disabled={searching}
         onClick={() => void app.moveSlides(-1)}
       >
-        <ArrowUp className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        label="Move down"
-        shortcut="mod+down"
-        disabledReason={SEARCH_REORDER}
+        <ArrowUp />
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        aria-label="Move down"
+        tooltip={searching ? SEARCH_REORDER : "Move down"}
+        shortcut={searching ? undefined : "mod+down"}
         disabled={searching}
         onClick={() => void app.moveSlides(1)}
       >
-        <ArrowDown className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
+        <ArrowDown />
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-xs"
         aria-label={`${show ? "Show" : "Hide"} slides`}
-        title={`${show ? "Show" : "Hide"} slides${skips}`}
+        tooltip={`${show ? "Show" : "Hide"} slides${skips}`}
         disabled={free.length === 0}
         onClick={() => void app.setSlidesHidden(ids, !show)}
       >
-        {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        aria-label="Duplicate slides"
-        title="Duplicate slides"
-        onClick={() => void app.duplicateSlides(picked)}
-      >
-        <Copy className="size-3.5" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
+        {show ? <Eye /> : <EyeOff />}
+      </Button>
+      <Button variant="tool" size="icon-xs" tooltip="Duplicate slides" onClick={() => void app.duplicateSlides(picked)}>
+        <Copy />
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-xs"
         aria-label="Delete slides"
-        title={`Delete slides${skips}`}
+        tooltip={`Delete slides${skips}`}
         disabled={free.length === 0}
         onClick={() => void app.deleteSlides(ids)}
+        className="hover:text-destructive"
       >
-        <Trash2 className="size-3.5" />
-      </ToolButton>
-      <ToolButton variant="panel" label="Clear selection" shortcut="escape" onClick={app.clearRailSelection}>
-        <X className="size-3.5" />
-      </ToolButton>
+        <Trash2 />
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        tooltip="Clear selection"
+        shortcut="escape"
+        onClick={app.clearRailSelection}
+      >
+        <X />
+      </Button>
     </div>
+  );
+}
+
+/** A line the rail says in place of its slides: that there are none yet, or none with the text searched for. */
+function RailNote({ children }: { children: React.ReactNode }) {
+  return (
+    <Empty className="flex-none items-start p-0 px-1 pt-2 text-left">
+      <EmptyHeader className="items-start">
+        <EmptyDescription className="text-xs/relaxed">{children}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

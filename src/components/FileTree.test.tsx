@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
+import { settle, tooltipOf } from "../test/ui";
 import { FileTree, TREE_RELOAD_DELAY } from "./FileTree";
 
 const entry = (path: string, kind: WorkspaceEntry["kind"]): WorkspaceEntry => ({
@@ -215,7 +217,10 @@ describe("FileTree", () => {
     await act(async () => fireEvent.click(item("talks")));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe('cannot read "talks"');
-    expect(item("talks").nextElementSibling).toBe(alert);
+    // In the folder's group, which is what follows its row.
+    const group = item("talks").nextElementSibling!;
+    expect(group.getAttribute("role")).toBe("group");
+    expect(group.contains(alert)).toBe(true);
     // The rest of the tree stays.
     expect(items()).toEqual(["talks", "index.html", "notes.md"]);
     // Closed, the folder takes its error with it; opened again, it is read again.
@@ -325,8 +330,12 @@ describe("FileTree", () => {
     it("opens on a right-click, where the pointer is, named after the row", async () => {
       await openMenu("index.html");
       const menu = screen.getByRole("menu", { name: "index.html" });
-      expect(menu.parentElement!.style.left).toBe("40px");
-      expect(menu.parentElement!.style.top).toBe("60px");
+      // Placed a moment after it opens, its corner at the pointer.
+      await settle();
+      expect(menu.parentElement!.style.transform).toBe("translate(40px, 60px)");
+      // In the body, where the sidebar does not clip it; the focus in it, for the arrows.
+      expect(screen.getByRole("tree").contains(menu)).toBe(false);
+      expect(menu.contains(document.activeElement)).toBe(true);
       expect(labels()).toEqual(["Open", "Show in folder", "Copy path"]);
     });
 
@@ -391,6 +400,66 @@ describe("FileTree", () => {
       item("notes.md").focus();
       fireEvent.keyDown(item("notes.md"), { key: "F10", shiftKey: true });
       expect(screen.getByRole("menu", { name: "notes.md" })).toBeTruthy();
+    });
+
+    it("goes through its choices with the arrows, picks with Enter, and gives the focus back to the row", async () => {
+      const user = userEvent.setup();
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(4));
+      item("notes.md").focus();
+      fireEvent.keyDown(item("notes.md"), { key: "F10", shiftKey: true });
+      await settle();
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(menuItems()[0]);
+      await user.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(menuItems()[1]);
+      await user.keyboard("{Enter}");
+      expect(revealItemInDir).toHaveBeenCalledWith("/ws/notes.md");
+      expect(screen.queryByRole("menu")).toBeNull();
+      await settle();
+      expect(document.activeElement).toBe(item("notes.md"));
+    });
+  });
+
+  describe("as a tree of collapsibles", () => {
+    it("puts a folder's entries in a group under its row, there only while it is open", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      expect(item("talks").nextElementSibling).toBeNull();
+      await act(async () => fireEvent.click(item("talks")));
+      await waitFor(() => expect(items()).toHaveLength(5));
+      const group = item("talks").nextElementSibling as HTMLElement;
+      expect(group.getAttribute("role")).toBe("group");
+      expect(item("talks").getAttribute("aria-controls")).toBe(group.id);
+      expect(
+        within(group)
+          .getAllByRole("treeitem")
+          .map((row) => row.textContent),
+      ).toEqual(["q3", "intro.html"]);
+      // A file is no collapsible: it has nothing to open.
+      expect(item("index.html").hasAttribute("aria-controls")).toBe(false);
+    });
+
+    it("opens and closes a folder with Enter and Space on its row", async () => {
+      const user = userEvent.setup();
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      item("talks").focus();
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(items()).toHaveLength(5));
+      expect(item("talks").getAttribute("aria-expanded")).toBe("true");
+      await user.keyboard(" ");
+      expect(item("talks").getAttribute("aria-expanded")).toBe("false");
+      expect(items()).toHaveLength(3);
+    });
+
+    it("names the header's buttons in their tooltips", async () => {
+      render(<FileTree />);
+      await waitFor(() => expect(items()).toHaveLength(3));
+      expect(tooltipOf(screen.getByRole("button", { name: "Refresh" }))).toBe("Refresh");
+      expect(tooltipOf(screen.getByRole("button", { name: "Show in folder" }))).toBe("Show in folder");
+      fireEvent.click(screen.getByRole("button", { name: "Show in folder" }));
+      expect(revealItemInDir).toHaveBeenCalledWith("/ws");
     });
   });
 });

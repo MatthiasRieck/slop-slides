@@ -181,16 +181,16 @@ export const Thumbnail = memo(function Thumbnail(props: {
         </RailMark>
         <div className="pointer-events-none absolute bottom-1 right-1 flex gap-1">
           {props.matches !== undefined && props.matches > 0 && (
-            <Badge testId="match-count" title={`${plural(props.matches, "match", "matches")} of the search`}>
+            <RailCount testId="match-count" title={`${plural(props.matches, "match", "matches")} of the search`}>
               <Search className="size-2.5" />
               {props.matches}
-            </Badge>
+            </RailCount>
           )}
           {comments > 0 && (
-            <Badge testId="comment-count" title={plural(comments, "comment")}>
+            <RailCount testId="comment-count" title={plural(comments, "comment")}>
               <MessageSquare className="size-2.5" />
               {comments}
-            </Badge>
+            </RailCount>
           )}
         </div>
         <div className="absolute right-1 top-1 hidden gap-0.5 group-focus-within:flex group-hover:flex">
@@ -220,8 +220,12 @@ export const Thumbnail = memo(function Thumbnail(props: {
   );
 });
 
-/** A small count over a thumbnail's corner, with an icon saying of what. */
-function Badge(props: { testId: string; title: string; children: React.ReactNode }) {
+/**
+ * A small count over a thumbnail's corner, with an icon saying of what. Plain markup, like the
+ * quick actions below: every row of the rail has these, and the rail renders again whenever the
+ * mode changes, so each is as light as it can be.
+ */
+function RailCount(props: { testId: string; title: string; children: React.ReactNode }) {
   return (
     <span
       data-testid={props.testId}
@@ -279,6 +283,11 @@ function HiddenMark() {
   );
 }
 
+/**
+ * A quick action over a thumbnail. Its hint is the native one: a tooltip of its own for each of
+ * four buttons on every row is more than a rail of hundreds of slides should carry, and so is
+ * a component per button: it is a plain one.
+ */
 function RailAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
@@ -290,7 +299,7 @@ function RailAction(props: { title: string; onClick: () => void; children: React
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
+      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90 [&_svg]:size-3"
     >
       {props.children}
     </button>

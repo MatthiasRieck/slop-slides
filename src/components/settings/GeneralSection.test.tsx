@@ -15,14 +15,16 @@ beforeEach(() => {
 
 afterEach(() => document.documentElement.classList.remove("dark"));
 
-const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
+const radio = (name: string) => screen.getByRole("radio", { name });
+/** Whether the radio called `name` is the one picked. */
+const picked = (name: string) => radio(name).getAttribute("aria-checked") === "true";
 const patches = () => calls("update_settings").map((args) => args.patch);
 
 describe("GeneralSection", () => {
   describe("appearance", () => {
     it("follows the system until told otherwise", () => {
       render(<GeneralSection />);
-      expect(radio("System").checked).toBe(true);
+      expect(picked("System")).toBe(true);
       expect(screen.getByRole("radiogroup", { name: "Appearance" })).toBeTruthy();
       expect(screen.getByText("System follows your computer's light or dark mode.")).toBeTruthy();
     });
@@ -31,11 +33,11 @@ describe("GeneralSection", () => {
       render(<GeneralSection />);
       fireEvent.click(radio("Dark"));
       expect(patches()).toEqual([{ appearance: "dark" }]);
-      await waitFor(() => expect(radio("Dark").checked).toBe(true));
+      await waitFor(() => expect(picked("Dark")).toBe(true));
       expect(useApp.getState().settings.appearance).toBe("dark");
       expect(document.documentElement.classList.contains("dark")).toBe(true);
       fireEvent.click(radio("Light"));
-      await waitFor(() => expect(radio("Light").checked).toBe(true));
+      await waitFor(() => expect(picked("Light")).toBe(true));
       expect(document.documentElement.classList.contains("dark")).toBe(false);
       fireEvent.click(radio("System"));
       expect(patches()).toEqual([{ appearance: "dark" }, { appearance: "light" }, { appearance: "system" }]);
@@ -46,9 +48,9 @@ describe("GeneralSection", () => {
     it("shows the choice the settings hold, also one made in another window", () => {
       useApp.setState({ settings: { ...defaultSettings(), appearance: "light" } });
       render(<GeneralSection />);
-      expect(radio("Light").checked).toBe(true);
+      expect(picked("Light")).toBe(true);
       act(() => useApp.setState({ settings: { ...defaultSettings(), appearance: "dark" } }));
-      expect(radio("Dark").checked).toBe(true);
+      expect(picked("Dark")).toBe(true);
     });
 
     it("stays as it was, saying why, when the choice could not be kept", async () => {
@@ -60,7 +62,7 @@ describe("GeneralSection", () => {
       render(<GeneralSection />);
       fireEvent.click(radio("Dark"));
       await waitFor(() => expect(lastError(useApp.getState())).toBe("settings.json could not be written"));
-      expect(radio("System").checked).toBe(true);
+      expect(picked("System")).toBe(true);
     });
   });
 
@@ -69,21 +71,31 @@ describe("GeneralSection", () => {
       render(<GeneralSection />);
       expect(screen.getByRole("radiogroup", { name: "Undoing a chat message's changes" })).toBeTruthy();
       expect(screen.getByText("What happens to the chat when you undo what the agent did.")).toBeTruthy();
-      expect(radio("Ask each time").checked).toBe(true);
+      expect(picked("Ask each time")).toBe(true);
       fireEvent.click(radio("Only undo the deck changes"));
-      await waitFor(() => expect(radio("Only undo the deck changes").checked).toBe(true));
+      await waitFor(() => expect(picked("Only undo the deck changes")).toBe(true));
       fireEvent.click(radio("Also rewind the chat"));
-      await waitFor(() => expect(radio("Also rewind the chat").checked).toBe(true));
+      await waitFor(() => expect(picked("Also rewind the chat")).toBe(true));
       fireEvent.click(radio("Ask each time"));
-      await waitFor(() => expect(radio("Ask each time").checked).toBe(true));
+      await waitFor(() => expect(picked("Ask each time")).toBe(true));
       expect(patches()).toEqual([{ rewind: "deck" }, { rewind: "rewind" }, { rewind: "ask" }]);
       expect(localStorage.getItem("slopslide.rewindChoice")).toBeNull();
+    });
+
+    it("takes a press on an answer's words, and only one answer at a time", async () => {
+      render(<GeneralSection />);
+      fireEvent.click(screen.getByText("Also rewind the chat"));
+      expect(patches()).toEqual([{ rewind: "rewind" }]);
+      await waitFor(() => expect(picked("Also rewind the chat")).toBe(true));
+      const group = screen.getByRole("radiogroup", { name: "Undoing a chat message's changes" });
+      const answers = [...group.querySelectorAll("[role=radio]")];
+      expect(answers.map((answer) => answer.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
     });
 
     it("shows the answer the rewind dialog was told to remember", () => {
       useApp.setState({ settings: { ...defaultSettings(), rewind: "deck" } });
       render(<GeneralSection />);
-      expect(radio("Only undo the deck changes").checked).toBe(true);
+      expect(picked("Only undo the deck changes")).toBe(true);
     });
   });
 

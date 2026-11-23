@@ -1,5 +1,32 @@
-import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Settings, Star } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Check, ChevronDown, Gauge, RotateCw, Settings, Star } from "lucide-react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandLoading,
+  CommandShortcut,
+} from "@/components/ui/command";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Kbd } from "@/components/ui/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatKeys, isMod } from "../lib/keys";
 import { memoizeLast } from "../lib/memo";
 import {
@@ -15,56 +42,62 @@ import {
 import { cn } from "../lib/utils";
 import { chatProvider, openSettings, useApp } from "../store";
 import { InstallHint } from "./chat/InstallHint";
-import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
 
 type Filter = "favorites" | Provider;
 
 type Row = ProviderModel & { provider: Provider };
 
-const triggerClass =
-  "flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground";
+/** A picker of the composer's footer: a quiet button that names what is picked. */
+const TRIGGER = "h-7 gap-1.5 rounded-md px-1.5 text-xs font-normal text-muted-foreground";
 
+/** A tab of the model menu's rail: an agent's mark (or the star of the favorites), square. */
+const RAIL_TAB =
+  "size-8 flex-none justify-center p-0 group-data-vertical/tabs:w-8 group-data-vertical/tabs:justify-center disabled:pointer-events-auto disabled:cursor-not-allowed aria-disabled:pointer-events-auto aria-disabled:cursor-not-allowed data-active:bg-muted";
+
+/**
+ * The model the next message goes to, in the composer's footer: pressed, it opens the models
+ * of every agent to search and pick from, with the keyboard in the search field.
+ */
 export function ModelPicker() {
   const selection = useApp((s) => s.selection);
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
 
   return (
-    <div ref={rootRef} className="relative min-w-0 shrink">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        title={selection.label}
-        aria-label={selection.label}
-        className={cn(triggerClass, "max-w-full")}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={selection.label}
+            tooltip={selection.label}
+            className={cn(TRIGGER, "max-w-full min-w-0 shrink justify-start")}
+          />
+        }
       >
         <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
         {/* The name always shows, cut short as room runs out; effort and permissions give way first, and the
             chevrons come only with room to spare (22rem), or they would take the name's. */}
         <span className="truncate font-medium text-foreground/90">{selection.label}</span>
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
-      </button>
-      {open && (
-        <Popover
-          anchor={rootRef}
-          onClose={close}
-          width={352}
-          variant="menu"
-          portal
-          follow
-          className="flex overflow-hidden"
-        >
-          <ModelMenu onClose={close} />
-        </Popover>
-      )}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Models"
+        side="top"
+        align="start"
+        initialFocus={search}
+        className="w-[352px] gap-0 overflow-hidden p-0"
+      >
+        <ModelMenu search={search} onClose={close} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function ModelMenu({ onClose }: { onClose: () => void }) {
+function ModelMenu({ search, onClose }: { search: RefObject<HTMLInputElement | null>; onClose: () => void }) {
   const selection = useApp((s) => s.selection);
   const locked = useApp(chatProvider);
   const favorites = useApp((s) => s.favoriteModels);
@@ -73,8 +106,8 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const enabled = useApp((s) => s.settings.providers);
   const [filter, setFilter] = useState<Filter>(selection.provider);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const listRef = useRef<HTMLDivElement>(null);
+  /** The model the keyboard is on, by its key. */
+  const [active, setActive] = useState("");
 
   const info = (provider: Provider) => providers?.find((p) => p.id === provider);
 
@@ -98,13 +131,9 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   // Start on the selected model whenever the list changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the list changes, not on every selection
   useEffect(() => {
-    const index = rows.findIndex((m) => m.provider === selection.provider && m.id === selection.model);
-    setActive(Math.max(0, index));
+    const chosen = rows.find((m) => m.provider === selection.provider && m.id === selection.model) ?? rows[0];
+    setActive(chosen ? modelKey(chosen.provider, chosen.id) : "");
   }, [rows]);
-
-  useEffect(() => {
-    listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [active]);
 
   const choose = (row: Row | undefined) => {
     if (!row) return;
@@ -112,29 +141,22 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  // The arrows and Enter are the list's own; the first nine models also have a key each.
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive((i) => Math.min(rows.length - 1, i + 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((i) => Math.max(0, i - 1));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      choose(rows[active]);
-    } else if (isMod(e) && /^[1-9]$/.test(e.key)) {
+    if (isMod(e) && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
       choose(rows[Number(e.key) - 1]);
     }
   };
 
-  const rail: { id: Filter; title: string; icon: React.ReactNode }[] = [
-    { id: "favorites", title: "Favorites", icon: <Star className="size-4" /> },
+  const rail: { id: Filter; title: string; blocked: boolean; icon: React.ReactNode }[] = [
+    { id: "favorites", title: "Favorites", blocked: false, icon: <Star /> },
     ...PROVIDER_IDS.filter((p) => enabled[p].enabled).map((p) => {
       const missing = info(p)?.installed === false;
       return {
         id: p,
         title: missing ? `${PROVIDERS[p].cli} is not installed` : PROVIDERS[p].label,
+        blocked: !!locked && p !== locked,
         icon: (
           <span className="relative">
             <ProviderIcon provider={p} className={cn("size-4", missing && "opacity-40 grayscale")} />
@@ -153,193 +175,197 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const turnedOff = !query && filter !== "favorites" && !enabled[filter].enabled ? filter : null;
 
   return (
-    <div className="flex min-h-0 w-full">
-      <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
+    <Tabs
+      orientation="vertical"
+      // While searching, the models of every agent show: no tab is the one on show.
+      value={query ? null : filter}
+      onValueChange={(value) => {
+        setFilter(value as Filter);
+        setQuery("");
+      }}
+      className="min-h-0 w-full gap-0"
+    >
+      <TabsList
+        variant="line"
+        aria-label="Agents"
+        className="w-12 shrink-0 justify-start gap-1 self-stretch border-r py-2 group-data-vertical/tabs:h-auto"
+      >
         {rail.map((item) => {
-          const selected = !query && filter === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              disabled={!!locked && item.id !== "favorites" && item.id !== locked}
-              title={
-                locked && item.id !== "favorites" && item.id !== locked
-                  ? "Start a new chat to change provider"
-                  : item.title
-              }
-              onClick={() => {
-                setFilter(item.id);
-                setQuery("");
-              }}
-              className={cn(
-                "relative flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed",
-                selected && "bg-accent text-foreground",
-              )}
-            >
-              {selected && <span className="absolute -left-2 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />}
+          const tab = { value: item.id, "aria-label": item.title, className: RAIL_TAB };
+          // A tab that cannot be picked says why to the pointer resting on it; the others say what they are.
+          return item.blocked ? (
+            <TabsTrigger key={item.id} {...tab} disabled title="Start a new chat to change provider">
               {item.icon}
-            </button>
+            </TabsTrigger>
+          ) : (
+            <Tooltip key={item.id}>
+              <TooltipTrigger render={<TabsTrigger {...tab} />}>{item.icon}</TooltipTrigger>
+              <TooltipContent side="left">{item.title}</TooltipContent>
+            </Tooltip>
           );
         })}
-      </div>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      </TabsList>
+      {/* The models are searched here, as written (by name, id or agent), and listed in the agent's order. */}
+      <Command
+        shouldFilter={false}
+        // Names the search field, which is what the keyboard is in.
+        label="Search models"
+        value={active}
+        onValueChange={setActive}
+        onKeyDown={onKeyDown}
+        className="min-w-0 flex-1 rounded-none!"
+      >
         {locked && (
-          <p className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
+          <p className="shrink-0 border-b px-2 pt-1 pb-2 text-xs text-muted-foreground">
             Start a new chat to change provider.
           </p>
         )}
-        <label className="flex shrink-0 items-center gap-2 border-b px-3 focus-within:border-primary">
-          <Search className="size-3.5 shrink-0 text-muted-foreground" />
-          <input
-            autoFocus
-            aria-label="Search models"
-            onKeyDown={onKeyDown}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search models..."
-            className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
-          />
-        </label>
-        <div ref={listRef} className="max-h-72 min-h-0 overflow-y-auto p-1.5">
+        <CommandInput ref={search} value={query} onValueChange={setQuery} placeholder="Search models..." />
+        <CommandList label="Models" className="mt-1">
           {providers === undefined ? (
-            <p className="flex items-center justify-center gap-2 px-2 py-8 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
+            <CommandLoading label="Looking for installed agents" className="justify-center px-2 py-8">
               Looking for installed agents…
-            </p>
+            </CommandLoading>
           ) : turnedOff ? (
             <TurnedOff provider={turnedOff} onClose={onClose} />
           ) : status && status.models.length === 0 ? (
             <ProviderStatus info={status} onClose={onClose} />
           ) : rows.length === 0 ? (
-            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+            <CommandEmpty className="px-2 py-8 text-xs text-muted-foreground">
               {filter === "favorites" && !query ? "Star a model to pin it here." : "No models match."}
-            </p>
+            </CommandEmpty>
           ) : (
             rows.map((row, index) => {
               const key = modelKey(row.provider, row.id);
               const isFavorite = favorites.includes(key);
+              const chosen = row.provider === selection.provider && row.id === selection.model;
               return (
-                <div
+                <CommandItem
                   key={key}
-                  data-index={index}
-                  className={cn(
-                    "group flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2",
-                    index === active && "bg-accent",
-                  )}
+                  value={key}
+                  onSelect={() => choose(row)}
+                  aria-current={chosen || undefined}
+                  className="rounded-lg px-2.5 py-2"
                 >
-                  <button
-                    type="button"
-                    onClick={() => choose(row)}
-                    onMouseMove={() => setActive(index)}
-                    onFocus={() => setActive(index)}
-                    aria-pressed={row.provider === selection.provider && row.id === selection.model}
-                    className="min-w-0 flex-1 rounded text-left"
-                  >
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 text-sm text-foreground">
                       <span className="truncate">{row.label}</span>
                       {row.isDefault && (
-                        <span className="rounded border border-primary/40 bg-primary/10 px-1 text-[0.625rem] font-semibold leading-4 text-primary">
+                        <Badge
+                          variant="outline"
+                          className="h-4 rounded-sm border-primary/40 bg-primary/10 px-1 text-[0.625rem] font-semibold text-primary"
+                        >
                           DEFAULT
-                        </span>
+                        </Badge>
                       )}
                     </div>
                     <div className="mt-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
                       <ProviderIcon provider={row.provider} className="size-3" />
                       {PROVIDERS[row.provider].label}
                     </div>
-                  </button>
-                  {row.provider === selection.provider && row.id === selection.model && (
-                    <Check className="size-3.5 shrink-0 text-primary" />
-                  )}
-                  {index < 9 && (
-                    <kbd className="shrink-0 font-sans text-2xs text-muted-foreground/80">
-                      {formatKeys(`mod+${index + 1}`)}
-                    </kbd>
-                  )}
-                  <button
-                    type="button"
-                    title={isFavorite ? "Remove from favorites" : "Add to favorites"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      useApp.getState().toggleFavoriteModel(key);
-                    }}
-                    className={cn(
-                      "shrink-0 rounded p-0.5 text-muted-foreground/60 hover:text-foreground",
-                      isFavorite && "text-warning hover:text-warning/80",
-                    )}
-                  >
-                    <Star className={cn("size-3.5", isFavorite && "fill-current")} />
-                  </button>
-                </div>
+                  </div>
+                  {/* What ends a row: that it is the model picked, its key, and its star. */}
+                  <CommandShortcut className="flex items-center gap-2 tracking-normal">
+                    {chosen && <Check className="size-3.5 text-primary" />}
+                    {index < 9 && <Kbd className="bg-transparent px-0">{formatKeys(`mod+${index + 1}`)}</Kbd>}
+                    <Button
+                      variant="ghost"
+                      size="icon-2xs"
+                      tooltip={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                      aria-pressed={isFavorite}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        useApp.getState().toggleFavoriteModel(key);
+                      }}
+                      // Its own keys press it: the list would take Enter for picking the model the keyboard is on.
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+                      }}
+                      className={cn(
+                        "text-muted-foreground/60 aria-pressed:bg-transparent",
+                        isFavorite && "text-warning aria-pressed:text-warning hover:text-warning/80",
+                      )}
+                    >
+                      <Star className={cn("size-3.5", isFavorite && "fill-current")} />
+                    </Button>
+                  </CommandShortcut>
+                </CommandItem>
               );
             })
           )}
-        </div>
-      </div>
-    </div>
+        </CommandList>
+      </Command>
+    </Tabs>
   );
 }
 
 /** In place of the models of a provider the settings have turned off: that it is, and the way to turn it on. */
 function TurnedOff({ provider, onClose }: { provider: Provider; onClose: () => void }) {
   return (
-    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-      <ProviderIcon provider={provider} className="size-6 opacity-40 grayscale" />
-      <p className="text-sm text-foreground">{PROVIDERS[provider].cli} is turned off</p>
-      <OpenProviders onClose={onClose} />
-    </div>
+    <Empty className="gap-2 px-4 py-6">
+      <EmptyHeader>
+        <EmptyMedia>
+          <ProviderIcon provider={provider} className="size-6 opacity-40 grayscale" />
+        </EmptyMedia>
+        <EmptyTitle className="font-normal">{PROVIDERS[provider].cli} is turned off</EmptyTitle>
+      </EmptyHeader>
+      <EmptyContent>
+        <OpenProviders onClose={onClose} />
+      </EmptyContent>
+    </Empty>
   );
 }
-
-const statusButtonClass =
-  "flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground";
 
 /** Opens the settings on the providers, where each agent's state is told in full, closing the menu. */
 function OpenProviders({ onClose }: { onClose: () => void }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
+      size="xs"
       onClick={() => {
         onClose();
         openSettings("providers");
       }}
-      className={statusButtonClass}
     >
-      <Settings className="size-3" />
+      <Settings data-icon="inline-start" />
       Open Providers
-    </button>
+    </Button>
   );
 }
 
 function ProviderStatus({ info, onClose }: { info: ProviderInfo; onClose: () => void }) {
   const { cli, install } = PROVIDERS[info.id];
   return (
-    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-      <ProviderIcon provider={info.id} className="size-6 opacity-40 grayscale" />
-      {info.installed ? (
-        <>
-          <p className="flex items-center gap-1.5 text-sm text-foreground">
-            <AlertTriangle className="size-3.5 text-warning" />
-            Could not list {cli} models
-          </p>
-          <p className="selectable text-xs leading-relaxed text-muted-foreground">{info.error}</p>
-        </>
-      ) : (
-        <>
-          <p className="text-sm text-foreground">{cli} is not installed</p>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            <InstallHint text={install} />
-          </p>
-        </>
-      )}
-      <div className="mt-1 flex flex-wrap justify-center gap-1.5">
-        <button type="button" onClick={() => void useApp.getState().refreshProviders()} className={statusButtonClass}>
-          <RotateCw className="size-3" />
+    <Empty className="gap-2 px-4 py-6">
+      <EmptyHeader>
+        <EmptyMedia>
+          <ProviderIcon provider={info.id} className="size-6 opacity-40 grayscale" />
+        </EmptyMedia>
+        {info.installed ? (
+          <>
+            <EmptyTitle className="flex items-center gap-1.5 font-normal">
+              <AlertTriangle className="size-3.5 text-warning" />
+              Could not list {cli} models
+            </EmptyTitle>
+            <EmptyDescription className="selectable text-xs">{info.error}</EmptyDescription>
+          </>
+        ) : (
+          <>
+            <EmptyTitle className="font-normal">{cli} is not installed</EmptyTitle>
+            <EmptyDescription className="text-xs">
+              <InstallHint text={install} />
+            </EmptyDescription>
+          </>
+        )}
+      </EmptyHeader>
+      <EmptyContent className="flex-row flex-wrap justify-center gap-1.5">
+        <Button variant="outline" size="xs" onClick={() => void useApp.getState().refreshProviders()}>
+          <RotateCw data-icon="inline-start" />
           Check again
-        </button>
+        </Button>
         <OpenProviders onClose={onClose} />
-      </div>
-    </div>
+      </EmptyContent>
+    </Empty>
   );
 }
 
@@ -354,10 +380,6 @@ const modelOf = memoizeLast((providers: ProviderInfo[] | undefined, provider: Pr
 /** Reasoning effort and context window for the selected model, like T3 Code's traits menu. */
 export function EffortPicker() {
   const selection = useApp((s) => s.selection);
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const close = useMemo(() => () => setOpen(false), []);
-
   const model = useApp((s) => modelOf(s.providers, s.selection.provider, s.selection.model));
   const efforts = model?.efforts ?? [];
   const contextWindows = model?.contextWindows ?? [];
@@ -387,42 +409,38 @@ export function EffortPicker() {
   ].filter((section) => section.options.length > 0);
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        title={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
-        aria-label={label}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(triggerClass, "shrink-0")}
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={label}
+            tooltip={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
+            className={cn(TRIGGER, "shrink-0")}
+          />
+        }
       >
         <Gauge className="size-3.5 @[26rem]:hidden" />
         <span className="hidden @[26rem]:inline">{label}</span>
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[22rem]:block" />
-      </button>
-      {open && (
-        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">
-          {sections.map((section, index) => (
-            <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
-              <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" className="min-w-40">
+        {sections.map((section, index) => (
+          <DropdownMenuGroup key={section.title}>
+            {index > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel>{section.title}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={section.current} onValueChange={(id) => section.choose(id as string)}>
               {section.options.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => {
-                    section.choose(option.id);
-                    close();
-                  }}
-                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent"
-                >
+                // Picking one is all the menu is for: it closes, as a menu of plain items does.
+                <DropdownMenuRadioItem key={option.id} value={option.id} closeOnClick>
                   {option.label}
-                  {option.id === section.current && <Check className="size-3.5 text-primary" />}
-                </button>
+                </DropdownMenuRadioItem>
               ))}
-            </div>
-          ))}
-        </Popover>
-      )}
-    </div>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuGroup>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

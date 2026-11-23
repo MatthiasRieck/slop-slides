@@ -11,16 +11,20 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 import { invoke } from "@tauri-apps/api/core";
 import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES, DEFAULT_THEME, editStylesFor } from "../lib/editTools";
+import { followFramePresses } from "../lib/framePress";
 import { wroteAsset } from "../lib/ownAssets";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { Stage } from "./Stage";
 
 // Drawing schedules a save of the review marks; finish it here, not in the next test.
 afterEach(() => flushReviewSave());
+
+/** Whether a tool of the toolbars is off; one that says why in its tooltip still takes the pointer and the focus. */
 
 beforeEach(() => {
   useApp.setState({
@@ -68,11 +72,17 @@ describe("Stage", () => {
 
   it("disables the arrows at either end", () => {
     render(<Stage />);
-    expect((prev() as HTMLButtonElement).disabled).toBe(true);
-    expect((next() as HTMLButtonElement).disabled).toBe(false);
+    // Off, they still say what they are for: disabled to a screen reader, and a press does nothing.
+    const off = (button: HTMLElement) => button.getAttribute("aria-disabled") === "true";
+    expect(off(prev())).toBe(true);
+    expect(off(next())).toBe(false);
+    fireEvent.click(prev());
+    expect(useApp.getState().selected).toBe("intro");
     act(() => useApp.getState().select("outro"));
-    expect((prev() as HTMLButtonElement).disabled).toBe(false);
-    expect((next() as HTMLButtonElement).disabled).toBe(true);
+    expect(off(prev())).toBe(false);
+    expect(off(next())).toBe(true);
+    fireEvent.click(next());
+    expect(useApp.getState().selected).toBe("outro");
   });
 
   it("moves between slides with the arrow buttons", () => {
@@ -85,8 +95,8 @@ describe("Stage", () => {
 
   it("names the arrows with their keys", () => {
     render(<Stage />);
-    expect(prev().title).toBe("Previous slide (←)");
-    expect(next().title).toBe("Next slide (→)");
+    expect(tooltipOf(prev())).toBe("Previous slide←");
+    expect(tooltipOf(next())).toBe("Next slide→");
   });
 
   it("goes to a slide by its number: the position is a field once pressed", () => {
@@ -131,7 +141,7 @@ describe("Stage", () => {
     render(<Stage />);
     const chip = () => screen.getByRole("button", { name: "Hidden" }) as HTMLButtonElement;
     expect(chip().disabled).toBe(false);
-    expect(chip().title).toBe("Hidden: skipped when presenting. Click to show it again.");
+    expect(tooltipOf(chip())).toBe("Hidden: skipped when presenting. Click to show it again.");
     await act(async () => fireEvent.click(chip()));
     expect(useApp.getState().editing).toBe(false);
     await waitFor(() =>
@@ -149,7 +159,7 @@ describe("Stage", () => {
     );
     render(<Stage />);
     const chip = screen.getByRole("button", { name: "Locked" });
-    expect(chip.title).toContain("Click to unlock it");
+    expect(tooltipOf(chip)).toContain("Click to unlock it");
     await act(async () => fireEvent.click(chip));
     expect(invoke).toHaveBeenCalledWith("set_slides_locked", { id: locked.id, slides: ["intro"], locked: false });
     expect(screen.queryByRole("button", { name: "Locked" })).toBeNull();
@@ -182,11 +192,11 @@ describe("Stage", () => {
     it("replaces only in Edit", () => {
       render(<Stage />);
       const replace = () => screen.getByRole("button", { name: "Replace…" }) as HTMLButtonElement;
-      expect(replace().disabled).toBe(true);
-      expect(replace().title).toBe("Switch to Edit to change the slides");
+      expect(isOff(replace())).toBe(true);
+      expect(tooltipOf(replace())).toBe("Switch to Edit to change the slides");
       act(() => useApp.getState().openFind());
       act(() => useApp.getState().setMode("edit"));
-      expect(replace().disabled).toBe(false);
+      expect(isOff(replace())).toBe(false);
     });
 
     it("ends when the stage goes away, for the deck's settings say", () => {
@@ -235,7 +245,9 @@ describe("Stage", () => {
     fireEvent.click(button);
     expect(screen.queryByRole("dialog")).toBeNull();
     act(() => useApp.setState({ running: true }));
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the deck's lint status beside Tidy layout, in the row under the slide", () => {
@@ -765,21 +777,21 @@ describe("Stage", () => {
     it("offers colors, which pick up the pen when no ink tool is in hand", () => {
       render(<Stage />);
       // With neither in hand the swatches show the pen's color.
-      expect(pressed("Color #ef4444")).toBe(true);
+      expect(pressed("Red")).toBe(true);
       fireEvent.click(tool("Comment on an element"));
-      fireEvent.click(tool("Color #3b82f6"));
+      fireEvent.click(tool("Blue"));
       expect([pressed("Draw on the slide"), pressed("Comment on an element")]).toEqual([true, false]);
-      expect(pressed("Color #3b82f6")).toBe(true);
+      expect(pressed("Blue")).toBe(true);
       draw([[10, 10]]);
       expect(useApp.getState().sketches.intro?.[0]?.color).toBe("#3b82f6");
       // The highlighter keeps a color of its own.
       fireEvent.click(tool("Highlight on the slide"));
-      expect(pressed("Color #facc15")).toBe(true);
+      expect(pressed("Yellow")).toBe(true);
     });
 
     it("undoes and clears marks", () => {
       render(<Stage />);
-      const off = (name: string) => (tool(name) as HTMLButtonElement).disabled;
+      const off = (name: string) => isOff(tool(name));
       expect([off("Remove last mark"), off("Clear marks on this slide")]).toEqual([true, true]);
       fireEvent.click(tool("Draw on the slide"));
       draw([[10, 10]]);
@@ -806,10 +818,10 @@ describe("Stage", () => {
     it("shows and hides the review marks", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       render(<Stage />);
-      expect((tool("Show review marks and comments on the slides") as HTMLButtonElement).disabled).toBe(true);
+      expect(isOff(tool("Show review marks and comments on the slides"))).toBe(true);
       // Marks on any slide offer the toggle, even when the current slide has none.
       act(() => useApp.setState({ sketches: { "#2": [mark] } }));
-      expect((tool("Show review marks and comments on the slides") as HTMLButtonElement).disabled).toBe(false);
+      expect(isOff(tool("Show review marks and comments on the slides"))).toBe(false);
       fireEvent.click(tool("Draw on the slide"));
       draw([[10, 10]]);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
@@ -817,7 +829,7 @@ describe("Stage", () => {
       expect(useApp.getState().reviewVisible).toBe(false);
       expect(pressed("Draw on the slide")).toBe(false);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
-      expect((tool("Remove last mark") as HTMLButtonElement).disabled).toBe(true);
+      expect(isOff(tool("Remove last mark") as HTMLButtonElement)).toBe(true);
       expect(useApp.getState().sketches.intro).toHaveLength(1);
       // The toggle keeps its name; whether it is pressed says if the marks show.
       expect(pressed("Show review marks and comments on the slides")).toBe(false);
@@ -954,10 +966,25 @@ describe("Stage", () => {
         const { container } = render(<Stage />);
         fireEvent.click(tool("Comment on an element"));
         pick(container);
-        expect(document.activeElement).toBe(input());
         // The preview that took the press may take focus too; the field gets it back.
         frameOf(container).focus();
         await waitFor(() => expect(document.activeElement).toBe(input()));
+      });
+
+      it("keeps the comment open for a press on its own pin, and saves and closes it on a press beside it", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        const pin = screen.getByRole("button", { name: "Comment 1" });
+        fireEvent.click(pin);
+        fireEvent.change(input(), { target: { value: "Much bigger" } });
+        fireEvent.pointerDown(pin, { pointerType: "mouse", button: 0 });
+        fireEvent.click(pin);
+        expect(screen.getByRole("dialog", { name: "Comment" })).toBeTruthy();
+        const beside = screen.getByTestId("stage-area");
+        fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+        fireEvent.click(beside);
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(useApp.getState().comments.intro?.[0]?.text).toBe("Much bigger");
       });
 
       it("dictates into the comment at the caret, and Enter keeps what is still being said", async () => {
@@ -1045,7 +1072,10 @@ describe("Stage", () => {
           spots: [{ id: "first", x: 0.75, y: 0.1, found: false }],
         });
         expect(pin.style.left).toBe("75%");
-        expect(pin.title).toContain("gone");
+        // Pointed at, it says so beside what the comment says.
+        fireEvent.pointerEnter(pin);
+        expect(screen.getByRole("note").textContent).toContain("The element it was on is gone.");
+        fireEvent.pointerLeave(pin);
         // Another slide's answer, from a preview on its way out, does not count.
         fromFrame(container, { type: "slop:comment-spots", slide: "outro", spots: [{ id: "first", x: 0, y: 0 }] });
         expect(pin.style.left).toBe("75%");
@@ -1162,7 +1192,7 @@ describe("Stage", () => {
             ],
           });
           expect(screen.getAllByTestId("comment-area")).toHaveLength(1);
-          expect(document.activeElement).toBe(input());
+          await waitFor(() => expect(document.activeElement).toBe(input()));
           fireEvent.change(input(), { target: { value: "Too crowded" } });
           fireEvent.keyDown(input(), { key: "Enter" });
           const area = {
@@ -1325,8 +1355,8 @@ describe("Stage", () => {
       // The timeline's tools stay, as in either ribbon.
       expect(screen.getByRole("button", { name: "Show the timeline under the slide" })).toBeTruthy();
       expect(screen.getByText("Locked")).toBeTruthy();
-      expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
-      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: /^Layout$/ }).getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByRole("button", { name: /Tidy layout/ }).getAttribute("aria-disabled")).toBe("true");
       // Going back to a slide that is not locked, the editor is there again.
       act(() => useApp.getState().select("intro"));
       expect(edited()).toBe(true);
@@ -1555,6 +1585,43 @@ describe("Stage", () => {
       };
       const select = (frame: HTMLIFrameElement, selection: unknown = SELECTION) =>
         fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selection });
+      /**
+       * A slider of the toolbar's popovers, by its label: the range input the keyboard and screen
+       * readers work (its thumb stays hidden while nothing is laid out, so it is found by the label).
+       */
+      const sliders = (name: string) =>
+        screen
+          .queryAllByLabelText(name)
+          .filter((named): named is HTMLInputElement => named.matches("input[type=range]"));
+      const slider = (name: string) => {
+        const [found, ...more] = sliders(name);
+        if (!found || more.length > 0) throw new Error(`${sliders(name).length} sliders named ${name}`);
+        return found;
+      };
+      /**
+       * Drags a slider with the pointer, as jsdom lays nothing out: its track is measured one pixel
+       * to a unit. `to` presses it at a value, then moves on to the next ones; `drop` lets it go.
+       */
+      const drag = (name: string) => {
+        const input = slider(name);
+        const control = input.closest("[data-slot=slider]")!.firstElementChild as HTMLElement;
+        const min = Number(input.min);
+        control.getBoundingClientRect = () => new DOMRect(0, 0, Number(input.max) - min, 10);
+        let at: { pointerId: number; pointerType: string; clientX: number; clientY: number } | null = null;
+        return {
+          input,
+          to(value: number) {
+            const pressed = at !== null;
+            at = { pointerId: 1, pointerType: "mouse", clientX: value - min, clientY: 5 };
+            if (pressed) fireEvent.pointerMove(document, { ...at, buttons: 1 });
+            else fireEvent.pointerDown(control, { ...at, button: 0 });
+          },
+          drop() {
+            fireEvent.pointerUp(document, at ?? {});
+            at = null;
+          },
+        };
+      };
 
       beforeEach(() =>
         useApp.setState({ editTool: "select", editStyles: DEFAULT_EDIT_STYLES, editTheme: DEFAULT_THEME }),
@@ -1684,14 +1751,14 @@ describe("Stage", () => {
       it("has nothing to style until something is selected or a tool is picked", () => {
         const { frame } = enter();
         for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete"]) {
-          expect(button(name).disabled).toBe(true);
+          expect(isOff(button(name))).toBe(true);
         }
         select(frame);
         for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete"]) {
-          expect(button(name).disabled).toBe(false);
+          expect(isOff(button(name))).toBe(false);
         }
         select(frame, null);
-        expect(button("Fill").disabled).toBe(true);
+        expect(isOff(button("Fill"))).toBe(true);
       });
 
       it("shows the selection's style", () => {
@@ -1729,7 +1796,7 @@ describe("Stage", () => {
       it("leaves the defaults alone when restyling the deck's own elements", () => {
         const { frame, post } = enter();
         select(frame, { ...SELECTION, kind: "element", valign: null });
-        expect(button("Align text to the top").disabled).toBe(true);
+        expect(isOff(button("Align text to the top"))).toBe(true);
         fireEvent.click(button("Align text right"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { align: "right" } }, "*");
         expect(useApp.getState().editStyles).toEqual(DEFAULT_EDIT_STYLES);
@@ -1746,15 +1813,15 @@ describe("Stage", () => {
           strokeWidth: 6,
           fill: null,
         });
-        expect(button("Bold").disabled).toBe(true);
-        expect(button("Line color").disabled).toBe(false);
+        expect(isOff(button("Bold"))).toBe(true);
+        expect(isOff(button("Line color"))).toBe(false);
         expect((screen.getByLabelText("Line width") as HTMLSelectElement).value).toBe("6");
       });
 
       it("styles what the tool adds when nothing is selected", () => {
         const { post } = enter();
         fireEvent.click(button("Add text"));
-        expect(button("Fill").disabled).toBe(false);
+        expect(isOff(button("Fill"))).toBe(false);
         fireEvent.click(button("Italic"));
         expect(useApp.getState().editStyles.text.italic).toBe(true);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
@@ -1851,10 +1918,11 @@ describe("Stage", () => {
         fireEvent.click(more);
         const picker = screen.getByRole("dialog", { name: "More shapes" });
         fireEvent.click(within(picker).getByRole("button", { name }));
-        expect(post).toHaveBeenLastCalledWith(
+        // The tool is the last thing the editor is told to do; that the picker closed comes after.
+        expect(post.mock.calls.findLast(([data]) => data.type !== "slop:layer")).toEqual([
           { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
           "*",
-        );
+        ]);
         // The picker closes; its button stands for the shape picked.
         expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
         expect(more.getAttribute("aria-pressed")).toBe("true");
@@ -1876,7 +1944,7 @@ describe("Stage", () => {
       it("sets a line's heads and route, for lines only", () => {
         const { frame, post } = enter();
         select(frame);
-        expect(button("Line ends and route").disabled).toBe(true);
+        expect(isOff(button("Line ends and route"))).toBe(true);
         select(frame, {
           ...SELECTION,
           kind: "drawing",
@@ -1900,8 +1968,8 @@ describe("Stage", () => {
 
       it("groups, ungroups and locks from the toolbar", () => {
         const { frame, post } = enter();
-        expect(button("Group").disabled).toBe(true);
-        expect(button("Lock").disabled).toBe(true);
+        expect(isOff(button("Group"))).toBe(true);
+        expect(isOff(button("Lock"))).toBe(true);
         select(frame, { ...SELECTION, kind: "group", group: true });
         fromFrame(frame, {
           type: "slop:edit-geometry",
@@ -1920,7 +1988,7 @@ describe("Stage", () => {
 
       it("lists the slide's layers, to pick, lock and restack them", () => {
         const { frame, post } = enter();
-        expect(button("Layers").disabled).toBe(true);
+        expect(isOff(button("Layers"))).toBe(true);
         fromFrame(frame, {
           type: "slop:edit-layers",
           slide: "intro",
@@ -1945,8 +2013,8 @@ describe("Stage", () => {
         fireEvent.click(panel.getByRole("button", { name: "Unlock Heading: Hi" }));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: false, path: [0] }, "*");
         // Up and down go among the layers of the same group, or of the slide.
-        expect((panel.getByRole("button", { name: "Move Group of 2 up" }) as HTMLButtonElement).disabled).toBe(true);
-        expect((panel.getByRole("button", { name: "Move Text: A down" }) as HTMLButtonElement).disabled).toBe(true);
+        expect(isOff(panel.getByRole("button", { name: "Move Group of 2 up" }) as HTMLButtonElement)).toBe(true);
+        expect(isOff(panel.getByRole("button", { name: "Move Text: A down" }) as HTMLButtonElement)).toBe(true);
         fireEvent.click(panel.getByRole("button", { name: "Move Text: A up" }));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "forward", path: [4, 0], any: true }, "*");
         fireEvent.click(panel.getByRole("button", { name: "Move Group of 2 down" }));
@@ -1956,7 +2024,7 @@ describe("Stage", () => {
       it("arms the format painter on the selection, and disarms it", () => {
         const { frame } = enter();
         const painter = "Format painter";
-        expect(button(painter).disabled).toBe(true);
+        expect(isOff(button(painter))).toBe(true);
         select(frame);
         fireEvent.click(button(painter));
         expect(useApp.getState().editTool).toBe("paint");
@@ -1967,33 +2035,57 @@ describe("Stage", () => {
 
       it("applies a slider where it is let go, not all along the drag", () => {
         const { frame, post } = enter();
-        expect(button("Appearance").disabled).toBe(true);
+        expect(isOff(button("Appearance"))).toBe(true);
         select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: 8 });
         fireEvent.click(button("Appearance"));
-        const opacity = screen.getByLabelText("Opacity") as HTMLInputElement;
-        fireEvent.input(opacity, { target: { value: "50" } });
+        const opacity = drag("Opacity");
+        expect([opacity.input.min, opacity.input.max, opacity.input.step]).toEqual(["5", "100", "5"]);
+        opacity.to(50);
         expect((screen.getByLabelText("Opacity value") as HTMLInputElement).value).toBe("50");
         // All along the drag the slide shows the value, without saving it.
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-style", style: { opacity: 0.5 }, preview: true }, "*");
         expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-style", style: expect.anything() }, "*");
-        act(() => void opacity.dispatchEvent(new Event("change")));
+        opacity.drop();
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { opacity: 0.5 } }, "*");
         // A drag given up with Escape is taken back, the panel staying open.
-        fireEvent.input(opacity, { target: { value: "30" } });
-        fireEvent.keyDown(opacity, { key: "Escape" });
+        opacity.to(30);
+        fireEvent.keyDown(opacity.input, { key: "Escape" });
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-style-cancel" }, "*");
         expect(screen.getByRole("dialog", { name: "Appearance" })).toBeTruthy();
+        // What is left of that drag, and letting go of it, change nothing.
+        post.mockClear();
+        opacity.to(20);
+        opacity.drop();
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
         // The number can be typed, within the slider's range.
         const shadow = screen.getByLabelText("Shadow value") as HTMLInputElement;
         fireEvent.change(shadow, { target: { value: "500" } });
         fireEvent.keyDown(shadow, { key: "Enter" });
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { shadow: 80 } }, "*");
-        const radius = screen.getByLabelText("Corner radius") as HTMLInputElement;
-        fireEvent.input(radius, { target: { value: "20" } });
-        act(() => void radius.dispatchEvent(new Event("change")));
+        expect(tooltipOf(shadow.parentElement!)).toBe("Shadow (type a value and press Enter)");
+        const radius = drag("Corner radius");
+        radius.to(20);
+        radius.drop();
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { radius: 20 } }, "*");
+        // A press that moves the slider nowhere applies nothing.
+        post.mockClear();
+        radius.to(20);
+        radius.drop();
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
         // Restyling leaves the next shape's defaults alone.
         expect(useApp.getState().editStyles.shape).toEqual(DEFAULT_EDIT_STYLES.shape);
+      });
+
+      it("steps a slider with the keyboard, applying each step, and Escape then closes the panel", () => {
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: 8 });
+        fireEvent.click(button("Appearance"));
+        // The range input is what the arrow keys and a screen reader work: a change of it is one step, applied.
+        fireEvent.change(slider("Shadow"), { target: { value: "2" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { shadow: 2 } }, "*");
+        fireEvent.keyDown(slider("Shadow"), { key: "Escape" });
+        expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-style-cancel" }, "*");
+        expect(screen.queryByRole("dialog", { name: "Appearance" })).toBeNull();
       });
 
       it("shows a dragged slider's value in the slide once per frame, and the last one before it is applied", () => {
@@ -2007,17 +2099,17 @@ describe("Stage", () => {
             .map(([data]) => data as { type: string; preview?: boolean; style?: { opacity?: number } })
             .filter((data) => data.type === "slop:edit-style" && data.preview)
             .map((data) => data.style?.opacity);
-        const opacity = screen.getByLabelText("Opacity") as HTMLInputElement;
+        const opacity = drag("Opacity");
         // The slider passes many values within a frame.
-        for (const value of ["90", "80", "70", "60"]) fireEvent.input(opacity, { target: { value } });
+        for (const value of [90, 80, 70, 60]) opacity.to(value);
         expect(previews()).toEqual([0.9]);
         act(() => frames.splice(0).forEach((run) => void run(0)));
         expect(previews()).toEqual([0.9, 0.6]);
         // Let go within the frame: the slide still shows where it was let go before that is saved.
-        fireEvent.input(opacity, { target: { value: "50" } });
-        fireEvent.input(opacity, { target: { value: "40" } });
+        opacity.to(50);
+        opacity.to(40);
         post.mockClear();
-        act(() => void opacity.dispatchEvent(new Event("change")));
+        opacity.drop();
         const restyles = post.mock.calls.map(([data]) => data).filter((data) => data.type === "slop:edit-style");
         expect(restyles).toEqual([
           { type: "slop:edit-style", style: { opacity: 0.4 }, preview: true },
@@ -2028,9 +2120,9 @@ describe("Stage", () => {
         expect(previews()).toEqual([0.4]);
         post.mockClear();
         // A drag given up is taken back, and the value it had reached is not shown after.
-        fireEvent.input(opacity, { target: { value: "30" } });
-        fireEvent.input(opacity, { target: { value: "20" } });
-        fireEvent.keyDown(opacity, { key: "Escape" });
+        opacity.to(30);
+        opacity.to(20);
+        fireEvent.keyDown(opacity.input, { key: "Escape" });
         act(() => frames.splice(0).forEach((run) => void run(0)));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-style-cancel" }, "*");
         expect(previews()).toEqual([0.3]);
@@ -2040,7 +2132,7 @@ describe("Stage", () => {
         const { frame, post } = enter();
         select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: null });
         fireEvent.click(button("Appearance"));
-        expect(screen.queryByLabelText("Points")).toBeNull();
+        expect(sliders("Points")).toEqual([]);
         select(frame, {
           ...SELECTION,
           opacity: 1,
@@ -2048,10 +2140,10 @@ describe("Stage", () => {
           radius: null,
           adjust: { value: 5, min: 3, max: 12, step: 1, label: "Points" },
         });
-        const points = screen.getByLabelText("Points") as HTMLInputElement;
-        expect([points.min, points.max, points.value]).toEqual(["3", "12", "5"]);
-        fireEvent.input(points, { target: { value: "7" } });
-        act(() => void points.dispatchEvent(new Event("change")));
+        const points = drag("Points");
+        expect([points.input.min, points.input.max, points.input.value]).toEqual(["3", "12", "5"]);
+        points.to(7);
+        points.drop();
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { adjust: 7 } }, "*");
         expect(useApp.getState().editStyles.shape).toEqual(DEFAULT_EDIT_STYLES.shape);
       });
@@ -2069,12 +2161,12 @@ describe("Stage", () => {
       it("turns off what a cut-out shape cannot show", () => {
         const { frame } = enter();
         select(frame, { ...SELECTION, clipped: true, radius: null });
-        expect(button("Border color").disabled).toBe(true);
+        expect(isOff(button("Border color"))).toBe(true);
         expect((screen.getByLabelText("Border width") as HTMLSelectElement).disabled).toBe(true);
         fireEvent.click(button("Appearance"));
-        expect((screen.getByLabelText("Shadow") as HTMLInputElement).disabled).toBe(true);
-        expect((screen.getByLabelText("Corner radius") as HTMLInputElement).disabled).toBe(true);
-        expect((screen.getByLabelText("Opacity") as HTMLInputElement).disabled).toBe(false);
+        expect(slider("Shadow").disabled).toBe(true);
+        expect(slider("Corner radius").disabled).toBe(true);
+        expect(slider("Opacity").disabled).toBe(false);
       });
 
       describe("images", () => {
@@ -2132,9 +2224,9 @@ describe("Stage", () => {
         it("offers the image panel for images only", () => {
           const { frame } = enter();
           select(frame);
-          expect(button("Image options").disabled).toBe(true);
+          expect(isOff(button("Image options"))).toBe(true);
           select(frame, IMAGE);
-          expect(button("Image options").disabled).toBe(false);
+          expect(isOff(button("Image options"))).toBe(false);
         });
 
         it("replaces, fits and positions the image", async () => {
@@ -2150,7 +2242,21 @@ describe("Stage", () => {
           ]);
           fireEvent.click(button("Position 50% 0%"));
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fitPosition: "50% 0%" } }, "*");
-          expect(button("Position 50% 0%").title).toBe("Top");
+          expect(tooltipOf(button("Position 50% 0%"))).toBe("Top");
+          // The nine places are one choice: the one the image has is on, and a press on it changes nothing.
+          const places = screen.getByRole("group", { name: "Image position" });
+          expect(places.getAttribute("data-slot")).toBe("toggle-group");
+          const on = within(places)
+            .getAllByRole("button")
+            .filter((place) => place.getAttribute("aria-pressed") === "true");
+          expect(on.map((place) => place.getAttribute("aria-label"))).toEqual(["Position 50% 50%"]);
+          post.mockClear();
+          fireEvent.click(button("Position 50% 50%"));
+          expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
+          // A press on one keeps the focus in the slide.
+          const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+          button("Position 0% 0%").dispatchEvent(press);
+          expect(press.defaultPrevented).toBe(true);
           // Flipping is with the other flips, under Position and size.
           expect(
             within(screen.getByRole("dialog", { name: "Image options" })).queryByRole("button", { name: /Flip/ }),
@@ -2173,8 +2279,21 @@ describe("Stage", () => {
           fireEvent.keyDown(alt, { key: "Enter" });
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { alt: "A cat" } }, "*");
           fireEvent.change(alt, { target: { value: "A dog" } });
-          fireEvent.pointerDown(document.body);
+          fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+          fireEvent.click(document.body);
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { alt: "A dog" } }, "*");
+          expect(screen.queryByRole("dialog", { name: "Image options" })).toBeNull();
+        });
+
+        it("puts the alt text back on Escape, which saves none of what was typed", () => {
+          const { frame, post } = enter();
+          select(frame, { ...IMAGE, alt: "A cat" });
+          fireEvent.click(button("Image options"));
+          const alt = screen.getByLabelText("Alt text") as HTMLInputElement;
+          expect(alt.value).toBe("A cat");
+          fireEvent.change(alt, { target: { value: "A dog" } });
+          fireEvent.keyDown(alt, { key: "Escape" });
+          expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-style", style: { alt: "A dog" } }, "*");
           expect(screen.queryByRole("dialog", { name: "Image options" })).toBeNull();
         });
       });
@@ -2268,6 +2387,23 @@ describe("Stage", () => {
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
         });
 
+        it("keeps the typing going on a press in one of the toolbar's popups, which open outside it", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          const finished = () => post.mock.calls.some(([message]) => message?.type === "slop:edit-finish");
+          for (const name of ["Text color", "Link", "Spacing"]) {
+            fireEvent.click(button(name));
+            const popup = screen.getByRole("dialog", { name });
+            // In the body, not in the toolbar: only its mark says whose it is.
+            expect(popup.closest("[role=toolbar]")).toBeNull();
+            fireEvent.pointerDown(popup.querySelector("button, input, select") ?? popup);
+            expect(finished()).toBe(false);
+            fireEvent.keyDown(popup, { key: "Escape" });
+          }
+          fireEvent.pointerDown(document.body);
+          expect(finished()).toBe(true);
+        });
+
         it("closes the toolbar's popup on Escape, pressed in the app or in the slide, staying in edit mode", () => {
           const { frame, post } = enter();
           select(frame, TEXT);
@@ -2293,6 +2429,8 @@ describe("Stage", () => {
         });
 
         it("closes the toolbar's popups on a press in the slide, leaving the typing to the editor", () => {
+          // The app's window follows the presses its previews report (see AppProviders).
+          const unfollow = followFramePresses();
           const { frame, post } = enter();
           select(frame, TEXT);
           fireEvent.click(button("Text color"));
@@ -2300,6 +2438,7 @@ describe("Stage", () => {
           fromFrame(frame, { type: "slop:press" });
           expect(screen.queryByRole("dialog", { name: "Text color" })).toBeNull();
           expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+          unfollow();
         });
 
         it("takes a typed font size on Enter and gives focus back to the slide", () => {
@@ -2361,7 +2500,15 @@ describe("Stage", () => {
           const address = screen.getByLabelText("Link address");
           fireEvent.change(address, { target: { value: "javascript:alert(1)" } });
           fireEvent.click(button("Add link"));
-          expect(screen.getByText(/Enter a web address/)).toBeTruthy();
+          // Said as a field says what is wrong with it: read out, and tied to the field.
+          const problem = screen.getByText(/Enter a web address/);
+          expect(problem.dataset.slot).toBe("field-error");
+          expect(problem.getAttribute("role")).toBe("alert");
+          expect(address.getAttribute("aria-invalid")).toBe("true");
+          expect(address.getAttribute("aria-describedby")).toBe(problem.id);
+          fireEvent.change(address, { target: { value: "exam" } });
+          expect(screen.queryByText(/Enter a web address/)).toBeNull();
+          expect(address.hasAttribute("aria-describedby")).toBe(false);
           fireEvent.change(address, { target: { value: "example.com" } });
           fireEvent.click(button("Add link"));
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-link", href: "https://example.com" }, "*");
@@ -2391,11 +2538,11 @@ describe("Stage", () => {
       it("ignores selections from other slides and drops a stale one when the editor reloads", () => {
         const { frame } = enter();
         fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selection: SELECTION });
-        expect(button("Fill").disabled).toBe(true);
+        expect(isOff(button("Fill"))).toBe(true);
         select(frame);
-        expect(button("Fill").disabled).toBe(false);
+        expect(isOff(button("Fill"))).toBe(false);
         act(() => void fireEvent.load(frame));
-        expect(button("Fill").disabled).toBe(true);
+        expect(isOff(button("Fill"))).toBe(true);
       });
     });
 
@@ -2427,7 +2574,7 @@ describe("Stage", () => {
       toggleEditing();
       act(() => edited("outro", "intro"));
       const open = () => fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
-      const dialog = () => screen.queryByRole("dialog", { name: "Discard changes" });
+      const dialog = () => screen.queryByRole("alertdialog", { name: "Discard changes on other slides too?" });
 
       open();
       expect(dialog()!.textContent).toContain("1 other slide");
@@ -2467,7 +2614,7 @@ describe("Stage", () => {
       toggleEditing();
       act(() => edited("outro", "#2"));
       fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
-      const dialog = screen.getByRole("dialog", { name: "Discard changes" });
+      const dialog = screen.getByRole("alertdialog", { name: "Discard changes on 2 other slides?" });
       expect(dialog.textContent).toContain("Discard changes on 2 other slides?");
       expect(dialog.textContent).toContain("The slide shown has no changes.");
       expect(discard).not.toHaveBeenCalled();
@@ -2478,7 +2625,30 @@ describe("Stage", () => {
       fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
       fireEvent.click(screen.getByRole("button", { name: "Discard on 2 slides" }));
       expect(discard).toHaveBeenCalledExactlyOnceWith();
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("starts the question on the answer that discards, cancels with Escape, and stays for a press beside it", async () => {
+      const discard = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ discardSlideEdits: discard, selected: "intro" });
+      render(<Stage />);
+      toggleEditing();
+      act(() => edited("outro", "#2"));
+      const opener = screen.getByRole("button", { name: /Discard changes/ });
+      opener.focus();
+      fireEvent.click(opener);
+      await settle();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Discard on 2 slides" }));
+      // A question with fixed answers: a press beside it is none of them.
+      const beside = document.querySelector("[data-slot=alert-dialog-overlay]")!;
+      fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+      fireEvent.click(beside);
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(discard).not.toHaveBeenCalled();
+      await settle();
+      expect(document.activeElement).toBe(opener);
     });
 
     it("saves the markup the editor posts for the current slide", () => {
@@ -2583,21 +2753,21 @@ describe("Stage", () => {
       const frame = stageFrame(container);
       fireEvent.load(frame);
       const remove = () => screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement;
-      expect(remove().disabled).toBe(true);
+      expect(isOff(remove())).toBe(true);
       fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selected: true, selection: { kind: "element" } });
       fromFrame(null, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
-      expect(remove().disabled).toBe(true);
+      expect(isOff(remove())).toBe(true);
       fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
-      expect(remove().disabled).toBe(false);
+      expect(isOff(remove())).toBe(false);
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
       fireEvent.click(remove());
       expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
       fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: false, selection: null });
-      expect(remove().disabled).toBe(true);
+      expect(isOff(remove())).toBe(true);
       // A reloaded editor starts without a selection.
       fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
       fireEvent.load(frame);
-      expect(remove().disabled).toBe(true);
+      expect(isOff(remove())).toBe(true);
     });
 
     describe("dropping images", () => {
@@ -2814,11 +2984,11 @@ describe("Stage", () => {
         const { container } = render(<Stage />);
         toggleEditing();
         const { frame, post } = loaded(container);
-        expect(button("Position and size").hasAttribute("disabled")).toBe(true);
+        expect(isOff(button("Position and size"))).toBe(true);
         // What waits for a selection says so.
-        expect(button("Position and size").title).toBe("Select an element");
-        expect(button("Align with the slide's left edges").title).toBe("Select an element");
-        expect(button("Distribute vertically").title).toBe("Select three or more elements");
+        expect(tooltipOf(button("Position and size"))).toBe("Select an element");
+        expect(tooltipOf(button("Align with the slide's left edges"))).toBe("Select an element");
+        expect(tooltipOf(button("Distribute vertically"))).toBe("Select three or more elements");
         fromFrame(frame, {
           type: "slop:edit-geometry",
           slide: "intro",
@@ -2833,6 +3003,9 @@ describe("Stage", () => {
         expect(button("Align with the slide").getAttribute("aria-pressed")).toBe("true");
         fireEvent.click(button("Align left edges with the slide"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "left", target: "slide" }, "*");
+        fireEvent.click(button("Distribute vertically"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-distribute", axis: "v" }, "*");
+        // The numbers, matching, flips and turns are in the popover, which stays open from one to the next.
         fireEvent.click(button("Position and size"));
         fireEvent.click(button("Match width"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-match", axis: "w" }, "*");
@@ -2841,9 +3014,7 @@ describe("Stage", () => {
         // Each of several elements flips in its own place; they have no one rotation to turn.
         fireEvent.click(button("Flip horizontally"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-flip", axis: "x" }, "*");
-        expect(button("Rotate 90° clockwise").hasAttribute("disabled")).toBe(true);
-        fireEvent.click(button("Distribute vertically"));
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-distribute", axis: "v" }, "*");
+        expect(isOff(button("Rotate 90° clockwise"))).toBe(true);
         const x = screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement;
         expect(x.value).toBe("10");
         fireEvent.change(x, { target: { value: "42" } });
@@ -2871,14 +3042,14 @@ describe("Stage", () => {
           slide: "intro",
           geometry: { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 15 },
         });
-        fireEvent.click(button("Position and size"));
-        expect(button("Distribute horizontally").hasAttribute("disabled")).toBe(true);
+        expect(isOff(button("Distribute horizontally"))).toBe(true);
         // One element can only line up with the slide.
-        expect(button("Align with the slide").hasAttribute("disabled")).toBe(true);
-        expect(button("Match width").hasAttribute("disabled")).toBe(true);
-        expect(button("Match width").title).toBe("Select two or more elements");
+        expect(isOff(button("Align with the slide"))).toBe(true);
         fireEvent.click(button("Align with the slide's right edges"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "right", target: "slide" }, "*");
+        fireEvent.click(button("Position and size"));
+        expect(isOff(button("Match width"))).toBe(true);
+        expect(tooltipOf(button("Match width"))).toBe("Select two or more elements");
         const width = screen.getByLabelText("Width") as HTMLInputElement;
         fireEvent.change(width, { target: { value: "0" } });
         fireEvent.blur(width);
@@ -2904,15 +3075,23 @@ describe("Stage", () => {
         const geometry = { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 };
         fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
         fireEvent.click(button("Position and size"));
-        fireEvent.click(button("Align with the slide's left edges"));
+        fireEvent.click(button("Rotate 90° clockwise"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: 90 }, "*");
         // The save reloads the preview, which has nothing selected until the editor restores it.
         fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
         expect(screen.getByRole("dialog", { name: "Position and size" })).toBeTruthy();
-        expect(button("Align with the slide's top edges").hasAttribute("disabled")).toBe(true);
-        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: { ...geometry, x: 0 } });
-        fireEvent.click(button("Align with the slide's top edges"));
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "top", target: "slide" }, "*");
+        expect(isOff(button("Rotate 90° clockwise"))).toBe(true);
+        expect(isOff(button("Align with the slide's top edges"))).toBe(true);
+        // Its button stays on while its panel is open, to close it with.
+        expect(isOff(button("Position and size"))).toBe(false);
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: { ...geometry, x: 0, rotation: 90 } });
+        fireEvent.click(button("Rotate 90° clockwise"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: 180 }, "*");
         expect((screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement).value).toBe("0");
+        // A tool of the ribbon beside it is a press outside the panel, which closes.
+        fireEvent.click(button("Align with the slide's top edges"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-align", to: "top", target: "slide" }, "*");
+        expect(screen.queryByRole("dialog", { name: "Position and size" })).toBeNull();
       });
 
       it("keeps the field being typed in through the reload that tabbing out of another one causes", () => {
@@ -2998,7 +3177,7 @@ describe("Stage", () => {
         });
         fireEvent.click(button("Position and size"));
         expect(button("Flip horizontally").getAttribute("aria-pressed")).toBe("true");
-        expect(button("Flip horizontally").title).toBe("Flip horizontally (Ctrl+Shift+H)");
+        expect(tooltipOf(button("Flip horizontally"))).toBe("Flip horizontallyCtrl+Shift+H");
         fireEvent.click(button("Flip horizontally"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-flip", axis: "x" }, "*");
         fireEvent.click(button("Flip vertically"));
@@ -3011,8 +3190,8 @@ describe("Stage", () => {
           selected: true,
           selection: { kind: "text", text: true, flippable: false },
         });
-        expect(button("Flip horizontally").hasAttribute("disabled")).toBe(true);
-        expect(button("Flip horizontally").title).toBe("Text and plain boxes have nothing to flip");
+        expect(isOff(button("Flip horizontally"))).toBe(true);
+        expect(tooltipOf(button("Flip horizontally"))).toBe("Text and plain boxes have nothing to flip");
         // A line is mirrored through its points.
         fromFrame(frame, {
           type: "slop:edit-selection",
@@ -3020,7 +3199,7 @@ describe("Stage", () => {
           selected: true,
           selection: { kind: "drawing", vector: true, flippable: true, line: { start: null, end: "arrow" } },
         });
-        expect(button("Flip horizontally").hasAttribute("disabled")).toBe(false);
+        expect(isOff(button("Flip horizontally"))).toBe(false);
       });
 
       it("rotates the selection in 3D from the toolbar, with the reset in the middle", () => {
@@ -3056,9 +3235,9 @@ describe("Stage", () => {
         });
         // The panel stays through the preview's reload after a save, its buttons waiting for the selection.
         fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
-        expect(button("Rotate top 5° in 3D").hasAttribute("disabled")).toBe(true);
+        expect(isOff(button("Rotate top 5° in 3D"))).toBe(true);
         fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
-        expect(button("Rotate top 5° in 3D").hasAttribute("disabled")).toBe(false);
+        expect(isOff(button("Rotate top 5° in 3D"))).toBe(false);
       });
 
       it("asks the editor to copy or cut with ⌘C / ⌘X pressed in the app, unless text is selected there", () => {
@@ -3359,8 +3538,8 @@ describe("Stage", () => {
         expect(post).toHaveBeenLastCalledWith({ type: "slop:camera", zoomBy: 1.25 }, "*");
         fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:camera", zoomBy: 0.8 }, "*");
-        expect(screen.getByRole("button", { name: "Zoom in" }).title).toBe("Zoom in (Ctrl++)");
-        expect(screen.getByRole("button", { name: "Zoom out" }).title).toBe("Zoom out (Ctrl+-)");
+        expect(tooltipOf(screen.getByRole("button", { name: "Zoom in" }))).toBe("Zoom inCtrl++");
+        expect(tooltipOf(screen.getByRole("button", { name: "Zoom out" }))).toBe("Zoom outCtrl+-");
 
         fireEvent.click(zoom());
         const items = within(screen.getByRole("menu", { name: "Zoom level" })).getAllByRole("menuitemradio");
@@ -3512,7 +3691,7 @@ describe("Stage", () => {
         return { frame, post };
       }
 
-      it("opens where the preview says, in the app's pixels", () => {
+      it("opens where the preview says, in the app's pixels", async () => {
         const { container } = render(<Stage />);
         toggleEditing();
         const frame = stageFrame(container);
@@ -3520,9 +3699,10 @@ describe("Stage", () => {
         Object.defineProperty(frame, "clientWidth", { value: 1920, configurable: true });
         frame.getBoundingClientRect = () => new DOMRect(40, 20, 960, 540);
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 100, y: 50, element: ELEMENT });
-        const menu = screen.getByRole("menu");
-        expect(menu.style.left).toBe("90px");
-        expect(menu.style.top).toBe("45px");
+        const menu = screen.getByRole("menu", { name: "Element" });
+        // The menu is placed against that point once it has been measured.
+        await settle();
+        expect(menu.parentElement!.style.transform).toBe("translate(90px, 45px)");
       });
 
       it("ignores a menu for another slide, and shows nothing out of edit mode", () => {
@@ -3762,9 +3942,9 @@ describe("Stage", () => {
         fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
         act(() => useApp.setState({ running: true }));
-        expect(item("Tidy this").disabled).toBe(true);
+        expect(isOff(item("Tidy this"))).toBe(true);
         expect(item("Tidy this").title).toBe("The agent is busy");
-        expect(item("Ask the agent").disabled).toBe(true);
+        expect(isOff(item("Ask the agent"))).toBe(true);
         act(() => useApp.setState({ running: false }));
         fireEvent.click(item("Tidy this"));
         expect(tidy).toHaveBeenCalledWith(ELEMENT);
@@ -3772,33 +3952,59 @@ describe("Stage", () => {
         useApp.setState({ tidyElement });
       });
 
-      it("closes on Escape or a press beside it, giving focus back to the slide", () => {
+      it("closes on Escape or a press beside it, giving focus back to the slide", async () => {
         const { frame } = open();
         const focus = vi.spyOn(frame, "focus");
+        // The menu takes the focus a moment after it opens.
+        await settle();
         expect(document.activeElement).toBe(screen.getByRole("menu"));
         fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
         expect(screen.queryByRole("menu")).toBeNull();
-        expect(focus).toHaveBeenCalled();
+        expect(focus).toHaveBeenCalledTimes(1);
         expect(useApp.getState().editing).toBe(true);
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
-        fireEvent.pointerDown(screen.getByTestId("edit-menu-cover"));
+        expect(screen.getByRole("menu")).toBeTruthy();
+        fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+        fireEvent.click(document.body);
         expect(screen.queryByRole("menu")).toBeNull();
+        expect(focus).toHaveBeenCalledTimes(2);
       });
 
-      it("moves through the items with the arrow keys, without reaching the slide's keys", () => {
+      it("hands the focus back to the slide once, as a choice is picked", () => {
+        const { frame, post } = open();
+        const focus = vi.spyOn(frame, "focus");
+        fireEvent.click(item("Duplicate"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-duplicate" }, "*");
+        expect(screen.queryByRole("menu")).toBeNull();
+        expect(focus).toHaveBeenCalledTimes(1);
+      });
+
+      it("moves through the items with the arrow keys, without reaching the slide's keys", async () => {
         open();
+        await settle();
         const menu = screen.getByRole("menu");
-        fireEvent.keyDown(menu, { key: "ArrowDown" });
+        const press = async (key: string) => {
+          fireEvent.keyDown(document.activeElement!, { key });
+          await settle();
+        };
+        expect(document.activeElement).toBe(menu);
+        await press("ArrowDown");
         expect(document.activeElement).toBe(item("Cut"));
-        fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+        await press("ArrowUp");
         expect(document.activeElement).toBe(item("Tidy this"));
-        fireEvent.keyDown(document.activeElement!, { key: "Home" });
+        await press("Home");
         expect(document.activeElement).toBe(item("Cut"));
-        fireEvent.keyDown(document.activeElement!, { key: "End" });
+        await press("End");
         expect(document.activeElement).toBe(item("Tidy this"));
         expect(useApp.getState().selected).toBe("intro");
-        fireEvent.keyDown(document.activeElement!, { key: "t" });
+        await press("t");
         expect(useApp.getState().editTool).toBe("select");
+        // Nor do the app's shortcuts with a modifier get a key pressed in the menu.
+        const onKey = vi.fn();
+        window.addEventListener("keydown", onKey);
+        fireEvent.keyDown(document.activeElement!, { key: "z", ctrlKey: true });
+        window.removeEventListener("keydown", onKey);
+        expect(onKey).not.toHaveBeenCalled();
       });
     });
 
@@ -3814,7 +4020,9 @@ describe("Stage", () => {
       expect(tidy).toHaveBeenCalledTimes(1);
       expect(tidy).toHaveBeenCalledWith([]);
       act(() => useApp.setState({ running: true }));
-      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: /Tidy layout/ }).getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
+      expect(tidy).toHaveBeenCalledTimes(1);
     });
 
     it("warns about overflow found in the editor and hands it to the agent", () => {
@@ -3829,7 +4037,7 @@ describe("Stage", () => {
       toggleEditing();
       const items = ['<h1> "Hello" runs past the bottom edge by 40px'];
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items });
-      expect(screen.getByText("Overflow").getAttribute("title")).toContain(items[0]);
+      expect(tooltipOf(screen.getByText("Overflow"))).toContain(items[0]);
       fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
       expect(tidy).toHaveBeenCalledWith(items);
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: [] });

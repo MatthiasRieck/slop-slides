@@ -1,9 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { hasOpenLayer } from "../lib/layers";
 import { forgetModes } from "../lib/permissions";
 import { type ChatPart, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
+import { tooltipOf } from "../test/ui";
 import { ApprovalCard, ApprovalReview, COMPOSER_INPUT_ATTR, PermissionPicker } from "./Permissions";
 
 const interrupt = vi.fn();
@@ -26,7 +29,7 @@ const picker = () => screen.getByRole("button", { name: "Permissions" });
 const mode = () => useApp.getState().permissionModes[useApp.getState().selection.provider];
 const openPicker = async () => {
   fireEvent.click(picker());
-  await screen.findByRole("button", { name: /Approve for me/ });
+  await screen.findByRole("menuitemradio", { name: /Approve for me/ });
 };
 const part = (): Extract<ChatPart, { kind: "approval" }> => ({
   kind: "approval",
@@ -45,18 +48,18 @@ describe("permission picker", () => {
   it("applies the chosen mode to the selected provider only", async () => {
     render(<PermissionPicker />);
     await openPicker();
-    fireEvent.click(screen.getByRole("button", { name: /Approve for me/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Approve for me/ }));
     expect(mode()).toBe("autoReview");
     expect(picker().textContent).toContain("Approve for me");
     expect(invoke).toHaveBeenCalledWith("permission_modes", { provider: "codex", id: "/decks/talk" });
     invoke.mockResolvedValue(["ask", "fullAccess"]);
     act(() => useApp.setState({ selection: { ...useApp.getState().selection, provider: "claude" } }));
     expect(mode()).toBe("ask");
-    expect(picker().title).toBe("Claude Code permissions: Ask for approval");
+    expect(tooltipOf(picker())).toBe("Claude Code permissions: Ask for approval");
     fireEvent.click(picker());
-    await screen.findByRole("button", { name: /Full access/ });
+    await screen.findByRole("menuitemradio", { name: /Full access/ });
     expect(invoke).toHaveBeenCalledWith("permission_modes", { provider: "claude", id: "/decks/talk" });
-    expect(screen.queryByRole("button", { name: /Approve for me/ })).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: /Approve for me/ })).toBeNull();
     expect(useApp.getState().permissionModes.codex).toBe("autoReview");
   });
 
@@ -72,7 +75,7 @@ describe("permission picker", () => {
     useApp.setState({ selection: { ...useApp.getState().selection, provider: "copilot" } });
     render(<PermissionPicker />);
     fireEvent.click(picker());
-    fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Full access/ }));
     await waitFor(() => expect(mode()).toBe("fullAccess"));
     expect(ask.mock.calls[0]![0]).toContain("GitHub Copilot will be able");
   });
@@ -81,10 +84,10 @@ describe("permission picker", () => {
     ask.mockResolvedValueOnce(false);
     render(<PermissionPicker />);
     await openPicker();
-    fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
     await waitFor(() => expect(ask).toHaveBeenCalled());
     expect(mode()).toBe("ask");
-    fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
     await waitFor(() => expect(mode()).toBe("fullAccess"));
   });
 
@@ -96,7 +99,7 @@ describe("permission picker", () => {
     render(<PermissionPicker />);
     expect((picker() as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(picker());
-    fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Full access/ }));
     await waitFor(() => expect(mode()).toBe("fullAccess"));
     expect(ask).toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith("set_permission_mode", { id: "/decks/talk", mode: "fullAccess" });
@@ -112,7 +115,7 @@ describe("permission picker", () => {
     );
     render(<PermissionPicker />);
     await openPicker();
-    fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
     act(() => useApp.setState({ running: true }));
     await act(async () => resolve(true));
     expect(mode()).toBe("fullAccess");
@@ -130,7 +133,7 @@ describe("permission picker", () => {
     ask.mockRejectedValueOnce("Dialog unavailable");
     render(<PermissionPicker />);
     await openPicker();
-    fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
     expect((await screen.findByRole("alert")).textContent).toBe("Dialog unavailable");
     expect(mode()).toBe("ask");
   });
@@ -140,9 +143,10 @@ describe("permission picker", () => {
     useApp.setState({ permissionModes: { claude: "ask", codex: "autoReview", copilot: "ask" } });
     render(<PermissionPicker />);
     fireEvent.click(picker());
-    await screen.findByRole("button", { name: /Use your existing/ });
-    expect(screen.queryByRole("button", { name: /Full access/ })).toBeNull();
+    await screen.findByRole("menuitemradio", { name: /Use your existing/ });
+    expect(screen.queryByRole("menuitemradio", { name: /Full access/ })).toBeNull();
     expect(screen.getByRole("alert").textContent).toContain("saved mode is unavailable");
+    expect(screen.getByRole("alert").getAttribute("data-slot")).toBe("field-error");
   });
 
   it("reports capability errors without inventing available modes", async () => {
@@ -150,7 +154,9 @@ describe("permission picker", () => {
     render(<PermissionPicker />);
     fireEvent.click(picker());
     expect((await screen.findByRole("alert")).textContent).toBe("CLI unavailable");
-    expect(screen.queryByRole("button", { name: /Full access/ })).toBeNull();
+    // The menu's complaints are all the same kind of line.
+    expect(screen.getByRole("alert").getAttribute("data-slot")).toBe("field-error");
+    expect(screen.queryByRole("menuitemradio", { name: /Full access/ })).toBeNull();
   });
 
   it("dismisses on Escape", async () => {
@@ -173,11 +179,11 @@ describe("permission picker", () => {
     fireEvent.click(picker());
     // No "Checking…": what was offered before is there while the answer is on its way.
     expect(screen.queryByText(/Checking/)).toBeNull();
-    expect(screen.getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Approve for me/ })).toBeTruthy();
     expect(invoke).toHaveBeenCalledTimes(2);
     await act(async () => answer(["ask", "fullAccess"]));
-    expect(screen.queryByRole("button", { name: /Approve for me/ })).toBeNull();
-    expect(screen.getByRole("button", { name: /Full access/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitemradio", { name: /Approve for me/ })).toBeNull();
+    expect(screen.getByRole("menuitemradio", { name: /Full access/ })).toBeTruthy();
   });
 
   it("keeps the modes it knows when asking again fails", async () => {
@@ -188,15 +194,63 @@ describe("permission picker", () => {
     fireEvent.click(picker());
     await act(async () => {});
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("button", { name: /Approve for me/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Approve for me/ })).toBeTruthy();
   });
 
   it("checks the selected mode in the list", async () => {
     render(<PermissionPicker />);
     await openPicker();
-    const selected = screen.getByRole("button", { name: /Ask for approval/, pressed: true });
+    const selected = screen.getByRole("menuitemradio", { name: /Ask for approval/, checked: true });
     expect(selected.querySelector(".lucide-check")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Approve for me/ }).querySelector(".lucide-check")).toBeNull();
+    expect(screen.getByRole("menuitemradio", { name: /Approve for me/ }).querySelector(".lucide-check")).toBeNull();
+    expect(screen.getAllByRole("menuitemradio", { checked: true })).toHaveLength(1);
+  });
+
+  it("is a menu of the modes, one of them checked, that counts as open while it is", async () => {
+    render(<PermissionPicker />);
+    expect(picker().getAttribute("aria-expanded")).toBe("false");
+    await openPicker();
+    expect(picker().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Permission modes" })).toBeTruthy();
+    expect(screen.getAllByRole("menuitemradio").map((item) => item.getAttribute("aria-checked"))).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+    expect(hasOpenLayer()).toBe(true);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(hasOpenLayer()).toBe(false);
+  });
+
+  it("picks a mode with the keyboard, and gives the keyboard back to its button", async () => {
+    const user = userEvent.setup();
+    render(<PermissionPicker />);
+    await user.click(picker());
+    const wanted = await screen.findByRole("menuitemradio", { name: /Approve for me/ });
+    for (let step = 0; step < 4 && document.activeElement !== wanted; step++) await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(wanted);
+    await user.keyboard("{Enter}");
+    expect(mode()).toBe("autoReview");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(picker()));
+  });
+
+  it("stays open, the old mode still checked, until Full access is confirmed", async () => {
+    let confirm!: (value: boolean) => void;
+    ask.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    render(<PermissionPicker />);
+    await openPicker();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Full access/ }));
+    expect(screen.getByRole("menuitemradio", { name: /Ask for approval/, checked: true })).toBeTruthy();
+    await act(async () => confirm(true));
+    expect(mode()).toBe("fullAccess");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("makes Full access stand out from the modes that ask: a warning color, and its name always on show", () => {
@@ -264,6 +318,18 @@ describe("approval card", () => {
     );
     expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
   });
+  it("shows what is asked for as a block of code that wraps, scrolls and can be selected", () => {
+    const p = part();
+    p.approval.details = "cat /reference\nrm -rf /tmp/build";
+    render(<ApprovalCard part={p} />);
+    const details = screen.getByText(/cat \/reference/).closest("pre")!;
+    expect(details.dataset.slot).toBe("code-block-content");
+    expect(details.textContent).toBe("cat /reference\nrm -rf /tmp/build");
+    expect(details.hasAttribute("data-wrap")).toBe(true);
+    expect(details.tabIndex).toBe(0);
+    expect(details.closest(".selectable")).not.toBeNull();
+  });
+
   it("tells the answers apart: accepting is the main button, denying a quiet one, stopping set apart", () => {
     const p = part();
     p.approval.decisions.push("acceptForSession");
@@ -272,13 +338,16 @@ describe("approval card", () => {
     const session = screen.getByRole("button", { name: "Allow for session" });
     const deny = screen.getByRole("button", { name: "Deny" });
     const stop = screen.getByRole("button", { name: "Stop" });
+    // Filled, outlined, and neither: the three looks of a button.
     expect(accept.className).toContain("bg-primary");
-    expect(session.className).toContain("border");
+    expect(session.className).toContain("border-border");
     expect(session.className).not.toContain("bg-primary");
-    expect(deny.className).not.toContain("border");
+    expect(deny.className).not.toContain("border-border");
     expect(deny.className).not.toContain("bg-primary");
     // Stop is no answer to the request: a text button on the far side, after a spacer.
-    expect(stop.className).not.toContain("border");
+    expect(stop.className).not.toContain("border-border");
+    expect(stop.className).toContain("hover:underline");
+    expect(tooltipOf(stop)).toBe("Stop the agent's turn");
     expect(stop.previousElementSibling!.className).toContain("flex-1");
     expect(stop.parentElement!.lastElementChild).toBe(stop);
   });
@@ -287,6 +356,12 @@ describe("approval card", () => {
     const { rerender } = render(<ApprovalCard part={part()} />);
     const card = screen.getByRole("region", { name: "Approval request" });
     expect(card.className).toContain("border-warning");
+    // Built as the review beside it in the transcript is: an item, with its parts in their places.
+    expect(card.tagName).toBe("SECTION");
+    expect(card.dataset.slot).toBe("item");
+    expect(card.querySelector("[data-slot=item-media] svg")).not.toBeNull();
+    expect(screen.getByText("Run a command").dataset.slot).toBe("item-title");
+    expect(screen.getByRole("button", { name: "Stop" }).closest("[data-slot=item-footer]")).not.toBeNull();
     const title = screen.getByText("Run a command");
     expect(title.getAttribute("aria-live")).toBe("assertive");
     expect(title.getAttribute("role")).toBe("status");
@@ -299,10 +374,12 @@ describe("approval card", () => {
     render(<ApprovalCard part={part()} />);
     const accept = screen.getByRole("button", { name: "Allow once" });
     expect(document.activeElement).toBe(accept);
-    expect(screen.getByText("Enter to allow once")).toBeTruthy();
+    const hint = screen.getByText("to allow once");
+    expect(hint.textContent).toBe("Enter to allow once");
+    expect(hint.querySelector("kbd")!.textContent).toBe("Enter");
     // Enter is the focused button's own key: nothing listens for it anywhere else.
     fireEvent.blur(accept);
-    expect(screen.queryByText("Enter to allow once")).toBeNull();
+    expect(screen.queryByText("to allow once")).toBeNull();
   });
 
   it("takes the focus from the empty message input, but not from a draft or another field", () => {
@@ -320,7 +397,7 @@ describe("approval card", () => {
       input.focus();
       const second = render(<ApprovalCard part={part()} />);
       expect(document.activeElement).toBe(input);
-      expect(screen.queryByText(/^Enter to/)).toBeNull();
+      expect(screen.queryByText(/^to allow/)).toBeNull();
       second.unmount();
 
       other.focus();
@@ -361,7 +438,10 @@ describe("approval card", () => {
     invoke.mockRejectedValueOnce("No longer pending");
     render(<ApprovalCard part={part()} />);
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("No longer pending");
+    const failed = await screen.findByRole("alert");
+    expect(failed.textContent).toBe("No longer pending");
+    // An error notice like the chat's others, not a line of red text.
+    expect(failed.getAttribute("data-slot")).toBe("alert");
     fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
   });

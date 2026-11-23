@@ -1,10 +1,19 @@
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { plural } from "../../lib/utils";
 import { editedSlidesOf, useApp } from "../../store";
-import { Button } from "../Button";
-import { Dialog } from "../Dialog";
 
 /** What the button says it discards: the slide shown, or how many slides. */
 export function discardLabel(edited: string[], selected: string | null): string {
@@ -23,6 +32,7 @@ export function DiscardButton() {
   const selected = useApp((s) => s.selected);
   const edited = useApp(editedSlidesOf);
   const [asking, setAsking] = useState(false);
+  const discard = useRef<HTMLButtonElement>(null);
   if (edited.length === 0) return null;
   const app = useApp.getState;
   const here = !!selected && edited.includes(selected);
@@ -33,57 +43,56 @@ export function DiscardButton() {
   };
   return (
     <>
-      <button
-        type="button"
-        title="Undo the edits made since entering edit mode"
+      <Button
+        variant="outline"
+        size="xs"
+        tooltip="Undo the edits made since entering edit mode"
+        tooltipSide="bottom"
         onClick={() => (others > 0 ? setAsking(true) : discardAll())}
-        className="absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border bg-background px-3 py-1 text-xs font-medium text-foreground shadow-md hover:bg-accent [&_svg]:size-3.5"
+        className="absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-background px-3 shadow-md dark:bg-background dark:hover:bg-[color-mix(in_oklch,var(--background),var(--foreground)_8%)]"
       >
-        <X />
+        <X data-icon="inline-start" />
         {discardLabel(edited, selected)}
-      </button>
+      </Button>
       {asking && (
-        <Dialog
-          label="Discard changes"
-          closeOnBackdrop
-          onClose={() => setAsking(false)}
-          className="flex w-96 max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-          heading={
-            <>
-              <h2 className="text-base font-semibold">
+        <AlertDialog open onOpenChange={(open) => !open && setAsking(false)}>
+          {/* With no changes on the slide shown there is one thing to confirm: the focus starts on it. */}
+          <AlertDialogContent {...(!here && { initialFocus: discard })}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
                 {here ? "Discard changes on other slides too?" : `Discard changes on ${plural(others, "other slide")}?`}
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">
+              </AlertDialogTitle>
+              <AlertDialogDescription>
                 {here
                   ? `You also edited ${plural(others, "other slide")} since entering edit mode.`
                   : `The slide shown has no changes. ${others === 1 ? "The slide" : "The slides"} you edited since entering edit mode ${others === 1 ? "goes" : "go"} back to how ${others === 1 ? "it was" : "they were"} then.`}
-              </p>
-            </>
-          }
-        >
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setAsking(false)}>
-              Cancel
-            </Button>
-            {here && selected && (
-              <Button
-                onClick={() => {
-                  setAsking(false);
-                  void app().discardSlideEdits(selected);
-                }}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+              {here && selected && (
+                <AlertDialogAction
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setAsking(false);
+                    void app().discardSlideEdits(selected);
+                  }}
+                >
+                  Only this slide
+                </AlertDialogAction>
+              )}
+              <AlertDialogAction
+                ref={discard}
+                variant={here ? "default" : "destructive"}
+                size="sm"
+                onClick={discardAll}
               >
-                Only this slide
-              </Button>
-            )}
-            <Button
-              variant={here ? "primary" : "destructive"}
-              data-autofocus={here ? undefined : ""}
-              onClick={discardAll}
-            >
-              {here ? `All ${plural(edited.length, "slide")}` : `Discard on ${plural(others, "slide")}`}
-            </Button>
-          </div>
-        </Dialog>
+                {here ? `All ${plural(edited.length, "slide")}` : `Discard on ${plural(others, "slide")}`}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </>
   );

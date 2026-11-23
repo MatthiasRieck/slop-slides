@@ -1,7 +1,19 @@
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { type RewindChoice, useApp } from "../store";
-import { Button } from "./Button";
-import { Dialog } from "./Dialog";
+import { QUIET_LABEL } from "./styles";
 
 /**
  * Asks, once the deck changes of an agent turn were undone, what becomes of the chat: it goes
@@ -17,72 +29,82 @@ export function RewindDialog() {
     return asked ? s.messages.find((m) => m.id === asked.message) : undefined;
   });
   const [remember, setRemember] = useState(false);
+  const rememberId = useId();
+  const rewind = useRef<HTMLButtonElement>(null);
   if (!entry || message?.role !== "user") return null;
   const answer = (picked: RewindChoice | null) => {
     void useApp.getState().answerRewind(picked, remember);
     setRemember(false);
   };
   return (
-    <Dialog
-      label="Undo chat changes"
-      onClose={() => answer(null)}
-      className="flex w-[28rem] max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-      heading={
-        <>
-          <h2 className="text-base font-semibold">You undid the agent's changes. What about the chat?</h2>
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-            The deck is back to how it was before your message “{entry.label}”.
-          </p>
-        </>
-      }
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) answer(null);
+      }}
     >
-      <div className="flex flex-col gap-2">
-        <Choice
-          primary
-          label="Rewind the chat too"
-          detail="The chat goes back to before this message, which returns to the message box. The agent forgets the turn."
-          onClick={() => answer("rewind")}
-        />
-        <Choice
-          label="Keep the chat, tell the agent"
-          detail="The chat stays as it is. Your next message tells the agent that its changes were undone."
-          onClick={() => answer("deck")}
-        />
-      </div>
-      <label className="flex items-start gap-2 text-xs text-muted-foreground">
-        <input type="checkbox" className="mt-0.5" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-        <span>
-          Don't ask again: always do what I pick here.
-          <span className="block">You can change this in Settings › General.</span>
-        </span>
-      </label>
-      <div className="flex items-center justify-between gap-3 border-t pt-3">
-        <p className="text-xs text-muted-foreground">
-          Or leave the chat as it is, without telling the agent; it may not know its changes are gone.
-        </p>
-        <Button variant="ghost" size="xl" className="shrink-0" onClick={() => answer(null)}>
-          Do nothing
-        </Button>
-      </div>
-    </Dialog>
+      <AlertDialogContent initialFocus={rewind} className="data-[size=default]:sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>You undid the agent's changes. What about the chat?</AlertDialogTitle>
+          <AlertDialogDescription className="line-clamp-2 text-xs">
+            The deck is back to how it was before your message “{entry.label}”.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="flex flex-col gap-2">
+          <Choice
+            ref={rewind}
+            primary
+            label="Rewind the chat too"
+            detail="The chat goes back to before this message, which returns to the message box. The agent forgets the turn."
+            onClick={() => answer("rewind")}
+          />
+          <Choice
+            label="Keep the chat, tell the agent"
+            detail="The chat stays as it is. Your next message tells the agent that its changes were undone."
+            onClick={() => answer("deck")}
+          />
+        </div>
+        <Field orientation="horizontal" className="items-start">
+          <Checkbox id={rememberId} checked={remember} onCheckedChange={setRemember} className="mt-0.5" />
+          <FieldContent className="gap-0.5">
+            <FieldLabel htmlFor={rememberId} className={QUIET_LABEL}>
+              Don't ask again: always do what I pick here.
+            </FieldLabel>
+            <FieldDescription className="text-xs">You can change this in Settings › General.</FieldDescription>
+          </FieldContent>
+        </Field>
+        <AlertDialogFooter className="items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Or leave the chat as it is, without telling the agent; it may not know its changes are gone.
+          </p>
+          <AlertDialogCancel variant="ghost" size="sm" className="shrink-0">
+            Do nothing
+          </AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
 /** One of the dialog's answers: a button with what it does written under its name. */
-function Choice(props: { label: string; detail: string; primary?: boolean; onClick: () => void }) {
+function Choice(props: {
+  ref?: React.Ref<HTMLButtonElement>;
+  label: string;
+  detail: string;
+  primary?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <button
-      type="button"
-      data-autofocus={props.primary || undefined}
+    <AlertDialogAction
+      ref={props.ref}
+      variant={props.primary ? "default" : "outline"}
       onClick={props.onClick}
-      className={
-        props.primary
-          ? "flex flex-col gap-0.5 rounded-lg bg-primary p-3 text-left text-primary-foreground hover:opacity-90"
-          : "flex flex-col gap-0.5 rounded-lg border p-3 text-left hover:bg-accent"
-      }
+      className="h-auto flex-col items-start gap-0.5 p-3 text-left whitespace-normal"
     >
       <span className="text-sm font-medium">{props.label}</span>
-      <span className={props.primary ? "text-xs opacity-90" : "text-xs text-muted-foreground"}>{props.detail}</span>
-    </button>
+      <span className={props.primary ? "text-xs font-normal opacity-90" : "text-xs font-normal text-muted-foreground"}>
+        {props.detail}
+      </span>
+    </AlertDialogAction>
   );
 }

@@ -335,10 +335,59 @@ describe("the chat out of view", () => {
   });
 });
 
+describe("the conversation's own parts", () => {
+  /** How often anything in the conversation rendered, the scroller's own parts included. */
+  const shown = (messages: ChatMessage[], running = false) => {
+    const commits = vi.fn();
+    useApp.setState({ messages, running });
+    render(
+      <Profiler id="conversation" onRender={commits}>
+        <MessageList />
+      </Profiler>,
+    );
+    commits.mockClear();
+    return commits;
+  };
+
+  it("render once for an event of the agent's, whatever the conversation holds", () => {
+    const last = reply("now", [text("So far")], { status: "streaming" });
+    const commits = shown([...transcript(15), said("ask", "And now?"), last], true);
+    startCounting();
+    act(() => applyAgentEvent(useApp, { type: "textDelta", text: ", and more" }));
+    expect(commits).toHaveBeenCalledTimes(1);
+    // Of the messages, the one that changed.
+    expect(renders).toEqual({ now: 1 });
+  });
+
+  it("have no tooltip of their own per message: a long conversation would pay for each with every word", () => {
+    shown(transcript(15));
+    const messages = [...document.querySelectorAll<HTMLElement>("[data-slot=message-scroller-item]")];
+    expect(messages).toHaveLength(30);
+    for (const message of messages) {
+      expect(message.querySelector("[data-slot=tooltip-trigger]")).toBeNull();
+      // What its buttons do is said by the browser's own tooltip instead.
+      for (const button of message.querySelectorAll("button[aria-label]")) {
+        expect(button.getAttribute("title") ?? button.getAttribute("aria-label")).toBeTruthy();
+      }
+    }
+  });
+
+  it("do not render when the reader scrolls: where they are is the scroller's to know, not React's", () => {
+    const commits = shown(transcript(15));
+    const viewport = screen.getByRole("region", { name: "Conversation" });
+    fireEvent.wheel(viewport);
+    fireEvent.scroll(viewport);
+    fireEvent.scroll(viewport);
+    expect(commits).not.toHaveBeenCalled();
+  });
+});
+
 describe("a message of the conversation", () => {
   it("is marked for the browser to leave out of the layout while out of view", () => {
     useApp.setState({ messages: transcript(2) });
     const { container } = render(<MessageList />);
-    expect(container.querySelectorAll(".chat-message")).toHaveLength(4);
+    const items = [...container.querySelectorAll<HTMLElement>("[data-slot=message-scroller-item]")];
+    expect(items.map((item) => item.dataset.messageId)).toEqual(["u0", "a0", "u1", "a1"]);
+    for (const item of items) expect(item.className).toContain("[content-visibility:auto]");
   });
 });

@@ -9,9 +9,12 @@ listen.mockImplementation(async (name: string, handler: (event: { payload: unkno
   return () => listeners.delete(name);
 });
 
+import { Popover, PopoverContent } from "@/components/ui/popover";
+import { hasOpenLayer } from "../lib/layers";
 import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
+import { settle, tooltipOf } from "../test/ui";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 const handlers = () => ({ onStart: vi.fn(), onPartial: vi.fn(), onEnd: vi.fn() });
@@ -265,12 +268,15 @@ describe("VoiceInput", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(listeners.has("voice-download")).toBe(true));
     act(() => listeners.get("voice-download")!({ payload: { received: MODEL_BYTES / 2, total: MODEL_BYTES } }));
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
-    // The bar is moved into its track, which takes no layout; its width does not change.
-    const bar = screen.getByRole("progressbar").firstElementChild as HTMLElement;
-    expect(bar.style.transform).toBe("translateX(-50%)");
-    expect(bar.style.width).toBe("");
+    const progress = screen.getByRole("progressbar", { name: "Speech model download" });
+    expect(progress.getAttribute("aria-valuenow")).toBe("50");
+    expect(progress.querySelector<HTMLElement>("[data-slot=progress-indicator]")!.style.width).toBe("50%");
     expect(screen.getByText("95 MB of 190 MB")).toBeTruthy();
+    // A download once started stays on show: neither Escape nor a press beside it puts it away.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.pointerDown(document.body, { pointerType: "mouse", button: 0 });
+    fireEvent.click(document.body);
+    expect(screen.getByRole("progressbar")).toBeTruthy();
 
     await act(async () => server.finishDownload());
     await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
@@ -287,17 +293,46 @@ describe("VoiceInput", () => {
     expect(commands()).toEqual(["voice_status"]);
   });
 
-  it("names itself after its field, and can keep the offer next to the button", async () => {
+  it("names itself after its field, and offers the download in a popover named by its question", async () => {
     backend({ ready: false });
-    const { container } = render(
-      <div data-testid="field">
-        <VoiceInput label="Dictate the comment" portal={false} {...handlers()} />
-      </div>,
+    render(<VoiceInput label="Dictate the comment" {...handlers()} />);
+    const mic = screen.getByRole("button", { name: "Dictate the comment" });
+    expect(tooltipOf(mic)).toBe("Dictate the comment");
+    fireEvent.click(mic);
+    const offer = await screen.findByRole("dialog", { name: "Download the speech model?" });
+    expect(offer.textContent).toContain("190 MB");
+    expect(hasOpenLayer()).toBe(true);
+    // Escape puts the offer away, as does the button it came from.
+    fireEvent.keyDown(offer, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(mic);
+    await screen.findByRole("dialog", { name: "Download the speech model?" });
+    fireEvent.click(mic);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(commands()).not.toContain("download_voice_model");
+  });
+
+  it("offers the download from inside another popover without closing that one", async () => {
+    backend({ ready: false });
+    const onOpenChange = vi.fn();
+    render(
+      <Popover open onOpenChange={onOpenChange}>
+        <PopoverContent aria-label="Comment">
+          <VoiceInput label="Dictate the comment" {...handlers()} />
+        </PopoverContent>
+      </Popover>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Dictate the comment" }));
-    const offer = await screen.findByText("Download the speech model?");
-    expect(screen.getByTestId("field").contains(offer)).toBe(true);
-    expect(container.contains(offer)).toBe(true);
+    const question = await screen.findByText("Download the speech model?");
+    await settle();
+    // A press on the offer is not a press outside of the popover it opened from.
+    fireEvent.pointerDown(question, { pointerType: "mouse", button: 0 });
+    fireEvent.click(question);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Comment" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByText("Download the speech model?")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Comment" })).toBeTruthy();
   });
 
   it("reports a microphone that cannot be opened", async () => {

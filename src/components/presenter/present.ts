@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { api, type Screen } from "../../lib/api";
+import { isFrame } from "../../lib/framePress";
 import { isTextField } from "../../lib/keys";
 import { hasOpenLayer } from "../../lib/layers";
 import { type Placement, type ScreenChoice, type ShowStart, saveChoice } from "../../lib/screens";
@@ -88,9 +89,6 @@ function asksToPresent(key: string, mod: boolean, shift: boolean, alt: boolean):
   if (key !== "Enter" || !mod || alt) return null;
   return shift ? "start" : "current";
 }
-
-const isFrame = (source: MessageEventSource | null) =>
-  Array.from(document.querySelectorAll("iframe")).some((frame) => frame.contentWindow === source);
 
 /**
  * The keys that start a show, anywhere in the app: ⌘↵ from the selected slide and ⇧⌘↵ from the

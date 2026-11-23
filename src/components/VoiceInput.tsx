@@ -1,13 +1,16 @@
-import { Check, Loader2, Mic } from "lucide-react";
+import { Check, Mic } from "lucide-react";
 import { type Ref, type RefObject, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverDescription, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
 import { openLayer } from "../lib/layers";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
 import { showError } from "../store";
-import { Popover } from "./Popover";
 
 type Phase = "idle" | "offer" | "downloading" | "starting" | "recording" | "transcribing";
 
@@ -107,12 +110,11 @@ function Waveform(props: { level: RefObject<number>; live: boolean }) {
  * again (it shows a check meanwhile) to keep it. The first use offers to download the speech model, which then runs locally.
  *
  * - `label`: what the button does while idle, "Dictate a message" by default.
- * - `portal`: puts the download offer in the body (the default). Off, it stays inside the
- *   button's parent, for a popover that would take a press on it as a press outside.
+ *
+ * The download offer is a popover; opened from inside another one (a comment's editor), that one
+ * knows it as its own, so a press on the offer is not a press outside of it.
  */
-export function VoiceInput(
-  props: DictationHandlers & { ref?: Ref<VoiceInputHandle>; label?: string; portal?: boolean },
-) {
+export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHandle>; label?: string }) {
   const handlers = useRef(props);
   handlers.current = props;
   const sendWhenDone = useRef(false);
@@ -127,7 +129,6 @@ export function VoiceInput(
     level.current = value;
     if (ring.current) ring.current.style.transform = `scale(${1 + value * 0.35})`;
   };
-  const button = useRef<HTMLButtonElement>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -226,99 +227,84 @@ export function VoiceInput(
     transcribing: "Transcribing…",
   }[phase];
 
+  const busy = phase === "transcribing" || phase === "starting" || phase === "downloading";
+  const offered = phase === "offer" || phase === "downloading";
+
   return (
     <>
       {(phase === "recording" || phase === "transcribing") && <Waveform level={level} live={phase === "recording"} />}
-      <button
-        ref={button}
-        type="button"
-        onClick={() => void click()}
-        title={title}
-        aria-label={title}
-        aria-pressed={phase === "recording"}
-        disabled={phase === "starting" || phase === "transcribing"}
-        className={cn(
-          "relative flex size-8 shrink-0 items-center justify-center rounded-full",
-          phase === "recording"
-            ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
-            : "text-muted-foreground hover:bg-accent hover:text-foreground",
-        )}
+      {/* The offer opens when the model turns out to be missing, not on the press itself: the
+          button only ever closes it (and a download, once started, stays on show). */}
+      <Popover
+        open={offered}
+        onOpenChange={(open) => {
+          if (!open) closeOffer();
+        }}
       >
-        {phase === "recording" && (
-          <span
-            ref={ring}
-            aria-hidden
-            data-testid="voice-level"
-            className="pointer-events-none absolute inset-0 rounded-full border-2 border-destructive/60 transition-transform duration-75"
-          />
-        )}
-        {phase === "transcribing" || phase === "starting" || phase === "downloading" ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : phase === "recording" ? (
-          // A check, not a square: it keeps what was said, where a square would look like stopping the agent.
-          <Check className="size-4" />
-        ) : (
-          <Mic className="size-4" />
-        )}
-      </button>
-      {(phase === "offer" || phase === "downloading") && (
-        <Popover
-          anchor={button}
-          onClose={closeOffer}
-          width={280}
-          variant="menu"
-          portal={props.portal ?? true}
-          follow
-          className="p-3 text-xs"
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => void click()}
+              tooltip={title}
+              aria-label={title}
+              aria-pressed={phase === "recording"}
+              disabled={phase === "starting" || phase === "transcribing"}
+              className={cn(
+                "relative shrink-0 rounded-full",
+                phase === "recording"
+                  ? "bg-destructive/15 text-destructive hover:bg-destructive/25 hover:text-destructive aria-pressed:bg-destructive/15 aria-pressed:text-destructive dark:hover:bg-destructive/25"
+                  : "text-muted-foreground",
+              )}
+            />
+          }
         >
+          {phase === "recording" && (
+            <span
+              ref={ring}
+              aria-hidden
+              data-testid="voice-level"
+              className="pointer-events-none absolute inset-0 rounded-full border-2 border-destructive/60 transition-transform duration-75"
+            />
+          )}
+          {busy ? (
+            <Spinner aria-hidden="true" />
+          ) : phase === "recording" ? (
+            // A check, not a square: it keeps what was said, where a square would look like stopping the agent.
+            <Check />
+          ) : (
+            <Mic />
+          )}
+        </PopoverTrigger>
+        <PopoverContent side="top" align="end" className="w-[280px] gap-0 p-3 text-xs">
           {phase === "offer" ? (
             <>
-              <p className="font-medium text-foreground">Download the speech model?</p>
-              <p className="mt-1 text-muted-foreground">
+              <PopoverTitle className="text-xs">Download the speech model?</PopoverTitle>
+              <PopoverDescription className="mt-1 text-xs">
                 Voice input transcribes on this computer with Whisper. The model ({formatBytes(modelBytes)}) is
                 downloaded once to ~/.slopslides/models.
-              </p>
+              </PopoverDescription>
               <div className="mt-3 flex justify-end gap-1.5">
-                <button
-                  type="button"
-                  onClick={closeOffer}
-                  className="rounded-md px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
+                <Button variant="ghost" size="xs" onClick={closeOffer} className="text-muted-foreground">
                   Not now
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void download()}
-                  className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:opacity-90"
-                >
+                </Button>
+                <Button size="xs" onClick={() => void download()}>
                   Download
-                </button>
+                </Button>
               </div>
             </>
           ) : (
             <>
-              <p className="font-medium text-foreground">Downloading the speech model…</p>
-              <div
-                role="progressbar"
-                aria-label="Speech model download"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
-                className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
-              >
-                {/* As wide as its track and moved into it from the left: moving takes no layout, a width changing does. */}
-                <div
-                  className="h-full bg-primary transition-transform"
-                  style={{ transform: `translateX(${percent - 100}%)` }}
-                />
-              </div>
+              <PopoverTitle className="text-xs">Downloading the speech model…</PopoverTitle>
+              <Progress aria-label="Speech model download" value={percent} className="mt-2 gap-0" />
               <p className="mt-1.5 text-muted-foreground">
                 {progress ? `${formatBytes(progress.received)} of ${formatBytes(progress.total)}` : "Starting…"}
               </p>
             </>
           )}
-        </Popover>
-      )}
+        </PopoverContent>
+      </Popover>
     </>
   );
 }

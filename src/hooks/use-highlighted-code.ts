@@ -1,0 +1,89 @@
+import * as React from "react";
+
+import { loadHighlighter } from "@/lib/highlighter";
+
+/** Code longer than this stays plain: coloring it would hold the page up for longer than it is worth. */
+export const HIGHLIGHT_LIMIT = 50_000;
+
+/**
+ * The lines of `value`, colored as `language` once its grammar is loaded, plain until then.
+ *
+ * Coloring is work on the main thread for every token, so it is only done where it shows: pass
+ * `enabled` false for code the user has not got to see yet (see `useSeen`), which then stays
+ * plain, while its grammar loads all the same and is ready when it is wanted. The first pass
+ * over code already there is a transition, which a key press or a click interrupts.
+ */
+export function useHighlightedCode(value: string, language: string, enabled = true) {
+  // A trailing newline would render as an extra empty line.
+  const code = value.endsWith("\n") ? value.slice(0, -1) : value;
+  const colored = enabled && code.length <= HIGHLIGHT_LIMIT;
+  const [loaded, setLoaded] = React.useState<{
+    language: string;
+    highlighter: Awaited<ReturnType<typeof loadHighlighter>>;
+  } | null>(null);
+  const highlighter = colored && loaded?.language === language ? loaded.highlighter : null;
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    loadHighlighter(language)
+      .then((next) => {
+        if (!cancelled) {
+          // The same grammar again (the chat shown again runs this for every block) changes nothing.
+          React.startTransition(() =>
+            setLoaded((was) =>
+              was?.language === language && was.highlighter === next ? was : { language, highlighter: next },
+            ),
+          );
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [language]);
+
+  // The complete lines, highlighted. While the code streams, only the new
+  // lines are tokenized, starting from the grammar state of the last one.
+  const [done, setDone] = React.useState<{
+    highlighter: typeof highlighter;
+    text: string;
+    lines: React.ReactNode[];
+    state?: Parameters<NonNullable<typeof highlighter>["highlight"]>[1];
+  }>({ highlighter: null, text: "", lines: [] });
+
+  let next = done;
+
+  if (next.highlighter !== highlighter || !code.startsWith(next.text)) {
+    next = { highlighter, text: "", lines: [] };
+  }
+
+  const end = code.lastIndexOf("\n") + 1;
+
+  if (highlighter && end > next.text.length) {
+    const result = highlighter.highlight(code.slice(next.text.length, end - 1), next.state);
+
+    next = {
+      highlighter,
+      text: code.slice(0, end),
+      lines: [...next.lines, ...result.lines],
+      state: result.state,
+    };
+  }
+
+  if (next !== done) {
+    setDone(next);
+  }
+
+  // The last line is still being written, so it is tokenized on every render.
+  const tail = code.slice(end);
+
+  return React.useMemo(() => {
+    if (!highlighter) {
+      return code.split("\n");
+    }
+
+    return [...next.lines, highlighter.highlight(tail, next.state).lines[0]];
+  }, [code, highlighter, next, tail]);
+}

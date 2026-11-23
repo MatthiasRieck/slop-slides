@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { isOff, tooltipOf } from "../test/ui";
 import { TimelineTools } from "./TimelineTools";
 
 beforeEach(() => useApp.setState({ deck: deckFor(DECK_HTML), timelineOpen: false }));
@@ -26,6 +27,9 @@ describe("TimelineTools", () => {
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
     render(<TimelineTools collapsed={false} />);
-    expect(toggle().disabled).toBe(true);
+    expect(isOff(toggle())).toBe(true);
+    expect(tooltipOf(toggle())).toBe("Every slide is hidden: there is nothing to play");
+    fireEvent.click(toggle());
+    expect(useApp.getState().timelineOpen).toBe(false);
   });
 });

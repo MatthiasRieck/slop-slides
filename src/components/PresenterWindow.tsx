@@ -1,6 +1,9 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+
 import { isTypingTarget } from "../lib/keys";
 import { hasOpenLayer } from "../lib/layers";
 import { useApp } from "../store";
@@ -50,9 +53,14 @@ export function PresenterWindow() {
 
   if (!state)
     return (
-      <div className="dark flex h-screen items-center justify-center bg-background text-foreground/50 text-sm">
-        Waiting for the show…
-      </div>
+      <Empty className="dark h-screen rounded-none bg-background text-foreground">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Spinner aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle className="font-normal text-muted-foreground">Waiting for the show…</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
     );
   return (
     <div className="h-screen">

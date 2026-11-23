@@ -17,7 +17,7 @@ export function InstallHint({ text }: { text: string }) {
             <code className="selectable rounded bg-foreground/10 px-1 py-0.5 font-mono text-[0.95em] text-foreground">
               {span.text}
             </code>
-            <CopyButton text={span.text} label={`Copy ${span.text}`} className="p-0.5" />
+            <CopyButton text={span.text} label={`Copy ${span.text}`} size="icon-2xs" className="text-current" />
           </span>
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: the sentence is fixed

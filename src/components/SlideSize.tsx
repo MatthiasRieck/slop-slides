@@ -1,5 +1,10 @@
 import { RectangleHorizontal, RectangleVertical, Square } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import {
   convert,
@@ -15,10 +20,9 @@ import {
   toPixels,
   withOrientation,
 } from "../lib/slideSize";
-import { cn } from "../lib/utils";
 import { type DesignChange, useApp } from "../store";
-import { Button } from "./Button";
-import { Field, NumberField, selectClass } from "./Field";
+import { NumberField } from "./fields";
+import { QUIET_LABEL } from "./styles";
 import { RequestStatus } from "./Templates";
 
 const ORIENTATIONS: { id: Orientation; label: string; icon: typeof Square }[] = [
@@ -70,6 +74,7 @@ function SlideSizePanel(props: {
   const [height, setHeight] = useState(String(current.height));
   const hasSlides = useApp((s) => (s.deck?.slides.length ?? 0) > 0);
   const running = useApp((s) => s.running);
+  const id = useId();
 
   const draft: SlideSize = { width: Number(width), height: Number(height), unit };
   const problem = width.trim() === "" || height.trim() === "" ? "Enter a width and a height." : sizeProblem(draft);
@@ -89,6 +94,7 @@ function SlideSizePanel(props: {
   };
 
   const pixels = problem ? null : toPixels(draft);
+  const inPixels = unit !== "px" && pixels ? `A ${pixels.width} × ${pixels.height} px canvas (96 px per inch).` : "";
   return (
     <form
       className="flex flex-col gap-3 p-3 text-xs"
@@ -98,31 +104,35 @@ function SlideSizePanel(props: {
       }}
     >
       <div className="font-medium">Slide size</div>
-      <div className="grid grid-cols-3 gap-1 rounded-md border bg-muted p-0.5">
-        {ORIENTATIONS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={orientation === id}
-            disabled={!!problem}
-            onClick={() => show(withOrientation(draft, id))}
-            className={cn(
-              "flex items-center justify-center gap-1.5 rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground disabled:opacity-40",
-              orientation === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
-            )}
-          >
-            <Icon className="size-3.5" />
+      <ToggleGroup
+        aria-label="Orientation"
+        variant="outline"
+        size="xs"
+        spacing={0}
+        disabled={!!problem}
+        value={orientation ? [orientation] : []}
+        // A press on the orientation the slides have changes nothing.
+        onValueChange={([next]) => next && show(withOrientation(draft, next as Orientation))}
+        className="w-full"
+      >
+        {ORIENTATIONS.map(({ id: value, label, icon: Icon }) => (
+          <ToggleGroupItem key={value} value={value} className="flex-1 gap-1.5">
+            <Icon data-icon="inline-start" />
             {label}
-          </button>
+          </ToggleGroupItem>
         ))}
-      </div>
+      </ToggleGroup>
       <div className="flex items-end gap-2">
-        <NumberField label="Width" aria-label="Width" min={0} value={width} onChange={setWidth} />
+        <NumberField label="Width" min={0} value={width} onChange={setWidth} />
         <span className="pb-1.5 text-muted-foreground">×</span>
-        <NumberField label="Height" aria-label="Height" min={0} value={height} onChange={setHeight} />
-        <Field label="Unit" className="flex flex-col gap-1">
-          <select
-            aria-label="Unit"
+        <NumberField label="Height" min={0} value={height} onChange={setHeight} />
+        <Field className="w-auto gap-1">
+          <FieldLabel htmlFor={`${id}-unit`} className={QUIET_LABEL}>
+            Unit
+          </FieldLabel>
+          <NativeSelect
+            id={`${id}-unit`}
+            size="sm"
             value={unit}
             onChange={(event) => {
               const next = event.target.value as SizeUnit;
@@ -130,47 +140,43 @@ function SlideSizePanel(props: {
               if (!problem) show(convert(draft, next));
               else setUnit(next);
             }}
-            className={selectClass}
           >
             {UNITS.map((u) => (
-              <option key={u.id} value={u.id}>
+              <NativeSelectOption key={u.id} value={u.id}>
                 {u.label}
-              </option>
+              </NativeSelectOption>
             ))}
-          </select>
+          </NativeSelect>
         </Field>
       </div>
-      <p
-        role={problem ? "alert" : undefined}
-        className={cn("min-h-4 text-2xs", problem ? "text-destructive" : "text-muted-foreground")}
-      >
-        {problem ?? (unit !== "px" && pixels ? `A ${pixels.width} × ${pixels.height} px canvas (96 px per inch).` : "")}
-      </p>
-      <div className="flex flex-col gap-1">
-        <span className="text-muted-foreground">Common sizes</span>
+      {problem ? (
+        <FieldError className="min-h-4 text-2xs">{problem}</FieldError>
+      ) : (
+        <FieldDescription className="min-h-4 text-2xs">{inPixels}</FieldDescription>
+      )}
+      <Field className="gap-1">
+        <FieldTitle className={QUIET_LABEL}>Common sizes</FieldTitle>
         <div className="flex flex-wrap gap-1">
           {SIZE_PRESETS.map((preset) => (
-            <button
+            <Button
               key={preset.label}
-              type="button"
-              title={describeSize(preset.size)}
+              variant="outline"
+              size="2xs"
+              tooltip={describeSize(preset.size)}
               aria-pressed={!problem && sameSize(draft, preset.size)}
               onClick={() => show(preset.size)}
-              className={cn(
-                "rounded-md border px-1.5 py-0.5 text-2xs hover:bg-accent",
-                !problem && sameSize(draft, preset.size) && "border-primary text-foreground",
-              )}
+              className="text-2xs aria-pressed:border-primary"
             >
               {preset.label}
-            </button>
+            </Button>
           ))}
         </div>
-      </div>
+      </Field>
       {hasSlides && (
-        <p className="text-2xs text-muted-foreground">
+        <FieldDescription className="text-2xs">
           The slides keep their content. The chat gets a message asking the agent to lay them out again for the new
           size.
-        </p>
+        </FieldDescription>
       )}
       {props.applied === "requested" && (
         <RequestStatus>Slides resized. Request added to the chat. Send it to lay the slides out again.</RequestStatus>
@@ -182,15 +188,15 @@ function SlideSizePanel(props: {
       )}
       <div className="flex items-center justify-end gap-2">
         {running && <span className="mr-auto text-2xs text-muted-foreground">{SIZE_BUSY}.</span>}
-        <Button size="lg" disabled={unchanged} onClick={() => show(current)}>
+        <Button variant="outline" size="xs" disabled={unchanged} onClick={() => show(current)}>
           Reset
         </Button>
         <Button
-          variant="primary"
-          size="lg"
+          size="xs"
           type="submit"
           disabled={!!problem || unchanged || running}
-          title={running ? SIZE_BUSY : undefined}
+          // Said on the button too, while the agent is why it waits.
+          tooltip={running ? SIZE_BUSY : undefined}
         >
           Apply
         </Button>

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
+import { AppProviders } from "./components/AppProviders";
 import "./index.css";
 import { followAppearance } from "./lib/theme";
 import { initNarrationEvents } from "./narrationStore";
@@ -25,7 +26,9 @@ if (new URLSearchParams(window.location.search).has("presenter")) {
   void import("./components/PresenterWindow").then(({ PresenterWindow }) =>
     root.render(
       <React.StrictMode>
-        <PresenterWindow />
+        <AppProviders>
+          <PresenterWindow />
+        </AppProviders>
       </React.StrictMode>,
     ),
   );
@@ -34,7 +37,9 @@ if (new URLSearchParams(window.location.search).has("presenter")) {
   void initNarrationEvents();
   root.render(
     <React.StrictMode>
-      <App />
+      <AppProviders>
+        <App />
+      </AppProviders>
     </React.StrictMode>,
   );
 }

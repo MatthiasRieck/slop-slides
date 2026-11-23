@@ -11,6 +11,11 @@ import { isOff, settle, tooltipOf } from "../test/ui";
 import { EditToolbar } from "./EditToolbar";
 import { reportFromEditor, resetEditorState } from "./stage/editorState";
 
+// The whole toolbar is rendered here, and some tests open a tooltip for each of its tools in turn:
+// seconds of work on a slow CI machine (Windows takes three times as long as a laptop), which the
+// default five seconds do not always leave.
+vi.setConfig({ testTimeout: 30_000 });
+
 const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Slide", "Arrange", "Timeline"];
 const SECTION_WIDTH = 200;
 

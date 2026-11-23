@@ -352,19 +352,10 @@
 }
 
 /*
- * A message of the chat. The browser lays out and paints only those in view, and takes the rest
- * to be as tall as they were when last seen (a guess before that), so a long conversation costs
- * what is on screen when the sidebar is resized or shown. What is left out can still be found,
- * selected and scrolled to. The padding, taken back by the margin, is room for the focus ring of
- * a button at the message's edge: nothing is painted outside a message's own box.
+ * Text written in Markdown: a reply of the agent's, speaker notes, a narration. Code set off from
+ * the text is a block of its own in the chat (a `CodeBlock`, which brings its own looks and is
+ * left alone here); anywhere else it is a plain `pre`.
  */
-.chat-message {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 6rem;
-  margin: -4px;
-  padding: 4px;
-}
-
 .markdown {
   overflow-wrap: anywhere;
   font-size: 0.875rem;
@@ -381,22 +372,22 @@
   list-style: decimal;
   padding-left: 1.25em;
 }
-.markdown code {
+.markdown :not(pre) > code {
   font-family: var(--font-mono);
   font-size: 0.8em;
   background: var(--accent);
   padding: 0.1em 0.35em;
   border-radius: 0.3em;
 }
-.markdown pre {
+.markdown pre:not([data-slot]) {
   background: var(--accent);
   padding: 0.75em;
   border-radius: 0.5em;
   overflow-x: auto;
 }
-.markdown pre code {
-  background: none;
-  padding: 0;
+.markdown pre:not([data-slot]) code {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
 }
 .markdown a {
   color: var(--primary);

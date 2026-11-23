@@ -1,12 +1,22 @@
 import { FileText, Pencil } from "lucide-react";
 import { memo, useState } from "react";
 
+import {
+  Attachment,
+  AttachmentContent,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Button } from "@/components/ui/button";
+import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
 import { isImage } from "../../lib/drop";
 import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { basename, cn, workspaceChatFileUrl } from "../../lib/utils";
 import { type UserMessage, useApp } from "../../store";
 import { CopyButton } from "./CopyButton";
-import { MESSAGE, ON_HOVER } from "./messageStyles";
+import { CHIP, CHIP_ICON, ON_HOVER } from "./messageStyles";
 
 /** What a picture sent along with a message shows, for those who cannot see it. */
 type Picture = { path: string; alt: string };
@@ -20,21 +30,30 @@ function picturesOf(message: UserMessage): Picture[] {
   ];
 }
 
+/**
+ * What goes along with a message, in a row at the message's side that wraps (and so neither
+ * scrolls nor fades at its ends, as a row of attachments does by itself).
+ */
+const ALONG = "max-w-[85%] flex-wrap justify-end gap-1.5 overflow-visible py-0 mask-none!";
+
 /** A picture sent along with a message, small; nothing once its file is gone. */
 function Thumbnail({ picture, workspace }: { picture: Picture; workspace: string }) {
   const [missing, setMissing] = useState(false);
   if (missing) return null;
   return (
-    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: a failed load is not an interaction
-    <img
-      src={workspaceChatFileUrl(workspace, picture.path)}
-      alt={picture.alt}
-      title={picture.alt}
-      loading="lazy"
-      draggable={false}
-      onError={() => setMissing(true)}
-      className="size-14 rounded-lg border bg-muted object-cover"
-    />
+    <Attachment size="xs" className="min-w-0 has-data-[slot=attachment-media]:p-0.5">
+      <AttachmentMedia variant="image" className="group-data-[size=xs]/attachment:w-14">
+        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: a failed load is not an interaction */}
+        <img
+          src={workspaceChatFileUrl(workspace, picture.path)}
+          alt={picture.alt}
+          title={picture.alt}
+          loading="lazy"
+          draggable={false}
+          onError={() => setMissing(true)}
+        />
+      </AttachmentMedia>
+    </Attachment>
   );
 }
 
@@ -50,84 +69,96 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
   const pictures = picturesOf(message);
   const files = message.attachments.filter((a) => !isImage(a));
   return (
-    <div className={cn(MESSAGE, "items-end gap-1")}>
-      {pictures.length > 0 && (
-        <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
-          {pictures.map((picture) => (
-            <Thumbnail key={picture.path} picture={picture} workspace={workspace} />
-          ))}
-        </div>
-      )}
-      {files.length > 0 && (
-        <ul className="flex max-w-[85%] flex-wrap justify-end gap-1">
-          {files.map((file) => (
-            <li
-              key={file}
-              title={file}
-              className="flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
+    <Message align="end">
+      <MessageContent className="gap-1">
+        {pictures.length > 0 && (
+          <AttachmentGroup className={ALONG}>
+            {pictures.map((picture) => (
+              <Thumbnail key={picture.path} picture={picture} workspace={workspace} />
+            ))}
+          </AttachmentGroup>
+        )}
+        {files.length > 0 && (
+          <AttachmentGroup role="list" className={cn(ALONG, "gap-1")}>
+            {files.map((file) => (
+              <Attachment
+                key={file}
+                role="listitem"
+                size="xs"
+                title={file}
+                className={cn(CHIP, "text-muted-foreground")}
+              >
+                <AttachmentMedia className={CHIP_ICON}>
+                  <FileText className="size-3" />
+                </AttachmentMedia>
+                <AttachmentContent>
+                  <AttachmentTitle className="font-normal">{file.replace(/^assets\//, "")}</AttachmentTitle>
+                </AttachmentContent>
+              </Attachment>
+            ))}
+          </AttachmentGroup>
+        )}
+        <Bubble variant="secondary" align="end" className="max-w-[85%]">
+          <BubbleContent className="selectable rounded-2xl p-3">
+            {/* What the user typed is shown as typed: marks in it are not formatting. */}
+            <p
+              className={cn(
+                "whitespace-pre-wrap break-words",
+                collapsible &&
+                  !expanded &&
+                  "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
+              )}
             >
-              <FileText className="size-3 shrink-0" />
-              <span className="truncate">{file.replace(/^assets\//, "")}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="selectable min-w-0 max-w-[85%] rounded-2xl bg-accent p-3 text-sm leading-relaxed">
-        {/* What the user typed is shown as typed: marks in it are not formatting. */}
-        <p
-          className={cn(
-            "whitespace-pre-wrap break-words",
-            collapsible &&
-              !expanded &&
-              "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
+              {message.text}
+            </p>
+            {collapsible && (
+              <Button
+                variant="link"
+                size="2xs"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(!expanded)}
+                className="mt-2 px-0 font-normal text-muted-foreground hover:text-foreground"
+              >
+                {expanded ? "Show less" : "Show full message"}
+              </Button>
+            )}
+          </BubbleContent>
+        </Bubble>
+        <MessageFooter className="px-0">
+          {!message.command && (
+            <Button
+              variant="tool"
+              size="icon-xs"
+              aria-label="Edit message"
+              tooltip="Edit: put this text back into the message box"
+              onClick={() => useApp.getState().fillComposer(message.text)}
+              className={ON_HOVER}
+            >
+              <Pencil />
+            </Button>
           )}
-        >
-          {message.text}
-        </p>
-        {collapsible && (
-          <button
-            type="button"
-            aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
-            className="mt-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {expanded ? "Show less" : "Show full message"}
-          </button>
+          <CopyButton text={message.text} label="Copy message" className={ON_HOVER} />
+        </MessageFooter>
+        {(slideNumber > 0 ||
+          message.sketch ||
+          !!message.comments?.length ||
+          message.screenshot ||
+          message.element ||
+          message.reverted) && (
+          <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
+            {message.reverted && <span title="You undid what this turn changed in the deck">changes undone ·</span>}
+            {slideNumber > 0 && <span>on slide {slideNumber}</span>}
+            {message.sketch && <span>· with sketch</span>}
+            {!!message.comments?.length && (
+              <span>
+                · with {message.comments.length} comment{message.comments.length === 1 ? "" : "s"}
+              </span>
+            )}
+            {message.element && <span>· about {message.element.name}</span>}
+            {message.screenshot && <span>· with screenshot</span>}
+          </div>
         )}
-      </div>
-      <div className="flex items-center">
-        {!message.command && (
-          <button
-            type="button"
-            aria-label="Edit message"
-            title="Edit: put this text back into the message box"
-            onClick={() => useApp.getState().fillComposer(message.text)}
-            className={cn("rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground", ON_HOVER)}
-          >
-            <Pencil className="size-3" />
-          </button>
-        )}
-        <CopyButton text={message.text} label="Copy message" className={ON_HOVER} />
-      </div>
-      {(slideNumber > 0 ||
-        message.sketch ||
-        !!message.comments?.length ||
-        message.screenshot ||
-        message.element ||
-        message.reverted) && (
-        <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
-          {message.reverted && <span title="You undid what this turn changed in the deck">changes undone ·</span>}
-          {slideNumber > 0 && <span>on slide {slideNumber}</span>}
-          {message.sketch && <span>· with sketch</span>}
-          {!!message.comments?.length && (
-            <span>
-              · with {message.comments.length} comment{message.comments.length === 1 ? "" : "s"}
-            </span>
-          )}
-          {message.element && <span>· about {message.element.name}</span>}
-          {message.screenshot && <span>· with screenshot</span>}
-        </div>
-      )}
-    </div>
+      </MessageContent>
+    </Message>
   );
 });

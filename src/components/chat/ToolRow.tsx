@@ -1,47 +1,81 @@
-import { Check, ChevronRight, Loader2, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockLine,
+  CodeBlockTitle,
+} from "@/components/ui/code-block";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "@/components/ui/trace";
+import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import { slideNumbers } from "../../lib/slideNumbers";
-import { cn, workspaceChatFileUrl } from "../../lib/utils";
+import { workspaceChatFileUrl } from "../../lib/utils";
 import { useApp } from "../../store";
-import { describeTool, editedIds, editedSlide, stepsLabel, type ToolPart, toolArguments } from "./toolCalls";
+import {
+  describeTool,
+  type EditLine,
+  editedIds,
+  editedSlide,
+  editLines,
+  stepsLabel,
+  type ToolPart,
+  textLanguage,
+  toolArguments,
+} from "./toolCalls";
+
+/** The arguments of an edit that its changes are read from (see `editLines`). */
+const EDIT_TEXTS = ["old_string", "new_string"];
 
 /** Tool calls of a finished reply that followed one another, as one line that unfolds into them. */
 export const ToolSteps = memo(function ToolSteps({ tools }: { tools: ToolPart[] }) {
   const [open, setOpen] = useState(false);
   const failed = tools.some((tool) => tool.status === "error");
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        title={open ? "Hide the steps" : "Show each step"}
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 self-start rounded-md text-xs text-muted-foreground hover:text-foreground"
-      >
-        <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
-        {failed && <X className="size-3.5 shrink-0 text-destructive" />}
-        {stepsLabel(tools)}
-      </button>
-      {open && (
-        <div className="flex min-w-0 flex-col gap-2 border-l pl-3">
+    <Trace>
+      <TraceCollapsible open={open} onOpenChange={setOpen}>
+        <TraceCollapsibleTrigger title={open ? "Hide the steps" : "Show each step"}>
+          <TraceLine status={failed ? "error" : undefined} className="text-xs">
+            {failed && (
+              <TraceIcon>
+                <X className="size-3.5" />
+              </TraceIcon>
+            )}
+            <TraceTitle>{stepsLabel(tools)}</TraceTitle>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        <TraceCollapsibleContent className="flex flex-col gap-2">
           {tools.map((tool) => (
             <ToolRow key={tool.id} part={tool} />
           ))}
-        </div>
-      )}
-    </div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    </Trace>
   );
 });
 
 /**
- * A tool call of the agent's; an edit of the deck's slide selects that slide when pressed. Its
- * arguments and output unfold beneath it.
+ * A tool call of the agent's, as a line of the reply's trace: pressed, its arguments and output
+ * unfold beneath it; an edit of the deck's slide names that slide beside it, which selects it
+ * when pressed.
  *
  * A transcript holds hundreds of these, and the deck changes with every save, in bursts while
  * the agent writes. So a row takes of the deck only what it shows, as plain values that stay the
  * same from one save to the next (the deck's id, the id of the slide it edited), and reads its
- * own edit once.
+ * own edit once. For the same reason it has no tooltips: each would be a component more per row.
  */
 export const ToolRow = memo(function ToolRow({ part }: { part: ToolPart }) {
   const deckId = useApp((s) => s.deck?.id ?? "");
@@ -50,50 +84,76 @@ export const ToolRow = memo(function ToolRow({ part }: { part: ToolPart }) {
   const slide = useApp((s) => (s.deck && edited.length > 0 ? editedSlide(edited, slideNumbers(s.deck.slides)) : null));
   const [open, setOpen] = useState(false);
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
+    <TraceCollapsible open={open} onOpenChange={setOpen}>
       <div className="flex min-w-0 items-center gap-1">
-        <ToolSummary part={part} icon={Icon} label={label} target={target} slide={slide} />
-        <button
-          type="button"
-          aria-expanded={open}
+        <TraceCollapsibleTrigger
           aria-label={`${open ? "Hide" : "Show"} arguments and output of ${label}${target ? ` ${target}` : ""}`}
           title={open ? "Hide arguments and output" : "Show arguments and output"}
-          onClick={() => setOpen(!open)}
-          className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
-        </button>
+          <TraceLine
+            status={part.status === "running" ? "running" : part.status === "error" ? "error" : undefined}
+            className="text-xs"
+          >
+            <TraceIcon>
+              {part.status === "running" ? (
+                <Spinner aria-hidden="true" className="size-3.5" />
+              ) : part.status === "error" ? (
+                <X className="size-3.5" />
+              ) : (
+                <Icon className="size-3.5" />
+              )}
+            </TraceIcon>
+            <TraceTitle>
+              {label}
+              {target && <span className="font-mono text-[0.95em] text-foreground/80"> {target}</span>}
+            </TraceTitle>
+          </TraceLine>
+        </TraceCollapsibleTrigger>
+        {slide && (
+          <Button
+            variant="ghost"
+            size="2xs"
+            aria-label={`Go to the slide ${slide}`}
+            onClick={() => useApp.getState().select(slide)}
+            className="min-w-0 shrink font-mono font-normal text-muted-foreground"
+          >
+            <span className="truncate">· #{slide}</span>
+            {part.status === "done" && <Check className="text-success" />}
+          </Button>
+        )}
       </div>
-      {open && <ToolDetails part={part} />}
-    </div>
+      <TraceCollapsibleContent>
+        <ToolDetails part={part} />
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
   );
 });
 
 /** What a tool call was given and what it gave back, unfolded beneath its row. */
 function ToolDetails({ part }: { part: ToolPart }) {
-  const args = toolArguments(part);
+  const edit = editLines(part);
+  // An edit shows what it changed line by line, in place of the two texts it was given.
+  const args = toolArguments(part).filter((arg) => !edit || !EDIT_TEXTS.includes(arg.name));
   const images = part.images ?? [];
+  const path = typeof part.input.file_path === "string" ? part.input.file_path : "";
+  const failed = part.status === "error";
   return (
-    <div className="selectable flex min-w-0 flex-col gap-2 rounded-lg border bg-muted/40 p-2.5 text-xs">
+    <div className="selectable flex min-w-0 flex-col gap-2 text-xs">
       <ToolDetail title={`Arguments · ${part.name}`}>
-        {args.length === 0 ? (
-          <span className="text-muted-foreground">None</span>
-        ) : (
-          <dl className="flex min-w-0 flex-col gap-1.5">
-            {args.map((arg) => (
-              <div key={arg.name} className="min-w-0">
-                <dt className="font-mono text-2xs text-muted-foreground">{arg.name}</dt>
-                <dd>
-                  <ToolText text={arg.value} />
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        {args.length === 0 && !edit && <span className="text-muted-foreground">None</span>}
+        {args.map((arg) => (
+          <ToolText
+            key={arg.name}
+            title={arg.name}
+            text={arg.value}
+            language={textLanguage(arg.name, arg.value, path)}
+          />
+        ))}
+        {edit && <ToolDiff lines={edit} />}
       </ToolDetail>
-      <ToolDetail title={part.status === "error" ? "Error" : "Output"}>
+      <ToolDetail title={failed ? "Error" : "Output"}>
         {part.output ? (
-          <ToolText text={part.output} error={part.status === "error"} />
+          <ToolText text={part.output} error={failed} language={failed ? "" : textLanguage("", part.output, "")} />
         ) : (
           !images.length && (
             <span className="text-muted-foreground">{part.status === "running" ? "Running…" : "No output"}</span>
@@ -114,7 +174,7 @@ function ToolDetails({ part }: { part: ToolPart }) {
 /** A titled part of a tool call's details. */
 function ToolDetail(props: { title: string; children: React.ReactNode }) {
   return (
-    <section className="flex min-w-0 flex-col gap-1">
+    <section className="flex min-w-0 flex-col gap-1.5">
       <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{props.title}</h4>
       {props.children}
     </section>
@@ -137,49 +197,52 @@ function ToolImage({ path, alt }: { path: string; alt: string }) {
   );
 }
 
-/** Text of a tool call as it was written, scrolling when long. */
-function ToolText({ text, error }: { text: string; error?: boolean }) {
+/**
+ * Text of a tool call as it was written, as a block of code to scroll and copy: an argument
+ * under its name (`title`), or the output. What reads as JSON is colored as such.
+ */
+function ToolText(props: { text: string; language: string; title?: string; error?: boolean }) {
+  const { text, title, error } = props;
+  const lines = useHighlightedCode(text, props.language);
   return (
-    <pre
-      className={cn(
-        "max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.95em] leading-relaxed",
-        error ? "text-destructive" : "text-foreground/80",
+    <CodeBlock size="sm" variant={error ? "destructive" : "default"}>
+      {title ? (
+        <CodeBlockHeader>
+          <CodeBlockTitle className="font-mono font-normal text-muted-foreground">{title}</CodeBlockTitle>
+          <CodeBlockActions>
+            <CodeBlockCopyButton value={text} />
+          </CodeBlockActions>
+        </CodeBlockHeader>
+      ) : (
+        <CodeBlockActions>
+          <CodeBlockCopyButton value={text} />
+        </CodeBlockActions>
       )}
-    >
-      {text}
-    </pre>
+      <CodeBlockContent wrap tabIndex={0} className="max-h-60">
+        {lines.map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the lines of a text that does not change
+          <CodeBlockLine key={index}>{line}</CodeBlockLine>
+        ))}
+      </CodeBlockContent>
+    </CodeBlock>
   );
 }
 
-/** The line a tool call shows: what it did and to what, linked to the slide it edited. */
-function ToolSummary(props: {
-  part: ToolPart;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  target: string;
-  slide: string | null;
-}) {
-  const { part, icon: Icon, label, target, slide } = props;
+/** What an edit took out and put in, line by line. */
+function ToolDiff({ lines }: { lines: EditLine[] }) {
   return (
-    <button
-      type="button"
-      disabled={!slide}
-      onClick={() => slide && useApp.getState().select(slide)}
-      className="flex min-w-0 items-center gap-2 rounded-md text-left text-xs text-muted-foreground enabled:hover:text-foreground"
-    >
-      {part.status === "running" ? (
-        <Loader2 className="size-3.5 shrink-0 animate-spin" />
-      ) : part.status === "error" ? (
-        <X className="size-3.5 shrink-0 text-destructive" />
-      ) : (
-        <Icon className="size-3.5 shrink-0" />
-      )}
-      <span className="truncate">
-        {label}
-        {target && <span className="font-mono text-[0.95em] text-foreground/80"> {target}</span>}
-        {slide && <span className="font-mono text-[0.95em] text-foreground/80"> · #{slide}</span>}
-      </span>
-      {part.status === "done" && slide && <Check className="size-3 shrink-0 text-success" />}
-    </button>
+    <CodeBlock size="sm" aria-label="Changes">
+      <CodeBlockHeader>
+        <CodeBlockTitle className="font-normal text-muted-foreground">Changes</CodeBlockTitle>
+      </CodeBlockHeader>
+      <CodeBlockContent wrap tabIndex={0} className="max-h-60 ps-6">
+        {lines.map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the lines of an edit that does not change
+          <CodeBlockLine key={index} variant={line.change}>
+            {line.text}
+          </CodeBlockLine>
+        ))}
+      </CodeBlockContent>
+    </CodeBlock>
   );
 }

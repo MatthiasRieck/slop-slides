@@ -1,10 +1,10 @@
-import { render } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { splitBlocks } from "../../lib/markdown";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { CHAT_COMPONENTS, ChatMarkdown } from "./ChatMarkdown";
 
 const FENCE = "```";
 
@@ -17,9 +17,17 @@ const plainLinks = (html: string[]) => html.map((block) => block.replace(/<a [^>
 /** What the chat shows for `text`, read piece by piece. */
 const inPieces = (text: string) => plainLinks(shown(render(<ChatMarkdown>{text}</ChatMarkdown>).container));
 
-/** What `text` shows read as one document. */
+/** What `text` shows read as one document, with the chat's own links and blocks of code. */
 const asOne = (text: string) =>
-  plainLinks(shown(render(<Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>).container));
+  plainLinks(
+    shown(
+      render(
+        <Markdown remarkPlugins={[remarkGfm]} components={CHAT_COMPONENTS}>
+          {text}
+        </Markdown>,
+      ).container,
+    ),
+  );
 
 /** Replies of the kinds an agent writes, with what could go wrong when they are read in pieces. */
 const REPLIES: Record<string, string> = {
@@ -59,6 +67,52 @@ describe("ChatMarkdown", () => {
   it("reads a reply of several blocks in several pieces", () => {
     // What makes the above worth checking: the pieces are not the whole text.
     expect(splitBlocks(REPLIES["a table"]!).length).toBeGreaterThan(2);
+  });
+
+  it("sets code off in a block that names its language and has every line of the code", () => {
+    const { container } = render(
+      <ChatMarkdown>{`Run:\n\n${FENCE}js\nconst a = 1;\n\nb();\n${FENCE}\n\nDone.`}</ChatMarkdown>,
+    );
+    const block = container.querySelector<HTMLElement>("[data-slot=code-block]")!;
+    expect(block.dataset.language).toBe("js");
+    expect(block.querySelector("[data-slot=code-block-title]")!.textContent).toBe("js");
+    const lines = [...block.querySelectorAll("[data-slot=code-block-line]")].map((line) => line.textContent);
+    // An empty line holds a line break, so that copying a selection keeps it.
+    expect(lines).toEqual(["const a = 1;", "\n", "b();"]);
+    // The text around it stays text.
+    expect([...container.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["Run:", "Done."]);
+  });
+
+  it("copies a block of code as it was written, and says so", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<ChatMarkdown>{`${FENCE}sh\npnpm install\npnpm dev\n${FENCE}`}</ChatMarkdown>);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith("pnpm install\npnpm dev");
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+  });
+
+  it("shows code of no language, or one it does not know, as plain lines with a way to copy them", () => {
+    const { container } = render(
+      <ChatMarkdown>{`${FENCE}\nplain\n${FENCE}\n\n${FENCE}brainfuck\n+++\n${FENCE}`}</ChatMarkdown>,
+    );
+    const blocks = [...container.querySelectorAll<HTMLElement>("[data-slot=code-block]")];
+    expect(blocks.map((block) => block.dataset.language)).toEqual([undefined, "brainfuck"]);
+    expect(blocks[0]!.querySelector("[data-slot=code-block-title]")).toBeNull();
+    expect(blocks.map((block) => block.querySelector("[data-slot=code-block-line]")!.textContent)).toEqual([
+      "plain",
+      "+++",
+    ]);
+    expect(screen.getAllByRole("button", { name: "Copy" })).toHaveLength(2);
+  });
+
+  it("colors the code of a language it knows once the colors are loaded, and keeps its text", async () => {
+    const { container } = render(<ChatMarkdown>{`${FENCE}json\n{ "a": 1 }\n${FENCE}`}</ChatMarkdown>);
+    const line = () => container.querySelector("[data-slot=code-block-line-content]")!;
+    expect(line().textContent).toBe('{ "a": 1 }');
+    await waitFor(() => expect(line().querySelector("span")).not.toBeNull(), { timeout: 5000 });
+    await act(async () => {});
+    expect(line().textContent).toBe('{ "a": 1 }');
   });
 
   it("keeps links from taking the window anywhere, in every piece", () => {

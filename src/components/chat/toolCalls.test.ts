@@ -6,9 +6,11 @@ import {
   describeTool,
   editedIds,
   editedSlide,
+  editLines,
   groupParts,
   stepsLabel,
   type ToolPart,
+  textLanguage,
   toolArguments,
   toolName,
 } from "./toolCalls";
@@ -168,5 +170,70 @@ describe("groupParts", () => {
     const failed: ToolPart = { ...tool("b", {}), status: "error" };
     expect(stepsLabel([tool("a", {}), tool("c", {})])).toBe("2 steps");
     expect(stepsLabel([tool("a", {}), failed, tool("c", {})])).toBe("3 steps · 1 failed");
+  });
+});
+
+describe("editLines", () => {
+  const edit = (input: Record<string, unknown>): ToolPart => ({
+    kind: "tool",
+    id: "t",
+    name: "Edit",
+    input,
+    status: "done",
+  });
+  const shown = (part: ToolPart) => editLines(part)?.map((line) => `${line.change}: ${line.text}`);
+
+  it("is null for a tool call that does not put one text in place of another", () => {
+    expect(editLines(edit({ file_path: "a.html" }))).toBeNull();
+    expect(editLines(edit({ file_path: "a.html", new_string: "x" }))).toBeNull();
+    expect(editLines(edit({ old_string: 1, new_string: "x" }))).toBeNull();
+  });
+
+  it("tells the lines taken out from those put in", () => {
+    expect(shown(edit({ old_string: "one\ntwo", new_string: "uno\ndos\ntres" }))).toEqual([
+      "removed: one",
+      "removed: two",
+      "added: uno",
+      "added: dos",
+      "added: tres",
+    ]);
+  });
+
+  it("leaves the lines both texts start and end with as they are, around the change", () => {
+    expect(
+      shown(edit({ old_string: "<ul>\n<li>a</li>\n</ul>", new_string: "<ul>\n<li>b</li>\n<li>c</li>\n</ul>" })),
+    ).toEqual(["default: <ul>", "removed: <li>a</li>", "added: <li>b</li>", "added: <li>c</li>", "default: </ul>"]);
+  });
+
+  it("counts a line once when the texts overlap: lines put in before the same line, or taken out", () => {
+    expect(shown(edit({ old_string: "a", new_string: "a\na" }))).toEqual(["default: a", "added: a"]);
+    expect(shown(edit({ old_string: "a\na", new_string: "a" }))).toEqual(["default: a", "removed: a"]);
+  });
+
+  it("shows a text put in where there was none, or taken out for nothing, and no line for a text that is empty", () => {
+    expect(shown(edit({ old_string: "", new_string: "new\n" }))).toEqual(["added: new"]);
+    expect(shown(edit({ old_string: "old", new_string: "" }))).toEqual(["removed: old"]);
+    expect(shown(edit({ old_string: "", new_string: "" }))).toEqual([]);
+  });
+});
+
+describe("textLanguage", () => {
+  it("reads a command as a shell's", () => {
+    expect(textLanguage("command", "ls -la", "")).toBe("bash");
+  });
+
+  it("reads what is written to a file as that file's language, by its name", () => {
+    expect(textLanguage("content", "<section>", "/decks/talk/deck.html")).toBe("html");
+    expect(textLanguage("content", "a { }", "/decks/talk/Theme.CSS")).toBe("css");
+    expect(textLanguage("content", "plain", "/decks/talk/notes.txt")).toBe("");
+    // Only the content is the file's: its path is a path.
+    expect(textLanguage("file_path", "/decks/talk/deck.html", "/decks/talk/deck.html")).toBe("");
+  });
+
+  it("reads what looks like JSON as JSON, an argument or the output", () => {
+    expect(textLanguage("slides", '["intro",\n "outro"]', "")).toBe("json");
+    expect(textLanguage("", ' {"ok": true}\n', "")).toBe("json");
+    expect(textLanguage("", "{not closed", "")).toBe("");
+    expect(textLanguage("", "logo.png", "")).toBe("");
   });
 });

@@ -3,6 +3,9 @@ import { memo } from "react";
 import Markdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+
 /** Where notes are shown, a click must not leave the app, and paths mean nothing. */
 const NOT_SHOWN = ["a", "img"];
 
@@ -35,16 +38,17 @@ export const ScriptMarkdown = memo(function ScriptMarkdown(props: {
 export function ScriptPreviewToggle(props: { preview: boolean; onChange: (preview: boolean) => void }) {
   const Icon = props.preview ? Pencil : Eye;
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="2xs"
       aria-pressed={props.preview}
-      title="Written in Markdown"
+      tooltip="Written in Markdown"
       onClick={() => props.onChange(!props.preview)}
-      className="flex shrink-0 items-center gap-1 hover:text-foreground"
+      className="shrink-0 px-1 font-normal aria-pressed:bg-transparent aria-pressed:text-current aria-pressed:hover:bg-muted aria-pressed:hover:text-foreground"
     >
-      <Icon className="size-3" />
+      <Icon data-icon="inline-start" />
       {props.preview ? "Edit" : "Preview"}
-    </button>
+    </Button>
   );
 }
 
@@ -70,14 +74,15 @@ export function ScriptField(props: {
       </div>
     );
   return (
-    <textarea
+    <Textarea
       aria-label={props.label}
       value={props.draft}
       readOnly={props.readOnly}
       onChange={(event) => props.onChange(event.target.value)}
       onBlur={props.onBlur}
       placeholder={props.placeholder}
-      className={`${box} resize-none outline-none focus:border-primary`}
+      // As tall as the room it is given, not as its text: it scrolls.
+      className={`${box} field-sizing-fixed resize-none border-border dark:bg-card`}
     />
   );
 }

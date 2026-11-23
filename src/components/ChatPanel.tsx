@@ -1,10 +1,13 @@
-import { AlertTriangle, RotateCw, Settings, SquarePen } from "lucide-react";
+import { AlertTriangle, MessageSquareText, RotateCw, Settings, SquarePen } from "lucide-react";
 import { Activity, useEffect, useState } from "react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { cn } from "../lib/utils";
 import { chatProvider, openSettings, useApp } from "../store";
-import { Button } from "./Button";
 import { Composer } from "./chat/Composer";
 import { InstallHint } from "./chat/InstallHint";
 import { MessageList } from "./chat/MessageList";
@@ -101,39 +104,44 @@ function MissingCli({ provider }: { provider: Provider }) {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
   return (
-    <div
-      role="alert"
-      className="mx-3 mt-2 mb-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-2.5 text-xs leading-relaxed text-warning"
-    >
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-      <div className="flex min-w-0 flex-col gap-2">
+    <Alert className="mx-3 mt-2 mb-2 w-auto shrink-0 border-warning/30 bg-warning/10 text-xs text-warning">
+      <AlertTriangle className="size-3.5" />
+      <AlertTitle>{cli} is not installed.</AlertTitle>
+      <AlertDescription className="flex min-w-0 flex-col gap-2 text-xs leading-relaxed text-warning">
         <p>
-          <span className="font-medium">{cli} is not installed.</span> <InstallHint text={install} />
+          <InstallHint text={install} />
         </p>
         <p>{locked ? "Start a new chat to use another agent." : "Or pick another model below."}</p>
         <div className="flex flex-wrap gap-1.5 text-foreground">
-          <Button busy={checking} onClick={() => void check()} className="bg-background">
-            {!checking && <RotateCw />}
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={checking}
+            aria-busy={checking || undefined}
+            onClick={() => void check()}
+          >
+            {checking ? <Spinner aria-hidden="true" data-icon="inline-start" /> : <RotateCw data-icon="inline-start" />}
             Check again
           </Button>
-          <Button onClick={() => openSettings("providers")} className="bg-background">
-            <Settings />
+          <Button variant="outline" size="xs" onClick={() => openSettings("providers")}>
+            <Settings data-icon="inline-start" />
             Open Providers
           </Button>
           {locked && (
             <Button
+              variant="outline"
+              size="xs"
               disabled={running}
-              title={running ? "Stop the current turn to start a new chat" : "New chat (files are kept)"}
+              tooltip={running ? "Stop the current turn to start a new chat" : "New chat (files are kept)"}
               onClick={() => void useApp.getState().resetChat()}
-              className="bg-background"
             >
-              <SquarePen />
+              <SquarePen data-icon="inline-start" />
               New chat
             </Button>
           )}
         </div>
-      </div>
-    </div>
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -146,25 +154,30 @@ function EmptyChat() {
   const onSlide = useApp((s) => !!s.deck && !!s.selected);
   const suggestions = deckEmpty ? STARTERS : [...(onSlide ? [SLIDE_REQUEST] : []), ...DECK_REQUESTS];
   return (
-    <div className="flex flex-col gap-3 px-1 pt-6">
-      <p className="text-sm text-muted-foreground">
-        {deckEmpty
-          ? "Ask the agent to create a presentation or work with files in this workspace."
-          : "Ask for changes to the current slide or the whole deck."}
-      </p>
-      <div className="flex flex-col gap-1.5">
+    <Empty className="justify-start gap-3 px-1 pt-6 pb-0">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <MessageSquareText />
+        </EmptyMedia>
+        <EmptyDescription>
+          {deckEmpty
+            ? "Ask the agent to create a presentation or work with files in this workspace."
+            : "Ask for changes to the current slide or the whole deck."}
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="gap-1.5">
         {suggestions.map((text) => (
-          <button
+          <Button
             key={text}
-            type="button"
-            title="Put this in the message box"
+            variant="outline"
+            tooltip="Put this in the message box"
             onClick={() => useApp.getState().fillComposer(text)}
-            className="rounded-lg border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="h-auto w-full justify-start px-3 py-2 text-left text-xs leading-relaxed font-normal whitespace-normal text-muted-foreground"
           >
             {text}
-          </button>
+          </Button>
         ))}
-      </div>
-    </div>
+      </EmptyContent>
+    </Empty>
   );
 }

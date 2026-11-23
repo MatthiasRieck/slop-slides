@@ -14,13 +14,11 @@ import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { basename, cn, dirname, isMac, relativeTime } from "../lib/utils";
 import { showError, useApp } from "../store";
 import { chooseDeck, chooseWorkspace, pickPptx } from "./openDialogs";
+import { SECTION_HEADING } from "./styles";
 import { TemplateSelect } from "./Templates";
 
 /** The small muted label over a field of the new deck's form. */
 const fieldLabel = "text-xs text-muted-foreground";
-
-/** The small uppercase label over a section of the start screen. */
-const sectionLabel = "text-2xs font-medium uppercase tracking-wide text-muted-foreground";
 
 /** Opens the SlopSlide library as the workspace; false when it did not open. */
 async function openLibrary(): Promise<boolean> {
@@ -213,7 +211,7 @@ export function Home() {
           />
 
           <section className="flex flex-col gap-2">
-            <h2 className={sectionLabel}>Open</h2>
+            <h2 className={SECTION_HEADING}>Open</h2>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
@@ -245,7 +243,7 @@ export function Home() {
 
           {decks && decks.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h2 className={sectionLabel}>Recent decks</h2>
+              <h2 className={SECTION_HEADING}>Recent decks</h2>
               <ul aria-label="Recent decks" className={recentList}>
                 {decks.map((deck) => (
                   <RecentRow
@@ -265,7 +263,7 @@ export function Home() {
 
           {folders && folders.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h2 className={sectionLabel}>Recent folders</h2>
+              <h2 className={SECTION_HEADING}>Recent folders</h2>
               <ul aria-label="Recent folders" className={recentList}>
                 {folders.map((workspace) => (
                   <RecentRow

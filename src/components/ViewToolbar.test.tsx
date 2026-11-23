@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { tooltipOf } from "../test/ui";
+import { isOff, tooltipOf } from "../test/ui";
 import { useFindShortcut } from "./FindReplace";
 import type { Annotations } from "./PresenterTools";
 import { ViewToolbar } from "./ViewToolbar";
@@ -59,7 +59,6 @@ const collapsedButton = (section: string) => screen.queryByRole("button", { name
 const inGroup = (group: string, tool: string | RegExp) =>
   within(screen.getByRole("group", { name: group })).getByRole("button", { name: tool }) as HTMLButtonElement;
 /** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
-const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
 
 describe("ViewToolbar ribbon", () => {
   beforeEach(() => {
@@ -225,12 +224,41 @@ describe("ViewToolbar ribbon", () => {
     act(() => useApp.setState({ comments: {}, commentAsked: null }));
   });
 
+  it("closes the list on a press of its button, which does not open it again", () => {
+    useApp.setState({ comments: { intro: [{ id: "a", text: "Bigger title", x: 0.5, y: 0.5 }] } });
+    render(toolbar());
+    const button = () => inGroup("Review", "Comments (1)");
+    const list = () => screen.queryByRole("dialog", { name: "Comments" });
+    // A whole press, as the pointer makes one: the list sees it start, the button sees it end.
+    const press = () => {
+      fireEvent.pointerDown(button(), { pointerType: "mouse", button: 0 });
+      fireEvent.click(button(), { detail: 1 });
+    };
+    press();
+    expect(list()).toBeTruthy();
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    press();
+    expect(list()).toBeNull();
+    expect(button().getAttribute("aria-expanded")).toBe("false");
+    // With the keyboard too (a click without a press).
+    fireEvent.click(button(), { detail: 0 });
+    expect(list()).toBeTruthy();
+    fireEvent.click(button(), { detail: 0 });
+    expect(list()).toBeNull();
+    act(() => useApp.setState({ comments: {} }));
+  });
+
   it("says so when there is no comment yet, with nothing to send", () => {
     useApp.setState({ comments: {} });
     render(toolbar());
     fireEvent.click(inGroup("Review", "Comments (0)"));
     expect(screen.getByText("No comments yet")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement).disabled).toBe(true);
+    const send = screen.getByRole("button", { name: "Send to agent" });
+    expect(isOff(send)).toBe(true);
+    expect(tooltipOf(send)).toBe("No comments to send yet");
+    // Off, a press does nothing: the list stays open.
+    fireEvent.click(send);
+    expect(screen.getByText("No comments yet")).toBeTruthy();
   });
 
   it("shows or folds the timeline away, leaving playing the deck to the timeline's own bar", () => {
@@ -251,14 +279,18 @@ describe("ViewToolbar ribbon", () => {
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
     render(toolbar());
-    expect(inGroup("Timeline", /the timeline under the slide$/).disabled).toBe(true);
+    const timeline = inGroup("Timeline", /the timeline under the slide$/);
+    expect(isOff(timeline)).toBe(true);
+    expect(tooltipOf(timeline)).toBe("Every slide is hidden: there is nothing to play");
   });
 
   it("keeps every tool in place, off while it has nothing to work on", () => {
     const { rerender } = render(toolbar());
     for (const name of ["Remove last mark", "Clear marks on this slide"])
       expect(isOff(inGroup("Mark up", name))).toBe(true);
-    expect(inGroup("Review", "Show review marks and comments on the slides").disabled).toBe(true);
+    const review = () => inGroup("Review", "Show review marks and comments on the slides");
+    expect(isOff(review())).toBe(true);
+    expect(tooltipOf(review())).toBe("No review marks or comments on this deck yet");
 
     const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
     const undo = vi.fn();
@@ -266,7 +298,8 @@ describe("ViewToolbar ribbon", () => {
     rerender(toolbar({ annotations: annotations({ strokes: [mark], undo }) }));
     fireEvent.click(inGroup("Mark up", "Remove last mark"));
     expect(undo).toHaveBeenCalled();
-    expect(inGroup("Review", "Show review marks and comments on the slides").disabled).toBe(false);
+    expect(isOff(review())).toBe(false);
+    expect(tooltipOf(review())).toBe("Show review marks and comments on the slides");
   });
 
   it("puts the other tools away when a color picks up the pen", () => {

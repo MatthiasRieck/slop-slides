@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-
+import { DarkScope } from "@/lib/darkScope";
 import { useContentSize } from "../hooks/useContentSize";
 import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
@@ -34,24 +34,26 @@ export function SlideImageExport() {
 function ExportRun(props: { dir: string; slides: string[]; deck: Deck }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   return (
-    <Dialog
-      open
-      disablePointerDismissal
-      onOpenChange={(open) => {
-        // Escape cancels, as the button does.
-        if (!open) useApp.getState().endImageExport();
-      }}
-    >
-      {/* Always dark, and there at once: nothing of it may still be moving when a slide is captured. */}
-      <DialogContent
-        aria-label="Saving slide images"
-        showCloseButton={false}
-        initialFocus={cancelRef}
-        className="dark inset-0 top-0 left-0 flex h-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none bg-background p-0 text-foreground ring-0 sm:max-w-none data-closed:animate-none data-open:animate-none"
+    <DarkScope>
+      <Dialog
+        open
+        disablePointerDismissal
+        onOpenChange={(open) => {
+          // Escape cancels, as the button does.
+          if (!open) useApp.getState().endImageExport();
+        }}
       >
-        <ExportStage {...props} cancelRef={cancelRef} />
-      </DialogContent>
-    </Dialog>
+        {/* Always dark, and there at once: nothing of it may still be moving when a slide is captured. */}
+        <DialogContent
+          aria-label="Saving slide images"
+          showCloseButton={false}
+          initialFocus={cancelRef}
+          className="inset-0 top-0 left-0 flex h-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none bg-background p-0 text-foreground ring-0 sm:max-w-none data-closed:animate-none data-open:animate-none"
+        >
+          <ExportStage {...props} cancelRef={cancelRef} />
+        </DialogContent>
+      </Dialog>
+    </DarkScope>
   );
 }
 

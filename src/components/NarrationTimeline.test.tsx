@@ -25,14 +25,12 @@ import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { NarrationTimeline, rulerStep } from "./NarrationTimeline";
 
 const play = playTimeline as unknown as Mock;
 
 /** Whether a button of the bar cannot be pressed: it says why in its tooltip, so it stays focusable and is `aria-disabled`. */
-const off = (button: Element) =>
-  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 const shown = formatShown as unknown as Mock;
 const waved = wavePath as unknown as Mock;
 const laidOut = layoutTimeline as unknown as Mock;
@@ -389,13 +387,13 @@ describe("NarrationTimeline", () => {
     const back = screen.getByRole("button", { name: "Step back" }) as HTMLButtonElement;
     const forward = screen.getByRole("button", { name: "Step forward" }) as HTMLButtonElement;
     const at = () => getSlideClock()?.at.toFixed(1);
-    expect(off(back)).toBe(true);
+    expect(isOff(back)).toBe(true);
     fireEvent.click(forward);
     expect(getSlideClock()).toMatchObject({ slide: "intro", paused: true });
     expect(at()).toBe("0.1");
     fireEvent.click(forward, { shiftKey: true });
     expect(at()).toBe("1.1");
-    expect(off(back)).toBe(false);
+    expect(isOff(back)).toBe(false);
     fireEvent.click(back);
     expect(at()).toBe("1.0");
     // Across a slide change, the stage follows.
@@ -409,7 +407,7 @@ describe("NarrationTimeline", () => {
     expect(useApp.getState().selected).toBe("intro");
     // Not before the start or past the end.
     fireEvent.pointerDown(ruler, { clientX: 300 });
-    expect(off(forward)).toBe(true);
+    expect(isOff(forward)).toBe(true);
     fireEvent.pointerDown(ruler, { clientX: 0 });
     fireEvent.click(back, { shiftKey: true });
     expect(at()).toBe("0.0");
@@ -616,9 +614,9 @@ describe("NarrationTimeline", () => {
   it("zooms in steps", () => {
     open();
     const out = screen.getByRole("button", { name: "Zoom out" }) as HTMLButtonElement;
-    expect(off(out)).toBe(true);
+    expect(isOff(out)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(off(out)).toBe(false);
+    expect(isOff(out)).toBe(false);
   });
 });
 
@@ -972,9 +970,9 @@ describe("NarrationTimeline: keys", () => {
   it("has a button back to the start, and names the keys in its tooltips", () => {
     watch();
     const back = screen.getByRole("button", { name: "Back to start" }) as HTMLButtonElement;
-    expect(off(back)).toBe(true);
+    expect(isOff(back)).toBe(true);
     press(ruler(), { key: "End" });
-    expect(off(back)).toBe(false);
+    expect(isOff(back)).toBe(false);
     expect(tooltipOf(back)).toBe("Back to the startHome");
     fireEvent.click(back);
     expect(time()).toBe("0:00.0 / 0:15");
@@ -1052,18 +1050,16 @@ describe("NarrationTimeline: finding one's way", () => {
     watch();
     const out = screen.getByRole("button", { name: "Zoom out" }) as HTMLButtonElement;
     const zoomIn = screen.getByRole("button", { name: "Zoom in" }) as HTMLButtonElement;
-    expect(off(out)).toBe(true);
+    expect(isOff(out)).toBe(true);
     expect(tooltipOf(out)).toBe("The whole timeline is in sight");
     expect(tooltipOf(zoomIn)).toBe("Zoom in, around the playhead");
     for (let i = 0; i < 4; i++) fireEvent.click(zoomIn);
-    expect(off(zoomIn)).toBe(true);
-    // A tooltip put away by a press stays away until the focus has left its button.
-    fireEvent.blur(zoomIn);
+    expect(isOff(zoomIn)).toBe(true);
     expect(tooltipOf(zoomIn)).toBe("Zoomed in all the way");
     expect(tooltipOf(out)).toBe("Zoom out");
     // Zoomed in all the way, pressing it again changes nothing.
     fireEvent.click(zoomIn);
-    expect(off(out)).toBe(false);
+    expect(isOff(out)).toBe(false);
   });
 
   describe("zoomed in", () => {

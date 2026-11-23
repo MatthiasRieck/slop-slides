@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { CommentsOverview, ComposerComments } from "./Comments";
 
 const comment = (id: string, text: string) => ({ id, text, x: 0.5, y: 0.5 });
@@ -160,7 +160,10 @@ describe("the overview of the deck's comments", () => {
 
     useApp.setState({ comments: {} });
     fireEvent.click(opener());
-    expect(send().disabled).toBe(true);
-    expect(tooltipOf(send())).toBeNull();
+    // Off, it still says why, and a press does nothing.
+    expect(isOff(send())).toBe(true);
+    expect(tooltipOf(send())).toBe("No comments to send yet");
+    fireEvent.click(send());
+    expect(overview()).toBeTruthy();
   });
 });

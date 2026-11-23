@@ -19,9 +19,7 @@ import {
   type LineRoute,
 } from "../lib/editTools";
 import { RibbonSelect } from "./Ribbon";
-
-/** A control's name beside it in a ribbon popover. */
-const LABEL = "text-xs font-normal text-muted-foreground";
+import { QUIET_LABEL } from "./styles";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
 const HEAD_LABELS: Record<HeadKind, string> = { arrow: "Arrow", triangle: "Triangle", bar: "Bar", dot: "Dot" };
@@ -109,7 +107,7 @@ export function LineButton(props: {
             aria-label="Line ends and route"
             tooltip={line ? "Arrowheads at either end, and how the line goes" : "Select a line"}
             disabled={!line}
-            onMouseDownCapture={keepFocus}
+            keepFocus
           />
         }
       >
@@ -122,15 +120,15 @@ export function LineButton(props: {
           finalFocus={false}
           className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 p-2 text-xs"
         >
-          <Label htmlFor={`${id}-start`} className={LABEL}>
+          <Label htmlFor={`${id}-start`} className={QUIET_LABEL}>
             Start
           </Label>
           {head("start")}
-          <Label htmlFor={`${id}-end`} className={LABEL}>
+          <Label htmlFor={`${id}-end`} className={QUIET_LABEL}>
             End
           </Label>
           {head("end")}
-          <span className={LABEL}>Route</span>
+          <span className={QUIET_LABEL}>Route</span>
           <ToggleGroup
             aria-label="Route"
             size="xs"

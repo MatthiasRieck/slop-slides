@@ -5,7 +5,7 @@ import { searchHighlight, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { FindBar, SlideSearch, useDeckSearch, useFindShortcut } from "./FindReplace";
 
 /** The search as the stage has it: its shortcut and its searching, with View's ribbon rows or Edit's bar. */
@@ -31,12 +31,6 @@ const MATCHES = [match("intro", 0), match("outro", 2), match("outro", 2, { locke
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
 /** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
-const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
-/** What a control's tooltip says. The pointer leaves it first: a press keeps the tooltip away until then. */
-const tip = (control: Element) => {
-  fireEvent.mouseLeave(control);
-  return tooltipOf(control);
-};
 const field = () => screen.getByLabelText("Search slides") as HTMLInputElement;
 const search = (value: string) => fireEvent.change(field(), { target: { value } });
 const status = () => screen.getByRole("status");
@@ -131,15 +125,15 @@ describe("search", () => {
     found(MATCHES);
     render(<Find />);
     // The field's hint is of the box around it, and does not show for as long as it is typed in.
-    expect(tip(field().parentElement!)).toBe("Search the text on the slides and in their notesCtrl+F");
+    expect(tooltipOf(field().parentElement!)).toBe("Search the text on the slides and in their notesCtrl+F");
     fireEvent.focus(field());
     expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull();
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
-    expect(tip(button("Next match"))).toBe("Next matchEnter");
-    expect(tip(button("Previous match"))).toBe("Previous matchShift+Enter");
-    expect(tip(button("Clear search"))).toBe("Clear searchEsc");
-    expect(tip(button("Match case"))).toBe("Match case");
+    expect(tooltipOf(button("Next match"))).toBe("Next matchEnter");
+    expect(tooltipOf(button("Previous match"))).toBe("Previous matchShift+Enter");
+    expect(tooltipOf(button("Clear search"))).toBe("Clear searchEsc");
+    expect(tooltipOf(button("Match case"))).toBe("Match case");
     expect(button("Match case").getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(button("Match case"));
     expect(button("Match case").getAttribute("aria-pressed")).toBe("true");
@@ -275,7 +269,7 @@ describe("replace", () => {
     search("hello");
     await waitFor(() => expect(status()).toBeTruthy());
     expect(isOff(button("Replace…"))).toBe(true);
-    expect(tip(button("Replace…"))).toBe("Switch to Edit to change the slides");
+    expect(tooltipOf(button("Replace…"))).toBe("Switch to Edit to change the slides");
     act(() => useApp.setState({ editing: true }));
     fireEvent.click(button("Replace…"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
@@ -316,9 +310,9 @@ describe("replace", () => {
     fireEvent.keyDown(field(), { key: "Enter" });
     expect(status().textContent).toBe("2 / 3");
     type("Hi");
-    expect(tip(button("Replace"))).toBe("Replace this match and go to the nextEnter");
-    expect(tip(button(/^Replace all/))).toBe("Replace every matchCtrl+Enter");
-    expect(tip(screen.getByLabelText("Replace with").parentElement!)).toBe(
+    expect(tooltipOf(button("Replace"))).toBe("Replace this match and go to the nextEnter");
+    expect(tooltipOf(button(/^Replace all/))).toBe("Replace every matchCtrl+Enter");
+    expect(tooltipOf(screen.getByLabelText("Replace with").parentElement!)).toBe(
       "Enter replaces this match, Ctrl+Enter all of them",
     );
     fireEvent.click(button("Replace"));
@@ -351,12 +345,12 @@ describe("replace", () => {
     useApp.setState({ selected: SLIDES[1]! });
     await open();
     expect(isOff(button("Replace"))).toBe(true);
-    expect(tip(button("Replace"))).toBe("Go to a match first");
+    expect(tooltipOf(button("Replace"))).toBe("Go to a match first");
     fireEvent.keyDown(field(), { key: "Enter", shiftKey: true });
     expect(useApp.getState().selected).toBe("intro");
     expect(isOff(button("Replace"))).toBe(false);
     fireEvent.keyDown(field(), { key: "Enter", shiftKey: true });
-    expect(tip(button("Replace"))).toBe("This match is on a locked slide");
+    expect(tooltipOf(button("Replace"))).toBe("This match is on a locked slide");
   });
 
   it("opens under its button with the focus in its field, and gives the focus back as it closes", async () => {

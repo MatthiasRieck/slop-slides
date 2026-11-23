@@ -18,7 +18,7 @@ export function RailMenuItems({ entries }: { entries: MenuEntry[] }) {
         disabled={entry.disabledReason !== undefined}
         title={entry.disabledReason}
         onClick={entry.run}
-        className="text-xs data-disabled:pointer-events-auto"
+        className="data-disabled:pointer-events-auto"
       >
         {entry.label}
         {entry.keys && <ContextMenuShortcut>{formatKeys(entry.keys)}</ContextMenuShortcut>}

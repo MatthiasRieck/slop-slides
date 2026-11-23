@@ -8,7 +8,7 @@ import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { pickOption, tooltipOf } from "../test/ui";
+import { isOff, pickOption, tooltipOf } from "../test/ui";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
 
 const playNarration = vi.fn();
@@ -26,8 +26,6 @@ vi.mock("../lib/waveform", async (original) => {
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
 
 /** Whether a button cannot be pressed: one that says why in its tooltip stays focusable, and is `aria-disabled`. */
-const off = (button: Element) =>
-  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 
 /** The voice picker: what it shows as picked, and the voices it lists once opened. */
 const voicePicker = () => screen.getByRole("combobox", { name: "Narration voice" });
@@ -448,7 +446,7 @@ describe("NarrationPanel speech", () => {
     // There is no voice model to download any more.
     expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
     const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
-    expect(off(generate)).toBe(true);
+    expect(isOff(generate)).toBe(true);
     expect(tooltipOf(generate)).toBe("Add your OpenAI API key first");
     const key = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
     expect(key.type).toBe("password");
@@ -458,7 +456,7 @@ describe("NarrationPanel speech", () => {
     await act(async () => fireEvent.click(save));
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: "sk-test" });
     expect(screen.getByText("OpenAI API key saved")).toBeTruthy();
-    expect(off(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
     backend(SPEECH, { set_speech_key: withKey("openai", null) });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Remove/ })));
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: null });
@@ -472,7 +470,7 @@ describe("NarrationPanel speech", () => {
     });
     await show();
     expect(screen.getByText(/OPENAI_API_KEY from your environment/)).toBeTruthy();
-    expect(off(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Generate/ }))).toBe(false);
   });
 
   it("lists the voices of the ElevenLabs account, keeping the deck's own voice pickable", async () => {
@@ -497,10 +495,10 @@ describe("NarrationPanel speech", () => {
     backend(SPEECH);
     await show();
     expect(screen.getByText("No audio yet")).toBeTruthy();
-    expect(off(screen.getByRole("button", { name: /Play/ }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: /Play/ }))).toBe(true);
     act(() => audioOf([{ slide: "intro", state: "ready", seconds: 12.4 }]));
     expect(screen.getByText("Audio 0:12")).toBeTruthy();
-    expect(off(screen.getByRole("button", { name: /Play/ }))).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: /Play/ }))).toBe(false);
     expect(screen.getByRole("button", { name: /Regenerate/ })).toBeTruthy();
     act(() => audioOf([{ slide: "intro", state: "stale", seconds: 75 }]));
     expect(screen.getByText("Audio 1:15, out of date")).toBeTruthy();

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { followFramePresses, pressOn } from "./framePress";
+import { followFramePresses, isFrame, pressOn } from "./framePress";
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -58,5 +58,17 @@ describe("a press in a slide preview", () => {
     stop();
     report(element.contentWindow);
     expect(press).toHaveBeenCalledOnce();
+  });
+});
+
+describe("isFrame", () => {
+  it("tells a message of one of this window's frames from any other", () => {
+    const frame = document.body.appendChild(document.createElement("iframe"));
+    expect(isFrame(frame.contentWindow)).toBe(true);
+    expect(isFrame(window)).toBe(false);
+    expect(isFrame(null)).toBe(false);
+    const gone = frame.contentWindow;
+    frame.remove();
+    expect(isFrame(gone)).toBe(false);
   });
 });

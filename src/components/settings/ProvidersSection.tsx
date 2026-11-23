@@ -25,6 +25,7 @@ import { cn } from "../../lib/utils";
 import { chatProvider, useApp } from "../../store";
 import { InstallHint } from "../chat/InstallHint";
 import { ProviderIcon } from "../ProviderIcon";
+import { SECTION_HEADING } from "../styles";
 import { providerStatus, type StatusTone, TONE_DOT } from "./providerStatus";
 
 /** What the Environment block calls each thing it checks. */
@@ -168,7 +169,7 @@ export function ProvidersSection() {
         ))}
       </ItemGroup>
       <section className="flex flex-col gap-2">
-        <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Environment</h4>
+        <h4 className={SECTION_HEADING}>Environment</h4>
         {typeof environment === "string" ? (
           <Alert variant="destructive">
             <AlertTitle>Could not check</AlertTitle>

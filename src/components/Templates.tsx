@@ -99,8 +99,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                 <Button
                   variant="ghost"
                   aria-label="Blank slide"
-                  // Its own tooltip for now: the slide rail's tests find the tile by it.
-                  title="Add blank slide"
+                  tooltip="Add blank slide"
                   onClick={() => {
                     props.onBlank?.();
                     props.onDone();

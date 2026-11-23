@@ -234,7 +234,9 @@ describe("App", () => {
     act(() => openSettings("providers"));
     expect(screen.getByRole("tab", { name: "Providers", selected: true })).toBeTruthy();
     // Pressing beside the dialog leaves it open.
-    fireEvent.pointerDown(screen.getByTestId("settings-backdrop"));
+    const backdrop = document.querySelector("[data-slot=dialog-overlay]")!;
+    fireEvent.pointerDown(backdrop, { pointerType: "mouse", button: 0 });
+    fireEvent.click(backdrop);
     expect(settings()).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(settings()).toBeNull();

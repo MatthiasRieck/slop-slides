@@ -318,7 +318,7 @@ describe("VoiceInput", () => {
     render(
       <Popover open onOpenChange={onOpenChange}>
         <PopoverContent aria-label="Comment">
-          <VoiceInput label="Dictate the comment" portal={false} {...handlers()} />
+          <VoiceInput label="Dictate the comment" {...handlers()} />
         </PopoverContent>
       </Popover>,
     );

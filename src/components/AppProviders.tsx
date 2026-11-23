@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { followFramePresses } from "@/lib/framePress";
 
 /** How long the pointer rests on a control before its tooltip shows; the next one then shows at once. */
-export const TOOLTIP_DELAY_MS = 500;
+const TOOLTIP_DELAY_MS = 500;
 
 /**
  * What every window of the app is rendered in (see ../main.tsx): the tooltips' shared delay, and

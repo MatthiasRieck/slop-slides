@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { hasOpenLayer } from "../lib/layers";
-import { tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { RibbonRow, RibbonSection, RibbonSelect, RibbonToggle, useRibbonReveal } from "./Ribbon";
 
 /** A tool that asks its section to show it, as the search field does on its shortcut. */
@@ -114,6 +114,21 @@ describe("RibbonSection", () => {
     expect(hasOpenLayer()).toBe(false);
     expect(page).not.toHaveBeenCalled();
     window.removeEventListener("keydown", page);
+  });
+
+  it("leaves Escape to a popover one of its tools opened, and closes on the next", async () => {
+    render(<Section collapsed />);
+    fireEvent.click(opener());
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    const panel = () => screen.queryByRole("dialog", { name: "More text tools" });
+    expect(panel()).toBeTruthy();
+    await settle();
+    act(() => void fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" }));
+    expect(panel()).toBeNull();
+    expect(toolsShow()).toBe(true);
+    act(() => void fireEvent.keyDown(document.body, { key: "Escape" }));
+    expect(toolsShow()).toBe(false);
+    expect(hasOpenLayer()).toBe(false);
   });
 
   it("closes on a press in a slide preview, which never reaches this window", () => {
@@ -280,9 +295,30 @@ describe("RibbonToggle", () => {
         Bold
       </RibbonToggle>,
     );
-    const button = screen.getByRole("button", { name: "Bold" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    const button = screen.getByRole("button", { name: "Bold" });
+    expect(isOff(button)).toBe(true);
+    // It still says what it is for.
+    expect(tooltipOf(button)).toBe("Bold");
     fireEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("says what it waits for while it is off, when it has a reason to give", () => {
+    const toggle = (disabled: boolean) => (
+      <RibbonToggle
+        label="Show review marks"
+        disabled={disabled}
+        disabledReason="No review marks yet"
+        onClick={() => {}}
+      >
+        Review marks
+      </RibbonToggle>
+    );
+    const { rerender } = render(toggle(true));
+    const button = () => screen.getByRole("button", { name: "Show review marks" });
+    expect(tooltipOf(button())).toBe("No review marks yet");
+    rerender(toggle(false));
+    expect(isOff(button())).toBe(false);
+    expect(tooltipOf(button())).toBe("Show review marks");
   });
 });

@@ -9,7 +9,7 @@ import { deckMode, useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { placeElements } from "../test/intersection";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
 const row = (
@@ -76,8 +76,6 @@ async function show(found: DeckChanges = changes()) {
 }
 
 /** Whether a button is off: one with a tooltip stays in reach, to say why, and is `aria-disabled`. */
-const off = (button: HTMLElement) =>
-  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 
 /**
  * The slider named `name`: its thumb, which is hidden until it is laid out (jsdom never does), so
@@ -195,9 +193,6 @@ describe("ChangesRail", () => {
     fireEvent.click(filter);
     expect(rows()).toEqual(["modified", "removed", "added"]);
     expect(filter.getAttribute("aria-pressed")).toBe("true");
-    // The press put the tooltip away; it comes back once the pointer has left the button.
-    fireEvent.mouseLeave(filter);
-    fireEvent.blur(filter);
     expect(tooltipOf(filter)).toBe("Show every slide");
   });
 
@@ -384,7 +379,7 @@ describe("staging", () => {
     useApp.setState({ deck });
     await show();
     const discard = group("Modified").getByRole("button", { name: "Discard changes" });
-    expect(off(discard)).toBe(true);
+    expect(isOff(discard)).toBe(true);
     expect(tooltipOf(discard)).toBe("This slide is locked; unlock it first");
     await act(async () => {
       fireEvent.click(discard);
@@ -395,7 +390,7 @@ describe("staging", () => {
   it("stages and restores slide by slide before a first commit too", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
-    expect(off(screen.getByRole("button", { name: "Stage all" }))).toBe(false);
+    expect(isOff(screen.getByRole("button", { name: "Stage all" }))).toBe(false);
     await act(async () => {
       fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
     });
@@ -422,7 +417,7 @@ describe("committing", () => {
   it("needs a message, and says so", async () => {
     await show(changes({ stagedFiles: 2 }));
     expect(button().textContent).toBe("Commit 2 files");
-    expect(off(button())).toBe(true);
+    expect(isOff(button())).toBe(true);
     expect(tooltipOf(button())).toBe("Write a message to commit");
     // Off, a press commits nothing.
     await act(async () => {
@@ -430,7 +425,7 @@ describe("committing", () => {
     });
     expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "commit_changes")).toBe(false);
     fireEvent.change(message(), { target: { value: "Fix" } });
-    expect(off(button())).toBe(false);
+    expect(isOff(button())).toBe(false);
     expect(tooltipOf(button())).toBe("Commit what is stagedCtrl+Enter");
     cleanup();
     await show(changes({ stagedFiles: 1 }));
@@ -440,7 +435,7 @@ describe("committing", () => {
   it("commits everything when nothing is staged", async () => {
     await show();
     expect(button().textContent).toBe("Commit all");
-    expect(off(button())).toBe(true);
+    expect(isOff(button())).toBe(true);
     expect(tooltipOf(button())).toBe("Write a message to commit");
     fireEvent.change(message(), { target: { value: "Fix" } });
     expect(tooltipOf(button())).toBe("Stage everything in this deck and commit itCtrl+Enter");
@@ -478,8 +473,8 @@ describe("committing", () => {
     expect(calls).toContain("unstage_all");
     cleanup();
     await show(changes({ hasUnstaged: false, stagedFiles: 2, stagedElsewhere: 2 }));
-    expect(off(screen.getByRole("button", { name: "Stage all" }))).toBe(true);
-    expect(off(screen.getByRole("button", { name: "Unstage all" }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: "Stage all" }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: "Unstage all" }))).toBe(true);
   });
 
   it("discards every change at once, after asking", async () => {
@@ -520,7 +515,7 @@ describe("committing", () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked')) });
     await show();
     const discard = screen.getByRole("button", { name: "Discard all…" });
-    expect(off(discard)).toBe(true);
+    expect(isOff(discard)).toBe(true);
     expect(tooltipOf(discard)).toBe("Slide 1 is locked; unlock it to discard its changes");
     fireEvent.click(discard);
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -669,7 +664,7 @@ describe("ChangesView", () => {
     expect(screen.getByText(text)).toBeTruthy();
     // One version only: nothing to switch between, and no divider to set.
     for (const name of ["Split", "Before", "After", "Divider"]) {
-      expect(off(screen.getByRole("button", { name }))).toBe(true);
+      expect(isOff(screen.getByRole("button", { name }))).toBe(true);
     }
     expect(tooltipOf(screen.getByRole("button", { name: "Split" }))).toBe("This slide has one version to show");
     expect(tooltipOf(screen.getByRole("button", { name: "Divider" }))).toBe("The divider shows in the split view");
@@ -687,7 +682,7 @@ describe("ChangesView", () => {
     expect(shown()[0]).toContain(".head");
     expect(screen.getByText("Before (abc123).")).toBeTruthy();
     // The divider belongs to the split view.
-    expect(off(screen.getByRole("button", { name: "Divider" }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: "Divider" }))).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Divider" }));
     expect(screen.queryByRole("dialog", { name: "Divider" })).toBeNull();
     fireEvent.click(view("After"));
@@ -787,7 +782,7 @@ describe("ChangesView", () => {
     expect(screen.getByText(/Every slide is as/).textContent).toBe("Every slide is as abc123 has it.");
     expect(screen.queryByTestId("single-version")).toBeNull();
     expect(isComparing()).toBe(false);
-    expect(off(screen.getByRole("button", { name: "Split" }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: "Split" }))).toBe(true);
     // Picking a slide in the list selects it, and still shows none.
     fireEvent.click(screen.getByRole("button", { name: "Slide 2" }));
     expect(useApp.getState().selected).toBe("#2");

@@ -43,6 +43,7 @@ import { type MenuEntry, SEARCH_REORDER, sectionMenu, slideMenu } from "./rail/m
 import { RailMenuItems } from "./rail/RailMenu";
 import { SectionHeader } from "./rail/SectionHeader";
 import { Thumbnail } from "./rail/Thumbnail";
+import { SECTION_HEADING } from "./styles";
 import { LayoutPicker } from "./Templates";
 
 /**
@@ -100,9 +101,6 @@ function useRailRows(deck: Deck | null) {
 
 /** What a right-click's menu is about, and its choices. */
 type OpenMenu = { label: string; entries: MenuEntry[] };
-
-/** The small uppercase heading of the rail and of its sections. */
-const RAIL_LABEL = "text-2xs font-medium uppercase tracking-wide text-muted-foreground";
 
 /**
  * The deck's slides and sections, to go through, pick from and change: adding, duplicating,
@@ -305,7 +303,7 @@ export function SlideRail() {
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <span className={RAIL_LABEL}>{railTitle(deck.slides.length, found?.size, hiddenCount)}</span>
+        <span className={SECTION_HEADING}>{railTitle(deck.slides.length, found?.size, hiddenCount)}</span>
         <div className="flex items-center gap-0.5">
           <StartSectionButton deck={deck} onStart={startSection} />
           <Popover open={addingSlide} onOpenChange={setAddingSlide}>
@@ -422,7 +420,7 @@ export function SlideRail() {
                   data-testid="section-overlay"
                   className="flex items-center gap-2 rounded bg-sidebar pb-1 pl-6 pr-1 pt-1 ring-1 ring-border"
                 >
-                  <span className={cn(RAIL_LABEL, "min-w-0 truncate")}>{sectionTitle(items, moving.key)}</span>
+                  <span className={cn(SECTION_HEADING, "min-w-0 truncate")}>{sectionTitle(items, moving.key)}</span>
                   <Separator className="flex-1 data-horizontal:w-auto" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
                     {plural(sizes.get(moving.key) ?? 0, "slide")}

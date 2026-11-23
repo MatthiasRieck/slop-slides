@@ -41,7 +41,6 @@ import { Label } from "@/components/ui/label";
 import { NativeSelectOption } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
-import { keepFocus } from "@/lib/focus";
 import {
   type AlignTarget,
   type AlignTo,
@@ -59,6 +58,7 @@ import { useApp } from "../store";
 import { DraftInput } from "./DraftInput";
 import { RibbonSelect } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
+import { QUIET_LABEL, SECTION_HEADING } from "./styles";
 import { SLIDE_TOOL, unlessOff } from "./toolProps";
 
 const DISTRIBUTE: { axis: DistributeAxis; label: string; title: string; icon: ReactNode }[] = [
@@ -112,9 +112,6 @@ const TILTS: { side: string; x: number; y: number; icon: ReactNode }[] = [
 ];
 
 const NOTHING_SELECTED = "Select an element";
-
-/** A control's name beside it in a ribbon popover. */
-const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** What an align button says it does: with the slide, or with the other selected elements. */
 function alignLabel(edges: string, many: boolean, target: AlignTarget) {
@@ -319,7 +316,7 @@ function PositionPanel(props: PositionProps) {
         </p>
       )}
       <div className="flex items-center gap-2">
-        <Label htmlFor={`${id}-size-mode`} className={LABEL}>
+        <Label htmlFor={`${id}-size-mode`} className={QUIET_LABEL}>
           Handles
         </Label>
         <RibbonSelect
@@ -399,7 +396,7 @@ function PositionPanel(props: PositionProps) {
         })}
       </div>
       <div className="flex items-start gap-2">
-        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">3D rotate</span>
+        <span className={SECTION_HEADING}>3D rotate</span>
         <FieldSet aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
           {TILTS.slice(0, 4).map(tilt)}
           <Button
@@ -452,7 +449,7 @@ function GeometryInput(props: {
   onDone: () => void;
 }) {
   return (
-    <Label className={cn(LABEL, "gap-1")}>
+    <Label className={cn(QUIET_LABEL, "gap-1")}>
       {props.label}
       <DraftInput
         aria-label={props.title}
@@ -576,7 +573,7 @@ function LayersList(props: { onArrange?: (message: ArrangeMessage) => void }) {
                 variant="ghost"
                 size="xs"
                 aria-current={layer.selected || undefined}
-                onMouseDownCapture={keepFocus}
+                keepFocus
                 onClick={() => send({ type: "slop:edit-select", path: layer.path })}
                 className={cn(
                   "min-w-0 flex-1 shrink justify-start px-1 font-normal",

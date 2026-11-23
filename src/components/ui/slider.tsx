@@ -2,7 +2,10 @@ import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import { cn } from "@/lib/utils";
 
 function Slider({ className, defaultValue, value, min = 0, max = 100, ...props }: SliderPrimitive.Root.Props) {
-  const _values = Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [min, max];
+  // One thumb per value: a single number is one thumb, and only a slider given no value at all
+  // falls back to a range over the whole track.
+  const given = value ?? defaultValue;
+  const _values = Array.isArray(given) ? given : typeof given === "number" ? [given] : [min, max];
 
   return (
     <SliderPrimitive.Root

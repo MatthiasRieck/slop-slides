@@ -25,7 +25,7 @@ import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { Presenter } from "./Presenter";
 import { fitWidth } from "./PresenterPanel";
 import { InkTools } from "./PresenterTools";
@@ -55,8 +55,6 @@ beforeEach(() => {
 const frame = () => screen.getByTitle("Presentation") as HTMLIFrameElement;
 
 /** Whether a button cannot be pressed: one that says why in its tooltip stays focusable, and is `aria-disabled`. */
-const off = (button: Element) =>
-  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 
 function fromFrame(data: unknown, source: MessageEventSource | null = frame().contentWindow) {
   act(() => void window.dispatchEvent(new MessageEvent("message", { data, source })));
@@ -971,7 +969,7 @@ describe("Presenter tools", () => {
 
   it("undo removes the last stroke, clear removes them all", () => {
     render(<Presenter />);
-    expect(off(tool(/^Undo/))).toBe(true);
+    expect(isOff(tool(/^Undo/))).toBe(true);
     fireEvent.click(tool(/^Pen/));
     draw([[10, 10]]);
     draw([[20, 20]]);
@@ -993,7 +991,7 @@ describe("Presenter tools", () => {
 
   it("undo brings back what clear removed, and redo clears again", () => {
     render(<Presenter />);
-    const disabled = (name: RegExp) => off(tool(name));
+    const disabled = (name: RegExp) => isOff(tool(name));
     fireEvent.click(tool(/^Pen/));
     draw([[10, 10]]);
     draw([[20, 20]]);
@@ -1059,7 +1057,7 @@ describe("Presenter tools", () => {
     draw([[10, 10]]);
     fireEvent.keyDown(document.body, { key: "c" });
     fromFrame({ type: "slop:slide", id: null, index: 1 });
-    expect(off(tool(/^Undo/))).toBe(true);
+    expect(isOff(tool(/^Undo/))).toBe(true);
     fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     expect(strokes()).toHaveLength(0);
     fromFrame({ type: "slop:slide", id: "intro", index: 0 });
@@ -1514,11 +1512,11 @@ describe("presenter view", () => {
     fireEvent.click(smaller());
     fireEvent.click(smaller());
     expect(size()).toBe("text-sm");
-    expect(off(smaller())).toBe(true);
+    expect(isOff(smaller())).toBe(true);
     expect(tooltipOf(smaller())).toBe("The notes are as small as they get");
     for (let i = 0; i < 8; i++) fireEvent.click(larger());
     expect(size()).toBe("text-4xl");
-    expect(off(larger())).toBe(true);
+    expect(isOff(larger())).toBe(true);
   });
 
   it("pressing the next slide's picture moves the show on to it", () => {
@@ -1639,16 +1637,16 @@ describe("presenter view", () => {
       open();
       const teleprompter = () => screen.getByRole("button", { name: /teleprompter/i }) as HTMLButtonElement;
       await act(async () => fireEvent.click(text()));
-      expect(off(audio())).toBe(true);
+      expect(isOff(audio())).toBe(true);
       expect(tooltipOf(audio())).toBe("Stop the other recording first");
-      expect(off(teleprompter())).toBe(true);
+      expect(isOff(teleprompter())).toBe(true);
       expect(tooltipOf(teleprompter())).toBe("Stop recording first");
       await act(async () => fireEvent.click(text()));
-      expect(off(audio())).toBe(false);
+      expect(isOff(audio())).toBe(false);
       expect(tooltipOf(audio())).toMatch(/^Record the narration as audio/);
       await act(async () => fireEvent.click(teleprompter()));
-      expect(off(text())).toBe(true);
-      expect(off(audio())).toBe(true);
+      expect(isOff(text())).toBe(true);
+      expect(isOff(audio())).toBe(true);
       expect(tooltipOf(text())).toBe("Stop the teleprompter first");
       expect(tooltipOf(audio())).toBe("Stop the teleprompter first");
     });
@@ -2016,7 +2014,7 @@ describe("Presenter on several screens", () => {
     render(<Presenter />);
     await act(async () => {});
     const button = screen.getByRole("button", { name: "Presenter view" }) as HTMLButtonElement;
-    expect(off(button)).toBe(true);
+    expect(isOff(button)).toBe(true);
     expect(tooltipOf(button)).toBe("The presenter view is in a window of its own");
   });
 

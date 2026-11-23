@@ -141,8 +141,7 @@ describe("SettingsDialog", () => {
   it("stays open when the backdrop is pressed, and on ? pressed in it", () => {
     useApp.setState({ settingsSection: "general" });
     render(<SettingsDialog />);
-    const backdrop = screen.getByTestId("settings-backdrop");
-    expect(backdrop.dataset.slot).toBe("dialog-overlay");
+    const backdrop = document.querySelector("[data-slot=dialog-overlay]")!;
     fireEvent.pointerDown(backdrop, { pointerType: "mouse", button: 0 });
     fireEvent.click(backdrop);
     fireEvent.keyDown(dialog()!, { key: "?" });

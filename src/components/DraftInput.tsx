@@ -3,6 +3,7 @@ import { type ComponentProps, type ReactNode, useEffect, useState } from "react"
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { stepNumber } from "@/lib/arrange";
+import { quietFocus } from "@/lib/focus";
 import { isMod } from "@/lib/keys";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +53,7 @@ export function DraftInput(
       onFocus={(event) => {
         rest.onFocus?.(event);
         // The tooltip is for the pointer: it does not stay up for as long as the field is typed in.
-        if (tooltip) event.stopPropagation();
+        if (tooltip) quietFocus(event);
       }}
       onChange={(event) => setDraft(sanitize(event.target.value))}
       onBlur={apply}

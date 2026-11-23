@@ -1,7 +1,6 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { FieldDescription, FieldError, FieldGroup } from "@/components/ui/field";
 import { PopoverHeader, PopoverTitle } from "@/components/ui/popover";
 
 import {
@@ -13,40 +12,7 @@ import {
   saveVideoOptions,
   secondsProblem,
 } from "../../lib/video";
-
-/** A time in seconds to type under its label, kept as the text typed so it can be checked before use. */
-function SecondsField(props: {
-  label: string;
-  "aria-label": string;
-  value: string;
-  min: number;
-  max: number;
-  invalid: boolean;
-  onChange: (value: string) => void;
-}) {
-  const id = useId();
-  return (
-    <Field data-invalid={props.invalid || undefined} className="min-w-0 flex-1 gap-1">
-      <FieldLabel htmlFor={id} className="text-xs font-normal text-muted-foreground">
-        {props.label}
-      </FieldLabel>
-      <Input
-        id={id}
-        size="sm"
-        aria-label={props["aria-label"]}
-        aria-invalid={props.invalid || undefined}
-        type="number"
-        inputMode="decimal"
-        min={props.min}
-        max={props.max}
-        step="any"
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        className="tabular-nums"
-      />
-    </Field>
-  );
-}
+import { NumberField } from "../fields";
 
 /**
  * The times the deck is laid out with wherever it plays by itself: on the timeline, in the show's
@@ -81,7 +47,7 @@ export function TimingSettings() {
         <PopoverTitle>Timing</PopoverTitle>
       </PopoverHeader>
       <FieldGroup className="gap-3 text-xs">
-        <SecondsField
+        <NumberField
           label="Seconds per slide without narration"
           aria-label="Seconds per slide without narration"
           min={MIN_SECONDS}
@@ -91,7 +57,7 @@ export function TimingSettings() {
           onChange={change(setSeconds, secondsProblem, "secondsPerSlide")}
         />
         <div className="flex gap-2">
-          <SecondsField
+          <NumberField
             label="Pause before (s)"
             aria-label="Pause before narration"
             min={0}
@@ -100,7 +66,7 @@ export function TimingSettings() {
             invalid={pauseProblem(before) !== null}
             onChange={change(setBefore, pauseProblem, "pauseBefore")}
           />
-          <SecondsField
+          <NumberField
             label="Pause after (s)"
             aria-label="Pause after narration"
             min={0}

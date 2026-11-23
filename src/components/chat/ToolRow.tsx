@@ -25,6 +25,7 @@ import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import { slideNumbers } from "../../lib/slideNumbers";
 import { workspaceChatFileUrl } from "../../lib/utils";
 import { useApp } from "../../store";
+import { SECTION_HEADING } from "../styles";
 import {
   describeTool,
   type EditLine,
@@ -175,7 +176,7 @@ function ToolDetails({ part }: { part: ToolPart }) {
 function ToolDetail(props: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col gap-1.5">
-      <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{props.title}</h4>
+      <h4 className={SECTION_HEADING}>{props.title}</h4>
       {props.children}
     </section>
   );

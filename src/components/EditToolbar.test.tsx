@@ -7,7 +7,7 @@ import { hasOpenLayer } from "../lib/layers";
 import { SWATCHES } from "../lib/palette";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { EditToolbar } from "./EditToolbar";
 import { reportFromEditor, resetEditorState } from "./stage/editorState";
 
@@ -250,12 +250,6 @@ const SHAPE = selection({ kind: "shape", text: true });
 const ONE = { count: 1, x: 0, y: 0, w: 100, h: 50, rotation: 0 };
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 /** Whether a tool is off: it still takes the pointer and the focus, to say why in its tooltip. */
-const isOff = (tool: Element) => tool.getAttribute("aria-disabled") === "true";
-/** What a control's tooltip says. The pointer leaves it first: a press keeps the tooltip away until then. */
-const tip = (control: Element) => {
-  fireEvent.mouseLeave(control);
-  return tooltipOf(control);
-};
 
 describe("EditToolbar controls", () => {
   afterEach(() => {
@@ -287,7 +281,7 @@ describe("EditToolbar controls", () => {
     };
     for (const [name, reason] of Object.entries(reasons)) {
       expect(isOff(button(name)), name).toBe(true);
-      expect(tip(button(name)), name).toBe(reason);
+      expect(tooltipOf(button(name)), name).toBe(reason);
       // The pointer and the focus still reach it, or the tooltip would never show.
       expect(button(name).disabled, name).toBe(false);
     }
@@ -329,13 +323,13 @@ describe("EditToolbar controls", () => {
       Delete: "Backspace",
     };
     for (const [name, shortcut] of Object.entries(keys)) {
-      const tooltip = tip(button(name)) ?? "";
+      const tooltip = tooltipOf(button(name)) ?? "";
       // A disabled one (Ungroup, with no group) says what it waits for instead.
       if (!isOff(button(name))) expect(tooltip.endsWith(shortcut), `${name}: ${tooltip}`).toBe(true);
       expect(button(name).getAttribute("aria-label"), name).toBe(name);
     }
-    expect(tip(button("Group"))).toBe("Group the selected elements, to move, size and style them as oneCtrl+G");
-    expect(tip(button("Ungroup"))).toBe("Select a group");
+    expect(tooltipOf(button("Group"))).toBe("Group the selected elements, to move, size and style them as oneCtrl+G");
+    expect(tooltipOf(button("Ungroup"))).toBe("Select a group");
   });
 
   it("leaves the focus where it is when a tool or one of its popovers is pressed", async () => {
@@ -464,7 +458,7 @@ describe("EditToolbar controls", () => {
       ["Chart…", "chart"],
       ["Icon…", "icon"],
     ] as const) {
-      expect(tip(button(name))).toContain("Ask the agent");
+      expect(tooltipOf(button(name))).toContain("Ask the agent");
       fireEvent.click(button(name));
       expect(onInsertAsk).toHaveBeenLastCalledWith(kind);
     }
@@ -478,11 +472,11 @@ describe("EditToolbar controls", () => {
     const snap = button("Snap to guides");
     expect(snap.getAttribute("aria-pressed")).toBe("true");
     // The override is said where the toggle is.
-    expect(tip(snap)).toContain("hold Ctrl while dragging to move freely");
+    expect(tooltipOf(snap)).toContain("hold Ctrl while dragging to move freely");
     fireEvent.click(snap);
     expect(useApp.getState().editSnap).toBe(false);
     expect(snap.getAttribute("aria-pressed")).toBe("false");
-    expect(tip(snap)).toContain("hold Ctrl while dragging to snap");
+    expect(tooltipOf(snap)).toContain("hold Ctrl while dragging to snap");
     expect(localStorage.getItem("slopslides.editSnap")).toBe("false");
   });
 
@@ -491,10 +485,10 @@ describe("EditToolbar controls", () => {
     const { rerender } = render(toolbar({ selection: SHAPE, geometry: ONE, onArrange }));
     fireEvent.click(button("Position and size"));
     expect(isOff(button("Flip horizontally"))).toBe(true);
-    expect(tip(button("Flip horizontally"))).toBe("Text and plain boxes have nothing to flip");
+    expect(tooltipOf(button("Flip horizontally"))).toBe("Text and plain boxes have nothing to flip");
     // The numbers say what they are under the pointer, and to a screen reader.
     const width = screen.getByRole("textbox", { name: "Width" });
-    expect(tip(width.parentElement!)).toBe("Width");
+    expect(tooltipOf(width.parentElement!)).toBe("Width");
     rerender(toolbar({ selection: SHAPE, geometry: { ...ONE, count: 3, rotation: null }, onArrange }));
     fireEvent.click(button("Flip vertically"));
     expect(onArrange).toHaveBeenLastCalledWith({ type: "slop:edit-flip", axis: "y" });
@@ -505,25 +499,25 @@ describe("EditToolbar controls", () => {
     it("names the swatches, and tells no color from one that is mixed or not plain", () => {
       const { rerender } = render(toolbar({ selection: selection({ kind: "shape", fill: SWATCHES.blue }) }));
       // The well says what it holds in its tooltip, which it shows while its popover is closed.
-      expect(tip(button("Fill"))).toBe(`Fill: Blue (${SWATCHES.blue})`);
+      expect(tooltipOf(button("Fill"))).toBe(`Fill: Blue (${SWATCHES.blue})`);
       expect(button("Fill").getAttribute("aria-label")).toBe("Fill");
       expect(screen.getByTestId("Fill swatch").dataset.state).toBe("color");
       fireEvent.click(button("Fill"));
       const well = within(screen.getByRole("dialog", { name: "Fill" }));
       expect(well.getByRole("button", { name: `Blue (${SWATCHES.blue})` }).getAttribute("aria-pressed")).toBe("true");
-      expect(tip(well.getByRole("button", { name: `Red (${SWATCHES.red})` }))).toBe(`Red (${SWATCHES.red})`);
-      expect(tip(well.getByRole("button", { name: "None" }))).toBe("No fill");
-      expect(tip(well.getByLabelText("Fill as a hex value").parentElement!)).toMatch(/^A hex color/);
+      expect(tooltipOf(well.getByRole("button", { name: `Red (${SWATCHES.red})` }))).toBe(`Red (${SWATCHES.red})`);
+      expect(tooltipOf(well.getByRole("button", { name: "None" }))).toBe("No fill");
+      expect(tooltipOf(well.getByLabelText("Fill as a hex value").parentElement!)).toMatch(/^A hex color/);
       expect(well.queryByText(/Mixed/)).toBeNull();
 
       rerender(toolbar({ selection: selection({ kind: "shape" }) }));
       expect(screen.getByTestId("Fill swatch").dataset.state).toBe("none");
       expect(well.getByRole("button", { name: "None" }).getAttribute("aria-pressed")).toBe("true");
       fireEvent.click(button("Fill"));
-      expect(tip(button("Fill"))).toBe("Fill: none");
+      expect(tooltipOf(button("Fill"))).toBe("Fill: none");
 
       rerender(toolbar({ selection: selection({ kind: "shape", fillOther: true }) }));
-      expect(tip(button("Fill"))).toBe("Fill: mixed, or not a plain color");
+      expect(tooltipOf(button("Fill"))).toBe("Fill: mixed, or not a plain color");
       expect(screen.getByTestId("Fill swatch").dataset.state).toBe("other");
       fireEvent.click(button("Fill"));
       const mixed = within(screen.getByRole("dialog", { name: "Fill" }));
@@ -574,7 +568,7 @@ describe("EditToolbar controls", () => {
       // Another well has them too; no color is not one of them.
       fireEvent.click(button("Border color"));
       const recent = within(screen.getByRole("group", { name: "Recent" }));
-      expect(recent.getAllByRole("button").map(tip)).toEqual(["#123456", `Red (${SWATCHES.red})`]);
+      expect(recent.getAllByRole("button").map(tooltipOf)).toEqual(["#123456", `Red (${SWATCHES.red})`]);
       fireEvent.click(recent.getByRole("button", { name: "Recent color #123456" }));
       expect(onStyle).toHaveBeenLastCalledWith({ stroke: "#123456" });
       fireEvent.click(button("Border color"));

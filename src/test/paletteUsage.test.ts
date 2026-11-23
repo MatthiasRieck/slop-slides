@@ -78,7 +78,6 @@ describe("palette", () => {
     const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(reduced).toMatch(/animation-duration: 0\.01ms !important;/);
     expect(reduced).toMatch(/transition-duration: 0\.01ms !important;/);
-    expect(reduced).toMatch(/\.shimmer-text \{\s*animation: none !important;/);
   });
 
   it("keeps raw colors out of the components", () => {

@@ -3,7 +3,6 @@ import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
@@ -22,6 +21,8 @@ import {
   withOrientation,
 } from "../lib/slideSize";
 import { type DesignChange, useApp } from "../store";
+import { NumberField } from "./fields";
+import { QUIET_LABEL } from "./styles";
 import { RequestStatus } from "./Templates";
 
 const ORIENTATIONS: { id: Orientation; label: string; icon: typeof Square }[] = [
@@ -37,9 +38,6 @@ const UNITS: { id: SizeUnit; label: string }[] = [
 ];
 
 const SIZE_BUSY = "Wait for the agent to finish to change the slide size";
-
-/** The small muted label over a control of this panel. */
-const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** The deck's slide size, in the deck's settings. */
 export function SlideSizeSettings() {
@@ -125,41 +123,11 @@ function SlideSizePanel(props: {
         ))}
       </ToggleGroup>
       <div className="flex items-end gap-2">
-        <Field className="min-w-0 flex-1 gap-1">
-          <FieldLabel htmlFor={`${id}-width`} className={LABEL}>
-            Width
-          </FieldLabel>
-          <Input
-            id={`${id}-width`}
-            size="sm"
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="any"
-            value={width}
-            onChange={(event) => setWidth(event.target.value)}
-            className="tabular-nums"
-          />
-        </Field>
+        <NumberField label="Width" min={0} value={width} onChange={setWidth} />
         <span className="pb-1.5 text-muted-foreground">×</span>
-        <Field className="min-w-0 flex-1 gap-1">
-          <FieldLabel htmlFor={`${id}-height`} className={LABEL}>
-            Height
-          </FieldLabel>
-          <Input
-            id={`${id}-height`}
-            size="sm"
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="any"
-            value={height}
-            onChange={(event) => setHeight(event.target.value)}
-            className="tabular-nums"
-          />
-        </Field>
+        <NumberField label="Height" min={0} value={height} onChange={setHeight} />
         <Field className="w-auto gap-1">
-          <FieldLabel htmlFor={`${id}-unit`} className={LABEL}>
+          <FieldLabel htmlFor={`${id}-unit`} className={QUIET_LABEL}>
             Unit
           </FieldLabel>
           <NativeSelect
@@ -187,7 +155,7 @@ function SlideSizePanel(props: {
         <FieldDescription className="min-h-4 text-2xs">{inPixels}</FieldDescription>
       )}
       <Field className="gap-1">
-        <FieldTitle className={LABEL}>Common sizes</FieldTitle>
+        <FieldTitle className={QUIET_LABEL}>Common sizes</FieldTitle>
         <div className="flex flex-wrap gap-1">
           {SIZE_PRESETS.map((preset) => (
             <Button

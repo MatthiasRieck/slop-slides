@@ -10,9 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import type { Deck, NarrationProvider } from "../../lib/api";
 import { deckProvider, useNarration } from "../../narrationStore";
 import { useApp } from "../../store";
-
-/** The label of a field of the panel: small and quiet, over its control. */
-const LABEL = "text-xs font-normal text-muted-foreground";
+import { QUIET_LABEL } from "../styles";
 
 /** The deck's provider, voice and language, and the service's API key. */
 export function SpeechSettings({ deck }: { deck: Deck }) {
@@ -36,7 +34,7 @@ export function SpeechSettings({ deck }: { deck: Deck }) {
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
       <Field className="gap-1">
-        <FieldLabel htmlFor={`${id}-provider`} className={LABEL}>
+        <FieldLabel htmlFor={`${id}-provider`} className={QUIET_LABEL}>
           Spoken by
         </FieldLabel>
         <NativeSelect
@@ -56,7 +54,7 @@ export function SpeechSettings({ deck }: { deck: Deck }) {
       </Field>
       <div className="flex gap-2">
         <Field className="min-w-0 flex-[3] gap-1">
-          <FieldLabel htmlFor={`${id}-voice`} className={LABEL}>
+          <FieldLabel htmlFor={`${id}-voice`} className={QUIET_LABEL}>
             Voice
           </FieldLabel>
           {/* The voices have a line each on how they sound, which the list shows and the field does not. */}
@@ -82,7 +80,7 @@ export function SpeechSettings({ deck }: { deck: Deck }) {
           </Select>
         </Field>
         <Field className="min-w-0 flex-[2] gap-1">
-          <FieldLabel htmlFor={`${id}-language`} className={LABEL}>
+          <FieldLabel htmlFor={`${id}-language`} className={QUIET_LABEL}>
             Language
           </FieldLabel>
           <NativeSelect

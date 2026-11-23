@@ -1,8 +1,9 @@
 import { MessageSquare, Send, Trash2, X } from "lucide-react";
 import { Fragment, type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Badge } from "@/components/ui/badge";
+import { Attachment } from "@/components/ui/attachment";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -18,10 +19,13 @@ import {
 } from "../lib/comments";
 import { toFraction } from "../lib/ink";
 import { formatKeys } from "../lib/keys";
+import { closeBesideAnchor } from "../lib/popups";
 import { cn, plural } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
 import { commentsInScope, commentsToSend, deckComments, hasComments, heldComment, useApp } from "../store";
+import { CHIP_SENT } from "./chat/messageStyles";
 import { type OpenComment, type SlideComments, useSlideComments } from "./stage/useSlideComments";
+import { SECTION_HEADING } from "./styles";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 export { type SlideComments, useSlideComments };
@@ -212,20 +216,6 @@ function Pin(props: {
   );
 }
 
-/**
- * What a panel anchored to a button that is not its trigger does when it is asked to close. A
- * press on that button is left to the button, which closes the panel itself (or keeps it): taken
- * as a press outside as well, it would close the panel and the button open it again.
- */
-function closeBesideAnchor(anchor: RefObject<HTMLElement | null>, close: () => void) {
-  return (open: boolean, details: { reason: string; event: Event }) => {
-    if (open) return;
-    const target = details.event?.target;
-    if (details.reason === "outside-press" && target instanceof Node && anchor.current?.contains(target)) return;
-    close();
-  };
-}
-
 /** Writes or changes the open comment, next to its pin. */
 export function CommentEditor(props: {
   comment: OpenComment;
@@ -361,7 +351,7 @@ export function CommentEditor(props: {
               <Trash2 />
             </Button>
           )}
-          <VoiceInput ref={voice} label="Dictate the comment" portal={false} {...dictationHandlers} />
+          <VoiceInput ref={voice} label="Dictate the comment" {...dictationHandlers} />
           <div className="flex-1" />
           <Button variant="ghost" size="xs" onClick={cancel}>
             Cancel
@@ -393,12 +383,9 @@ export function ComposerComments() {
   if (!visible) return null;
 
   return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "gap-1 overflow-visible rounded-md px-1 font-normal",
-        count > 0 ? "border-primary/30 bg-primary/10 text-primary" : "text-muted-foreground",
-      )}
+    <Attachment
+      size="chip"
+      className={cn("flex-nowrap px-1 whitespace-nowrap", count > 0 ? CHIP_SENT : "text-muted-foreground")}
     >
       <Popover>
         <PopoverTrigger
@@ -454,7 +441,7 @@ export function ComposerComments() {
           <X />
         </Button>
       )}
-    </Badge>
+    </Attachment>
   );
 }
 
@@ -483,12 +470,11 @@ function CommentList() {
         const included = !heldComment(state, comment);
         return (
           <label key={comment.id} className="flex items-start gap-2 rounded-md p-2 text-xs hover:bg-muted">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={included}
               aria-label={`Send: ${comment.text}`}
-              onChange={() => useApp.getState().setCommentHeld(comment, included)}
-              className="mt-0.5 accent-primary"
+              onCheckedChange={() => useApp.getState().setCommentHeld(comment, included)}
+              className="mt-0.5"
             />
             <span className="min-w-0">
               <span className="block text-2xs text-muted-foreground">Slide {comment.slideNumber}</span>
@@ -540,9 +526,7 @@ export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLEl
           {numbers.map((number) => (
             // biome-ignore lint/a11y/useSemanticElements: a labelled group of rows, not a form's fieldset
             <div key={number} role="group" aria-label={`Slide ${number}`}>
-              <p className="px-2 pb-0.5 pt-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-                Slide {number}
-              </p>
+              <p className={cn("px-2 pb-0.5 pt-1.5", SECTION_HEADING)}>Slide {number}</p>
               {comments
                 .filter((c) => c.slideNumber === number)
                 .map((comment) => (
@@ -567,13 +551,13 @@ export function CommentsOverview({ anchor, onClose }: { anchor: RefObject<HTMLEl
           ))}
         </div>
         <div className="flex shrink-0 justify-end border-t p-2">
-          {/* With nothing to send it is plainly off, and has no more to say. */}
           <Button
             size="xs"
             disabled={comments.length === 0}
             tooltip={
-              comments.length > 0 &&
-              "Takes every comment along with your next message, and goes to the chat to write it"
+              comments.length > 0
+                ? "Takes every comment along with your next message, and goes to the chat to write it"
+                : "No comments to send yet"
             }
             onClick={send}
           >

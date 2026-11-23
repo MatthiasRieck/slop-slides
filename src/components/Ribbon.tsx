@@ -14,21 +14,19 @@ import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
-import { keepFocus } from "@/lib/focus";
+import { isFrame } from "../lib/framePress";
 import { openLayer } from "../lib/layers";
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
 
-/** What pops up from a ribbon and is placed by it: a collapsed section's flyout, and the tools' own panels. */
+/**
+ * What pops up from a ribbon and is placed by it: a collapsed section's flyout. (The tools' own
+ * panels are popovers, which are not in the ribbon and place themselves against the window.)
+ */
 const FLYOUTS = "[data-flyout]";
-// A popover (the shadcn one, or the old `Popover`) is not in the ribbon, and places itself against the window.
-const PANELS = "[role=dialog]:not([data-popover])";
 
 /** Where a shadcn/ui popup renders, in the body: a press in one opened from a flyout is not a press outside it. */
 const POPUPS = "[data-base-ui-portal]";
-
-const isFrame = (source: MessageEventSource | null) =>
-  Array.from(document.querySelectorAll("iframe")).some((frame) => frame.contentWindow === source);
 
 /**
  * Whether a collapsed section's flyout is open, and the ref of the section around it. It is no
@@ -102,12 +100,8 @@ export function useRibbonFit() {
       for (const el of shifted) el.style.marginLeft = "";
       shifted.clear();
       const flyouts = [...ribbon.querySelectorAll<HTMLElement>(FLYOUTS)];
-      const panels = [...ribbon.querySelectorAll<HTMLElement>(PANELS)];
-      if (flyouts.length + panels.length === 0) return;
-      const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
-      // The flyouts first: a panel in one moves with it.
-      shift(flyouts, bounds);
-      shift(panels, bounds);
+      if (flyouts.length === 0) return;
+      shift(flyouts, (ribbon.parentElement ?? ribbon).getBoundingClientRect());
     };
     const fitSections = () => {
       const width = ribbon.clientWidth;
@@ -179,7 +173,7 @@ export function RibbonSection(props: {
           aria-label={`${props.title} tools`}
           tooltip={props.title}
           aria-expanded={open}
-          onMouseDown={keepFocus}
+          keepFocus
           onClick={() => setOpen(!open)}
           className="mr-1 h-auto flex-1 flex-col gap-1 rounded-md px-0 [&_svg]:size-4"
         >
@@ -252,13 +246,14 @@ export function RibbonSelect({
 
 /**
  * A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the
- * one made. `label` says in full what it does, as its name and its tooltip; disabled, it is plainly
- * off (it has no reason to give, and its short name is beside its icon).
+ * one made. `label` says in full what it does, as its name and its tooltip; disabled, the tooltip
+ * is `disabledReason`, saying what it waits for (its label, if it has none to give).
  */
 export function RibbonToggle(props: {
   label: string;
   active?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -267,7 +262,7 @@ export function RibbonToggle(props: {
       variant="tool"
       size="xs"
       aria-label={props.label}
-      {...(!props.disabled && { tooltip: props.label })}
+      tooltip={(props.disabled && props.disabledReason) || props.label}
       {...(props.active !== undefined && { "aria-pressed": props.active })}
       {...(props.disabled !== undefined && { disabled: props.disabled })}
       onClick={props.onClick}

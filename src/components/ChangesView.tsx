@@ -66,6 +66,7 @@ import {
 } from "./changes/changeRows";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { SECTION_HEADING } from "./styles";
 
 /** A kind of change in the header, with how many slides have it. Every badge has the same height and icon box. */
 function CountBadge(props: { mark: Mark; title: string; count?: number }) {
@@ -124,9 +125,7 @@ export function ChangesRail() {
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
-          {counts.length === 0 && !stylesChanged && (
-            <span className="truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">Changes</span>
-          )}
+          {counts.length === 0 && !stylesChanged && <span className={cn("truncate", SECTION_HEADING)}>Changes</span>}
           {stylesChanged && <CountBadge mark={STYLES} title="The shared styles changed" />}
           {counts.map(({ status, count }) => {
             const mark = MARKS[status];
@@ -801,8 +800,7 @@ function ValueSlider(props: {
         aria-labelledby={id}
         min={min}
         max={max}
-        // A list of one: the slider draws a thumb for each value it is given.
-        value={[value]}
+        value={value}
         disabled={disabled}
         onValueChange={(next) => onChange(Array.isArray(next) ? (next[0] ?? value) : next)}
         className="min-w-0 flex-1"

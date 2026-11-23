@@ -110,12 +110,11 @@ function Waveform(props: { level: RefObject<number>; live: boolean }) {
  * again (it shows a check meanwhile) to keep it. The first use offers to download the speech model, which then runs locally.
  *
  * - `label`: what the button does while idle, "Dictate a message" by default.
- * - `portal`: no longer needed, and ignored: the download offer is a popover that another one it
- *   opens from knows as its own, so a press on it is not a press outside of that.
+ *
+ * The download offer is a popover; opened from inside another one (a comment's editor), that one
+ * knows it as its own, so a press on the offer is not a press outside of it.
  */
-export function VoiceInput(
-  props: DictationHandlers & { ref?: Ref<VoiceInputHandle>; label?: string; portal?: boolean },
-) {
+export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHandle>; label?: string }) {
   const handlers = useRef(props);
   handlers.current = props;
   const sendWhenDone = useRef(false);

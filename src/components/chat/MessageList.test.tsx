@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type AssistantMessage, type ChatMessage, useApp } from "../../store";
 import { applyAgentEvent } from "../../store/chat";
-import { layOutConversation, nextFrame } from "./conversationLayout.testing";
+import { layOutConversation, nextFrame } from "../../test/conversationLayout";
 import { MessageList } from "./MessageList";
 
 /** What the browser tells of sizes, by hand: jsdom lays nothing out. */

@@ -21,6 +21,7 @@ import {
 import { flushSync } from "react-dom";
 
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { keepFocus } from "@/lib/focus";
 
 import {
@@ -57,7 +58,7 @@ import {
   visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
-import { ShowButton, ShowTooltip } from "./presenter/ShowButton";
+import { ShowButton } from "./presenter/ShowButton";
 
 const laserShadow = LASER_GLOW.map((g) => `0 0 ${g.blur}px ${g.spread}px rgb(${LASER_RGB} / ${g.opacity})`).join(", ");
 
@@ -571,21 +572,26 @@ export function InkTools({ annotations }: { annotations: Annotations }) {
       {inking && (
         <div className="mx-1 flex items-center gap-1">
           {INK_COLORS.map((color) => (
-            <ShowTooltip key={color} text={inkColorName(color)}>
+            <Tooltip key={color}>
               {/* A swatch is its color, which no variant of a button is: it stays a plain one. */}
-              <button
-                type="button"
-                aria-label={inkColorName(color)}
-                aria-pressed={colors[tool] === color}
-                onMouseDown={keepFocus}
-                onClick={() => setColor(color)}
-                className={cn(
-                  "size-5 rounded-full border border-foreground/20",
-                  colors[tool] === color && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
-                )}
-                style={{ background: color }}
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={inkColorName(color)}
+                    aria-pressed={colors[tool] === color}
+                    onMouseDown={keepFocus}
+                    onClick={() => setColor(color)}
+                    className={cn(
+                      "size-5 rounded-full border border-foreground/20",
+                      colors[tool] === color && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
+                    )}
+                    style={{ background: color }}
+                  />
+                }
               />
-            </ShowTooltip>
+              <TooltipContent>{inkColorName(color)}</TooltipContent>
+            </Tooltip>
           ))}
         </div>
       )}

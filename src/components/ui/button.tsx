@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { keepFocus as holdFocus } from "@/lib/focus";
 import { formatKeys } from "@/lib/keys";
 import { cn } from "@/lib/utils";
 
@@ -14,7 +15,9 @@ import { cn } from "@/lib/utils";
  *   over them, and 14px icons in the `xs` ones;
  * - a toggle is a button with `aria-pressed`: pressed, it is filled;
  * - disabled with a tooltip, it stays focusable and under the pointer (`aria-disabled`), so the
- *   tooltip can say why; it looks disabled either way.
+ *   tooltip can say why; it looks disabled either way;
+ * - `keepFocus` for the tools that work on what is selected elsewhere (the slide), which a press
+ *   on the button must not take the focus from.
  */
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:not-aria-disabled:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-default aria-disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -69,6 +72,12 @@ type ButtonProps = ButtonPrimitive.Props &
     shortcut?: string;
     /** The side of the button its tooltip opens on; the top unless given. */
     tooltipSide?: React.ComponentProps<typeof TooltipContent>["side"];
+    /**
+     * Pressing the button leaves the keyboard focus (and the text selection) where it is. The
+     * press is caught on its way down: a button that is off but still focusable, to show its
+     * tooltip, gets no `onMouseDown` of its own, and would take the focus all the same.
+     */
+    keepFocus?: boolean;
   };
 
 function Button({
@@ -78,6 +87,7 @@ function Button({
   tooltip,
   shortcut,
   tooltipSide,
+  keepFocus = false,
   ...props
 }: ButtonProps) {
   const hasTooltip = tooltip !== undefined && tooltip !== null && tooltip !== false && tooltip !== "";
@@ -91,6 +101,7 @@ function Button({
       // Disabled, it still shows its tooltip, which says what it waits for.
       {...(hasTooltip && props.disabled && { focusableWhenDisabled: true })}
       {...(named && { "aria-label": tooltip })}
+      {...(keepFocus && { onMouseDownCapture: holdFocus })}
       {...props}
       className={cn(buttonVariants({ variant, size, className }))}
     />

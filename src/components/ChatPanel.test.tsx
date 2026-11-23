@@ -33,10 +33,10 @@ import {
   useApp,
 } from "../store";
 import { lastError } from "../store/errors";
+import { layOutConversation } from "../test/conversationLayout";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { ChatPanel } from "./ChatPanel";
-import { layOutConversation } from "./chat/conversationLayout.testing";
 
 const PROVIDERS: ProviderInfo[] = [
   {
@@ -158,8 +158,6 @@ beforeEach(() => {
 
 const textarea = () => screen.getByRole("textbox") as HTMLTextAreaElement;
 /** Whether a button takes no press: off for good, or (with a tooltip that says why) off but still to be found. */
-const isOff = (button: Element) =>
-  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
 const sendButton = () => screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
 /** Unfolds the tool calls of a finished reply, which show as one line of steps. */
 const openSteps = () => fireEvent.click(screen.getByRole("button", { name: /^\d+ steps/ }));
@@ -654,7 +652,7 @@ describe("ChatPanel: composing", () => {
       render(<ChatPanel />);
       fireEvent.click(count("2 comments"));
       const box = screen.getByRole("checkbox", { name: "Send: Bigger" });
-      expect((box as HTMLInputElement).checked).toBe(true);
+      expect(box.getAttribute("aria-checked")).toBe("true");
       fireEvent.click(box);
       expect(count("1 comment")).toBeTruthy();
       expect(useApp.getState().comments).toEqual(comments);

@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import { basename, cn, isSessionFile, workspaceChatFileUrl } from "../../lib/utils";
+import { SECTION_HEADING } from "../styles";
 
 const assetName = (path: string) => (isSessionFile(path) ? "Slide screenshot" : basename(path));
 
@@ -121,7 +122,7 @@ export function ImageGrid(props: {
         className="w-[calc(var(--anchor-width)-1.5rem)] gap-2 rounded-xl p-2"
       >
         <div className="flex items-center justify-between px-1">
-          <p className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          <p className={SECTION_HEADING}>
             {images.length} image{images.length === 1 ? "" : "s"}
           </p>
           <Button variant="tool" size="icon-2xs" aria-label="Close" onClick={onClose}>

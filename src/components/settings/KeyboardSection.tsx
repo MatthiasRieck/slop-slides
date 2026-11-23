@@ -7,6 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
 import { formatKeys } from "../../lib/keys";
+import { SECTION_HEADING } from "../styles";
 import { keysLabel, SECTIONS, type ShortcutRow, type ShortcutSection } from "./shortcuts";
 
 /** Whether a row has `query` (in lower case) in its keys, as shown or as named (`shift`, `enter`), or in what they do. */
@@ -71,7 +72,7 @@ export function KeyboardSection() {
       </div>
       {sections.map((section) => (
         <section key={section.title} className="flex flex-col gap-2">
-          <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{section.title}</h4>
+          <h4 className={SECTION_HEADING}>{section.title}</h4>
           <div className="overflow-hidden rounded-lg border bg-card">
             <Table className="text-xs">
               <TableBody>

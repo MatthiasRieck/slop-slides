@@ -216,6 +216,7 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
             label="Show review marks and comments on the slides"
             active={reviewVisible}
             disabled={!reviewed}
+            disabledReason="No review marks or comments on this deck yet"
             onClick={toggleReview}
           >
             <Eye />
@@ -284,9 +285,6 @@ function CommentsButton() {
   const count = useApp((s) => deckComments(s).length);
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
-  // Whether the list was open as the button was pressed: the list may close itself on that press
-  // (a press beside it), before the click that would then open it again.
-  const wasOpen = useRef(false);
   return (
     <>
       <Button
@@ -297,11 +295,8 @@ function CommentsButton() {
         tooltip="All comments of the deck, by slide"
         aria-expanded={open}
         aria-haspopup="dialog"
-        onPointerDown={() => {
-          wasOpen.current = open;
-        }}
-        // A click without a press is the keyboard's (Enter, Space).
-        onClick={(event) => setOpen(event.detail === 0 ? !open : !wasOpen.current)}
+        // The list leaves a press on this button to it (`closeBesideAnchor`), so it only toggles.
+        onClick={() => setOpen(!open)}
         className="px-1.5 tabular-nums"
       >
         <MessagesSquare />

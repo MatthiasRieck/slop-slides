@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-
+import { DarkScope } from "@/lib/darkScope";
 import { dismissTopLayer, hasOpenLayer } from "../lib/layers";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock } from "../lib/slideClock";
@@ -199,98 +199,101 @@ export function Presenter() {
   const panelShown = panelOpen && !separate;
   const hash = start ? `#${encodeURIComponent(start)}` : "";
   return (
-    <div className="fixed inset-0 z-50 flex bg-stage">
-      <div className="relative min-w-0 flex-1 overflow-hidden">
-        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
-        <iframe
-          ref={frameRef}
-          title="Presentation"
-          src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
-          sandbox="allow-scripts"
-          onLoad={(event) => {
-            event.currentTarget.focus();
-            post({ type: "slop:idle", idle });
-          }}
-          className="size-full border-0"
-        />
-        <ShowZoom frame={frameRef} annotations={annotations} />
-        {!panelShown && <MicrophonePill session={session} />}
-        {/* Only as wide as the bar: the slide beside it still takes a press. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
-          <div
-            role="toolbar"
-            aria-label="Show controls"
-            data-visible={controls.visible}
-            // Hidden, it is out of reach of the pointer and the keyboard.
-            inert={!controls.visible}
-            {...controls.zoneProps}
-            className={cn(
-              "dark flex max-w-full items-center gap-1 rounded-xl border border-foreground/10 bg-overlay p-1.5 text-foreground shadow-lg backdrop-blur transition-opacity duration-200 motion-reduce:transition-none",
-              controls.visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
-            )}
-          >
-            <InkTools annotations={annotations} />
-            <Divider />
-            <ShowButton tooltip="Previous slide" shortcut="left" onClick={() => go("ArrowLeft")}>
-              <ChevronLeft />
-            </ShowButton>
-            <span
-              data-testid="show-position"
-              title="The slide on screen, of the slides shown"
-              className="min-w-12 text-center text-xs text-foreground/80 tabular-nums"
+    // Dark in either theme, and so is what opens from it.
+    <DarkScope>
+      <div className="fixed inset-0 z-50 flex bg-stage">
+        <div className="relative min-w-0 flex-1 overflow-hidden">
+          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
+          <iframe
+            ref={frameRef}
+            title="Presentation"
+            src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
+            sandbox="allow-scripts"
+            onLoad={(event) => {
+              event.currentTarget.focus();
+              post({ type: "slop:idle", idle });
+            }}
+            className="size-full border-0"
+          />
+          <ShowZoom frame={frameRef} annotations={annotations} />
+          {!panelShown && <MicrophonePill session={session} />}
+          {/* Only as wide as the bar: the slide beside it still takes a press. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
+            <div
+              role="toolbar"
+              aria-label="Show controls"
+              data-visible={controls.visible}
+              // Hidden, it is out of reach of the pointer and the keyboard.
+              inert={!controls.visible}
+              {...controls.zoneProps}
+              className={cn(
+                "dark flex max-w-full items-center gap-1 rounded-xl border border-foreground/10 bg-overlay p-1.5 text-foreground shadow-lg backdrop-blur transition-opacity duration-200 motion-reduce:transition-none",
+                controls.visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+              )}
             >
-              {position + 1} / {shown.length}
-            </span>
-            <ShowButton tooltip="Next slide" shortcut="right" onClick={() => go("ArrowRight")}>
-              <ChevronRight />
-            </ShowButton>
-            <ShowButton
-              aria-label={autoplay.playing ? "Pause" : "Play"}
-              tooltip={autoplay.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
-              onClick={autoplay.toggle}
-            >
-              {autoplay.playing ? <Pause /> : <Play />}
-            </ShowButton>
-            <Divider />
-            <ShowButton
-              aria-label="Presenter view"
-              tooltip={
-                separate
-                  ? "The presenter view is in a window of its own"
-                  : "Presenter view: notes, the next slide and the time"
-              }
-              shortcut={separate ? undefined : "n"}
-              aria-pressed={panelShown}
-              disabled={separate}
-              onClick={() => setPanelOpen((open) => !open)}
-            >
-              <PanelRight />
-            </ShowButton>
-            <ShowButton
-              size="default"
-              tooltip="End show"
-              shortcut="escape"
-              onClick={() => useApp.getState().setPresenting(false)}
-              className="text-xs"
-            >
-              <X />
-              End show
-            </ShowButton>
+              <InkTools annotations={annotations} />
+              <Divider />
+              <ShowButton tooltip="Previous slide" shortcut="left" onClick={() => go("ArrowLeft")}>
+                <ChevronLeft />
+              </ShowButton>
+              <span
+                data-testid="show-position"
+                title="The slide on screen, of the slides shown"
+                className="min-w-12 text-center text-xs text-foreground/80 tabular-nums"
+              >
+                {position + 1} / {shown.length}
+              </span>
+              <ShowButton tooltip="Next slide" shortcut="right" onClick={() => go("ArrowRight")}>
+                <ChevronRight />
+              </ShowButton>
+              <ShowButton
+                aria-label={autoplay.playing ? "Pause" : "Play"}
+                tooltip={autoplay.playing ? "Pause" : "Play: speak each slide's narration and move on by itself"}
+                onClick={autoplay.toggle}
+              >
+                {autoplay.playing ? <Pause /> : <Play />}
+              </ShowButton>
+              <Divider />
+              <ShowButton
+                aria-label="Presenter view"
+                tooltip={
+                  separate
+                    ? "The presenter view is in a window of its own"
+                    : "Presenter view: notes, the next slide and the time"
+                }
+                shortcut={separate ? undefined : "n"}
+                aria-pressed={panelShown}
+                disabled={separate}
+                onClick={() => setPanelOpen((open) => !open)}
+              >
+                <PanelRight />
+              </ShowButton>
+              <ShowButton
+                size="default"
+                tooltip="End show"
+                shortcut="escape"
+                onClick={() => useApp.getState().setPresenting(false)}
+                className="text-xs"
+              >
+                <X />
+                End show
+              </ShowButton>
+            </div>
           </div>
         </div>
+        {panelShown && (
+          <PresenterPanel
+            deck={deck}
+            slide={onScreen}
+            session={session}
+            onNext={() => go("ArrowRight")}
+            onShowKeys={() => setKeysOpen(true)}
+            onClose={() => setPanelOpen(false)}
+          />
+        )}
+        {keysOpen && <ShowKeys onClose={() => setKeysOpen(false)} />}
       </div>
-      {panelShown && (
-        <PresenterPanel
-          deck={deck}
-          slide={onScreen}
-          session={session}
-          onNext={() => go("ArrowRight")}
-          onShowKeys={() => setKeysOpen(true)}
-          onClose={() => setPanelOpen(false)}
-        />
-      )}
-      {keysOpen && <ShowKeys onClose={() => setKeysOpen(false)} />}
-    </div>
+    </DarkScope>
   );
 }
 

@@ -27,9 +27,10 @@ describe("the stylesheet of the shadcn/ui components", () => {
     }
   });
 
-  it("leaves tw-animate-css its keyframes: the app names none `enter` or `exit`", () => {
+  it("leaves the components their keyframes: the app has none of its own to shadow them", () => {
+    // tw-animate-css animates every popup with `enter` and `exit`; the later of two keyframes of one name wins.
     const own = [...css.matchAll(/@keyframes ([\w-]+)/g)].map((match) => match[1]);
-    expect(own).toEqual(["shimmer", "layer-enter", "layer-leave"]);
+    expect(own).toEqual([]);
   });
 
   it("keeps the dark variant on a subtree, so a popup of the presenter's can be dark by itself", () => {

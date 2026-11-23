@@ -16,7 +16,7 @@ import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { basename, cn, workspaceChatFileUrl } from "../../lib/utils";
 import { type UserMessage, useApp } from "../../store";
 import { CopyButton } from "./CopyButton";
-import { CHIP, CHIP_ICON, ON_HOVER } from "./messageStyles";
+import { ON_HOVER } from "./messageStyles";
 
 /** What a picture sent along with a message shows, for those who cannot see it. */
 type Picture = { path: string; alt: string };
@@ -81,14 +81,8 @@ export const UserBubble = memo(function UserBubble({ message }: { message: UserM
         {files.length > 0 && (
           <AttachmentGroup role="list" className={cn(ALONG, "gap-1")}>
             {files.map((file) => (
-              <Attachment
-                key={file}
-                role="listitem"
-                size="xs"
-                title={file}
-                className={cn(CHIP, "text-muted-foreground")}
-              >
-                <AttachmentMedia className={CHIP_ICON}>
+              <Attachment key={file} role="listitem" size="chip" title={file} className="text-muted-foreground">
+                <AttachmentMedia>
                   <FileText className="size-3" />
                 </AttachmentMedia>
                 <AttachmentContent>

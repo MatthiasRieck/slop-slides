@@ -8,7 +8,6 @@ import { Label } from "@/components/ui/label";
 import { NativeSelectOption } from "@/components/ui/native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
-import { keepFocus } from "@/lib/focus";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
   type EditSelection,
@@ -23,6 +22,7 @@ import { perFrame } from "../lib/perFrame";
 import { cn } from "../lib/utils";
 import { DraftInput } from "./DraftInput";
 import { RibbonSelect } from "./Ribbon";
+import { QUIET_LABEL } from "./styles";
 
 /**
  * The toolbar's tools for how an element looks, beyond text, fill and border: opacity, shadow and
@@ -57,7 +57,7 @@ export function LookTools(props: {
         tooltip={paintable ? "Copy this look to the next element clicked" : "Select an element"}
         aria-pressed={painting}
         disabled={!paintable}
-        onMouseDownCapture={keepFocus}
+        keepFocus
         onClick={() => props.onTool(painting ? "select" : "paint")}
       >
         <Paintbrush />
@@ -73,9 +73,6 @@ export function LookTools(props: {
 }
 
 const popoverPanel = "grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 p-2 text-xs";
-
-/** A control's name beside it in a ribbon popover. */
-const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** Opacity, shadow and corner radius of the selection, and a shape's proportions. */
 function AppearanceButton(props: {
@@ -105,7 +102,7 @@ function AppearanceButton(props: {
             aria-label="Appearance"
             tooltip={s ? "Opacity, shadow, corner radius and a shape's proportions" : "Select an element"}
             disabled={!s}
-            onMouseDownCapture={keepFocus}
+            keepFocus
           />
         }
       >
@@ -209,7 +206,7 @@ function LookSlider(props: {
   };
   return (
     <>
-      <span id={id} className={cn(LABEL, props.disabled && "opacity-30")}>
+      <span id={id} className={cn(QUIET_LABEL, props.disabled && "opacity-30")}>
         {props.label}
       </span>
       <span className="flex items-center gap-2">
@@ -219,7 +216,7 @@ function LookSlider(props: {
           max={max}
           step={props.step}
           disabled={props.disabled}
-          value={[draft]}
+          value={draft}
           // A new press starts a new drag, whatever became of the last one.
           onPointerDownCapture={() => {
             givenUp.current = false;
@@ -312,7 +309,7 @@ function ImageButton(props: {
             aria-label="Image options"
             tooltip={s ? "Replace, fit and describe the image" : "Select an image"}
             disabled={!s}
-            onMouseDownCapture={keepFocus}
+            keepFocus
           />
         }
       >
@@ -320,19 +317,19 @@ function ImageButton(props: {
       </PopoverTrigger>
       {s && (
         <PopoverContent aria-label="Image options" initialFocus={false} finalFocus={false} className={popoverPanel}>
-          <span className={LABEL}>Image</span>
+          <span className={QUIET_LABEL}>Image</span>
           <span className="flex items-center gap-0.5">
             <Button
               variant="tool"
               size="icon-xs"
               tooltip="Replace the image, keeping its size and place"
-              onMouseDownCapture={keepFocus}
+              keepFocus
               onClick={props.onReplace}
             >
               <Replace />
             </Button>
           </span>
-          <Label htmlFor={`${id}-fit`} className={LABEL}>
+          <Label htmlFor={`${id}-fit`} className={QUIET_LABEL}>
             Fit
           </Label>
           <RibbonSelect
@@ -349,7 +346,7 @@ function ImageButton(props: {
               </NativeSelectOption>
             ))}
           </RibbonSelect>
-          <span className={LABEL}>Position</span>
+          <span className={QUIET_LABEL}>Position</span>
           <FieldSet aria-label="Image position" className="grid w-max grid-cols-3 gap-0.5">
             {FIT_POSITIONS.map((position, index) => (
               <Button
@@ -359,13 +356,13 @@ function ImageButton(props: {
                 aria-label={`Position ${position}`}
                 tooltip={FIT_POSITION_NAMES[index]}
                 aria-pressed={s.fitPosition === position}
-                onMouseDownCapture={keepFocus}
+                keepFocus
                 onClick={() => props.onStyle({ fitPosition: position })}
                 className="rounded-sm aria-pressed:bg-foreground/60 aria-pressed:hover:bg-foreground/60"
               />
             ))}
           </FieldSet>
-          <Label htmlFor={`${id}-alt`} className={LABEL}>
+          <Label htmlFor={`${id}-alt`} className={QUIET_LABEL}>
             Alt text
           </Label>
           <Input

@@ -1,5 +1,5 @@
 import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWord, X } from "lucide-react";
-import { type FocusEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { quietFocus } from "@/lib/focus";
 import type { ReplacedText, Slide } from "../lib/api";
 import { formatKeys, isMod } from "../lib/keys";
 import { memoizeLast } from "../lib/memo";
@@ -14,12 +15,6 @@ import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { EDIT_ONLY } from "./editOnly";
 import { RibbonRow, useRibbonReveal } from "./Ribbon";
-
-/**
- * Keeps a field's focus from the tooltip around it: a field shows its hint under the pointer
- * only, not for as long as it is typed in.
- */
-const quietFocus = (event: FocusEvent) => event.stopPropagation();
 
 /** How long typing settles before it searches. */
 const SEARCH_DELAY_MS = 150;

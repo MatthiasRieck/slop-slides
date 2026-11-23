@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
 import { chooseWorkspace } from "../components/openDialogs";
+import { isFrame } from "../lib/framePress";
 import { isMod } from "../lib/keys";
 import { type PressedKey, type ShellCommand, shellCommand } from "../lib/shellKeys";
 import { useApp } from "../store";
@@ -41,9 +42,6 @@ export function runShellCommand(command: ShellCommand): boolean {
       return true;
   }
 }
-
-const isFrame = (source: MessageEventSource | null) =>
-  Array.from(document.querySelectorAll("iframe")).some((frame) => frame.contentWindow === source);
 
 /**
  * The shell's keyboard shortcuts (see ../lib/shellKeys.ts): ⌘1 / ⌘2 / ⌘3 for View, Edit and Git,

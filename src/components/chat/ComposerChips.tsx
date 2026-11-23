@@ -15,9 +15,7 @@ import type { EditElement } from "../../lib/editTools";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { ComposerComments } from "../Comments";
-import { CHIP, CHIP_ICON } from "./messageStyles";
-
-const SENT = "border-primary/30 bg-primary/10 text-primary";
+import { CHIP_SENT } from "./messageStyles";
 
 /**
  * A chip that goes along with the message: what it is (`icon`, and its name as `children`), with
@@ -32,8 +30,8 @@ function Chip(props: {
 }) {
   const { remove } = props;
   return (
-    <Attachment size="xs" title={props.title} className={cn(CHIP, props.sent ? SENT : "text-muted-foreground")}>
-      <AttachmentMedia className={CHIP_ICON}>{props.icon}</AttachmentMedia>
+    <Attachment size="chip" title={props.title} className={props.sent ? CHIP_SENT : "text-muted-foreground"}>
+      <AttachmentMedia>{props.icon}</AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle className="font-normal">{props.children}</AttachmentTitle>
       </AttachmentContent>
@@ -96,7 +94,10 @@ export function ComposerChips(props: {
           className={cn(
             "rounded-md px-1.5 font-normal",
             includeSlide
-              ? cn(SENT, "aria-pressed:bg-primary/10 aria-pressed:text-primary hover:bg-primary/15 hover:text-primary")
+              ? cn(
+                  CHIP_SENT,
+                  "aria-pressed:bg-primary/10 aria-pressed:text-primary hover:bg-primary/15 hover:text-primary",
+                )
               : "bg-transparent text-muted-foreground line-through",
           )}
         >
@@ -154,7 +155,7 @@ export function ComposerChips(props: {
         );
       })}
       {pending > 0 && (
-        <Attachment size="xs" state="uploading" role="status" className={cn(CHIP, "px-1.5 text-muted-foreground")}>
+        <Attachment size="chip" state="uploading" role="status" className="text-muted-foreground">
           <Spinner aria-hidden="true" className="size-3" />
           <AttachmentTitle className="font-normal">Attaching{pending > 1 ? ` ${pending} files` : ""}…</AttachmentTitle>
         </Attachment>

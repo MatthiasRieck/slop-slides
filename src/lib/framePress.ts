@@ -5,8 +5,12 @@
 // covers the previews and gets the press itself; this is for the ones that are not (a popover, a
 // combobox, a menu with `modal={false}`).
 
+/** The frame in this window that a message came from (`event.source`), if it came from one. */
 const frameOf = (source: MessageEventSource | null) =>
   Array.from(document.querySelectorAll("iframe")).find((frame) => frame.contentWindow === source);
+
+/** Whether a message came from a frame of this window: a slide preview, not some other window. */
+export const isFrame = (source: MessageEventSource | null) => frameOf(source) !== undefined;
 
 /**
  * A press on `target` as the popups see one: `pointerdown` for those that close as a press starts,

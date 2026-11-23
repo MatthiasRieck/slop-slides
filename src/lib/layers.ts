@@ -5,6 +5,8 @@
 // Escape pressed in a text field is the field's first (it takes the typing back, say): the layer
 // gets it once the field and what is around it have seen it, unless they keep it to themselves
 // (`stopPropagation`). Pressed anywhere else, the layer gets it before anything does.
+
+import { isFrame } from "./framePress";
 import { isTextField } from "./keys";
 
 interface Layer {
@@ -86,9 +88,6 @@ function onFieldKeyDown(event: KeyboardEvent) {
   event.preventDefault();
   event.stopPropagation();
 }
-
-const isFrame = (source: MessageEventSource | null) =>
-  Array.from(document.querySelectorAll("iframe")).some((frame) => frame.contentWindow === source);
 
 /** Escape pressed in a slide preview that was told something is open here. */
 function onMessage(event: MessageEvent) {

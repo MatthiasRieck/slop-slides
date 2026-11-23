@@ -104,11 +104,9 @@ import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
 import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
+import { QUIET_LABEL } from "./styles";
 import { TimelineTools } from "./TimelineTools";
 import { SLIDE_TOOL, unlessOff } from "./toolProps";
-
-/** A control's name beside it in a ribbon popover. */
-const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
 interface ToolChoice {
@@ -1057,7 +1055,7 @@ function SpacingButton(props: {
         finalFocus={false}
         className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 p-2 text-xs"
       >
-        <Label htmlFor={`${id}-line-height`} className={LABEL}>
+        <Label htmlFor={`${id}-line-height`} className={QUIET_LABEL}>
           Line height
         </Label>
         <RibbonSelect
@@ -1074,7 +1072,7 @@ function SpacingButton(props: {
             </NativeSelectOption>
           ))}
         </RibbonSelect>
-        <Label htmlFor={`${id}-letter-spacing`} className={LABEL}>
+        <Label htmlFor={`${id}-letter-spacing`} className={QUIET_LABEL}>
           Letter spacing
         </Label>
         <RibbonSelect

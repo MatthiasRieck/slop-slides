@@ -5,7 +5,7 @@ import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-
+import { quietFocus } from "@/lib/focus";
 import type { Deck } from "../lib/api";
 import { parseTime } from "../lib/slideTime";
 import { useApp } from "../store";
@@ -71,7 +71,7 @@ export function SlideTime({ deck }: { deck: Deck }) {
               setInvalid(false);
             }}
             // The hint is for the pointer: it does not open over the field while a time is typed.
-            onFocus={(event) => event.stopPropagation()}
+            onFocus={quietFocus}
             onBlur={commit}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();

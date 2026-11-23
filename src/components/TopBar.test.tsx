@@ -99,9 +99,6 @@ describe("undo and redo", () => {
 
       act(() => useApp.setState({ running: true }));
       expect(off("Undo")).toBe(true);
-      // (A tooltip stays away after its button was pressed, until the pointer or the focus has left it.)
-      fireEvent.mouseLeave(button("Undo"));
-      fireEvent.blur(button("Undo"));
       expect(tooltipOf(button("Undo"))).toBe("Undo chat: “Bigger title”, once the agent is done");
       fireEvent.click(button("Undo"));
       expect(undo).toHaveBeenCalledOnce();

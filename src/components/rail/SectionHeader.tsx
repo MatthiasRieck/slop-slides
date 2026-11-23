@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import type { Section } from "../../lib/api";
 import { cn, plural } from "../../lib/utils";
 import { showInfo, useApp } from "../../store";
+import { SECTION_HEADING } from "../styles";
 import { REMOVE_SECTION } from "./menus";
 import { noLayoutAnimation } from "./Thumbnail";
 
@@ -110,10 +111,7 @@ export const SectionHeader = memo(function SectionHeader(props: {
           <span
             title="Double-click to rename"
             onDoubleClick={() => onEditing(section.index)}
-            className={cn(
-              "min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground",
-              !section.title && "italic",
-            )}
+            className={cn("min-w-0 truncate", SECTION_HEADING, !section.title && "italic")}
           >
             {section.title || "Untitled section"}
           </span>

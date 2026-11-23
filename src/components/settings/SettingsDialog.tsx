@@ -44,7 +44,6 @@ export function SettingsDialog() {
       <DialogContent
         ref={box}
         showCloseButton={false}
-        overlayProps={{ "data-testid": "settings-backdrop" }}
         initialFocus={() => box.current?.querySelector<HTMLElement>("[data-autofocus]") ?? true}
         className="flex h-[38rem] max-h-[calc(100vh-4rem)] w-[54rem] gap-0 overflow-hidden bg-background p-0 text-foreground sm:max-w-[calc(100vw-2rem)]"
       >

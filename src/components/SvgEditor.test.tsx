@@ -5,7 +5,7 @@ import { useApp } from "../store";
 import { type SvgOpen, useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { settle, tooltipOf } from "../test/ui";
+import { isOff, settle, tooltipOf } from "../test/ui";
 import { SvgEditor } from "./SvgEditor";
 
 const DECK = "/decks/talk/deck.html";
@@ -89,7 +89,6 @@ async function open(changes: Partial<SvgOpen> = {}) {
 const shown = () => screen.getByTestId("svg-drawing").shadowRoot!;
 const draft = () => useSvgEditor.getState().edit!.draft;
 /** Whether a button is off; one that says why in its tooltip still takes the pointer and the focus. */
-const isOff = (control: HTMLButtonElement) => control.disabled || control.getAttribute("aria-disabled") === "true";
 const press = (target: Element, x: number, y: number, type = "pointerDown") =>
   fireEvent[type as "pointerDown"](target, { button: 0, pointerId: 1, clientX: x, clientY: y, composed: true });
 

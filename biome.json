@@ -38,7 +38,10 @@
       "a11y": {
         "preset": "recommended",
         "noAutofocus": "off",
-        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftInput"] } },
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": { "inputComponents": ["DraftInput", "Checkbox", "Switch"] }
+        },
         "noNoninteractiveElementInteractions": "error"
       },
       "style": {

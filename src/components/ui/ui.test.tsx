@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AppProviders } from "@/components/AppProviders";
+import { DarkScope } from "@/lib/darkScope";
 import { dismissTopLayer, hasOpenLayer } from "@/lib/layers";
 import { pickOption, settle, tooltipOf } from "@/test/ui";
 import {
@@ -14,6 +15,7 @@ import {
   AlertDialogContent,
   AlertDialogTitle,
 } from "./alert-dialog";
+import { Attachment, AttachmentContent, AttachmentMedia, AttachmentTitle } from "./attachment";
 import { Button, buttonVariants } from "./button";
 import { Checkbox } from "./checkbox";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./context-menu";
@@ -27,6 +29,7 @@ import {
 } from "./dropdown-menu";
 import { Field, FieldLabel } from "./field";
 import { Input } from "./input";
+import { NativeSelect, NativeSelectOption } from "./native-select";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { Slider } from "./slider";
@@ -143,6 +146,29 @@ describe("Button", () => {
     );
     // What the browser does with a prevented press is its own; the handler has to get there.
     expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Bold" }))).toBe(false);
+  });
+
+  it("with keepFocus, leaves the focus where it is when pressed, off or not", () => {
+    const onMouseDown = vi.fn();
+    render(
+      <>
+        <input aria-label="Slide text" />
+        <Button keepFocus onMouseDown={onMouseDown}>
+          Bold
+        </Button>
+        <Button keepFocus size="icon" aria-label="Group" disabled tooltip="Select two or more elements" />
+        <Button>Plain</Button>
+      </>,
+    );
+    screen.getByLabelText("Slide text").focus();
+    // The press's default, which would move the focus, is prevented; who listens still hears it.
+    expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Bold" }))).toBe(false);
+    expect(onMouseDown).toHaveBeenCalledOnce();
+    // A button that is off but focusable, for its tooltip, would take the focus all the same.
+    const group = screen.getByRole("button", { name: "Group" }) as HTMLButtonElement;
+    expect(group.disabled).toBe(false);
+    expect(fireEvent.mouseDown(group)).toBe(false);
+    expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Plain" }))).toBe(true);
   });
 
   it("keeps what a trigger hands down when it is the trigger's button, tooltip and all", () => {
@@ -579,6 +605,58 @@ describe("a popup open in another", () => {
   });
 });
 
+describe("DarkScope", () => {
+  it("makes what opens from a dark part of the app dark too, though it opens outside it", async () => {
+    render(
+      <>
+        <DarkScope>
+          <div className="dark" data-testid="chrome">
+            <Button size="icon" tooltip="Pen" shortcut="p" />
+            <Popover>
+              <PopoverTrigger>Timer</PopoverTrigger>
+              <PopoverContent aria-label="Timer settings">Times</PopoverContent>
+            </Popover>
+            <DropdownMenu>
+              <DropdownMenuTrigger>More</DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem>End show</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Dialog>
+              <DialogTrigger>Keys</DialogTrigger>
+              <DialogContent>
+                <DialogTitle>Keys while presenting</DialogTitle>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </DarkScope>
+        <Button size="icon" tooltip="Bold" />
+      </>,
+    );
+    const chrome = screen.getByTestId("chrome");
+    const dark = (popup: Element | null) => {
+      expect(popup).toBeTruthy();
+      expect(chrome.contains(popup)).toBe(false);
+      return popup?.classList.contains("dark");
+    };
+    fireEvent.focus(screen.getByRole("button", { name: "Pen" }));
+    expect(dark(document.querySelector("[data-slot=tooltip-content]"))).toBe(true);
+    fireEvent.blur(screen.getByRole("button", { name: "Pen" }));
+    fireEvent.click(screen.getByRole("button", { name: "Timer" }));
+    expect(dark(screen.getByRole("dialog", { name: "Timer settings" }))).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(dark(screen.getByRole("menu"))).toBe(true);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Keys" }));
+    expect(dark(screen.getByRole("dialog", { name: "Keys while presenting" }))).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Keys while presenting" }), { key: "Escape" });
+    // Anywhere else, a popup follows the app's theme.
+    fireEvent.focus(screen.getByRole("button", { name: "Bold" }));
+    expect(dark(document.querySelector("[data-slot=tooltip-content]"))).toBe(false);
+  });
+});
+
 describe("the form controls", () => {
   it("are named by their label, and say what they hold in ARIA", () => {
     const onSwitch = vi.fn();
@@ -614,6 +692,20 @@ describe("the form controls", () => {
     expect(onValueChange.mock.calls[0]?.[0]).toBe(60);
   });
 
+  it("draws one thumb for a single value, and two for a range or for no value at all", () => {
+    const thumbs = (slider: React.ReactElement) => {
+      const { container, unmount } = render(slider);
+      const count = container.querySelectorAll("[data-slot=slider-thumb]").length;
+      unmount();
+      return count;
+    };
+    expect(thumbs(<Slider aria-label="Volume" value={40} />)).toBe(1);
+    expect(thumbs(<Slider aria-label="Volume" defaultValue={40} />)).toBe(1);
+    expect(thumbs(<Slider aria-label="Volume" value={[40]} />)).toBe(1);
+    expect(thumbs(<Slider aria-label="Volume" value={[20, 60]} />)).toBe(2);
+    expect(thumbs(<Slider aria-label="Volume" />)).toBe(2);
+  });
+
   it("picks one of a toggle group, as a list of what is pressed", () => {
     const onValueChange = vi.fn();
     render(
@@ -630,6 +722,45 @@ describe("the form controls", () => {
     // Pressing the one that is on turns it off: a group that always has one ignores the empty list.
     fireEvent.click(screen.getByRole("button", { name: "Left" }));
     expect(onValueChange.mock.calls[1]?.[0]).toEqual([]);
+  });
+});
+
+describe("Attachment", () => {
+  it("has a chip size: one line as wide as its name, with its icon in its own color", () => {
+    render(
+      <Attachment size="chip" data-testid="chip">
+        <AttachmentMedia data-testid="icon">
+          <svg />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>notes.md</AttachmentTitle>
+        </AttachmentContent>
+      </Attachment>,
+    );
+    const chip = screen.getByTestId("chip");
+    expect(chip.dataset.size).toBe("chip");
+    const classes = chip.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["h-6", "min-w-0", "max-w-full", "bg-transparent"]));
+    // Not the least width of a row of an attachment list, which comes with the orientation.
+    expect(classes).not.toContain("min-w-40");
+    expect(screen.getByTestId("icon").className).toContain("group-data-[size=chip]/attachment:text-current");
+  });
+});
+
+describe("NativeSelect", () => {
+  it("is a real select, as small as the small input beside it", () => {
+    const onChange = vi.fn();
+    render(
+      <NativeSelect size="sm" aria-label="Unit" value="px" onChange={(event) => onChange(event.target.value)}>
+        <NativeSelectOption value="px">px</NativeSelectOption>
+        <NativeSelectOption value="cm">cm</NativeSelectOption>
+      </NativeSelect>,
+    );
+    const select = screen.getByRole("combobox", { name: "Unit" });
+    expect(select.tagName).toBe("SELECT");
+    expect(select.className).toContain("data-[size=sm]:text-xs");
+    fireEvent.change(select, { target: { value: "cm" } });
+    expect(onChange).toHaveBeenCalledWith("cm");
   });
 });
 

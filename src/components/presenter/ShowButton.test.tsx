@@ -2,9 +2,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DarkScope } from "@/lib/darkScope";
 
 import { tooltipOf } from "../../test/ui";
-import { ShowButton, ShowTooltip } from "./ShowButton";
+import { ShowButton } from "./ShowButton";
 
 /** Presses the mouse button on `element`; true when that was kept from moving the focus. */
 function pressKept(element: Element): boolean {
@@ -31,11 +32,13 @@ describe("ShowButton", () => {
 
   it("shows its tooltip dark, outside the dark subtree it belongs to, with the key in a key cap", () => {
     render(
-      <div className="dark" data-testid="chrome">
-        <ShowButton tooltip="Pen" shortcut="p">
-          <svg />
-        </ShowButton>
-      </div>,
+      <DarkScope>
+        <div className="dark" data-testid="chrome">
+          <ShowButton tooltip="Pen" shortcut="p">
+            <svg />
+          </ShowButton>
+        </div>
+      </DarkScope>,
     );
     fireEvent.focus(screen.getByRole("button", { name: "Pen" }));
     const tooltip = document.querySelector("[data-slot=tooltip-content]")!;
@@ -114,21 +117,5 @@ describe("ShowButton", () => {
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("dialog", { name: "Timer settings" }).textContent).toBe("Times");
-  });
-});
-
-describe("ShowTooltip", () => {
-  it("is the dark tooltip of an element that is no ShowButton", () => {
-    render(
-      <ShowTooltip text="Red">
-        <button type="button" aria-label="Red" />
-      </ShowTooltip>,
-    );
-    const swatch = screen.getByRole("button", { name: "Red" });
-    fireEvent.focus(swatch);
-    const tooltip = document.querySelector("[data-slot=tooltip-content]")!;
-    expect(tooltip.textContent).toBe("Red");
-    expect(tooltip.classList.contains("dark")).toBe(true);
-    expect(tooltip.querySelector("[data-slot=kbd]")).toBeNull();
   });
 });

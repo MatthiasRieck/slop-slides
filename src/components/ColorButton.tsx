@@ -7,13 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { keepFocus } from "@/lib/focus";
+import { quietFocus } from "@/lib/focus";
 import { type DeckColor, EDIT_COLORS } from "../lib/editTools";
 import { colorLabel, parseHexInput, SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import type { EditPanel } from "../store/editing";
 import { useEditPanelAsk } from "./editPanelAsk";
+import { QUIET_LABEL } from "./styles";
 
 /** What a color well holds: a color, none at all, or something that is not one color. */
 export type ColorState = "color" | "none" | "other";
@@ -109,7 +110,7 @@ export function ColorButton(props: {
             aria-label={props.label}
             tooltip={tooltip}
             disabled={props.disabled}
-            onMouseDownCapture={keepFocus}
+            keepFocus
             className="flex-col gap-0.5 px-1"
           />
         }
@@ -173,7 +174,7 @@ export function ColorButton(props: {
               aria-label="None"
               tooltip={`No ${props.label.toLowerCase()}`}
               aria-pressed={state === "none"}
-              onMouseDownCapture={keepFocus}
+              keepFocus
               onClick={() => pick(null)}
               className={cn(
                 "rounded-full text-muted-foreground",
@@ -207,7 +208,7 @@ export function ColorButton(props: {
                   setInvalid(false);
                 }}
                 // The hint is for the pointer: it does not stay up while the value is typed.
-                onFocus={(event) => event.stopPropagation()}
+                onFocus={quietFocus}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
                   event.preventDefault();
@@ -219,7 +220,7 @@ export function ColorButton(props: {
             </TooltipTrigger>
             <TooltipContent>A hex color, six digits or three; Enter applies it</TooltipContent>
           </Tooltip>
-          <Label className="gap-1 text-xs font-normal text-muted-foreground">
+          <Label className={cn("gap-1", QUIET_LABEL)}>
             <Input
               ref={custom}
               type="color"
@@ -259,7 +260,7 @@ function Swatch(props: { color: string; label: string; tooltip: string; picked: 
       aria-label={props.label}
       tooltip={props.tooltip}
       aria-pressed={props.picked}
-      onMouseDownCapture={keepFocus}
+      keepFocus
       onClick={props.onPick}
       className={cn(
         "rounded-full border-foreground/20 dark:border-foreground/20",

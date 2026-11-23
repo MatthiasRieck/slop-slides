@@ -13,6 +13,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { type RewindChoice, useApp } from "../store";
+import { QUIET_LABEL } from "./styles";
 
 /**
  * Asks, once the deck changes of an agent turn were undone, what becomes of the chat: it goes
@@ -66,7 +67,7 @@ export function RewindDialog() {
         <Field orientation="horizontal" className="items-start">
           <Checkbox id={rememberId} checked={remember} onCheckedChange={setRemember} className="mt-0.5" />
           <FieldContent className="gap-0.5">
-            <FieldLabel htmlFor={rememberId} className="text-xs font-normal text-muted-foreground">
+            <FieldLabel htmlFor={rememberId} className={QUIET_LABEL}>
               Don't ask again: always do what I pick here.
             </FieldLabel>
             <FieldDescription className="text-xs">You can change this in Settings › General.</FieldDescription>

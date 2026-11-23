@@ -22,7 +22,6 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -31,7 +30,6 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -64,6 +62,8 @@ import {
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
+import { LabeledField } from "./fields";
+import { SECTION_HEADING } from "./styles";
 import { checkerboard, duplicate, NO_OVERLAY, type Overlay, overlayOf, showDrawing, subtreeSize } from "./svg/drawing";
 
 const MIN_ZOOM = 0.05;
@@ -786,7 +786,7 @@ function Properties(props: {
         <Section title="Point">
           <div className="flex gap-2">
             {(["x", "y"] as const).map((axis) => (
-              <Labeled key={axis} label={axis.toUpperCase()}>
+              <LabeledField key={axis} label={axis.toUpperCase()}>
                 {(id) => (
                   <CommitInput
                     id={id}
@@ -800,7 +800,7 @@ function Properties(props: {
                     }}
                   />
                 )}
-              </Labeled>
+              </LabeledField>
             ))}
           </div>
         </Section>
@@ -810,7 +810,7 @@ function Properties(props: {
           <ColorField key={name} label={name === "fill" ? "Fill" : "Stroke"} value={value(name)} onChange={set(name)} />
         ))}
         <div className="flex gap-2">
-          <Labeled label="Stroke width">
+          <LabeledField label="Stroke width">
             {(id) => (
               <CommitInput
                 id={id}
@@ -820,15 +820,15 @@ function Properties(props: {
                 live
               />
             )}
-          </Labeled>
-          <Labeled label="Opacity">
+          </LabeledField>
+          <LabeledField label="Opacity">
             {(id) => (
               <CommitInput id={id} aria-label="Opacity" value={value("opacity")} onCommit={set("opacity")} live />
             )}
-          </Labeled>
+          </LabeledField>
         </div>
         <div className="flex gap-2">
-          <Labeled label="Line ends">
+          <LabeledField label="Line ends">
             {(id) => (
               <NativeSelect
                 id={id}
@@ -844,8 +844,8 @@ function Properties(props: {
                 <NativeSelectOption value="square">Square</NativeSelectOption>
               </NativeSelect>
             )}
-          </Labeled>
-          <Labeled label="Corners">
+          </LabeledField>
+          <LabeledField label="Corners">
             {(id) => (
               <NativeSelect
                 id={id}
@@ -861,9 +861,9 @@ function Properties(props: {
                 <NativeSelectOption value="bevel">Bevel</NativeSelectOption>
               </NativeSelect>
             )}
-          </Labeled>
+          </LabeledField>
         </div>
-        <Labeled label="Dashes">
+        <LabeledField label="Dashes">
           {(id) => (
             <CommitInput
               id={id}
@@ -873,7 +873,7 @@ function Properties(props: {
               onCommit={set("stroke-dasharray")}
             />
           )}
-        </Labeled>
+        </LabeledField>
       </Section>
       {textOnly && (
         <Section title="Text">
@@ -897,22 +897,9 @@ function Properties(props: {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{title}</h2>
+      <h2 className={SECTION_HEADING}>{title}</h2>
       {children}
     </section>
-  );
-}
-
-/** A control of the inspector under its muted label, the two filling their share of a row. */
-function Labeled({ label, children }: { label: string; children: (id: string) => ReactNode }) {
-  const id = useId();
-  return (
-    <Field className="min-w-0 flex-1 gap-1">
-      <FieldLabel htmlFor={id} className="text-xs font-normal text-muted-foreground">
-        {label}
-      </FieldLabel>
-      {children(id)}
-    </Field>
   );
 }
 
@@ -920,7 +907,7 @@ function Labeled({ label, children }: { label: string; children: (id: string) =>
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const hex = hexOf(value);
   return (
-    <Labeled label={label}>
+    <LabeledField label={label}>
       {(id) => (
         <div className="flex gap-1.5">
           <Input
@@ -933,7 +920,7 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
           <CommitInput id={id} aria-label={label} placeholder="none" value={value} onCommit={onChange} />
         </div>
       )}
-    </Labeled>
+    </LabeledField>
   );
 }
 

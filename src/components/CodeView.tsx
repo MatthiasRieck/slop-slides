@@ -3,12 +3,27 @@ import { EditorView, keymap } from "@codemirror/view";
 import { AlertTriangle, FileCode2, RotateCcw, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty";
+import { Kbd } from "@/components/ui/kbd";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { api, errorMessage } from "../lib/api";
 import { onDiskRead } from "../lib/codeSync";
 import { formatKeys } from "../lib/keys";
 import { basename, cn } from "../lib/utils";
 import { provideCodeSave, showError, useApp } from "../store";
-import { Button } from "./Button";
 import {
   fromDisk,
   replaceText,
@@ -18,12 +33,22 @@ import {
   sourceExtensions,
 } from "./code/sourceEditor";
 import { useDeckFile } from "./code/useDeckFile";
-import { Dialog } from "./Dialog";
 
 /** The sidebar's HTML tab: the open deck's source, or a line saying there is no deck to show. */
 export function CodePanel({ active }: { active: boolean }) {
   const hasDeck = useApp((s) => s.deck !== null);
-  if (!hasDeck) return <p className="p-4 text-sm text-muted-foreground">Open a deck to see its HTML.</p>;
+  if (!hasDeck) {
+    return (
+      <Empty className="h-full">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FileCode2 />
+          </EmptyMedia>
+          <EmptyDescription>Open a deck to see its HTML.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
   return <CodeView active={active} />;
 }
 
@@ -221,7 +246,7 @@ export function CodeView({ active }: { active: boolean }) {
         {dirty && <span title="Unsaved changes" className="size-1.5 shrink-0 rounded-full bg-primary" />}
         {span && (
           <>
-            <span className="hidden text-muted-foreground/40 @md:inline">·</span>
+            <Separator orientation="vertical" className="hidden h-3 self-center @md:block" />
             <span className="hidden min-w-0 truncate @md:inline">
               Slide {index + 1} <span className="font-mono text-2xs">#{span.id.replace(/^#/, "")}</span>
             </span>
@@ -232,84 +257,77 @@ export function CodeView({ active }: { active: boolean }) {
             )}
           </>
         )}
-        <span className="ml-auto hidden text-2xs @2xl:inline">
-          {formatKeys("mod+f")} search · {formatKeys("mod+s")} save
+        <span className="ml-auto hidden items-center gap-1 text-2xs @2xl:flex">
+          <Kbd>{formatKeys("mod+f")}</Kbd> search <Kbd>{formatKeys("mod+s")}</Kbd> save
         </span>
         <span className="ml-auto @2xl:hidden" />
         <Button
           variant="ghost"
-          size="sm"
+          size="xs"
           disabled={!dirty || saving}
           onClick={() => setReverting(true)}
-          title="Discard unsaved changes"
+          tooltip="Discard unsaved changes"
         >
-          <RotateCcw className="size-3.5" />
+          <RotateCcw data-icon="inline-start" />
           Revert
         </Button>
         <Button
-          variant="primary"
-          size="md"
+          size="xs"
           disabled={!dirty || saving}
+          aria-busy={saving || undefined}
           onClick={() => saveRef.current()}
-          title={`Save ${fileName} (${formatKeys("mod+s")})`}
+          tooltip={`Save ${fileName}`}
+          shortcut="mod+s"
           className="shadow-sm"
         >
-          <Save className="size-3.5" />
+          {saving ? <Spinner aria-hidden="true" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>
       {conflict && (
-        <div className="flex shrink-0 items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs">
-          <AlertTriangle className="size-3.5 shrink-0 text-warning " />
-          <span className="flex-1">{fileName} changed on disk while you were editing.</span>
-          <button
-            type="button"
-            onClick={() => source !== null && loadText(source)}
-            className="rounded-md border px-2 py-0.5 hover:bg-accent"
-          >
+        <Alert className="flex shrink-0 items-center gap-2 rounded-none border-x-0 border-t-0 bg-warning/10 px-3 py-1.5 text-xs">
+          <AlertTriangle className="size-3.5 shrink-0 translate-y-0! text-warning!" />
+          <AlertDescription className="flex-1 text-xs text-foreground">
+            {fileName} changed on disk while you were editing.
+          </AlertDescription>
+          <Button variant="outline" size="2xs" onClick={() => source !== null && loadText(source)}>
             Load disk version
-          </button>
-          <button
-            type="button"
-            onClick={() => saveRef.current(true)}
-            className="rounded-md border px-2 py-0.5 hover:bg-accent"
-          >
+          </Button>
+          <Button variant="outline" size="2xs" onClick={() => saveRef.current(true)}>
             Overwrite with mine
-          </button>
-        </div>
+          </Button>
+        </Alert>
       )}
       {reverting && (
-        <Dialog
-          label="Discard unsaved changes"
-          closeOnBackdrop
-          onClose={() => setReverting(false)}
-          className="flex w-96 max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
-          heading={
-            <>
-              <h2 className="text-base font-semibold">Discard your unsaved changes?</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
+        <AlertDialog open onOpenChange={(open) => !open && setReverting(false)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Discard your unsaved changes?</AlertDialogTitle>
+              <AlertDialogDescription>
                 What you typed into {fileName} since it was last saved is lost; the file itself stays as it is.
-              </p>
-            </>
-          }
-        >
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" data-autofocus onClick={() => setReverting(false)}>
-              Keep editing
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setReverting(false);
-                if (source !== null) loadText(source);
-              }}
-            >
-              Discard changes
-            </Button>
-          </div>
-        </Dialog>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel size="sm">Keep editing</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setReverting(false);
+                  if (source !== null) loadText(source);
+                }}
+              >
+                Discard changes
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
-      {error && <p className="px-3 py-2 text-xs text-destructive">{error}</p>}
+      {error && (
+        <Alert variant="destructive" className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-2">
+          <AlertDescription className="selectable text-xs">{error}</AlertDescription>
+        </Alert>
+      )}
       <div ref={hostRef} className="selectable min-h-0 flex-1 overflow-hidden" />
     </div>
   );

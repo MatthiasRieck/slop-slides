@@ -3,10 +3,13 @@ import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, Pencil, X } from "lucide-react";
 import { memo } from "react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import type { Section } from "../../lib/api";
 import { cn, plural } from "../../lib/utils";
 import { showInfo, useApp } from "../../store";
-import { SectionLabel } from "../SectionLabel";
 import { REMOVE_SECTION } from "./menus";
 import { noLayoutAnimation } from "./Thumbnail";
 
@@ -66,23 +69,24 @@ export const SectionHeader = memo(function SectionHeader(props: {
       {props.first === undefined || props.slides !== undefined ? (
         <span className="w-4 shrink-0" />
       ) : (
-        <button
-          type="button"
-          aria-label={props.collapsed ? "Expand section" : "Collapse section"}
-          title={props.collapsed ? "Expand section" : "Collapse section"}
+        <Button
+          variant="tool"
+          size="icon-2xs"
+          tooltip={props.collapsed ? "Expand section" : "Collapse section"}
           aria-expanded={!props.collapsed}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             useApp.getState().toggleSection(props.first!);
           }}
-          className="flex w-4 shrink-0 justify-end rounded text-muted-foreground hover:text-foreground"
+          className="-mr-1 w-4 justify-end aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted aria-expanded:hover:text-foreground"
         >
           <ChevronRight className={cn("size-3 transition-transform duration-200", !props.collapsed && "rotate-90")} />
-        </button>
+        </Button>
       )}
       {editing ? (
-        <input
+        <Input
+          size="sm"
           autoFocus
           aria-label="Section title"
           defaultValue={section.title}
@@ -97,19 +101,23 @@ export const SectionHeader = memo(function SectionHeader(props: {
             }
           }}
           onBlur={(e) => void commit(e.currentTarget.value)}
-          className="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-foreground outline-none focus:ring-1 focus:ring-primary"
+          className="h-6 flex-1 bg-background text-2xs font-medium uppercase tracking-wide text-foreground data-[size=sm]:text-2xs"
         />
       ) : (
         <>
-          {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
-          <SectionLabel
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: double-click is a shortcut for the adjacent keyboard-accessible Rename section button */}
+          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: the same shortcut */}
+          <span
             title="Double-click to rename"
             onDoubleClick={() => onEditing(section.index)}
-            className={cn("min-w-0 truncate", !section.title && "italic")}
+            className={cn(
+              "min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground",
+              !section.title && "italic",
+            )}
           >
             {section.title || "Untitled section"}
-          </SectionLabel>
-          <span className="h-px flex-1 bg-border" />
+          </span>
+          <Separator className="flex-1 data-horizontal:w-auto" />
           {props.slides !== undefined ? (
             <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">
               {plural(props.slides, "slide")}
@@ -117,19 +125,19 @@ export const SectionHeader = memo(function SectionHeader(props: {
           ) : (
             <>
               {props.collapsed && (
-                <span data-testid="folded-count" className="shrink-0 text-2xs text-muted-foreground">
+                <Badge data-testid="folded-count" variant="secondary" className="h-4 px-1.5 text-2xs font-normal">
                   {plural(props.count, "slide")}
-                </span>
+                </Badge>
               )}
               <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
                 <SectionAction title="Rename section" onClick={() => onEditing(section.index)}>
-                  <Pencil className="size-3" />
+                  <Pencil />
                 </SectionAction>
                 <SectionAction
                   title={REMOVE_SECTION}
                   onClick={() => void useApp.getState().removeSection(section.index)}
                 >
-                  <X className="size-3" />
+                  <X />
                 </SectionAction>
               </div>
             </>
@@ -142,18 +150,17 @@ export const SectionHeader = memo(function SectionHeader(props: {
 
 function SectionAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      aria-label={props.title}
-      title={props.title}
+    <Button
+      variant="tool"
+      size="icon-2xs"
+      tooltip={props.title}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       {props.children}
-    </button>
+    </Button>
   );
 }

@@ -1,6 +1,19 @@
 import type { Deck } from "../../lib/api";
 import { type SectionBlock, sectionStarts, startsSection } from "../../lib/sections";
-import type { MenuEntry } from "./ContextMenu";
+
+/** One choice of a context menu, or the line between two groups of them. */
+export type MenuEntry =
+  | "divider"
+  | {
+      label: string;
+      /** The keys that do the same, as a `formatKeys` spec. */
+      keys?: string;
+      /** Why it cannot be picked just now; it shows, off, with this as its tooltip. */
+      disabledReason?: string;
+      /** It deletes or discards. */
+      destructive?: boolean;
+      run: () => void;
+    };
 
 /** What removing a section is called, wherever it is offered: its slides stay. */
 export const REMOVE_SECTION = "Remove section (keeps its slides)";

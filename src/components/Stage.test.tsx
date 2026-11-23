@@ -18,7 +18,7 @@ import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { settle as settleTools, tooltipOf as tooltipOfTool } from "../test/ui";
+import { settle, settle as settleTools, tooltipOf, tooltipOf as tooltipOfTool } from "../test/ui";
 import { Stage } from "./Stage";
 
 // Drawing schedules a save of the review marks; finish it here, not in the next test.
@@ -79,11 +79,17 @@ describe("Stage", () => {
 
   it("disables the arrows at either end", () => {
     render(<Stage />);
-    expect((prev() as HTMLButtonElement).disabled).toBe(true);
-    expect((next() as HTMLButtonElement).disabled).toBe(false);
+    // Off, they still say what they are for: disabled to a screen reader, and a press does nothing.
+    const off = (button: HTMLElement) => button.getAttribute("aria-disabled") === "true";
+    expect(off(prev())).toBe(true);
+    expect(off(next())).toBe(false);
+    fireEvent.click(prev());
+    expect(useApp.getState().selected).toBe("intro");
     act(() => useApp.getState().select("outro"));
-    expect((prev() as HTMLButtonElement).disabled).toBe(false);
-    expect((next() as HTMLButtonElement).disabled).toBe(true);
+    expect(off(prev())).toBe(false);
+    expect(off(next())).toBe(true);
+    fireEvent.click(next());
+    expect(useApp.getState().selected).toBe("outro");
   });
 
   it("moves between slides with the arrow buttons", () => {
@@ -96,8 +102,8 @@ describe("Stage", () => {
 
   it("names the arrows with their keys", () => {
     render(<Stage />);
-    expect(prev().title).toBe("Previous slide (←)");
-    expect(next().title).toBe("Next slide (→)");
+    expect(tooltipOf(prev())).toBe("Previous slide←");
+    expect(tooltipOf(next())).toBe("Next slide→");
   });
 
   it("goes to a slide by its number: the position is a field once pressed", () => {
@@ -142,7 +148,7 @@ describe("Stage", () => {
     render(<Stage />);
     const chip = () => screen.getByRole("button", { name: "Hidden" }) as HTMLButtonElement;
     expect(chip().disabled).toBe(false);
-    expect(chip().title).toBe("Hidden: skipped when presenting. Click to show it again.");
+    expect(tooltipOf(chip())).toBe("Hidden: skipped when presenting. Click to show it again.");
     await act(async () => fireEvent.click(chip()));
     expect(useApp.getState().editing).toBe(false);
     await waitFor(() =>
@@ -160,7 +166,7 @@ describe("Stage", () => {
     );
     render(<Stage />);
     const chip = screen.getByRole("button", { name: "Locked" });
-    expect(chip.title).toContain("Click to unlock it");
+    expect(tooltipOf(chip)).toContain("Click to unlock it");
     await act(async () => fireEvent.click(chip));
     expect(invoke).toHaveBeenCalledWith("set_slides_locked", { id: locked.id, slides: ["intro"], locked: false });
     expect(screen.queryByRole("button", { name: "Locked" })).toBeNull();
@@ -246,7 +252,9 @@ describe("Stage", () => {
     fireEvent.click(button);
     expect(screen.queryByRole("dialog")).toBeNull();
     act(() => useApp.setState({ running: true }));
-    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows the deck's lint status beside Tidy layout, in the row under the slide", () => {
@@ -965,10 +973,25 @@ describe("Stage", () => {
         const { container } = render(<Stage />);
         fireEvent.click(tool("Comment on an element"));
         pick(container);
-        expect(document.activeElement).toBe(input());
         // The preview that took the press may take focus too; the field gets it back.
         frameOf(container).focus();
         await waitFor(() => expect(document.activeElement).toBe(input()));
+      });
+
+      it("keeps the comment open for a press on its own pin, and saves and closes it on a press beside it", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        const pin = screen.getByRole("button", { name: "Comment 1" });
+        fireEvent.click(pin);
+        fireEvent.change(input(), { target: { value: "Much bigger" } });
+        fireEvent.pointerDown(pin, { pointerType: "mouse", button: 0 });
+        fireEvent.click(pin);
+        expect(screen.getByRole("dialog", { name: "Comment" })).toBeTruthy();
+        const beside = screen.getByTestId("stage-area");
+        fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+        fireEvent.click(beside);
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(useApp.getState().comments.intro?.[0]?.text).toBe("Much bigger");
       });
 
       it("dictates into the comment at the caret, and Enter keeps what is still being said", async () => {
@@ -1056,7 +1079,10 @@ describe("Stage", () => {
           spots: [{ id: "first", x: 0.75, y: 0.1, found: false }],
         });
         expect(pin.style.left).toBe("75%");
-        expect(pin.title).toContain("gone");
+        // Pointed at, it says so beside what the comment says.
+        fireEvent.pointerEnter(pin);
+        expect(screen.getByRole("note").textContent).toContain("The element it was on is gone.");
+        fireEvent.pointerLeave(pin);
         // Another slide's answer, from a preview on its way out, does not count.
         fromFrame(container, { type: "slop:comment-spots", slide: "outro", spots: [{ id: "first", x: 0, y: 0 }] });
         expect(pin.style.left).toBe("75%");
@@ -1173,7 +1199,7 @@ describe("Stage", () => {
             ],
           });
           expect(screen.getAllByTestId("comment-area")).toHaveLength(1);
-          expect(document.activeElement).toBe(input());
+          await waitFor(() => expect(document.activeElement).toBe(input()));
           fireEvent.change(input(), { target: { value: "Too crowded" } });
           fireEvent.keyDown(input(), { key: "Enter" });
           const area = {
@@ -1336,8 +1362,8 @@ describe("Stage", () => {
       // The timeline's tools stay, as in either ribbon.
       expect(screen.getByRole("button", { name: "Show the timeline under the slide" })).toBeTruthy();
       expect(screen.getByText("Locked")).toBeTruthy();
-      expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
-      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: /^Layout$/ }).getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByRole("button", { name: /Tidy layout/ }).getAttribute("aria-disabled")).toBe("true");
       // Going back to a slide that is not locked, the editor is there again.
       act(() => useApp.getState().select("intro"));
       expect(edited()).toBe(true);
@@ -2516,7 +2542,7 @@ describe("Stage", () => {
       toggleEditing();
       act(() => edited("outro", "intro"));
       const open = () => fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
-      const dialog = () => screen.queryByRole("dialog", { name: "Discard changes" });
+      const dialog = () => screen.queryByRole("alertdialog", { name: "Discard changes on other slides too?" });
 
       open();
       expect(dialog()!.textContent).toContain("1 other slide");
@@ -2556,7 +2582,7 @@ describe("Stage", () => {
       toggleEditing();
       act(() => edited("outro", "#2"));
       fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
-      const dialog = screen.getByRole("dialog", { name: "Discard changes" });
+      const dialog = screen.getByRole("alertdialog", { name: "Discard changes on 2 other slides?" });
       expect(dialog.textContent).toContain("Discard changes on 2 other slides?");
       expect(dialog.textContent).toContain("The slide shown has no changes.");
       expect(discard).not.toHaveBeenCalled();
@@ -2567,7 +2593,30 @@ describe("Stage", () => {
       fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
       fireEvent.click(screen.getByRole("button", { name: "Discard on 2 slides" }));
       expect(discard).toHaveBeenCalledExactlyOnceWith();
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("starts the question on the answer that discards, cancels with Escape, and stays for a press beside it", async () => {
+      const discard = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ discardSlideEdits: discard, selected: "intro" });
+      render(<Stage />);
+      toggleEditing();
+      act(() => edited("outro", "#2"));
+      const opener = screen.getByRole("button", { name: /Discard changes/ });
+      opener.focus();
+      fireEvent.click(opener);
+      await settle();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Discard on 2 slides" }));
+      // A question with fixed answers: a press beside it is none of them.
+      const beside = document.querySelector("[data-slot=alert-dialog-overlay]")!;
+      fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+      fireEvent.click(beside);
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(discard).not.toHaveBeenCalled();
+      await settle();
+      expect(document.activeElement).toBe(opener);
     });
 
     it("saves the markup the editor posts for the current slide", () => {
@@ -3457,8 +3506,8 @@ describe("Stage", () => {
         expect(post).toHaveBeenLastCalledWith({ type: "slop:camera", zoomBy: 1.25 }, "*");
         fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:camera", zoomBy: 0.8 }, "*");
-        expect(screen.getByRole("button", { name: "Zoom in" }).title).toBe("Zoom in (Ctrl++)");
-        expect(screen.getByRole("button", { name: "Zoom out" }).title).toBe("Zoom out (Ctrl+-)");
+        expect(tooltipOf(screen.getByRole("button", { name: "Zoom in" }))).toBe("Zoom inCtrl++");
+        expect(tooltipOf(screen.getByRole("button", { name: "Zoom out" }))).toBe("Zoom outCtrl+-");
 
         fireEvent.click(zoom());
         const items = within(screen.getByRole("menu", { name: "Zoom level" })).getAllByRole("menuitemradio");
@@ -3939,7 +3988,9 @@ describe("Stage", () => {
       expect(tidy).toHaveBeenCalledTimes(1);
       expect(tidy).toHaveBeenCalledWith([]);
       act(() => useApp.setState({ running: true }));
-      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: /Tidy layout/ }).getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
+      expect(tidy).toHaveBeenCalledTimes(1);
     });
 
     it("warns about overflow found in the editor and hands it to the agent", () => {
@@ -3954,7 +4005,7 @@ describe("Stage", () => {
       toggleEditing();
       const items = ['<h1> "Hello" runs past the bottom edge by 40px'];
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items });
-      expect(screen.getByText("Overflow").getAttribute("title")).toContain(items[0]);
+      expect(tooltipOf(screen.getByText("Overflow"))).toContain(items[0]);
       fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
       expect(tidy).toHaveBeenCalledWith(items);
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: [] });

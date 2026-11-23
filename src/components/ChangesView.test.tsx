@@ -9,6 +9,7 @@ import { deckMode, useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { placeElements } from "../test/intersection";
+import { settle, tooltipOf } from "../test/ui";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
 const row = (
@@ -73,6 +74,16 @@ async function show(found: DeckChanges = changes()) {
     );
   });
 }
+
+/** Whether a button is off: one with a tooltip stays in reach, to say why, and is `aria-disabled`. */
+const off = (button: HTMLElement) =>
+  (button as HTMLButtonElement).disabled || button.getAttribute("aria-disabled") === "true";
+
+/**
+ * The slider named `name`: its thumb, which is hidden until it is laid out (jsdom never does), so
+ * it is found through the slider it is the thumb of, which has the same name.
+ */
+const slider = (name: string) => within(screen.getByRole("group", { name })).getByRole("slider", { hidden: true });
 
 const rows = () => screen.getAllByTestId("change-row").map((r) => r.dataset.status);
 const isComparing = () => screen.queryByTestId("slide-comparison") !== null;
@@ -178,13 +189,21 @@ describe("ChangesRail", () => {
 
   it("can show only the slides that changed", async () => {
     await show();
-    fireEvent.click(screen.getByTitle("Show only the slides that changed"));
+    const filter = screen.getByRole("button", { name: "Show only the slides that changed" });
+    expect(filter.getAttribute("aria-pressed")).toBe("false");
+    expect(tooltipOf(filter)).toBe("Show only the slides that changed");
+    fireEvent.click(filter);
     expect(rows()).toEqual(["modified", "removed", "added"]);
+    expect(filter.getAttribute("aria-pressed")).toBe("true");
+    // The press put the tooltip away; it comes back once the pointer has left the button.
+    fireEvent.mouseLeave(filter);
+    fireEvent.blur(filter);
+    expect(tooltipOf(filter)).toBe("Show every slide");
   });
 
   it("says when nothing changed", async () => {
     await show(changes({ slides: [row("unchanged", "intro")] }));
-    fireEvent.click(screen.getByTitle("Show only the slides that changed"));
+    fireEvent.click(screen.getByRole("button", { name: "Show only the slides that changed" }));
     expect(screen.getByText("No slide changed.")).toBeTruthy();
   });
 });
@@ -260,8 +279,8 @@ describe("staging", () => {
     expect(undo("Removed", "Bring back").className).not.toContain("text-destructive");
     expect(undo("Moved", "Undo move").className).not.toContain("text-destructive");
     expect(undo("Styles", "Discard changes").className).toContain("text-destructive");
-    expect(undo("Added", "Discard new slide").title).toBe(
-      "Take this slide out: the last commit does not have it (Ctrl+Z undoes it)",
+    expect(tooltipOf(undo("Added", "Discard new slide"))).toBe(
+      "Take this slide out: the last commit does not have itCtrl+Z",
     );
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   });
@@ -364,15 +383,19 @@ describe("staging", () => {
     const deck = deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked'));
     useApp.setState({ deck });
     await show();
-    const discard = group("Modified").getByRole("button", { name: "Discard changes" }) as HTMLButtonElement;
-    expect(discard.disabled).toBe(true);
-    expect(discard.title).toBe("This slide is locked; unlock it first");
+    const discard = group("Modified").getByRole("button", { name: "Discard changes" });
+    expect(off(discard)).toBe(true);
+    expect(tooltipOf(discard)).toBe("This slide is locked; unlock it first");
+    await act(async () => {
+      fireEvent.click(discard);
+    });
+    expect(sent("restore_change")).toHaveLength(0);
   });
 
   it("stages and restores slide by slide before a first commit too", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Stage all" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(off(screen.getByRole("button", { name: "Stage all" }))).toBe(false);
     await act(async () => {
       fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
     });
@@ -399,11 +422,16 @@ describe("committing", () => {
   it("needs a message, and says so", async () => {
     await show(changes({ stagedFiles: 2 }));
     expect(button().textContent).toBe("Commit 2 files");
-    expect(button().disabled).toBe(true);
-    expect(button().title).toBe("Write a message to commit");
+    expect(off(button())).toBe(true);
+    expect(tooltipOf(button())).toBe("Write a message to commit");
+    // Off, a press commits nothing.
+    await act(async () => {
+      fireEvent.click(button());
+    });
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "commit_changes")).toBe(false);
     fireEvent.change(message(), { target: { value: "Fix" } });
-    expect(button().disabled).toBe(false);
-    expect(button().title).toBe("Commit what is staged (Ctrl+Enter)");
+    expect(off(button())).toBe(false);
+    expect(tooltipOf(button())).toBe("Commit what is stagedCtrl+Enter");
     cleanup();
     await show(changes({ stagedFiles: 1 }));
     expect(button().textContent).toBe("Commit 1 file");
@@ -412,10 +440,10 @@ describe("committing", () => {
   it("commits everything when nothing is staged", async () => {
     await show();
     expect(button().textContent).toBe("Commit all");
-    expect(button().disabled).toBe(true);
-    expect(button().title).toBe("Write a message to commit");
+    expect(off(button())).toBe(true);
+    expect(tooltipOf(button())).toBe("Write a message to commit");
     fireEvent.change(message(), { target: { value: "Fix" } });
-    expect(button().title).toBe("Stage everything in this deck and commit it (Ctrl+Enter)");
+    expect(tooltipOf(button())).toBe("Stage everything in this deck and commit itCtrl+Enter");
     await act(async () => {
       fireEvent.click(button());
     });
@@ -450,20 +478,29 @@ describe("committing", () => {
     expect(calls).toContain("unstage_all");
     cleanup();
     await show(changes({ hasUnstaged: false, stagedFiles: 2, stagedElsewhere: 2 }));
-    expect((screen.getByRole("button", { name: "Stage all" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Unstage all" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(off(screen.getByRole("button", { name: "Stage all" }))).toBe(true);
+    expect(off(screen.getByRole("button", { name: "Unstage all" }))).toBe(true);
   });
 
   it("discards every change at once, after asking", async () => {
     await show();
     fireEvent.click(screen.getByRole("button", { name: "Discard all…" }));
-    const dialog = within(screen.getByRole("dialog", { name: "Discard all changes" }));
+    const dialog = within(screen.getByRole("alertdialog", { name: "Discard all changes to this deck?" }));
     expect(dialog.getByText(/abc123/)).toBeTruthy();
     expect(dialog.getByText(/Ctrl\+Z brings the changes back/)).toBeTruthy();
     // Cancel has the focus: Enter does not discard by accident.
+    await settle();
     expect(document.activeElement).toBe(dialog.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(dialog.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    // Nor does a press beside the question answer it; Escape cancels.
+    const beside = document.querySelector("[data-slot=alert-dialog-overlay]")!;
+    fireEvent.pointerDown(beside, { pointerType: "mouse", button: 0 });
+    fireEvent.click(beside);
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Discard all…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "restore_all_changes")).toBe(false);
 
     vi.mocked(invoke).mockImplementation(async (cmd) =>
@@ -476,15 +513,17 @@ describe("committing", () => {
       fireEvent.click(screen.getByRole("button", { name: "Discard all changes" }));
     });
     expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "restore_all_changes")).toHaveLength(1);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("does not discard everything while a changed slide is locked, or before a first commit", async () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked')) });
     await show();
-    const discard = screen.getByRole("button", { name: "Discard all…" }) as HTMLButtonElement;
-    expect(discard.disabled).toBe(true);
-    expect(discard.title).toBe("Slide 1 is locked; unlock it to discard its changes");
+    const discard = screen.getByRole("button", { name: "Discard all…" });
+    expect(off(discard)).toBe(true);
+    expect(tooltipOf(discard)).toBe("Slide 1 is locked; unlock it to discard its changes");
+    fireEvent.click(discard);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     cleanup();
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.queryByRole("button", { name: "Discard all…" })).toBeNull();
@@ -581,8 +620,13 @@ describe("states", () => {
     });
     expect(screen.getAllByRole("status").map((s) => s.textContent)).toEqual(["Reading changes…", "Reading changes…"]);
     expect(screen.queryByRole("textbox", { name: "Commit message" })).toBeNull();
+    // Placeholders stand where the slides come, and say nothing to a screen reader.
+    const placeholders = screen.getAllByTestId("change-skeleton");
+    expect(placeholders).toHaveLength(3);
+    expect(placeholders.every((p) => p.getAttribute("aria-hidden") === "true")).toBe(true);
     await act(async () => finish(changes()));
     expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByTestId("change-skeleton")).toBeNull();
     expect(isComparing()).toBe(true);
   });
 
@@ -625,8 +669,10 @@ describe("ChangesView", () => {
     expect(screen.getByText(text)).toBeTruthy();
     // One version only: nothing to switch between, and no divider to set.
     for (const name of ["Split", "Before", "After", "Divider"]) {
-      expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect(off(screen.getByRole("button", { name }))).toBe(true);
     }
+    expect(tooltipOf(screen.getByRole("button", { name: "Split" }))).toBe("This slide has one version to show");
+    expect(tooltipOf(screen.getByRole("button", { name: "Divider" }))).toBe("The divider shows in the split view");
   });
 
   it("shows one version at a time when asked: before, or after", async () => {
@@ -641,7 +687,9 @@ describe("ChangesView", () => {
     expect(shown()[0]).toContain(".head");
     expect(screen.getByText("Before (abc123).")).toBeTruthy();
     // The divider belongs to the split view.
-    expect((screen.getByRole("button", { name: "Divider" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(off(screen.getByRole("button", { name: "Divider" }))).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Divider" }));
+    expect(screen.queryByRole("dialog", { name: "Divider" })).toBeNull();
     fireEvent.click(view("After"));
     expect(shown()).toHaveLength(1);
     expect(shown()[0]).toContain(".file");
@@ -666,10 +714,14 @@ describe("ChangesView", () => {
     fireEvent.click(divider);
     expect(divider.getAttribute("aria-expanded")).toBe("true");
     expect(
-      within(screen.getByRole("dialog", { name: "Divider" })).getByRole("slider", { name: "Feather" }),
+      within(screen.getByRole("dialog", { name: "Divider" })).getByRole("group", { name: "Feather" }),
     ).toBeTruthy();
+    expect(slider("Feather").getAttribute("aria-valuenow")).toBe("0");
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Divider" })).toBeNull();
+    expect(divider.getAttribute("aria-expanded")).toBe("false");
+    await settle();
+    expect(document.activeElement).toBe(divider);
   });
 
   it("compares every slide once the shared styles changed", async () => {
@@ -683,14 +735,16 @@ describe("ChangesView", () => {
   it("sets the angle and the feather, by slider and by number", async () => {
     await show();
     fireEvent.click(screen.getByRole("button", { name: "Divider" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Angle" }), { target: { value: "30" } });
+    fireEvent.change(slider("Angle"), { target: { value: "30" } });
     expect(useChanges.getState().divider.angle).toBe(30);
     fireEvent.change(screen.getByRole("spinbutton", { name: "Feather in pixels" }), { target: { value: "50" } });
     expect(useChanges.getState().divider.feather).toBe(50);
     expect(screen.getByTestId("comparison-after").dataset.mask).toContain("deg");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Feather in pixels" }), { target: { value: "9999" } });
     expect(useChanges.getState().divider.feather).toBe(400);
-    fireEvent.click(screen.getByTitle("Put the divider back in the middle, without a feather"));
+    const reset = screen.getByRole("button", { name: "Reset divider" });
+    expect(tooltipOf(reset)).toBe("Put the divider back in the middle, without a feather");
+    fireEvent.click(reset);
     expect(useChanges.getState().divider).toEqual(DEFAULT_DIVIDER);
   });
 
@@ -733,7 +787,7 @@ describe("ChangesView", () => {
     expect(screen.getByText(/Every slide is as/).textContent).toBe("Every slide is as abc123 has it.");
     expect(screen.queryByTestId("single-version")).toBeNull();
     expect(isComparing()).toBe(false);
-    expect((screen.getByRole("button", { name: "Split" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(off(screen.getByRole("button", { name: "Split" }))).toBe(true);
     // Picking a slide in the list selects it, and still shows none.
     fireEvent.click(screen.getByRole("button", { name: "Slide 2" }));
     expect(useApp.getState().selected).toBe("#2");

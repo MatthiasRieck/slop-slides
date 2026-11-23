@@ -33,8 +33,15 @@ import {
   StretchVertical,
   Ungroup,
 } from "lucide-react";
-import { Fragment, memo, type ReactNode, useEffect, useRef, useState } from "react";
-import { useDropdown } from "../hooks/useDropdown";
+import { Fragment, memo, type ReactNode, useEffect, useId, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { FieldSet } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
+import { NativeSelectOption } from "@/components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
+import { keepFocus } from "@/lib/focus";
 import {
   type AlignTarget,
   type AlignTo,
@@ -49,12 +56,10 @@ import {
 import { formatKeys } from "../lib/keys";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
-import { keepFocus, ToolButton } from "./Button";
-import { DraftInput } from "./Field";
-import { DropdownPanel } from "./Popover";
+import { DraftInput } from "./DraftInput";
 import { RibbonSelect } from "./Ribbon";
-import { SectionLabel } from "./SectionLabel";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
+import { SLIDE_TOOL, unlessOff } from "./toolProps";
 
 const DISTRIBUTE: { axis: DistributeAxis; label: string; title: string; icon: ReactNode }[] = [
   {
@@ -108,6 +113,9 @@ const TILTS: { side: string; x: number; y: number; icon: ReactNode }[] = [
 
 const NOTHING_SELECTED = "Select an element";
 
+/** A control's name beside it in a ribbon popover. */
+const LABEL = "text-xs font-normal text-muted-foreground";
+
 /** What an align button says it does: with the slide, or with the other selected elements. */
 function alignLabel(edges: string, many: boolean, target: AlignTarget) {
   if (!many) return `Align with the slide's ${edges}`;
@@ -128,45 +136,45 @@ export const AlignControls = memo(function AlignControls(props: { onArrange?: (m
   const target: AlignTarget = many && !toSlide ? "selection" : "slide";
   return (
     <>
-      {ALIGN.map((a) => (
-        <ToolButton
-          key={a.to}
-          keepFocus
-          label={alignLabel(a.label, many, target)}
-          disabled={off}
-          disabledReason={NOTHING_SELECTED}
-          onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to, target })}
-        >
-          {a.icon}
-        </ToolButton>
-      ))}
-      <ToolButton
-        keepFocus
-        label="Align with the slide"
-        title={
+      {ALIGN.map((a) => {
+        const label = alignLabel(a.label, many, target);
+        return (
+          <Button
+            key={a.to}
+            {...SLIDE_TOOL}
+            aria-label={label}
+            {...unlessOff(off, NOTHING_SELECTED, label)}
+            onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to, target })}
+          >
+            {a.icon}
+          </Button>
+        );
+      })}
+      <Button
+        {...SLIDE_TOOL}
+        aria-label="Align with the slide"
+        aria-pressed={many && toSlide}
+        {...unlessOff(
+          !many,
+          "Select two or more elements (one element always aligns with the slide)",
           toSlide
             ? "Several elements each line up with the slide's edges or center; press to line them up with each other"
-            : "Line several elements up with the slide's edges or center, not with each other"
-        }
-        active={many && toSlide}
-        disabled={!many}
-        disabledReason="Select two or more elements (one element always aligns with the slide)"
+            : "Line several elements up with the slide's edges or center, not with each other",
+        )}
         onClick={() => setToSlide(!toSlide)}
       >
         <Frame />
-      </ToolButton>
+      </Button>
       {DISTRIBUTE.map((d) => (
-        <ToolButton
+        <Button
           key={d.axis}
-          keepFocus
-          label={d.label}
-          title={d.title}
-          disabled={count < 3}
-          disabledReason="Select three or more elements"
+          {...SLIDE_TOOL}
+          aria-label={d.label}
+          {...unlessOff(count < 3, "Select three or more elements", d.title)}
           onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: d.axis })}
         >
           {d.icon}
-        </ToolButton>
+        </Button>
       ))}
     </>
   );
@@ -180,25 +188,35 @@ export const AlignControls = memo(function AlignControls(props: { onArrange?: (m
  * after each save, which clears the selection until the editor restores it.
  */
 export const PositionControls = memo(function PositionControls(props: PositionProps) {
-  const { open, ref, toggle } = useDropdown();
+  const [open, setOpen] = useState(false);
   // The button only says whether there is a selection; where it is, the open panel follows.
   const off = useSlideReport((report) => report.geometry === null);
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Position and size"
-        title="Position, size and rotation as numbers, match size, flip, quarter turns and 3D rotation"
-        aria-expanded={open}
-        active={open}
-        disabled={off && !open}
-        disabledReason={NOTHING_SELECTED}
-        onClick={toggle}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="Position and size"
+            {...unlessOff(
+              off && !open,
+              NOTHING_SELECTED,
+              "Position, size and rotation as numbers, match size, flip, quarter turns and 3D rotation",
+            )}
+          />
+        }
       >
         <Scaling />
-      </ToolButton>
-      {open && <PositionPanel {...props} />}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Position and size"
+        initialFocus={false}
+        finalFocus={false}
+        className="w-max gap-2 p-2 text-xs"
+      >
+        <PositionPanel {...props} />
+      </PopoverContent>
+    </Popover>
   );
 });
 
@@ -211,10 +229,11 @@ interface PositionProps {
 }
 
 /**
- * The open Position and size popover. It reads where the selection is by itself, so the numbers
- * follow a drag frame by frame while nothing else of the toolbar renders.
+ * What the open Position and size popover holds. It reads where the selection is by itself, so
+ * the numbers follow a drag frame by frame while nothing else of the toolbar renders.
  */
 function PositionPanel(props: PositionProps) {
+  const id = useId();
   const reported = useSlideReport((report) => report.geometry);
   // The selected element's look, for flipping it.
   const selection = useSlideReport((report) => report.selection);
@@ -249,21 +268,23 @@ function PositionPanel(props: PositionProps) {
   const flips = !off && (many || !!selection?.flippable || !!selection?.group);
   const flipReason = off ? NOTHING_SELECTED : "Text and plain boxes have nothing to flip";
   const rotation = geometry.rotation;
-  const tilt = (t: (typeof TILTS)[number]) => (
-    <ToolButton
-      keepFocus
-      key={t.side}
-      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
-      disabled={off}
-      disabledReason={NOTHING_SELECTED}
-      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
-    >
-      {t.icon}
-    </ToolButton>
-  );
+  const tilt = (t: (typeof TILTS)[number]) => {
+    const label = `Rotate ${t.side} ${TILT_STEP}° in 3D`;
+    return (
+      <Button
+        key={t.side}
+        {...SLIDE_TOOL}
+        aria-label={label}
+        {...unlessOff(off, NOTHING_SELECTED, label)}
+        onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
+      >
+        {t.icon}
+      </Button>
+    );
+  };
 
   return (
-    <DropdownPanel role="dialog" aria-label="Position and size" className="flex w-max flex-col gap-2 text-xs">
+    <>
       <div className="flex items-center gap-1.5">
         {FIELDS.map((f) => (
           <Fragment key={f.field}>
@@ -275,19 +296,19 @@ function PositionPanel(props: PositionProps) {
               onDone={onDone}
             />
             {f.field === "w" && (
-              <ToolButton
-                keepFocus
-                label="Lock aspect ratio"
-                title={
+              <Button
+                {...SLIDE_TOOL}
+                aria-label="Lock aspect ratio"
+                tooltip={
                   keepRatio
                     ? "Resizes keep the aspect ratio (Shift frees it); a typed width or height brings the other along"
                     : "Keep the aspect ratio when resizing, without holding Shift"
                 }
-                active={keepRatio}
+                aria-pressed={keepRatio}
                 onClick={() => props.onKeepRatio?.(!keepRatio)}
               >
                 {keepRatio ? <Link2 /> : <Link2Off />}
-              </ToolButton>
+              </Button>
             )}
           </Fragment>
         ))}
@@ -298,11 +319,11 @@ function PositionPanel(props: PositionProps) {
         </p>
       )}
       <div className="flex items-center gap-2">
-        <label htmlFor="edit-size-mode" className="text-muted-foreground">
+        <Label htmlFor={`${id}-size-mode`} className={LABEL}>
           Handles
-        </label>
+        </Label>
         <RibbonSelect
-          id="edit-size-mode"
+          id={`${id}-size-mode`}
           label="Size mode"
           title="Resize changes the box; Stretch scales its contents too"
           value={sizeMode}
@@ -310,88 +331,89 @@ function PositionPanel(props: PositionProps) {
           onDone={onDone}
           className="border"
         >
-          <option value="resize">Resize the box</option>
-          <option value="stretch">Stretch the contents</option>
+          <NativeSelectOption value="resize">Resize the box</NativeSelectOption>
+          <NativeSelectOption value="stretch">Stretch the contents</NativeSelectOption>
         </RibbonSelect>
       </div>
       <div className="flex items-center gap-0.5">
-        <ToolButton
-          keepFocus
-          label="Match width"
-          title="Give the others the first selected element's width"
-          disabled={off || !many}
-          disabledReason="Select two or more elements"
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Match width"
+          {...unlessOff(
+            off || !many,
+            "Select two or more elements",
+            "Give the others the first selected element's width",
+          )}
           onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "w" })}
         >
           <StretchHorizontal />
-        </ToolButton>
-        <ToolButton
-          keepFocus
-          label="Match height"
-          title="Give the others the first selected element's height"
-          disabled={off || !many}
-          disabledReason="Select two or more elements"
+        </Button>
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Match height"
+          {...unlessOff(
+            off || !many,
+            "Select two or more elements",
+            "Give the others the first selected element's height",
+          )}
           onClick={() => props.onArrange?.({ type: "slop:edit-match", axis: "h" })}
         >
           <StretchVertical />
-        </ToolButton>
-        <div className="mx-1 h-4 w-px bg-border" />
-        <ToolButton
-          keepFocus
-          label="Flip horizontally"
-          shortcut="mod+shift+h"
-          active={flips && !many && !!selection?.flipX}
-          disabled={!flips}
-          disabledReason={flipReason}
+        </Button>
+        <Separator orientation="vertical" className="mx-1 h-4 data-vertical:self-center" />
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Flip horizontally"
+          aria-pressed={flips && !many && !!selection?.flipX}
+          {...unlessOff(!flips, flipReason, "Flip horizontally", "mod+shift+h")}
           onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "x" })}
         >
           <FlipHorizontal2 />
-        </ToolButton>
-        <ToolButton
-          keepFocus
-          label="Flip vertically"
-          shortcut="mod+shift+v"
-          active={flips && !many && !!selection?.flipY}
-          disabled={!flips}
-          disabledReason={flipReason}
+        </Button>
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Flip vertically"
+          aria-pressed={flips && !many && !!selection?.flipY}
+          {...unlessOff(!flips, flipReason, "Flip vertically", "mod+shift+v")}
           onClick={() => props.onArrange?.({ type: "slop:edit-flip", axis: "y" })}
         >
           <FlipVertical2 />
-        </ToolButton>
-        <div className="mx-1 h-4 w-px bg-border" />
-        {([-1, 1] as const).map((step) => (
-          <ToolButton
-            key={step}
-            keepFocus
-            label={step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise"}
-            disabled={off || rotation === null}
-            disabledReason={off ? NOTHING_SELECTED : "Select one element"}
-            onClick={() =>
-              rotation !== null &&
-              props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
-            }
-          >
-            {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
-          </ToolButton>
-        ))}
+        </Button>
+        <Separator orientation="vertical" className="mx-1 h-4 data-vertical:self-center" />
+        {([-1, 1] as const).map((step) => {
+          const label = step < 0 ? "Rotate 90° counterclockwise" : "Rotate 90° clockwise";
+          return (
+            <Button
+              key={step}
+              {...SLIDE_TOOL}
+              aria-label={label}
+              {...unlessOff(off || rotation === null, off ? NOTHING_SELECTED : "Select one element", label)}
+              onClick={() =>
+                rotation !== null &&
+                props.onArrange?.({ type: "slop:edit-geometry", rotation: quarterTurn(rotation, step) })
+              }
+            >
+              {step < 0 ? <RotateCcwSquare /> : <RotateCwSquare />}
+            </Button>
+          );
+        })}
       </div>
       <div className="flex items-start gap-2">
-        <SectionLabel>3D rotate</SectionLabel>
-        <fieldset aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
+        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">3D rotate</span>
+        <FieldSet aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5">
           {TILTS.slice(0, 4).map(tilt)}
-          <ToolButton
-            keepFocus
-            label="Reset the 3D rotation"
-            disabled={off}
-            disabledReason={NOTHING_SELECTED}
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="Reset the 3D rotation"
+            {...unlessOff(off, NOTHING_SELECTED, "Reset the 3D rotation")}
             onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
           >
             <RotateCcw />
-          </ToolButton>
+          </Button>
           {TILTS.slice(4).map(tilt)}
-        </fieldset>
+        </FieldSet>
       </div>
-    </DropdownPanel>
+    </>
   );
 }
 
@@ -403,19 +425,19 @@ export function SnapToggle() {
   const snap = useApp((s) => s.editSnap);
   const held = formatKeys("mod");
   return (
-    <ToolButton
-      keepFocus
-      label="Snap to guides"
-      title={
+    <Button
+      {...SLIDE_TOOL}
+      aria-label="Snap to guides"
+      tooltip={
         snap
           ? `Snap to guides: moves and resizes snap to the slide and other elements (hold ${held} while dragging to move freely)`
           : `Snap to guides is off (hold ${held} while dragging to snap)`
       }
-      active={snap}
+      aria-pressed={snap}
       onClick={() => useApp.getState().setEditSnap(!snap)}
     >
       <Magnet />
-    </ToolButton>
+    </Button>
   );
 }
 
@@ -430,19 +452,20 @@ function GeometryInput(props: {
   onDone: () => void;
 }) {
   return (
-    <label title={props.title} className="flex items-center gap-1 text-muted-foreground">
+    <Label className={cn(LABEL, "gap-1")}>
       {props.label}
       <DraftInput
         aria-label={props.title}
+        tooltip={props.title}
         disabled={props.disabled}
         value={props.value}
         parse={(text) => parseGeometryValue(props.field, text)}
         sanitize={(text) => text.replace(/[^\d.-]/g, "")}
         onChange={props.onChange}
         onDone={props.onDone}
-        className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-40"
+        className="w-12 text-center text-foreground"
       />
-    </label>
+    </Label>
   );
 }
 
@@ -457,43 +480,43 @@ export const GroupControls = memo(function GroupControls(props: { onArrange?: (m
   const locked = useSlideReport((report) => !!report.selection?.locked);
   return (
     <>
-      <ToolButton
-        keepFocus
-        label="Group"
-        shortcut="mod+g"
-        title="Group the selected elements, to move, size and style them as one"
-        disabled={count < 2}
-        disabledReason="Select two or more elements"
+      <Button
+        {...SLIDE_TOOL}
+        aria-label="Group"
+        {...unlessOff(
+          count < 2,
+          "Select two or more elements",
+          "Group the selected elements, to move, size and style them as one",
+          "mod+g",
+        )}
         onClick={() => props.onArrange?.({ type: "slop:edit-group" })}
       >
         <Group />
-      </ToolButton>
-      <ToolButton
-        keepFocus
-        label="Ungroup"
-        shortcut="mod+shift+g"
-        disabled={!group}
-        disabledReason="Select a group"
+      </Button>
+      <Button
+        {...SLIDE_TOOL}
+        aria-label="Ungroup"
+        {...unlessOff(!group, "Select a group", "Ungroup", "mod+shift+g")}
         onClick={() => props.onArrange?.({ type: "slop:edit-ungroup" })}
       >
         <Ungroup />
-      </ToolButton>
-      <ToolButton
-        keepFocus
-        label={locked ? "Unlock" : "Lock"}
-        shortcut="mod+alt+l"
-        title={
+      </Button>
+      <Button
+        {...SLIDE_TOOL}
+        aria-label={locked ? "Unlock" : "Lock"}
+        aria-pressed={locked}
+        {...unlessOff(
+          !selected,
+          NOTHING_SELECTED,
           locked
             ? "Unlock, so it can be picked and moved again"
-            : "Lock, so it cannot be picked, moved or deleted by accident (right-click it or use Layers to unlock it)"
-        }
-        active={locked}
-        disabled={!selected}
-        disabledReason={NOTHING_SELECTED}
+            : "Lock, so it cannot be picked, moved or deleted by accident (right-click it or use Layers to unlock it)",
+          "mod+alt+l",
+        )}
         onClick={() => props.onArrange?.({ type: "slop:edit-lock", locked: !locked })}
       >
         {locked ? <Lock /> : <LockOpen />}
-      </ToolButton>
+      </Button>
     </>
   );
 });
@@ -504,88 +527,99 @@ export const GroupControls = memo(function GroupControls(props: { onArrange?: (m
  * the next one. The panel stays open through the preview's reload after each change.
  */
 export const LayersPanel = memo(function LayersPanel(props: { onArrange?: (message: ArrangeMessage) => void }) {
-  const { open, ref, toggle } = useDropdown();
+  const [open, setOpen] = useState(false);
+  const none = useSlideReport((report) => report.layers.length === 0);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="Layers"
+            {...unlessOff(none && !open, "Nothing on this slide", "What is on the slide, to pick, lock and restack")}
+          />
+        }
+      >
+        <Layers />
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Layers"
+        initialFocus={false}
+        finalFocus={false}
+        className="max-h-80 w-64 gap-0 overflow-y-auto p-2 text-xs"
+      >
+        <LayersList onArrange={props.onArrange} />
+      </PopoverContent>
+    </Popover>
+  );
+});
+
+/** What the open Layers popover holds; it follows the slide's layers by itself. */
+function LayersList(props: { onArrange?: (message: ArrangeMessage) => void }) {
   const layers = useSlideReport((report) => report.layers);
   const send = (message: ArrangeMessage) => props.onArrange?.(message);
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Layers"
-        title="What is on the slide, to pick, lock and restack"
-        aria-expanded={open}
-        active={open}
-        disabled={!layers.length && !open}
-        disabledReason="Nothing on this slide"
-        onClick={toggle}
-      >
-        <Layers />
-      </ToolButton>
-      {open && (
-        <DropdownPanel
-          role="dialog"
-          aria-label="Layers"
-          className="flex max-h-80 w-64 flex-col overflow-y-auto text-xs"
-        >
-          {!layers.length && <p className="px-1 py-0.5 text-muted-foreground">Nothing on this slide</p>}
-          <ul aria-label="Layers, the top-most first" className="flex flex-col">
-            {layers.map((layer) => {
-              // Up and down go past the next layer of its own kind: in its group, or on the slide.
-              const peers = layers.filter((other) => other.depth === layer.depth && samePlace(other.path, layer.path));
-              const at = peers.indexOf(layer);
-              return (
-                <li
-                  key={layer.path.join(".")}
-                  className={cn("group flex items-center gap-0.5 rounded", layer.selected && "bg-accent")}
-                  style={{ paddingLeft: layer.depth * 12 }}
-                >
-                  <button
-                    type="button"
-                    aria-current={layer.selected || undefined}
-                    title={layer.name}
-                    onMouseDown={keepFocus}
-                    onClick={() => send({ type: "slop:edit-select", path: layer.path })}
-                    className={cn(
-                      "min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left hover:bg-accent",
-                      (layer.locked || layer.held) && "text-muted-foreground",
-                    )}
-                  >
-                    {layer.name}
-                  </button>
-                  <ToolButton
-                    keepFocus
-                    label={`${layer.locked ? "Unlock" : "Lock"} ${layer.name}`}
-                    active={layer.locked}
-                    disabled={layer.held}
-                    onClick={() => send({ type: "slop:edit-lock", locked: !layer.locked, path: layer.path })}
-                  >
-                    {layer.locked || layer.held ? <Lock /> : <LockOpen />}
-                  </ToolButton>
-                  <ToolButton
-                    keepFocus
-                    label={`Move ${layer.name} up`}
-                    disabled={at <= 0}
-                    onClick={() => send({ type: "slop:edit-order", to: "forward", path: layer.path, any: true })}
-                  >
-                    <ArrowUp />
-                  </ToolButton>
-                  <ToolButton
-                    keepFocus
-                    label={`Move ${layer.name} down`}
-                    disabled={at < 0 || at >= peers.length - 1}
-                    onClick={() => send({ type: "slop:edit-order", to: "backward", path: layer.path, any: true })}
-                  >
-                    <ArrowDown />
-                  </ToolButton>
-                </li>
-              );
-            })}
-          </ul>
-        </DropdownPanel>
-      )}
-    </div>
+    <>
+      {!layers.length && <p className="px-1 py-0.5 text-muted-foreground">Nothing on this slide</p>}
+      <ul aria-label="Layers, the top-most first" className="flex flex-col">
+        {layers.map((layer) => {
+          // Up and down go past the next layer of its own kind: in its group, or on the slide.
+          const peers = layers.filter((other) => other.depth === layer.depth && samePlace(other.path, layer.path));
+          const at = peers.indexOf(layer);
+          return (
+            <li
+              key={layer.path.join(".")}
+              className={cn("group flex items-center gap-0.5 rounded-md", layer.selected && "bg-accent")}
+              style={{ paddingLeft: layer.depth * 12 }}
+            >
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-current={layer.selected || undefined}
+                onMouseDownCapture={keepFocus}
+                onClick={() => send({ type: "slop:edit-select", path: layer.path })}
+                className={cn(
+                  "min-w-0 flex-1 shrink justify-start px-1 font-normal",
+                  (layer.locked || layer.held) && "text-muted-foreground",
+                )}
+              >
+                {/* The whole name, for one too long for the row. */}
+                <span title={layer.name} className="truncate">
+                  {layer.name}
+                </span>
+              </Button>
+              <Button
+                {...SLIDE_TOOL}
+                tooltip={`${layer.locked ? "Unlock" : "Lock"} ${layer.name}`}
+                aria-pressed={layer.locked}
+                disabled={layer.held}
+                onClick={() => send({ type: "slop:edit-lock", locked: !layer.locked, path: layer.path })}
+              >
+                {layer.locked || layer.held ? <Lock /> : <LockOpen />}
+              </Button>
+              <Button
+                {...SLIDE_TOOL}
+                tooltip={`Move ${layer.name} up`}
+                disabled={at <= 0}
+                onClick={() => send({ type: "slop:edit-order", to: "forward", path: layer.path, any: true })}
+              >
+                <ArrowUp />
+              </Button>
+              <Button
+                {...SLIDE_TOOL}
+                tooltip={`Move ${layer.name} down`}
+                disabled={at < 0 || at >= peers.length - 1}
+                onClick={() => send({ type: "slop:edit-order", to: "backward", path: layer.path, any: true })}
+              >
+                <ArrowDown />
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
-});
+}
 
 /** Whether two layers sit in the same group (or both on the slide), by their paths. */
 function samePlace(a: number[], b: number[]) {

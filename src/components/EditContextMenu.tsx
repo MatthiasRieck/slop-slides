@@ -1,9 +1,16 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useRef } from "react";
 
-import { useMenuKeys } from "../hooks/useMenuKeys";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+} from "@/components/ui/dropdown-menu";
+import { keepKeys } from "@/hooks/useOverlayLayer";
 import type { EditElement, StackOrder } from "../lib/editTools";
 import { formatKeys } from "../lib/keys";
-import { openLayer } from "../lib/layers";
 
 export type EditMenuAction =
   | "edit-text"
@@ -27,8 +34,6 @@ export type EditMenuAction =
   | "unlock-all"
   | "background"
   | StackOrder;
-
-const WIDTH = 240;
 
 interface Item {
   action: EditMenuAction;
@@ -69,10 +74,13 @@ const SVG: Item = { action: "svg", label: "Edit in the SVG editor" };
 const isDrawing = (element: EditElement | null) => !!element && /^<svg[\s>]/i.test(element.markup.trimStart());
 
 /**
- * The menu for a right-click in the slide editor. It lives in the app, not in the preview, so it
- * can reach past the slide; a cover over the preview catches the click that closes it. It takes
- * the focus from the preview, so the keys come here: the arrows, Home and End go through its
- * choices and Escape closes it (see `useMenuKeys`), and it gives the focus back as it closes.
+ * The menu for a right-click in the slide editor: a shadcn/ui `DropdownMenu` opened at the point
+ * the preview reports, with no trigger. It lives in the app, not in the preview, so it can reach
+ * past the slide, and stays on screen by itself; while it is open the window is covered, the
+ * preview included, and a press beside it closes it. It takes the focus from the preview, so the
+ * keys come here: the arrows, Home and End go through its choices and Escape closes it, and no
+ * key reaches the stage's shortcuts meanwhile. Where the focus goes as it closes is `onClose`'s
+ * and `onAction`'s part (the stage hands it back to the slide).
  *
  * It offers only what applies to what was clicked: on an empty spot, pasting there, selecting
  * everything, unlocking and the slide's background; on a locked element, little more than
@@ -105,44 +113,27 @@ export function EditContextMenu(props: {
   onClose: () => void;
 }) {
   const { x, y, element, running, onAction, onClose } = props;
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
-
-  useLayoutEffect(() => {
-    const height = menuRef.current?.offsetHeight ?? 0;
-    setPosition({
-      left: Math.max(8, Math.min(x, window.innerWidth - WIDTH - 8)),
-      top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
-    });
-  }, [x, y]);
-
-  const menu = useMenuKeys();
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  // Escape closes the menu, and nothing under it sees the key.
-  useEffect(() => openLayer(() => closeRef.current()), []);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    menu.onKeyDown(event);
-    // Nothing reaches the stage's shortcuts while the menu is open; Escape goes on, to close it.
-    if (event.key !== "Escape") event.stopPropagation();
-  };
+  // The point of the right-click, which the menu opens at.
+  const anchor = useMemo(() => ({ getBoundingClientRect: () => new DOMRect(x, y, 0, 0) }), [x, y]);
+  // A choice was picked: `onAction` closes the menu itself, so its closing is not reported again.
+  const picked = useRef(false);
 
   const button = ({ action, label, keys }: Item, disabledReason?: string) => (
-    <button
+    <DropdownMenuItem
       key={action}
-      type="button"
-      role="menuitem"
+      // Off, it still says why to the pointer.
       title={disabledReason}
       disabled={!!disabledReason}
-      onClick={() => onAction(action)}
-      className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left hover:bg-accent focus:bg-accent focus:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+      onClick={() => {
+        picked.current = true;
+        onAction(action);
+      }}
+      className="data-disabled:pointer-events-auto"
     >
       {label}
-      {keys && <span className="text-muted-foreground">{formatKeys(keys)}</span>}
-    </button>
+      {keys && <DropdownMenuShortcut>{formatKeys(keys)}</DropdownMenuShortcut>}
+    </DropdownMenuItem>
   );
-  const divider = (key: string) => <hr key={key} className="my-1 border-border" />;
 
   const count = props.elements?.length ?? (element ? 1 : 0);
   const several = !!props.several || count > 1;
@@ -171,33 +162,32 @@ export function EditContextMenu(props: {
   const shown = sections.map((section) => section.filter(Boolean)).filter((section) => section.length > 0);
 
   return (
-    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: the cover only catches a press outside the menu.
-    // biome-ignore lint/a11y/noStaticElementInteractions: the cover only catches a press outside the menu.
-    <div
-      data-testid="edit-menu-cover"
-      className="fixed inset-0 z-50"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        if (event.target === event.currentTarget) onClose();
+    <DropdownMenu
+      open
+      onOpenChange={(open) => {
+        if (!open && !picked.current) onClose();
       }}
     >
-      <div
-        ref={(element) => {
-          menuRef.current = element;
-          return menu.ref(element);
-        }}
-        role="menu"
+      <DropdownMenuContent
+        anchor={anchor}
+        align="start"
+        side="bottom"
+        sideOffset={0}
         aria-label={element ? "Element" : "Slide"}
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-        style={{ ...position, width: WIDTH }}
-        className="fixed rounded-lg border bg-card p-1 text-xs text-foreground shadow-lg outline-none"
+        // Where the focus goes next is the stage's to say (`onClose`, `onAction`).
+        finalFocus={false}
+        // Nothing reaches the stage's shortcuts while the menu is open; Escape goes on, to close it.
+        onKeyDown={keepKeys()}
+        className="w-60"
       >
-        {shown.flatMap((section, index) => (index > 0 ? [divider(`line-${index}`), ...section] : section))}
-      </div>
-    </div>
+        {shown.map((section, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the sections of one menu never move
+          <Fragment key={index}>
+            {index > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuGroup>{section}</DropdownMenuGroup>
+          </Fragment>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

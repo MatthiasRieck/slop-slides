@@ -1,5 +1,4 @@
 import {
-  Check,
   ChevronDown,
   CircleDashed,
   Delete,
@@ -21,16 +20,24 @@ import {
 } from "lucide-react";
 import { memo, useRef, useState } from "react";
 
-import { useMenuKeys } from "../hooks/useMenuKeys";
-
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
 import { deckComments, hasReview, useApp } from "../store";
-import { ToolButton, toolButtonClass } from "./Button";
 import { CommentsOverview } from "./Comments";
 import { SlideSearch } from "./FindReplace";
-import { Popover } from "./Popover";
 import type { Annotations } from "./PresenterTools";
 import { RibbonRow, RibbonSection, RibbonToggle, useRibbonFit } from "./Ribbon";
 import { TimelineTools } from "./TimelineTools";
@@ -40,6 +47,17 @@ const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
   { shape: "ellipse", label: "Ellipse", icon: CircleDashed },
   { shape: "lasso", label: "Lasso", icon: Lasso },
 ];
+
+/** What a slide does as it is shown, as the two choices of the Animations section. */
+const SHOWN = [
+  { value: "play", label: "Play the slide's animations when it is shown", text: "Play", icon: Play },
+  {
+    value: "final",
+    label: "Show the slide's final state, with no animations, as the slide list does",
+    text: "Final",
+    icon: SkipForward,
+  },
+] as const;
 
 /**
  * View mode's tools, in a ribbon like the edit tools': pen, highlighter and eraser for marking up
@@ -107,34 +125,48 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
     <div ref={ribbon.ref} role="toolbar" aria-label="View tools" className="flex min-w-0 flex-[1_1_200px]">
       <RibbonSection title="Mark up" icon={<PenLine />} collapsed={collapsedFrom <= 0} closeOn={tool}>
         <RibbonRow>
-          <ToolButton label="Draw on the slide" active={tool === "pen"} onClick={() => toggle("pen")}>
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Draw on the slide"
+            aria-pressed={tool === "pen"}
+            onClick={() => toggle("pen")}
+          >
             <PenLine />
-          </ToolButton>
-          <ToolButton
-            label="Highlight on the slide"
-            active={tool === "highlighter"}
+          </Button>
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Highlight on the slide"
+            aria-pressed={tool === "highlighter"}
             onClick={() => toggle("highlighter")}
           >
             <Highlighter />
-          </ToolButton>
-          <ToolButton label="Erase marks" active={tool === "eraser"} onClick={() => toggle("eraser")}>
+          </Button>
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Erase marks"
+            aria-pressed={tool === "eraser"}
+            onClick={() => toggle("eraser")}
+          >
             <Eraser />
-          </ToolButton>
-          <div className="mx-0.5 h-4 w-px bg-border" />
+          </Button>
+          <Separator orientation="vertical" className="mx-0.5 h-4 data-vertical:self-center" />
           {/* Not the deck's undo: it only takes the newest mark off this slide. */}
-          <ToolButton label="Remove last mark" disabled={noMarks} onClick={undo}>
+          <Button variant="tool" size="icon-xs" tooltip="Remove last mark" disabled={noMarks} onClick={undo}>
             <Delete />
-          </ToolButton>
-          <ToolButton label="Clear marks on this slide" disabled={noMarks} onClick={clear}>
+          </Button>
+          <Button variant="tool" size="icon-xs" tooltip="Clear marks on this slide" disabled={noMarks} onClick={clear}>
             <Trash2 />
-          </ToolButton>
+          </Button>
         </RibbonRow>
         <RibbonRow>
           <div className="flex flex-1 items-center justify-around">
             {INK_COLORS.map((color) => (
-              <button
+              <Button
                 key={color}
-                type="button"
+                variant="outline"
                 aria-label={`Color ${color}`}
                 aria-pressed={inkColor === color}
                 onClick={() => {
@@ -143,7 +175,7 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
                   setColor(color);
                 }}
                 className={cn(
-                  "size-3.5 rounded-full border border-foreground/20",
+                  "size-3.5 rounded-full border-foreground/20 p-0 dark:border-foreground/20",
                   inkColor === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background",
                 )}
                 style={{ background: color }}
@@ -159,9 +191,15 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
         closeOn={`${commenting} ${drawingArea} ${props.areaShape}`}
       >
         <RibbonRow>
-          <ToolButton label="Comment on an element" active={commenting} onClick={toggleCommenting}>
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip="Comment on an element"
+            aria-pressed={commenting}
+            onClick={toggleCommenting}
+          >
             <MessageSquarePlus />
-          </ToolButton>
+          </Button>
           <AreaTool
             active={drawingArea}
             shape={props.areaShape}
@@ -183,46 +221,45 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
             <Eye />
             Review marks
           </RibbonToggle>
-          <ToolButton
-            label={
+          <Button
+            variant="tool"
+            size="icon-xs"
+            tooltip={
               commentTexts
                 ? "Show a comment's text only when its pin is pointed at"
                 : "Show every comment's text next to its pin"
             }
-            active={commentTexts}
+            aria-pressed={commentTexts}
             disabled={!reviewVisible}
             onClick={() => useApp.getState().setCommentTexts(!commentTexts)}
           >
             <MessageSquareText />
-          </ToolButton>
+          </Button>
         </RibbonRow>
       </RibbonSection>
       <RibbonSection title="Animations" icon={<Play />} collapsed={collapsedFrom <= 2} closeOn={finalState}>
         <RibbonRow>
           {/* One choice of two: a slide either plays its animations as it shows, or shows how it ends. */}
-          {/* biome-ignore lint/a11y/useSemanticElements: two pressed buttons read better here than a fieldset. */}
-          <div
-            role="group"
+          <ToggleGroup
             aria-label="When a slide is shown"
-            className="flex flex-1 items-center rounded-md border p-px"
+            size="xs"
+            variant="outline"
+            spacing={0}
+            value={[finalState ? "final" : "play"]}
+            // Pressing the choice made keeps it: one of the two always holds.
+            onValueChange={([shown]) => shown && useApp.getState().setFinalState(shown === "final")}
+            className="flex-1"
           >
-            <Segment
-              label="Play the slide's animations when it is shown"
-              active={!finalState}
-              onClick={() => useApp.getState().setFinalState(false)}
-            >
-              <Play />
-              Play
-            </Segment>
-            <Segment
-              label="Show the slide's final state, with no animations, as the slide list does"
-              active={finalState}
-              onClick={() => useApp.getState().setFinalState(true)}
-            >
-              <SkipForward />
-              Final
-            </Segment>
-          </div>
+            {SHOWN.map(({ value, label, text, icon: Icon }) => (
+              <Tooltip key={value}>
+                <TooltipTrigger render={<ToggleGroupItem value={value} aria-label={label} className="flex-1" />}>
+                  <Icon />
+                  {text}
+                </TooltipTrigger>
+                <TooltipContent>{label}</TooltipContent>
+              </Tooltip>
+            ))}
+          </ToggleGroup>
         </RibbonRow>
         <RibbonRow>
           <RibbonToggle
@@ -242,45 +279,34 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
   );
 });
 
-/** One half of a two-way choice in the ribbon; `active` is the half chosen. */
-function Segment(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      onClick={props.onClick}
-      className={cn(
-        toolButtonClass("toolbar", "xs", props.active),
-        "flex flex-1 items-center justify-center gap-1 px-1.5 text-xs [&_svg]:!size-3.5",
-      )}
-    >
-      {props.children}
-    </button>
-  );
-}
-
 /** How many comments the deck has, opening the list of them (see `CommentsOverview`). */
 function CommentsButton() {
   const count = useApp((s) => deckComments(s).length);
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
+  // Whether the list was open as the button was pressed: the list may close itself on that press
+  // (a press beside it), before the click that would then open it again.
+  const wasOpen = useRef(false);
   return (
     <>
-      <button
+      <Button
         ref={anchor}
-        type="button"
+        variant="tool"
+        size="xs"
         aria-label={`Comments (${count})`}
-        title="All comments of the deck, by slide"
+        tooltip="All comments of the deck, by slide"
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(toolButtonClass("toolbar", "sm", open), "flex items-center gap-1 px-1.5 text-xs tabular-nums")}
+        onPointerDown={() => {
+          wasOpen.current = open;
+        }}
+        // A click without a press is the keyboard's (Enter, Space).
+        onClick={(event) => setOpen(event.detail === 0 ? !open : !wasOpen.current)}
+        className="px-1.5 tabular-nums"
       >
         <MessagesSquare />
         {count}
-      </button>
+      </Button>
       {open && <CommentsOverview anchor={anchor} onClose={() => setOpen(false)} />}
     </>
   );
@@ -293,53 +319,39 @@ function AreaTool(props: {
   onToggle: () => void;
   onShape: (shape: AreaShape) => void;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menu = useMenuKeys();
-  const anchor = useRef<HTMLDivElement>(null);
   const current = AREA_SHAPES.find((s) => s.shape === props.shape) ?? AREA_SHAPES[0]!;
   const Icon = current.icon;
   return (
-    <div ref={anchor} className="flex items-center">
-      <ToolButton
-        label={`Comment on an area (${current.label.toLowerCase()})`}
-        active={props.active}
+    <ButtonGroup>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        tooltip={`Comment on an area (${current.label.toLowerCase()})`}
+        aria-pressed={props.active}
         onClick={props.onToggle}
       >
         <Icon />
-      </ToolButton>
-      <ToolButton
-        size="xs"
-        label="Area shape"
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((v) => !v)}
-        className="-ml-0.5"
-      >
-        <ChevronDown className="size-3" />
-      </ToolButton>
-      {menuOpen && (
-        <Popover anchor={anchor} onClose={() => setMenuOpen(false)} width={180} variant="menu" portal className="p-1">
-          <div role="menu" aria-label="Area shape" {...menu} className="outline-none">
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="tool" size="2xs" aria-label="Area shape" tooltip="Area shape" className="h-6 w-4 px-0" />
+          }
+        >
+          <ChevronDown className="size-3" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent aria-label="Area shape" align="start">
+          <DropdownMenuRadioGroup value={props.shape}>
             {AREA_SHAPES.map(({ shape, label, icon: ShapeIcon }) => (
-              <button
-                key={shape}
-                type="button"
-                role="menuitemradio"
-                aria-checked={props.shape === shape}
-                onClick={() => {
-                  setMenuOpen(false);
-                  props.onShape(shape);
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5"
-              >
+              // Picking the shape in use still starts outlining with it.
+              <DropdownMenuRadioItem key={shape} value={shape} closeOnClick onClick={() => props.onShape(shape)}>
                 <ShapeIcon />
-                <span className="flex-1 text-left">{label}</span>
-                {props.shape === shape && <Check className="text-muted-foreground" />}
-              </button>
+                {label}
+              </DropdownMenuRadioItem>
             ))}
-          </div>
-        </Popover>
-      )}
-    </div>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
   );
 }

@@ -63,8 +63,14 @@ import {
   Underline,
   Wallpaper,
 } from "lucide-react";
-import { memo, type ReactNode, useMemo, useState } from "react";
-import { useDropdown } from "../hooks/useDropdown";
+import { memo, type ReactNode, useId, useMemo, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import { FieldLegend, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect, NativeSelectOptGroup, NativeSelectOption } from "@/components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { ArrangeMessage } from "../lib/arrange";
 import {
   type AgentInsert,
@@ -89,19 +95,20 @@ import {
   toolbarState,
   type VerticalAlign,
 } from "../lib/editTools";
-import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { AlignControls, GroupControls, LayersPanel, PositionControls, SnapToggle } from "./ArrangeControls";
-import { ToolButton } from "./Button";
 import { ColorButton } from "./ColorButton";
+import { DraftInput } from "./DraftInput";
 import { useEditPanelAsk } from "./editPanelAsk";
-import { DraftInput } from "./Field";
 import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
-import { DropdownPanel, dropdownPanel } from "./Popover";
 import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 import { TimelineTools } from "./TimelineTools";
+import { SLIDE_TOOL, unlessOff } from "./toolProps";
+
+/** A control's name beside it in a ribbon popover. */
+const LABEL = "text-xs font-normal text-muted-foreground";
 
 /** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
 interface ToolChoice {
@@ -374,17 +381,17 @@ const InsertSection = memo(function InsertSection(
   },
 ) {
   const toolButton = (t: ToolChoice) => (
-    <ToolButton
-      keepFocus
+    <Button
       key={t.tool}
-      label={t.label}
-      title={t.title}
+      {...SLIDE_TOOL}
+      aria-label={t.label}
+      tooltip={t.title ?? t.label}
       shortcut={t.shortcut}
-      active={props.tool === t.tool}
+      aria-pressed={props.tool === t.tool}
       onClick={() => props.onTool(t.tool)}
     >
       {t.icon}
-    </ToolButton>
+    </Button>
   );
   return (
     <RibbonSection title="Insert" icon={<Shapes />} collapsed={props.collapsed} closeOn={props.tool}>
@@ -394,19 +401,19 @@ const InsertSection = memo(function InsertSection(
       </RibbonRow>
       <RibbonRow>
         {TOOLS.slice(FIRST_ROW_TOOLS).map(toolButton)}
-        <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+        <Button {...SLIDE_TOOL} tooltip="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
           <ImagePlus />
-        </ToolButton>
+        </Button>
         {AGENT_INSERTS.map((insert) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={insert.kind}
-            label={insert.label}
-            title={insert.title}
+            {...SLIDE_TOOL}
+            aria-label={insert.label}
+            tooltip={insert.title}
             onClick={() => props.onInsertAsk?.(insert.kind)}
           >
             {insert.icon}
-          </ToolButton>
+          </Button>
         ))}
       </RibbonRow>
     </RibbonSection>
@@ -435,59 +442,52 @@ const TextSection = memo(function TextSection(
           onChange={(fontFamily) => props.onStyle({ fontFamily })}
           onDone={returnFocus}
         />
-        <ToolButton
-          keepFocus
-          label="Smaller text"
-          shortcut="mod+shift+,"
-          disabled={textOff}
-          disabledReason={NEEDS_TEXT}
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Smaller text"
+          {...unlessOff(textOff, NEEDS_TEXT, "Smaller text", "mod+shift+,")}
           onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
         >
           <Minus />
-        </ToolButton>
+        </Button>
         <FontSizeInput
           value={state?.text ? fontSize : null}
           onChange={(size) => props.onStyle({ fontSize: size })}
           onDone={returnFocus}
         />
-        <ToolButton
-          keepFocus
-          label="Larger text"
-          shortcut="mod+shift+."
-          disabled={textOff}
-          disabledReason={NEEDS_TEXT}
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Larger text"
+          {...unlessOff(textOff, NEEDS_TEXT, "Larger text", "mod+shift+.")}
           onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
         >
           <Plus />
-        </ToolButton>
+        </Button>
       </RibbonRow>
       <RibbonRow>
         {TEXT_MARKS.map((m) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={m.mark}
-            label={m.label}
-            shortcut={m.shortcut}
-            active={!textOff && !!style[m.mark]}
-            disabled={textOff}
-            disabledReason={NEEDS_TEXT}
+            {...SLIDE_TOOL}
+            aria-label={m.label}
+            aria-pressed={!textOff && !!style[m.mark]}
+            {...unlessOff(textOff, NEEDS_TEXT, m.label, m.shortcut)}
             onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
           >
             {m.icon}
-          </ToolButton>
+          </Button>
         ))}
         {SCRIPTS.map((s) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={s.value}
-            label={s.label}
-            active={!textOff && !!selection && selection.script === s.value}
-            disabled={textOff || !selection}
-            disabledReason={NEEDS_TEXT}
+            {...SLIDE_TOOL}
+            aria-label={s.label}
+            aria-pressed={!textOff && !!selection && selection.script === s.value}
+            {...unlessOff(textOff || !selection, NEEDS_TEXT, s.label)}
             onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
           >
             {s.icon}
-          </ToolButton>
+          </Button>
         ))}
         <ColorButton
           label="Text color"
@@ -506,16 +506,18 @@ const TextSection = memo(function TextSection(
           onChange={(href) => props.onLink?.(href)}
           onDone={returnFocus}
         />
-        <ToolButton
-          keepFocus
-          label="Clear formatting"
-          title="Clear formatting: take bold, colors, sizes and other formatting off the text, keeping its links"
-          disabled={textOff || !selection}
-          disabledReason={NEEDS_TEXT}
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Clear formatting"
+          {...unlessOff(
+            textOff || !selection,
+            NEEDS_TEXT,
+            "Clear formatting: take bold, colors, sizes and other formatting off the text, keeping its links",
+          )}
           onClick={() => props.onArrange?.({ type: "slop:edit-clear-formatting" })}
         >
           <RemoveFormatting />
-        </ToolButton>
+        </Button>
       </RibbonRow>
     </RibbonSection>
   );
@@ -531,32 +533,28 @@ const ParagraphSection = memo(function ParagraphSection(
     <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={props.collapsed} closeOn={props.tool}>
       <RibbonRow>
         {ALIGN.map((a) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={a.value}
-            label={a.label}
-            shortcut={a.shortcut}
-            active={!textOff && style.align === a.value}
-            disabled={textOff}
-            disabledReason={NEEDS_TEXT}
+            {...SLIDE_TOOL}
+            aria-label={a.label}
+            aria-pressed={!textOff && style.align === a.value}
+            {...unlessOff(textOff, NEEDS_TEXT, a.label, a.shortcut)}
             onClick={() => props.onStyle({ align: a.value })}
           >
             {a.icon}
-          </ToolButton>
+          </Button>
         ))}
         {LISTS.map((l) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={l.value}
-            label={l.label}
-            title={l.title}
-            active={!textOff && !!selection && selection.list === l.value}
-            disabled={textOff || !selection}
-            disabledReason={NEEDS_TEXT}
+            {...SLIDE_TOOL}
+            aria-label={l.label}
+            aria-pressed={!textOff && !!selection && selection.list === l.value}
+            {...unlessOff(textOff || !selection, NEEDS_TEXT, l.title)}
             onClick={() => props.onList?.(l.value)}
           >
             {l.icon}
-          </ToolButton>
+          </Button>
         ))}
         <SpacingButton
           lineHeight={style.lineHeight ?? null}
@@ -568,17 +566,20 @@ const ParagraphSection = memo(function ParagraphSection(
       </RibbonRow>
       <RibbonRow>
         {VALIGN.map((a) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={a.value}
-            label={a.label}
-            active={!textOff && !!state?.valign && style.valign === a.value}
-            disabled={textOff || !state?.valign}
-            disabledReason={textOff ? NEEDS_TEXT : "This element's text cannot align vertically"}
+            {...SLIDE_TOOL}
+            aria-label={a.label}
+            aria-pressed={!textOff && !!state?.valign && style.valign === a.value}
+            {...unlessOff(
+              textOff || !state?.valign,
+              textOff ? NEEDS_TEXT : "This element's text cannot align vertically",
+              a.label,
+            )}
             onClick={() => props.onStyle({ valign: a.value })}
           >
             {a.icon}
-          </ToolButton>
+          </Button>
         ))}
         <RibbonSelect
           label="When text does not fit"
@@ -591,9 +592,9 @@ const ParagraphSection = memo(function ParagraphSection(
           className="w-full min-w-0 flex-1 enabled:hover:bg-accent"
         >
           {AUTOFIT_LABELS.map((choice) => (
-            <option key={choice.value} value={choice.value}>
+            <NativeSelectOption key={choice.value} value={choice.value}>
               {choice.label}
-            </option>
+            </NativeSelectOption>
           ))}
         </RibbonSelect>
       </RibbonRow>
@@ -653,9 +654,9 @@ const StyleSection = memo(function StyleSection(
           className="w-24 enabled:hover:bg-accent"
         >
           {strokeWidths(strokeWidth, vector).map((w) => (
-            <option key={w} value={w}>
+            <NativeSelectOption key={w} value={w}>
               {w === 0 ? "No border" : `${w}px`}
-            </option>
+            </NativeSelectOption>
           ))}
         </RibbonSelect>
         <DashSelect
@@ -737,42 +738,36 @@ const ArrangeSection = memo(function ArrangeSection(
       </RibbonRow>
       <RibbonRow>
         {ORDER.map((o) => (
-          <ToolButton
-            keepFocus
+          <Button
             key={o.to}
-            label={o.label}
-            shortcut={o.shortcut}
-            disabled={nothing}
-            disabledReason={NEEDS_ELEMENT}
+            {...SLIDE_TOOL}
+            aria-label={o.label}
+            {...unlessOff(nothing, NEEDS_ELEMENT, o.label, o.shortcut)}
             onClick={() => props.onOrder(o.to)}
           >
             {o.icon}
-          </ToolButton>
+          </Button>
         ))}
         <GroupControls onArrange={onArrange} />
         <LayersPanel onArrange={onArrange} />
         <SnapToggle />
-        <ToolButton
-          keepFocus
-          label="Duplicate"
-          shortcut="mod+d"
-          disabled={nothing}
-          disabledReason={NEEDS_ELEMENT}
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Duplicate"
+          {...unlessOff(nothing, NEEDS_ELEMENT, "Duplicate", "mod+d")}
           onClick={() => onArrange?.({ type: "slop:edit-duplicate" })}
         >
           <CopyPlus />
-        </ToolButton>
-        <ToolButton
-          keepFocus
-          destructive
-          label="Delete"
-          shortcut="backspace"
-          disabled={nothing}
-          disabledReason={NEEDS_ELEMENT}
+        </Button>
+        <Button
+          {...SLIDE_TOOL}
+          aria-label="Delete"
+          {...unlessOff(nothing, NEEDS_ELEMENT, "Delete", "backspace")}
           onClick={props.onDelete}
+          className="hover:text-destructive aria-disabled:hover:text-muted-foreground"
         >
           <Trash2 />
-        </ToolButton>
+        </Button>
       </RibbonRow>
     </RibbonSection>
   );
@@ -780,46 +775,51 @@ const ArrangeSection = memo(function ArrangeSection(
 
 /** The "More shapes" picker: diagram shapes under their headings, which go back to Select once one is added. */
 function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void }) {
-  const { open, setOpen, ref, toggle } = useDropdown();
+  const [open, setOpen] = useState(false);
   const current = MORE_SHAPES.flatMap((group) => group.shapes).find((s) => s.tool === props.tool);
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="More shapes"
-        title={current ? `More shapes: ${current.label.replace(/^Add an? /, "")}` : "More shapes"}
-        aria-expanded={open}
-        active={!!current || open}
-        onClick={toggle}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="More shapes"
+            tooltip={current ? `More shapes: ${current.label.replace(/^Add an? /, "")}` : "More shapes"}
+            aria-pressed={!!current}
+          />
+        }
       >
         {current?.icon ?? <Shapes />}
-      </ToolButton>
-      {open && (
-        <DropdownPanel role="dialog" aria-label="More shapes" className="flex w-max flex-col gap-1 p-1.5">
-          {MORE_SHAPES.map((group) => (
-            <fieldset key={group.heading} aria-label={group.heading} className="flex flex-col gap-0.5">
-              <span className="text-[10px] leading-3 text-muted-foreground">{group.heading}</span>
-              <div className="flex gap-0.5">
-                {group.shapes.map((s) => (
-                  <ToolButton
-                    keepFocus
-                    key={s.tool}
-                    label={s.label}
-                    active={props.tool === s.tool}
-                    onClick={() => {
-                      props.onTool(s.tool);
-                      setOpen(false);
-                    }}
-                  >
-                    {s.icon}
-                  </ToolButton>
-                ))}
-              </div>
-            </fieldset>
-          ))}
-        </DropdownPanel>
-      )}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent aria-label="More shapes" initialFocus={false} finalFocus={false} className="w-max gap-1 p-1.5">
+        {MORE_SHAPES.map((group) => (
+          <FieldSet key={group.heading} className="gap-0.5">
+            <FieldLegend
+              variant="label"
+              className="mb-0 leading-3 font-normal text-muted-foreground data-[variant=label]:text-[10px]"
+            >
+              {group.heading}
+            </FieldLegend>
+            <div className="flex gap-0.5">
+              {group.shapes.map((s) => (
+                <Button
+                  key={s.tool}
+                  {...SLIDE_TOOL}
+                  tooltip={s.label}
+                  aria-pressed={props.tool === s.tool}
+                  onClick={() => {
+                    props.onTool(s.tool);
+                    setOpen(false);
+                  }}
+                >
+                  {s.icon}
+                </Button>
+              ))}
+            </div>
+          </FieldSet>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -849,24 +849,24 @@ function FontPicker(props: {
       onDone={props.onDone}
       className="w-28 truncate enabled:hover:bg-accent"
     >
-      <option value="">Default font</option>
-      {current && <option value="__current">{current}</option>}
+      <NativeSelectOption value="">Default font</NativeSelectOption>
+      {current && <NativeSelectOption value="__current">{current}</NativeSelectOption>}
       {choices.deck.length > 0 && (
-        <optgroup label="Deck fonts">
+        <NativeSelectOptGroup label="Deck fonts">
           {choices.deck.map((f) => (
-            <option key={f.name} value={f.stack}>
+            <NativeSelectOption key={f.name} value={f.stack}>
               {f.name}
-            </option>
+            </NativeSelectOption>
           ))}
-        </optgroup>
+        </NativeSelectOptGroup>
       )}
-      <optgroup label="System fonts">
+      <NativeSelectOptGroup label="System fonts">
         {choices.system.map((f) => (
-          <option key={f.name} value={f.stack}>
+          <NativeSelectOption key={f.name} value={f.stack}>
             {f.name}
-          </option>
+          </NativeSelectOption>
         ))}
-      </optgroup>
+      </NativeSelectOptGroup>
     </RibbonSelect>
   );
 }
@@ -876,14 +876,14 @@ function FontSizeInput(props: { value: number | null; onChange: (size: number) =
   return (
     <DraftInput
       aria-label="Font size"
-      title={props.value === null ? NEEDS_TEXT : "Font size (type a size and press Enter, or step it with ↑ and ↓)"}
+      tooltip={props.value === null ? NEEDS_TEXT : "Font size (type a size and press Enter, or step it with ↑ and ↓)"}
       disabled={props.value === null}
       value={props.value}
       parse={parseFontSize}
       sanitize={(text) => text.replace(/[^\d.]/g, "")}
       onChange={props.onChange}
       onDone={props.onDone}
-      className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-40"
+      className="w-9 text-center"
     />
   );
 }
@@ -895,7 +895,10 @@ function LinkButton(props: {
   onChange: (href: string | null) => void;
   onDone: () => void;
 }) {
-  const { open, setOpen, ref } = useDropdown({ disabled: props.disabled });
+  const [open, setOpen] = useState(false);
+  // Nothing to link: it closes, and stays closed when a selection comes back.
+  if (props.disabled && open) setOpen(false);
+  const field = useRef<HTMLInputElement>(null);
   const slideNow = linkedSlide(props.value);
   const [address, setAddress] = useState("");
   const [slide, setSlide] = useState("");
@@ -907,10 +910,6 @@ function LinkButton(props: {
     setSlide(slideNow ?? "");
     setInvalid(false);
     setOpen(true);
-  };
-  const toggle = () => {
-    if (open) setOpen(false);
-    else show();
   };
   // ⌘K opens it, from the slide or the app.
   useEditPanelAsk("link", () => {
@@ -931,35 +930,35 @@ function LinkButton(props: {
   };
 
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Link"
-        shortcut="mod+k"
-        title={props.value ? `Link: ${props.value}` : "Add a link"}
-        active={!!props.value}
-        aria-expanded={open}
-        disabled={props.disabled}
-        disabledReason={NEEDS_ELEMENT}
-        onClick={toggle}
+    <Popover open={open} onOpenChange={(next) => (next ? show() : setOpen(false))}>
+      <PopoverTrigger
+        render={
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="Link"
+            aria-pressed={!!props.value}
+            {...unlessOff(props.disabled, NEEDS_ELEMENT, props.value ? `Link: ${props.value}` : "Add a link", "mod+k")}
+          />
+        }
       >
         <Link />
-      </ToolButton>
-      {open && (
+      </PopoverTrigger>
+      {/* The address is typed, so the focus goes to its field; done, it goes back to the slide (`onDone`). */}
+      <PopoverContent aria-label="Link" initialFocus={field} finalFocus={false} className="w-64 p-2 text-xs">
         <form
-          role="dialog"
-          aria-label="Link"
           onSubmit={(event) => {
             event.preventDefault();
             apply();
           }}
-          className={cn(dropdownPanel, "flex w-64 flex-col gap-2 text-xs")}
+          className="flex flex-col gap-2"
         >
-          <input
-            autoFocus
+          <Input
+            ref={field}
+            size="sm"
             aria-label="Link address"
             placeholder="https://… or someone@example.com"
             value={address}
+            aria-invalid={invalid || undefined}
             onChange={(event) => {
               setAddress(event.target.value);
               setSlide("");
@@ -972,7 +971,6 @@ function LinkButton(props: {
                 props.onDone();
               }
             }}
-            className={cn("h-7 rounded border bg-transparent px-2", invalid && "border-destructive")}
           />
           <LinkTargets
             value={slide}
@@ -984,17 +982,17 @@ function LinkButton(props: {
           {invalid && <p className="text-destructive">Enter a web address, an email address, or pick a slide.</p>}
           <div className="flex justify-end gap-1">
             {props.value && (
-              <button type="button" onClick={() => finish(null)} className="rounded-md px-2 py-1 hover:bg-accent">
+              <Button variant="ghost" size="xs" onClick={() => finish(null)}>
                 Remove link
-              </button>
+              </Button>
             )}
-            <button type="submit" className="rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground">
+            <Button type="submit" size="xs">
               {props.value ? "Update" : "Add link"}
-            </button>
+            </Button>
           </div>
         </form>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1007,19 +1005,20 @@ function LinkTargets(props: { value: string; onChange: (slide: string) => void }
   const targets = useMemo(() => (slides ?? []).map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })), [slides]);
   if (targets.length === 0) return null;
   return (
-    <select
+    <NativeSelect
+      size="sm"
       aria-label="Link to slide"
       value={props.value}
       onChange={(event) => props.onChange(event.target.value)}
-      className="h-7 rounded border bg-transparent px-1"
+      className="w-full"
     >
-      <option value="">Or link to a slide…</option>
+      <NativeSelectOption value="">Or link to a slide…</NativeSelectOption>
       {targets.map((target) => (
-        <option key={target.id} value={target.id}>
+        <NativeSelectOption key={target.id} value={target.id}>
           {target.label}
-        </option>
+        </NativeSelectOption>
       ))}
-    </select>
+    </NativeSelect>
   );
 }
 
@@ -1031,65 +1030,67 @@ function SpacingButton(props: {
   onChange: (changes: EditStyle) => void;
   onDone: () => void;
 }) {
-  const { open, ref, toggle } = useDropdown({ disabled: props.disabled });
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  // No text to space: it closes, and stays closed when text is selected again.
+  if (props.disabled && open) setOpen(false);
   const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
     (a, b) => a - b,
   );
   const spacings = [...new Set<number>([...LETTER_SPACINGS, props.letterSpacing])].sort((a, b) => a - b);
   return (
-    <div ref={ref} className="relative">
-      <ToolButton
-        keepFocus
-        label="Spacing"
-        title="Line height and letter spacing"
-        aria-expanded={open}
-        disabled={props.disabled}
-        disabledReason={NEEDS_TEXT}
-        onClick={toggle}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            {...SLIDE_TOOL}
+            aria-label="Spacing"
+            {...unlessOff(props.disabled, NEEDS_TEXT, "Line height and letter spacing")}
+          />
+        }
       >
         <Space />
-      </ToolButton>
-      {open && (
-        <DropdownPanel
-          role="dialog"
-          aria-label="Spacing"
-          className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs"
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Spacing"
+        initialFocus={false}
+        finalFocus={false}
+        className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 p-2 text-xs"
+      >
+        <Label htmlFor={`${id}-line-height`} className={LABEL}>
+          Line height
+        </Label>
+        <RibbonSelect
+          id={`${id}-line-height`}
+          value={props.lineHeight === null ? "" : String(props.lineHeight)}
+          onPick={(height) => props.onChange({ lineHeight: height ? Number(height) : null })}
+          onDone={props.onDone}
+          className="border"
         >
-          <label htmlFor="edit-line-height" className="text-muted-foreground">
-            Line height
-          </label>
-          <RibbonSelect
-            id="edit-line-height"
-            value={props.lineHeight === null ? "" : String(props.lineHeight)}
-            onPick={(height) => props.onChange({ lineHeight: height ? Number(height) : null })}
-            onDone={props.onDone}
-            className="border"
-          >
-            <option value="">Default</option>
-            {heights.map((h) => (
-              <option key={h} value={h}>
-                {h}
-              </option>
-            ))}
-          </RibbonSelect>
-          <label htmlFor="edit-letter-spacing" className="text-muted-foreground">
-            Letter spacing
-          </label>
-          <RibbonSelect
-            id="edit-letter-spacing"
-            value={String(props.letterSpacing)}
-            onPick={(spacing) => props.onChange({ letterSpacing: Number(spacing) })}
-            onDone={props.onDone}
-            className="border"
-          >
-            {spacings.map((v) => (
-              <option key={v} value={v}>
-                {v === 0 ? "Normal" : `${v}px`}
-              </option>
-            ))}
-          </RibbonSelect>
-        </DropdownPanel>
-      )}
-    </div>
+          <NativeSelectOption value="">Default</NativeSelectOption>
+          {heights.map((h) => (
+            <NativeSelectOption key={h} value={h}>
+              {h}
+            </NativeSelectOption>
+          ))}
+        </RibbonSelect>
+        <Label htmlFor={`${id}-letter-spacing`} className={LABEL}>
+          Letter spacing
+        </Label>
+        <RibbonSelect
+          id={`${id}-letter-spacing`}
+          value={String(props.letterSpacing)}
+          onPick={(spacing) => props.onChange({ letterSpacing: Number(spacing) })}
+          onDone={props.onDone}
+          className="border"
+        >
+          {spacings.map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {v === 0 ? "Normal" : `${v}px`}
+            </NativeSelectOption>
+          ))}
+        </RibbonSelect>
+      </PopoverContent>
+    </Popover>
   );
 }

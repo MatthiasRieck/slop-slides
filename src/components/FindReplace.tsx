@@ -1,15 +1,25 @@
 import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWord, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type FocusEvent, useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Kbd } from "@/components/ui/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ReplacedText, Slide } from "../lib/api";
 import { formatKeys, isMod } from "../lib/keys";
 import { memoizeLast } from "../lib/memo";
 import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
-import { Button, ToolButton } from "./Button";
 import { EDIT_ONLY } from "./editOnly";
-import { Popover } from "./Popover";
 import { RibbonRow, useRibbonReveal } from "./Ribbon";
+
+/**
+ * Keeps a field's focus from the tooltip around it: a field shows its hint under the pointer
+ * only, not for as long as it is typed in.
+ */
+const quietFocus = (event: FocusEvent) => event.stopPropagation();
 
 /** How long typing settles before it searches. */
 const SEARCH_DELAY_MS = 150;
@@ -48,9 +58,15 @@ export function FindBar() {
     >
       <SearchField />
       <SearchSteps />
-      <ToolButton label="Close the search" shortcut="escape" onClick={() => useApp.getState().clearSearch()}>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        tooltip="Close the search"
+        shortcut="escape"
+        onClick={() => useApp.getState().clearSearch()}
+      >
         <X />
-      </ToolButton>
+      </Button>
     </search>
   );
 }
@@ -82,71 +98,89 @@ function SearchField() {
   const slideCount = new Set(matches?.map((m) => m.slide)).size;
 
   return (
-    <div className="flex h-6 w-64 min-w-0 items-center gap-1 rounded-md border pl-2 pr-0.5 focus-within:ring-1 focus-within:ring-ring">
-      <Search className="size-3.5 shrink-0 text-muted-foreground" />
-      <input
-        ref={input}
-        aria-label="Search slides"
-        placeholder="Search slides"
-        title={`Search the text on the slides and in their notes (${formatKeys("mod+f")})`}
-        value={query}
-        onChange={(event) => setSearch({ query: event.target.value })}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            stepSearch(event.shiftKey ? -1 : 1);
-          } else if (event.key === "Escape") {
-            clearSearch();
-          }
-        }}
-        className="h-full min-w-0 flex-1 bg-transparent text-xs outline-none"
-      />
-      {failed !== null ? (
-        <span role="alert" title={failed} className="shrink-0 text-2xs text-destructive">
-          Search failed
-        </span>
-      ) : (
-        matches && (
-          <span
-            role="status"
-            title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide")}`}
-            className="shrink-0 text-2xs tabular-nums text-muted-foreground"
-          >
-            {active >= 0 ? `${active + 1} / ${found}` : found === 0 ? "No matches" : found}
-            {active >= 0 && matches[active]?.notes && " in notes"}
+    <InputGroup className="h-6 w-64 rounded-md">
+      <InputGroupAddon className="py-0 pl-1.5">
+        <Search className="size-3.5" />
+      </InputGroupAddon>
+      <Tooltip>
+        <TooltipTrigger render={<span className="flex h-full min-w-0 flex-1" />}>
+          <InputGroupInput
+            ref={input}
+            aria-label="Search slides"
+            placeholder="Search slides"
+            value={query}
+            onChange={(event) => setSearch({ query: event.target.value })}
+            onFocus={quietFocus}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                stepSearch(event.shiftKey ? -1 : 1);
+              } else if (event.key === "Escape") {
+                clearSearch();
+              }
+            }}
+            className="h-full px-1.5 py-0 text-xs"
+          />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          Search the text on the slides and in their notes
+          <Kbd>{formatKeys("mod+f")}</Kbd>
+        </TooltipContent>
+      </Tooltip>
+      <InputGroupAddon align="inline-end" className="gap-0.5 py-0 pr-0.5 font-normal has-[>button]:mr-0">
+        {failed !== null ? (
+          <span role="alert" title={failed} className="shrink-0 text-2xs text-destructive">
+            Search failed
           </span>
-        )
-      )}
-      {query && (
-        <ToolButton
-          size="xs"
-          label="Clear search"
-          shortcut="escape"
-          onClick={() => {
-            setSearch({ query: "" });
-            input.current?.focus();
-          }}
+        ) : (
+          matches && (
+            <span
+              role="status"
+              title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide")}`}
+              className="shrink-0 text-2xs tabular-nums text-muted-foreground"
+            >
+              {active >= 0 ? `${active + 1} / ${found}` : found === 0 ? "No matches" : found}
+              {active >= 0 && matches[active]?.notes && " in notes"}
+            </span>
+          )
+        )}
+        {query && (
+          <InputGroupButton
+            size="icon-xs"
+            aria-label="Clear search"
+            tooltip="Clear search"
+            shortcut="escape"
+            onClick={() => {
+              setSearch({ query: "" });
+              input.current?.focus();
+            }}
+            className="size-5"
+          >
+            <X className="size-3.5" />
+          </InputGroupButton>
+        )}
+        <InputGroupButton
+          size="icon-xs"
+          aria-label="Match case"
+          tooltip="Match case"
+          aria-pressed={options.matchCase}
+          onClick={() => setSearch({ options: { ...options, matchCase: !options.matchCase } })}
+          className="size-5"
         >
-          <X className="size-3.5" />
-        </ToolButton>
-      )}
-      <ToolButton
-        size="xs"
-        label="Match case"
-        active={options.matchCase}
-        onClick={() => setSearch({ options: { ...options, matchCase: !options.matchCase } })}
-      >
-        <CaseSensitive />
-      </ToolButton>
-      <ToolButton
-        size="xs"
-        label="Whole words"
-        active={options.wholeWord}
-        onClick={() => setSearch({ options: { ...options, wholeWord: !options.wholeWord } })}
-      >
-        <WholeWord />
-      </ToolButton>
-    </div>
+          <CaseSensitive />
+        </InputGroupButton>
+        <InputGroupButton
+          size="icon-xs"
+          aria-label="Whole words"
+          tooltip="Whole words"
+          aria-pressed={options.wholeWord}
+          onClick={() => setSearch({ options: { ...options, wholeWord: !options.wholeWord } })}
+          className="size-5"
+        >
+          <WholeWord />
+        </InputGroupButton>
+      </InputGroupAddon>
+    </InputGroup>
   );
 }
 
@@ -156,12 +190,26 @@ function SearchSteps() {
   const { stepSearch } = useApp.getState();
   return (
     <>
-      <ToolButton label="Previous match" shortcut="shift+enter" disabled={found === 0} onClick={() => stepSearch(-1)}>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        tooltip="Previous match"
+        shortcut="shift+enter"
+        disabled={found === 0}
+        onClick={() => stepSearch(-1)}
+      >
         <ChevronUp />
-      </ToolButton>
-      <ToolButton label="Next match" shortcut="enter" disabled={found === 0} onClick={() => stepSearch(1)}>
+      </Button>
+      <Button
+        variant="tool"
+        size="icon-xs"
+        tooltip="Next match"
+        shortcut="enter"
+        disabled={found === 0}
+        onClick={() => stepSearch(1)}
+      >
         <ChevronDown />
-      </ToolButton>
+      </Button>
       <ReplaceButton />
     </>
   );
@@ -222,35 +270,33 @@ export function useDeckSearch() {
 function ReplaceButton() {
   const editable = useApp((s) => s.editing);
   const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
   if (!editable && open) setOpen(false);
   return (
-    <>
-      <ToolButton
-        ref={anchor}
-        label="Replace…"
-        title="Replace what the search finds"
-        disabled={!editable}
-        disabledReason={EDIT_ONLY}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => setOpen((v) => !v)}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="tool"
+            size="icon-xs"
+            aria-label="Replace…"
+            tooltip={editable ? "Replace what the search finds" : EDIT_ONLY}
+            disabled={!editable}
+          />
+        }
       >
         <Replace />
-      </ToolButton>
-      {open && (
-        <Popover
-          anchor={anchor}
-          placement="below"
-          align="end"
-          width={380}
-          label="Replace"
-          onClose={() => setOpen(false)}
-        >
-          <ReplacePanel />
-        </Popover>
-      )}
-    </>
+      </PopoverTrigger>
+      <PopoverContent
+        aria-label="Replace"
+        side="bottom"
+        align="end"
+        initialFocus={field}
+        className="w-[380px] gap-2 p-3 text-xs"
+      >
+        <ReplacePanel field={field} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -258,7 +304,7 @@ function ReplaceButton() {
  * What to replace the matches with, and which of them: the one in focus (then on to the next),
  * those on the slide shown, or all. Locked slides keep theirs, which it says.
  */
-function ReplacePanel() {
+function ReplacePanel(props: { field: React.RefObject<HTMLInputElement | null> }) {
   const current = useApp((s) => s.selected);
   const query = useApp((s) => s.search.query);
   const options = useApp((s) => s.search.options);
@@ -294,43 +340,49 @@ function ReplacePanel() {
   };
 
   return (
-    <div className="flex min-h-0 flex-col gap-2 p-3 text-xs">
-      <input
-        autoFocus
-        aria-label="Replace with"
-        placeholder="Replace with"
-        title={`${formatKeys("enter")} replaces this match, ${formatKeys("mod+enter")} all of them`}
-        value={replacement}
-        onChange={(event) => setReplacement(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-          event.preventDefault();
-          if (isMod(event)) replaceAll();
-          else replaceOne();
-        }}
-        className="h-7 min-w-0 rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-      />
+    <>
+      <Tooltip>
+        <TooltipTrigger render={<span className="flex" />}>
+          <Input
+            ref={props.field}
+            size="sm"
+            aria-label="Replace with"
+            placeholder="Replace with"
+            value={replacement}
+            onChange={(event) => setReplacement(event.target.value)}
+            onFocus={quietFocus}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              if (isMod(event)) replaceAll();
+              else replaceOne();
+            }}
+          />
+        </TooltipTrigger>
+        <TooltipContent>
+          <Kbd>{formatKeys("enter")}</Kbd> replaces this match, <Kbd>{formatKeys("mod+enter")}</Kbd> all of them
+        </TooltipContent>
+      </Tooltip>
       <div className="flex flex-wrap items-center justify-end gap-1">
         <Button
+          variant="outline"
+          size="xs"
           disabled={busy || !canReplaceOne}
-          title={
-            canReplaceOne
-              ? `Replace this match and go to the next (${formatKeys("enter")})`
-              : inFocus
-                ? "This match is on a locked slide"
-                : "Go to a match first"
-          }
+          {...(canReplaceOne
+            ? { tooltip: "Replace this match and go to the next", shortcut: "enter" }
+            : { tooltip: inFocus ? "This match is on a locked slide" : "Go to a match first" })}
           onClick={replaceOne}
         >
           Replace
         </Button>
-        <Button disabled={busy || here.length === 0} onClick={replaceHere}>
+        <Button variant="outline" size="xs" disabled={busy || here.length === 0} onClick={replaceHere}>
           Replace on this slide ({here.length})
         </Button>
         <Button
-          variant="primary"
+          size="xs"
           disabled={busy || replaceable.length === 0}
-          title={`Replace every match (${formatKeys("mod+enter")})`}
+          tooltip="Replace every match"
+          shortcut="mod+enter"
           onClick={replaceAll}
         >
           Replace all ({replaceable.length})
@@ -349,18 +401,19 @@ function ReplacePanel() {
               ` ${plural(done.skipped.length, "locked slide was", "locked slides were")} left as ${done.skipped.length === 1 ? "it was" : "they were"}.`}
           </span>
           {done.count > 0 && (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="2xs"
               disabled={busy}
               onClick={() => void undo()}
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-background disabled:opacity-40 [&_svg]:size-3.5"
+              className="hover:bg-background"
             >
-              <Undo2 />
+              <Undo2 data-icon="inline-start" />
               Undo
-            </button>
+            </Button>
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

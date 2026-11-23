@@ -57,7 +57,7 @@ export function DiscardButton() {
       {asking && (
         <AlertDialog open onOpenChange={(open) => !open && setAsking(false)}>
           {/* With no changes on the slide shown there is one thing to confirm: the focus starts on it. */}
-          <AlertDialogContent aria-label="Discard changes" {...(!here && { initialFocus: discard })}>
+          <AlertDialogContent {...(!here && { initialFocus: discard })}>
             <AlertDialogHeader>
               <AlertDialogTitle>
                 {here ? "Discard changes on other slides too?" : `Discard changes on ${plural(others, "other slide")}?`}

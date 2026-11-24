@@ -1204,6 +1204,7 @@ describe("the menu of a right-click", () => {
       "New slideCtrl+Shift+N",
       "DuplicateCtrl+D",
       "CopyCtrl+C",
+      "Copy screenshot",
       "CutCtrl+X",
       "Paste afterCtrl+V",
       "DeleteBackspace",
@@ -1252,6 +1253,19 @@ describe("the menu of a right-click", () => {
       expect(screen.getByRole("menu")).toBeTruthy();
       unmount();
     }
+  });
+
+  it("copies a screenshot of the slide it was opened on, even among several picked ones", () => {
+    const copySlideScreenshot = vi.fn().mockResolvedValue(true);
+    const before = useApp.getState();
+    afterThis(() => useApp.setState(before, true));
+    useApp.setState({ copySlideScreenshot } as never);
+    render(<SlideRail />);
+    useApp.setState({ selected: "outro", railSelected: ["intro", "outro"] });
+    fireEvent.contextMenu(thumb(1));
+    fireEvent.click(choice("Copy screenshot"));
+    expect(copySlideScreenshot).toHaveBeenCalledWith("intro");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("opens no menu for a right-click between the rows", () => {
@@ -1314,7 +1328,7 @@ describe("the menu of a right-click", () => {
     expect(invoke).toHaveBeenCalledWith("set_slides_locked", { id: DECK.id, slides: ["intro", "outro"], locked: true });
 
     fireEvent.contextMenu(thumb(3));
-    await act(async () => fireEvent.click(choice(/^Copy/)));
+    await act(async () => fireEvent.click(choice(/^CopyCtrl/)));
     expect(invoke).toHaveBeenCalledWith("copy_slides", { id: DECK.id, slides: ["intro", "outro"] });
 
     // Asked on a slide that is not picked, it is about that one alone.
@@ -1358,7 +1372,8 @@ describe("the menu of a right-click", () => {
     for (const name of [
       /^New slide/,
       /^Duplicate/,
-      /^Copy/,
+      /^CopyCtrl/,
+      /^Copy screenshot/,
       /^Cut/,
       /^Paste/,
       /^Delete/,

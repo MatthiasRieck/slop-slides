@@ -3876,6 +3876,7 @@ describe("Stage", () => {
           "PasteCtrl+V",
           "Select allCtrl+A",
           "Slide background…",
+          "Copy screenshot",
         ]);
         fireEvent.click(item("Select all"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-select-all" }, "*");
@@ -3887,6 +3888,17 @@ describe("Stage", () => {
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: null });
         fireEvent.click(item("Slide background"));
         expect(screen.getByRole("dialog", { name: "Slide background" })).toBeTruthy();
+      });
+
+      it("copies a screenshot of the slide from an empty spot", async () => {
+        const copy = vi.fn().mockResolvedValue(true);
+        const { copySlideScreenshot } = useApp.getState();
+        useApp.setState({ copySlideScreenshot: copy });
+        open(null);
+        fireEvent.click(item("Copy screenshot"));
+        expect(copy).toHaveBeenCalledOnce();
+        expect(screen.queryByRole("menu")).toBeNull();
+        useApp.setState({ copySlideScreenshot });
       });
 
       it("asks the agent about every selected element", () => {

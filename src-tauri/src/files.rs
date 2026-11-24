@@ -32,6 +32,29 @@ pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
     Ok(root)
 }
 
+/// `file` by its canonical path: the same whatever spelling of it is given, and whatever is
+/// happening to the file just then. A file being written over (see [`atomic_write`]) cannot
+/// be opened for an instant on Windows, so canonicalizing it fails; its folder still can be,
+/// and the file's name goes after it. Falling back to `file` as given instead would key one
+/// deck two ways, and its lock, history and cache (deck_lock.rs, history.rs, deck_cache.rs)
+/// would take it for two decks.
+pub(crate) fn canonical_file(file: &Path) -> PathBuf {
+    if let Ok(path) = file.canonicalize() {
+        return path;
+    }
+    let Some(name) = file.file_name() else {
+        return file.into();
+    };
+    let parent = match file.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    parent
+        .canonicalize()
+        .map(|dir| dir.join(name))
+        .unwrap_or_else(|_| file.into())
+}
+
 /// Writes `bytes` to `path` through a temporary file next to it, so a reader never sees half
 /// of it.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -105,6 +128,21 @@ pub fn slide_image_name(index: usize, total: usize) -> String {
 mod tests {
     use super::*;
     use crate::test_support::TempDir;
+
+    #[test]
+    fn a_file_is_named_the_same_whether_or_not_it_can_be_opened() {
+        let dir = TempDir::new("files");
+        let file = dir.join("deck.html");
+        // As while it is renamed over: its folder is canonical, its name follows.
+        let missing = canonical_file(&file);
+        fs::write(&file, "x").unwrap();
+        let there = canonical_file(&file);
+        assert_eq!(missing, there);
+        assert_eq!(canonical_file(&dir.join(".").join("deck.html")), there);
+        // Nothing to canonicalize: the path as given.
+        let nowhere = Path::new("/no/such/folder/deck.html");
+        assert_eq!(canonical_file(nowhere), nowhere);
+    }
 
     #[test]
     fn atomic_write_leaves_no_temp_files() {

@@ -3993,23 +3993,24 @@ describe("Stage", () => {
 
       it("moves through the items with the arrow keys, without reaching the slide's keys", async () => {
         open();
-        await settle();
         const menu = screen.getByRole("menu");
-        const press = async (key: string) => {
-          fireEvent.keyDown(document.activeElement!, { key });
-          await settle();
-        };
-        expect(document.activeElement).toBe(menu);
-        await press("ArrowDown");
-        expect(document.activeElement).toBe(item("Cut"));
-        await press("ArrowUp");
-        expect(document.activeElement).toBe(item("Tidy this"));
-        await press("Home");
-        expect(document.activeElement).toBe(item("Cut"));
-        await press("End");
-        expect(document.activeElement).toBe(item("Tidy this"));
+        // The menu takes the focus a frame or two after it opens: longer on a busy CI machine
+        // than any fixed wait can be sure of, so each step waits for the focus to get there.
+        const focused = (target: () => Element) =>
+          waitFor(() => expect(document.activeElement).toBe(target()), { timeout: 2000 });
+        const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key });
+        await focused(() => menu);
+        press("ArrowDown");
+        await focused(() => item("Cut"));
+        press("ArrowUp");
+        await focused(() => item("Tidy this"));
+        press("Home");
+        await focused(() => item("Cut"));
+        press("End");
+        await focused(() => item("Tidy this"));
         expect(useApp.getState().selected).toBe("intro");
-        await press("t");
+        press("t");
+        await settle();
         expect(useApp.getState().editTool).toBe("select");
         // Nor do the app's shortcuts with a modifier get a key pressed in the menu.
         const onKey = vi.fn();

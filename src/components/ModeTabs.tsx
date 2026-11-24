@@ -46,7 +46,7 @@ function useInRepository() {
 /**
  * The deck's modes, in the top bar: what the stage does with the slide. Each brings its own tools
  * to the row under it. View changes nothing in the deck but its review; Edit changes the slides,
- * their order and their timing. The deck's timeline opens under the slide in either, and the
+ * their order and their timing. The deck's timeline opens under the slide in either, from the row under it, and the
  * slide's narration and notes and the deck's HTML are tabs of the sidebar. The tab of the mode
  * the deck is in is filled; with the deck's settings open, none is. The arrows go from tab to
  * tab; a click, Enter or Space takes the mode.

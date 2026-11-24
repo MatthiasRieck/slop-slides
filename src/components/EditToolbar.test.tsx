@@ -16,7 +16,7 @@ import { reportFromEditor, resetEditorState } from "./stage/editorState";
 // default five seconds do not always leave.
 vi.setConfig({ testTimeout: 30_000 });
 
-const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Slide", "Arrange", "Timeline"];
+const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Slide", "Arrange"];
 const SECTION_WIDTH = 200;
 
 let resize: ResizeObserverCallback | null = null;
@@ -91,7 +91,7 @@ describe("EditToolbar ribbon", () => {
 
   it("groups its tools in captioned sections", () => {
     render(toolbar());
-    // Each section shows its caption (the timeline's toggle is named like its section).
+    // Each section shows its caption.
     for (const name of SECTIONS) {
       expect(within(screen.getByRole("group", { name })).getAllByText(name).length).toBeGreaterThan(0);
     }
@@ -112,8 +112,8 @@ describe("EditToolbar ribbon", () => {
     expect(inGroup("Arrange", "Distribute horizontally")).toBeTruthy();
     expect(inGroup("Arrange", "Position and size")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Size mode" })).toBeNull();
-    // The timeline's tools are the same as in the view ribbon.
-    expect(inGroup("Timeline", "Show the timeline under the slide")).toBeTruthy();
+    // The timeline opens from the row under the slide, not from here.
+    expect(screen.queryByRole("group", { name: "Timeline" })).toBeNull();
   });
 
   it("measures its sections once, and fits them to each new width from that", () => {

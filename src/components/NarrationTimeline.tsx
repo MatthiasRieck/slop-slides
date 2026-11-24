@@ -242,7 +242,7 @@ function Tracks(props: {
     <section
       aria-label="Narration timeline"
       onKeyDown={onKeyDown}
-      className="flex h-44 shrink-0 flex-col border-t bg-background"
+      className="flex h-46 shrink-0 flex-col border-t bg-background"
     >
       {/* The time on the left, zoom on the right, and what plays it in the middle between them. */}
       <div
@@ -393,7 +393,8 @@ function Tracks(props: {
 }
 
 /**
- * What plays the timeline and steps along it, in the middle of its bar. Back and forward go as
+ * What plays the timeline and steps along it, in the middle of its bar: buttons of their own,
+ * apart and large enough to press without aiming. Back and forward go as
  * far as the ends: whether the playhead (`limit` at most) is at one is all it follows of it.
  */
 function Transport(props: {
@@ -409,32 +410,33 @@ function Transport(props: {
   const atStart = usePlayheadValue(clock, (time) => Math.min(time, limit) <= 0);
   const atEnd = usePlayheadValue(clock, (time) => Math.min(time, limit) >= end);
   return (
-    <ButtonGroup data-testid="transport" aria-label="Playback">
+    <fieldset data-testid="transport" aria-label="Playback" className="flex min-w-0 items-center gap-1.5">
       <Button
         variant="outline"
-        size="icon-2xs"
+        size="icon-sm"
         aria-label="Back to start"
         tooltip="Back to the start"
         shortcut="home"
         disabled={atStart}
         onClick={() => props.onFreeze(0)}
       >
-        <SkipBack className="size-3.5" />
+        <SkipBack />
       </Button>
       <Button
         variant="outline"
-        size="icon-2xs"
+        size="icon-sm"
         aria-label="Step back"
         tooltip="Step back a tenth of a second, the slide frozen there; with Shift, a second"
         shortcut="left"
         disabled={atStart}
         onClick={(event) => props.onStep(event, -1)}
       >
-        <StepBack className="size-3.5" />
+        <StepBack />
       </Button>
       <Button
         variant="outline"
-        size="2xs"
+        size="sm"
+        className="min-w-20"
         tooltip={playing ? "Pause" : "Play from the playhead"}
         shortcut="space"
         onClick={props.onPlay}
@@ -444,16 +446,16 @@ function Transport(props: {
       </Button>
       <Button
         variant="outline"
-        size="icon-2xs"
+        size="icon-sm"
         aria-label="Step forward"
         tooltip="Step forward a tenth of a second, the slide frozen there; with Shift, a second"
         shortcut="right"
         disabled={atEnd}
         onClick={(event) => props.onStep(event, 1)}
       >
-        <StepForward className="size-3.5" />
+        <StepForward />
       </Button>
-    </ButtonGroup>
+    </fieldset>
   );
 }
 

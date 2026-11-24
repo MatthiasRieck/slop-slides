@@ -163,6 +163,9 @@ function useMountedTabs(tabs: SidebarTab[], active: SidebarTab | null): SidebarT
   return mounted;
 }
 
+/** How far one line of a mouse wheel that counts in lines scrolls the tab strip, in pixels. */
+const WHEEL_LINE = 16;
+
 /** How far a tab strip can scroll each way, in pixels. */
 interface Overflow {
   left: number;
@@ -171,9 +174,9 @@ interface Overflow {
 
 /**
  * The open tabs, then `+`. The arrows go from tab to tab, Home and End to the ends; a click,
- * Enter or Space shows the tab. When they don't fit, the strip scrolls without a scrollbar: its
- * cut-off ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls
- * into view.
+ * Enter or Space shows the tab. When they don't fit, the strip scrolls without a scrollbar, and
+ * only sideways: its cut-off ends fade out, ‹ › after the `+` scroll it a page at a time, and the
+ * mouse wheel over it scrolls it sideways too. The active tab scrolls into view.
  */
 function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | null }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -190,11 +193,21 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
     };
     measure();
     strip.addEventListener("scroll", measure, { passive: true });
+    // A wheel that turns up and down moves the strip sideways. (Not passive: it keeps the turn
+    // from scrolling anything else.)
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      if (strip.scrollWidth <= strip.clientWidth) return;
+      event.preventDefault();
+      strip.scrollLeft += event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? WHEEL_LINE : 1);
+    };
+    strip.addEventListener("wheel", wheel, { passive: false });
     const observer = new ResizeObserver(measure);
     observer.observe(strip);
     for (const child of strip.children) observer.observe(child);
     return () => {
       strip.removeEventListener("scroll", measure);
+      strip.removeEventListener("wheel", wheel);
       observer.disconnect();
     };
   }, [tabs]);
@@ -217,7 +230,7 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
       <TabsList
         ref={ref}
         aria-label="Sidebar"
-        className="no-scrollbar w-auto min-w-0 justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 group-data-horizontal/tabs:h-auto"
+        className="no-scrollbar w-auto min-w-0 justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-none bg-transparent p-0 group-data-horizontal/tabs:h-auto"
         data-fade={[overflow.left && "left", overflow.right && "right"].filter(Boolean).join(" ") || undefined}
         style={overflowing ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
       >
@@ -255,8 +268,8 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
 }
 
 /**
- * One open tab: its icon and name, then its close button on the trailing edge, which shows on
- * the active tab and while the tab is hovered or holds the focus. A middle click closes it too.
+ * One open tab: its icon and name. Hovering it, or giving it the focus, puts its close button
+ * where its icon is, so the button takes no room of its own. A middle click closes it too.
  */
 function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
   const { label, icon: Icon, close } = TABS[id];
@@ -271,7 +284,7 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
   return (
     <div
       className={cn(
-        "group flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground",
+        "group relative flex shrink-0 items-center rounded-md text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground",
         active && "bg-muted text-foreground",
       )}
     >
@@ -285,9 +298,9 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
           event.preventDefault();
           closeTab();
         }}
-        className="h-auto flex-none gap-1.5 border-0 py-1 pr-1 pl-2 text-xs text-inherit data-active:bg-transparent data-active:text-inherit data-active:shadow-none dark:text-inherit dark:data-active:bg-transparent dark:data-active:text-inherit [&_svg:not([class*='size-'])]:size-3.5"
+        className="h-auto flex-none gap-1.5 border-0 py-1 pr-2.5 pl-2 text-xs text-inherit data-active:bg-transparent data-active:text-inherit data-active:shadow-none dark:text-inherit dark:data-active:bg-transparent dark:data-active:text-inherit [&_svg:not([class*='size-'])]:size-3.5"
       >
-        <Icon />
+        <Icon className="group-focus-within:invisible group-hover:invisible" />
         {label}
         {mark && (
           <span data-testid={`${id}-mark`} title={mark} aria-hidden className="size-1.5 rounded-full bg-primary" />
@@ -300,10 +313,8 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         tooltip={`Close ${label}`}
         tooltipSide="bottom"
         onClick={closeTab}
-        className={cn(
-          "mr-1 size-4.5 rounded-sm opacity-0 hover:bg-foreground/10 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [&_svg:not([class*='size-'])]:size-3.5",
-          active && "opacity-100",
-        )}
+        // Over the icon. Unseen rather than hidden until then, to stay within the keyboard's reach.
+        className="absolute left-1.5 size-4.5 rounded-sm opacity-0 hover:bg-foreground/10 focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [&_svg:not([class*='size-'])]:size-3.5"
       >
         <X />
       </Button>

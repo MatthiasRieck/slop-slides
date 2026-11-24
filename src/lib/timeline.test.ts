@@ -5,7 +5,7 @@ import type { Slide } from "./api";
 import {
   formatShown,
   formatTenths,
-  LEAST_PICTURE,
+  LEAST_STRIP,
   layoutTimeline,
   moveClip,
   moveEdge,
@@ -252,9 +252,10 @@ describe("showsPicture", () => {
     expect(showsPicture(599, 500, 100, 0, 600)).toBe(true);
   });
 
-  it("shows none in a strip with room for only a sliver of it", () => {
-    expect(showsPicture(0, 100 * LEAST_PICTURE, 100, 0, 600)).toBe(true);
-    expect(showsPicture(0, 100 * LEAST_PICTURE - 1, 100, 0, 600)).toBe(false);
+  it("shows the left of it in a strip narrower than the picture, and none in a strip of a few pixels", () => {
+    expect(showsPicture(0, 20, 100, 0, 600)).toBe(true);
+    expect(showsPicture(0, LEAST_STRIP, 100, 0, 600)).toBe(true);
+    expect(showsPicture(0, LEAST_STRIP - 1, 100, 0, 600)).toBe(false);
     // A strip narrower than its picture is in sight as far as it reaches.
     expect(showsPicture(0, 50, 100, 60, 600)).toBe(false);
   });

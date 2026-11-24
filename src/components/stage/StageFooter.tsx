@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   EyeOff,
+  Film,
   LayoutTemplate,
   Lock,
   Search,
@@ -35,7 +36,8 @@ import { isMoved, useShownView, useStageView } from "./stageView";
 import { ZOOM_LEVELS, ZOOM_STEP } from "./usePasteboard";
 
 /**
- * The row under the slide: on the left the search, in the middle the arrows between slides and
+ * The row under the slide: on the left the search and what shows or folds away the deck's
+ * timeline under this row (see NarrationTimeline), in the middle the arrows between slides and
  * where this one is (a field to jump to another), and on the right the zoom, what is wrong with
  * the slide or special about it (hidden, locked), its layout tools and the lint status.
  *
@@ -61,7 +63,7 @@ export const StageFooter = memo(function StageFooter(props: {
   const locked = !!slide?.locked;
   return (
     <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
-      <div className="flex items-center">
+      <div className="flex items-center gap-1">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -71,6 +73,7 @@ export const StageFooter = memo(function StageFooter(props: {
         >
           <Search />
         </Button>
+        <TimelineToggle />
       </div>
       <div className="flex items-center gap-2">
         <Button
@@ -159,6 +162,30 @@ export const StageFooter = memo(function StageFooter(props: {
     </div>
   );
 });
+
+/**
+ * Shows or folds away the timeline under the slide, which has what plays the deck in its own
+ * bar. Named for what it shows either way, its state in whether it is pressed in.
+ */
+function TimelineToggle() {
+  const open = useApp((s) => s.timelineOpen);
+  const playable = useApp((s) => s.deck?.slides.some((slide) => !slide.hidden) ?? false);
+  const label = open ? "Hide the timeline under the slide" : "Show the timeline under the slide";
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      aria-label={label}
+      aria-pressed={open}
+      tooltip={playable ? label : "Every slide is hidden: there is nothing to play"}
+      disabled={!playable}
+      onClick={() => useApp.getState().setTimelineOpen(!open)}
+    >
+      <Film data-icon="inline-start" />
+      Timeline
+    </Button>
+  );
+}
 
 /**
  * Where the slide shown is in the deck, "3 / 20". Pressed, the 3 becomes a field: a number and

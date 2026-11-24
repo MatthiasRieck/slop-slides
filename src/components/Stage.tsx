@@ -30,7 +30,6 @@ import { StageFooter } from "./stage/StageFooter";
 import { usePasteboard } from "./stage/usePasteboard";
 import { useSlideEditing } from "./stage/useSlideEditing";
 import { useSketchKeyboard, useSlideKeyboard } from "./stage/useSlideKeyboard";
-import { TimelineTools } from "./TimelineTools";
 import { ViewToolbar } from "./ViewToolbar";
 
 /**
@@ -150,8 +149,6 @@ export function Stage() {
       {slide && mode === "edit" && locked && (
         <ModeBar>
           <LockedNote slide={slide.id} />
-          {/* The timeline is Edit mode's on a locked slide too, to play the deck and time the others. */}
-          <TimelineTools collapsed={false} />
         </ModeBar>
       )}
       {slide && mode === "view" && (

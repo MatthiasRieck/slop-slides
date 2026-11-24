@@ -151,17 +151,18 @@ export function slideAt(timeline: Timeline, time: number): number {
   return index >= 0 ? index : timeline.slides.length - 1;
 }
 
-/** How much of its picture a filmstrip must have room for to show it, as a part of the picture's width. */
-export const LEAST_PICTURE = 0.25;
+/** How wide a filmstrip must be to show its picture, in pixels: narrower, there is nothing of it to see. */
+export const LEAST_STRIP = 8;
 
 /**
  * Whether a filmstrip shows its picture. A strip has one picture, `picture` wide, at its start;
  * the rest of it is empty film. The strip starts `left` along the track and is `width` wide, and
  * what lies between `from` and `to` of the track is in sight. All in pixels. A strip with room
- * for only a sliver of the picture shows none: a slide nobody could make out is not worth loading.
+ * for less than the whole picture shows the left of it, as far as the strip reaches; only one a
+ * few pixels wide shows none.
  */
 export function showsPicture(left: number, width: number, picture: number, from: number, to: number): boolean {
-  if (!(picture > 0) || !(width >= picture * LEAST_PICTURE)) return false;
+  if (!(picture > 0) || !(width >= LEAST_STRIP)) return false;
   return left < to && left + Math.min(width, picture) > from;
 }
 

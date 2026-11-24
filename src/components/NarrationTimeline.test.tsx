@@ -375,6 +375,10 @@ describe("NarrationTimeline", () => {
     expect([...transport.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(
       ["Back to start", "Step back", "Play", "Step forward"],
     );
+    // Apart from each other, and larger than the rest of the bar's buttons.
+    expect(transport.className).toContain("gap-1.5");
+    expect(transport.getAttribute("data-slot")).not.toBe("button-group");
+    for (const button of transport.querySelectorAll("button")) expect(button.className).toMatch(/\b(size|h)-7\b/);
     const bar = transport.parentElement!;
     expect(bar.className).toContain("grid-cols-[1fr_auto_1fr]");
     expect([...bar.children].indexOf(transport)).toBe(1);
@@ -711,10 +715,23 @@ describe("the slides as strips of film", () => {
     sizes.filmstrip = ["clientHeight", 90];
   });
 
-  it("loads no page for strips too narrow to make a slide out on", () => {
-    // A hundred slides on 1500 pixels: slivers of 15.
-    long(100);
-    expect(screen.getAllByTestId("filmstrip")).toHaveLength(100);
+  it("shows the left of the picture on a strip narrower than it", () => {
+    // Thirty slides on 1500 pixels: strips of 50, under a picture of 160.
+    long(30);
+    expect(pictured().slice(0, 2)).toEqual(["Slide 1", "Slide 2"]);
+    const picture = pictures()[0]!;
+    // The whole picture's width from the strip's start, which cuts off what it has no room for.
+    expect(picture.style.width).toBe("160px");
+    expect(picture.className).toContain("left-0");
+    expect(picture.closest("button")?.className).toContain("overflow-hidden");
+    // Only those in sight are loaded, however many there are.
+    expect(pictures().length).toBeLessThan(30);
+  });
+
+  it("loads no page for strips of a few pixels", () => {
+    // Three hundred slides on 1500 pixels: slivers of 5.
+    long(300);
+    expect(screen.getAllByTestId("filmstrip")).toHaveLength(300);
     expect(pictures()).toEqual([]);
   });
 

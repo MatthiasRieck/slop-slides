@@ -40,7 +40,6 @@ import { CommentsOverview } from "./Comments";
 import { SlideSearch } from "./FindReplace";
 import type { Annotations } from "./PresenterTools";
 import { RibbonRow, RibbonSection, RibbonToggle, useRibbonFit } from "./Ribbon";
-import { TimelineTools } from "./TimelineTools";
 
 const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
   { shape: "rect", label: "Rectangle", icon: SquareDashed },
@@ -63,7 +62,7 @@ const SHOWN = [
  * View mode's tools, in a ribbon like the edit tools': pen, highlighter and eraser for marking up
  * the slide, comments on its elements or on an area outlined with a rectangle, an ellipse or a
  * lasso, the list of the deck's comments, whether the slide plays its animations or shows its
- * final state (and playing them again), the deck's timeline, and the search. Marks
+ * final state (and playing them again), and the search. Marks
  * and comments are saved in the deck file as a review, which can be shown and hidden, and go to
  * the agent with the next chat message: the marks as a screenshot, the comments as the composer
  * says, and each new area comment's screenshot of its area as an image in the composer.
@@ -284,8 +283,7 @@ export const ViewToolbar = memo(function ViewToolbar(props: {
           </RibbonToggle>
         </RibbonRow>
       </RibbonSection>
-      <TimelineTools collapsed={collapsedFrom <= 3} />
-      <RibbonSection title="Find" icon={<Search />} collapsed={collapsedFrom <= 4}>
+      <RibbonSection title="Find" icon={<Search />} collapsed={collapsedFrom <= 3}>
         <SlideSearch />
       </RibbonSection>
     </div>

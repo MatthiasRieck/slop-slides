@@ -610,6 +610,14 @@ describe("ChatPanel: composing", () => {
       fireEvent.click(screen.getByRole("button", { name: "Slide 1" }));
       expect(screen.queryByText("Sketch")).toBeNull();
     });
+
+    it("goes out with an empty message that asks the agent to address it", () => {
+      useApp.setState({ sketches: { intro: [mark] } });
+      render(<ChatPanel />);
+      expect(textarea().placeholder).toBe('Send to say "Please address the sketch.", or write more…');
+      fireEvent.click(sendButton());
+      expect(send).toHaveBeenCalledWith("Please address the sketch.", { includeSlide: true, attachments: [] });
+    });
   });
 
   describe("comments", () => {
@@ -669,6 +677,36 @@ describe("ChatPanel: composing", () => {
       // A changed comment goes along again.
       act(() => useApp.getState().updateComment("intro", "a", "Much bigger"));
       expect(count("1 comment")).toBeTruthy();
+    });
+
+    it("lets an empty message go out with them, asking the agent to address them", () => {
+      render(<ChatPanel />);
+      expect(isOff(sendButton())).toBe(false);
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+      expect(send).toHaveBeenCalledWith("Please address the comments.", { includeSlide: true, attachments: [] });
+    });
+
+    it("sends what is typed as it is, the comments along with it", () => {
+      render(<ChatPanel />);
+      type("Use blue");
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+      expect(send).toHaveBeenCalledWith("Use blue", { includeSlide: true, attachments: [] });
+    });
+
+    it("sends no empty message once none of them goes along", () => {
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: "Don't send comments" }));
+      expect(isOff(sendButton())).toBe(true);
+      expect(textarea().placeholder).toBe("Ask for slides or changes…");
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("queues an empty message with them while the agent works", () => {
+      useApp.setState({ running: true });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+      expect(send).toHaveBeenCalledWith("Please address the comments.", { includeSlide: true, attachments: [] });
     });
 
     it("is not sent while the review is hidden", () => {

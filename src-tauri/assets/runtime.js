@@ -74,6 +74,52 @@
     });
   }
 
+  // Presented by hand, a slide shows as it ends up. Animations timed to the narration (delayed
+  // by TIMED_MS or more, as the linter takes them, see TIMED_DELAY in src-tauri/src/lint/css.rs)
+  // only play out while the app plays the show ({ type: "slop:playing", playing }) and in
+  // captures, which have a clock; otherwise nobody says the words they wait for. So each is
+  // put on its last frame as its slide shows: what came in is there, what left again is gone.
+  // One that repeats forever skips its wait and runs, and so does everything else: entrances,
+  // and loops that carry on across slides. The editor's previews (`embed`) are left to the
+  // editor, and stills and captures to what renders them.
+  var TIMED_MS = 1000;
+  var playing = false;
+  // Animations the narration clock or `settle` took over (see keepTime), the ones resting on
+  // their last frame, and the ones held at a moment.
+  var driven = typeof WeakSet === "function" ? new WeakSet() : null;
+  var ended = driven && new WeakSet();
+  var held = driven && new WeakSet();
+  function settle() {
+    var slide = slides[current];
+    if (embed || still || playing || !slide || !driven || !document.getAnimations) return;
+    document.getAnimations().forEach(function (animation) {
+      var effect = animation.effect;
+      var target = effect && effect.target;
+      if (typeof animation.animationName !== "string" || !target || !slide.contains(target)) return;
+      // Paused on purpose by the deck's styles.
+      if (animation.playState === "paused" && !ended.has(animation) && !held.has(animation)) return;
+      var timing = effect.getComputedTiming();
+      if (!driven.has(animation)) {
+        var began = animation.startTime;
+        if (shownAt !== null && began !== null && began < shownAt - 50) return;
+        if (!(timing.delay >= TIMED_MS)) return;
+        driven.add(animation);
+      }
+      ended.delete(animation);
+      held.delete(animation);
+      if (timing.endTime === Infinity) {
+        if (!(animation.currentTime >= timing.delay)) animation.currentTime = timing.delay || 0;
+        if (animation.playState === "paused") animation.play();
+        return;
+      }
+      try {
+        animation.finish();
+      } catch (e) {
+        // One that cannot end (a playback rate of 0) stays as it is.
+      }
+    });
+  }
+
   function show(index) {
     index = Math.min(slides.length - 1, Math.max(0, index));
     if (index === current) return;
@@ -91,6 +137,7 @@
         el.classList.toggle("active", i === index);
       });
       shownAt = document.timeline ? document.timeline.currentTime : null;
+      settle();
     }
     if (canMorph) {
       morphNames(slides[previous], true);
@@ -459,9 +506,6 @@
   // moved once it drifted, so nothing stutters. With `paused`, they are held at `at` instead of
   // running on from it (the timeline's playhead while it does not play), and `at: null` lets
   // the ones held so run again.
-  var driven = typeof WeakSet === "function" ? new WeakSet() : null;
-  var ended = driven && new WeakSet();
-  var held = driven && new WeakSet();
   function releaseTime() {
     if (!held || !document.getAnimations) return;
     document.getAnimations().forEach(function (animation) {
@@ -518,13 +562,19 @@
   // and goes with the pointer, whose moves over the slide only this page sees: it says so, and how
   // far above the bottom the pointer is ({ type: "slop:pointer", bottom }, at most every
   // POINTER_MS, often enough for the controls to follow), and hides the cursor while the
-  // presenter says the pointer rests ({ type: "slop:idle", idle }).
+  // presenter says the pointer rests ({ type: "slop:idle", idle }). It also says whether it
+  // plays the show by itself ({ type: "slop:playing", playing }, see `settle`).
   var POINTER_MS = 50;
   var pointerTold = 0;
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (!framed || !data) return;
     if (data.type === "slop:go") navigate(String(data.key), !!data.shift);
+    if (data.type === "slop:playing") {
+      playing = !!data.playing;
+      // Stopped, the slide shows as it ends up again; playing, the narration clock has it.
+      settle();
+    }
     if (data.type === "slop:idle") {
       if (data.idle) root.setAttribute("data-slop-idle", "");
       else root.removeAttribute("data-slop-idle");

@@ -21,7 +21,8 @@ use deck::{
 };
 use markup::check_markup;
 use styles::{
-    check_entrances, check_slide_id_styles, check_theme_colors, check_tilts, check_untimed_delays,
+    check_entrances, check_slide_id_styles, check_theme_colors, check_tilts, check_timed_exits,
+    check_untimed_delays,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -247,6 +248,7 @@ pub fn lint_parsed(
     check_entrances(&mut l);
     check_tilts(&mut l);
     check_untimed_delays(&mut l);
+    check_timed_exits(&mut l);
     check_morphs(&mut l);
     check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);

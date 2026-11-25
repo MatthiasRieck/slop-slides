@@ -1,5 +1,5 @@
-//! What the linter looks for in CSS: selectors that name slide ids, animation delays, 3D tilts,
-//! and entrance keyframes. Plain text in, positions out; [`super::styles`] reports them.
+//! What the linter looks for in CSS: selectors that name slide ids, animation delays, timed
+//! exits, 3D tilts, and entrance keyframes. Plain text in, positions out; [`super::styles`] reports them.
 
 use std::collections::HashSet;
 
@@ -68,10 +68,9 @@ pub(super) const STEEPEST_TILT: f64 = 45.0;
 /// The shortest animation delay taken to time something to its slide, in seconds.
 const TIMED_DELAY: f64 = 1.0;
 
-/// The rules of `css` (outside `@keyframes`) that delay an animation to time it without being
-/// under `.active`: where each starts, and its selector. `easings` are custom properties that
-/// hold an easing, not a time.
-pub(super) fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(usize, &'a str)> {
+/// The style rules of `css` (outside `@keyframes`): where each starts, its selector as written,
+/// and its declarations.
+fn style_rules(css: &str) -> Vec<(usize, &str, &str)> {
     let mut found = Vec::new();
     let bytes = css.as_bytes();
     // Where the text since the last rule (a selector or an at-rule's prelude) starts.
@@ -112,13 +111,9 @@ pub(super) fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(
                     head = i + 1;
                 } else {
                     let body_end = css[i..].find('}').map_or(css.len(), |e| i + e);
-                    let body = &css[i + 1..body_end];
                     let selector = &css[head..i];
-                    let ungated = selector.split(',').any(|part| !part.contains(".active"));
-                    if ungated && delays_to_time(body, easings) {
-                        let lead = selector.len() - selector.trim_start().len();
-                        found.push((head + lead, selector));
-                    }
+                    let lead = selector.len() - selector.trim_start().len();
+                    found.push((head + lead, selector, &css[i + 1..body_end]));
                     i = body_end;
                     head = i + 1;
                 }
@@ -127,6 +122,127 @@ pub(super) fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(
             _ => {}
         }
         i += 1;
+    }
+    found
+}
+
+/// The rules of `css` (outside `@keyframes`) that delay an animation to time it without being
+/// under `.active`: where each starts, and its selector. `easings` are custom properties that
+/// hold an easing, not a time.
+pub(super) fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(usize, &'a str)> {
+    style_rules(css)
+        .into_iter()
+        .filter(|(_, selector, body)| {
+            let ungated = selector.split(',').any(|part| !part.contains(".active"));
+            ungated && delays_to_time(body, easings)
+        })
+        .map(|(at, selector, _)| (at, selector))
+        .collect()
+}
+
+/// The names of the `@keyframes` in `css` whose last frame (`to` or `100%`) hides what they
+/// animate: no opacity, no size, or not shown at all.
+pub(super) fn hiding_keyframes(css: &str) -> HashSet<&str> {
+    let mut found = HashSet::new();
+    for (at, _) in css.match_indices("@keyframes") {
+        let rest = &css[at + "@keyframes".len()..];
+        let Some(brace) = rest.find('{') else {
+            continue;
+        };
+        let name = rest[..brace].trim();
+        // Each frame is `selectors { declarations }`; the block ends at a `}` with none open.
+        let mut frames = &rest[brace + 1..];
+        while let Some(open) = frames.find('{') {
+            if frames[..open].contains('}') {
+                break;
+            }
+            let close = frames[open..].find('}').map_or(frames.len(), |e| open + e);
+            let last = frames[..open]
+                .split(',')
+                .any(|stop| matches!(stop.trim(), "to" | "100%"));
+            if last && !name.is_empty() && hides(&frames[open + 1..close]) {
+                found.insert(name);
+            }
+            frames = frames.get(close + 1..).unwrap_or("");
+        }
+    }
+    found
+}
+
+/// Whether `declarations` leave an element unseen.
+fn hides(declarations: &str) -> bool {
+    declarations.split(';').any(|declaration| {
+        let Some((name, value)) = declaration.split_once(':') else {
+            return false;
+        };
+        let value = value.trim().trim_end_matches("!important").trim();
+        let zero = |v: &str| v.trim_end_matches('%').parse::<f64>() == Ok(0.0);
+        match name.trim().to_ascii_lowercase().as_str() {
+            "opacity" => zero(value),
+            "visibility" => value.eq_ignore_ascii_case("hidden"),
+            "display" => value.eq_ignore_ascii_case("none"),
+            "scale" => !value.is_empty() && value.split_whitespace().all(zero),
+            "transform" => {
+                let value = value.to_ascii_lowercase().replace(' ', "");
+                value.contains("scale(0)") || value.contains("scale(0,0)")
+            }
+            _ => false,
+        }
+    })
+}
+
+/// The rules of `css` under `.active` that time an animation to its slide (see
+/// [`delays_to_time`]) which leaves what it animates hidden: where each starts, its selector,
+/// and the keyframes, one of `hiding`, that it ends on. An animation that does not keep its last
+/// frame (no `forwards` or `both`) hides nothing once it is over.
+pub(super) fn timed_exits<'a>(
+    css: &'a str,
+    easings: &HashSet<&str>,
+    hiding: &HashSet<&'a str>,
+) -> Vec<(usize, &'a str, &'a str)> {
+    let keeps = |words: &[&str]| words.iter().any(|w| matches!(*w, "forwards" | "both"));
+    let mut found = Vec::new();
+    for (at, selector, body) in style_rules(css) {
+        if !selector.contains(".active") {
+            continue;
+        }
+        // What the rule sets apart from the shorthand: names, delays and whether it keeps the end.
+        let mut names: Vec<&str> = Vec::new();
+        let mut kept = false;
+        let mut exit = None;
+        for declaration in body.split(';') {
+            let Some((name, value)) = declaration.split_once(':') else {
+                continue;
+            };
+            let value = value.trim().trim_end_matches("!important").trim();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "animation-name" => names.extend(value.split(',').map(str::trim)),
+                "animation-fill-mode" => kept |= keeps(&css_words(&value.replace(',', " "))),
+                "animation" => {
+                    for one in value.split(',') {
+                        let words = css_words(one);
+                        let name = words.iter().find_map(|w| hiding.get(w).copied());
+                        if let Some(name) = name.filter(|_| {
+                            keeps(&words) && delays_to_time(&format!("animation:{one}"), easings)
+                        }) {
+                            exit.get_or_insert(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Set apart, the names, the delays and the fill mode are lists of their own.
+        let apart = names.iter().find_map(|n| hiding.get(n).copied());
+        let delayed = body.split(';').any(|d| {
+            d.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("animation-delay")
+                && delays_to_time(d, easings)
+        });
+        if let Some(name) = exit.or(apart.filter(|_| kept && delayed)) {
+            found.push((at, selector, name));
+        }
     }
     found
 }

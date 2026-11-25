@@ -187,6 +187,13 @@ export function Presenter() {
   );
   // While it plays, the slide's animations keep with the narration.
   useEffect(() => onSlideClock(() => postSlideClock(frameRef.current, null)), []);
+  // Presented by hand, the player shows each slide as it ends up, without the animations timed
+  // to the narration (see `settle` in src-tauri/assets/runtime.js): it is told when the show plays.
+  const playing = autoplay.playing;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `post` reads the frame there is.
+  useEffect(() => {
+    post({ type: "slop:playing", playing });
+  }, [playing]);
 
   if (!deck) return null;
   const shown = deck.slides.filter((s) => !s.hidden);
@@ -212,6 +219,7 @@ export function Presenter() {
             onLoad={(event) => {
               event.currentTarget.focus();
               post({ type: "slop:idle", idle });
+              post({ type: "slop:playing", playing });
             }}
             className="size-full border-0"
           />

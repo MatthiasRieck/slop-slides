@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, onTestFinished as afterThis, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, FindMatch, Section } from "../lib/api";
 import { flushReviewSave, useApp } from "../store";
@@ -1266,6 +1266,20 @@ describe("the menu of a right-click", () => {
     fireEvent.click(choice("Copy screenshot"));
     expect(copySlideScreenshot).toHaveBeenCalledWith("intro");
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens the slide's menu for a right-click anywhere on its picture, not the frame's own", () => {
+    render(<SlideRail />);
+    const button = thumb(2);
+    const cover = button.querySelector("[data-thumbnail-cover]")!;
+    // The cover lies over the slide's frame, inside the button, so the right-click is the rail's.
+    expect(button.lastElementChild).toBe(cover);
+    expect(cover.className).toContain("inset-0");
+    const event = createEvent.contextMenu(cover, { clientX: 30, clientY: 40 });
+    fireEvent(cover, event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menu", { name: "Slide" })).toBeTruthy();
+    expect(choice("Copy screenshot")).toBeTruthy();
   });
 
   it("opens no menu for a right-click between the rows", () => {

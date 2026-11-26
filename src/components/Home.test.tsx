@@ -288,6 +288,93 @@ describe("Home", () => {
       expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
     });
 
+    it("keeps no folder that did not open", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      fireEvent.click(asDefault()!);
+      const answer = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "open_workspace") throw "decks is already open in another window.";
+        return answer(command, args);
+      });
+      await act(async () => fireEvent.click(createButton()));
+      expect(lastError(useApp.getState())).toBe("decks is already open in another window.");
+      expect(sent("update_settings")).toEqual([]);
+      expect(useApp.getState().settings.libraryFolder).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
+    });
+
+    it("still creates the deck in the folder when the settings cannot keep it", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      fireEvent.click(asDefault()!);
+      const answer = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "update_settings") throw "cannot save the settings";
+        return answer(command, args);
+      });
+      await act(async () => fireEvent.click(createButton()));
+      expect(lastError(useApp.getState())).toBe("cannot save the settings");
+      expect(useApp.getState().settings.libraryFolder).toBeNull();
+      expect(sent("open_workspace")).toEqual([{ path: PICKED }]);
+      expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
+    });
+
+    it("asks of each folder chosen whether it is for all new decks", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      fireEvent.click(asDefault()!);
+      // The dialog starts at the folder chosen last.
+      openDialog.mockResolvedValue("/Volumes/work/other");
+      await act(async () => fireEvent.click(change()));
+      expect(openDialog).toHaveBeenLastCalledWith(expect.objectContaining({ defaultPath: PICKED }));
+      expect(location().textContent).toBe("/Volumes/work/other");
+      expect(asDefault()?.getAttribute("aria-checked")).toBe("false");
+      // The same folder chosen again keeps its tick.
+      fireEvent.click(asDefault()!);
+      await act(async () => fireEvent.click(change()));
+      expect(asDefault()?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("imports a PowerPoint file into the folder chosen", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      fireEvent.click(asDefault()!);
+      openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
+      fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("import_pptx", { path: "/Users/me/Downloads/q3.pptx" }));
+      expect(sent("open_workspace")).toEqual([{ path: PICKED }]);
+      expect(sent("library_folder")).not.toContainEqual({ create: true });
+      expect(sent("update_settings")).toEqual([{ patch: { libraryFolder: PICKED } }]);
+    });
+
+    it("says what the location row and its button are about", async () => {
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      const row = screen.getByRole("group", { name: "Location" });
+      expect(row.contains(location())).toBe(true);
+      expect(row.contains(change())).toBe(true);
+      expect(change().getAttribute("aria-describedby")).toBe(location().id);
+    });
+
+    it("takes no change of location while a deck is being created", async () => {
+      const release = held();
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      fireEvent.click(createButton());
+      await waitFor(() => expect(createButton().textContent).toBe("Creating…"));
+      expect((change() as HTMLButtonElement).closest("fieldset")?.disabled).toBe(true);
+      await act(async () => release());
+    });
+
     it("stays where it was when the dialog is cancelled", async () => {
       openDialog.mockResolvedValue(null);
       render(<Home />);
@@ -329,8 +416,12 @@ describe("Home", () => {
         "Cannot use the folder H:\\SlopSlide: the drive is away. Choose another location.",
       );
       expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
-      // The form is back, to choose another location.
+      // The form is back, to choose another location; the settings are where the library is changed.
       expect(createButton().disabled).toBe(false);
+      const toast = useApp.getState().toasts.at(-1);
+      expect(toast?.action?.label).toBe("Settings");
+      act(() => toast?.action?.run());
+      expect(useApp.getState().settingsSection).toBe("general");
     });
 
     it("names the place while it is not known where the library is", async () => {

@@ -344,7 +344,13 @@ pub fn create(root: &Path, title: &str, template: Option<TemplateSource>) -> Res
         title
     };
     let dir = unique_dir(root, &html::slugify(title));
-    fs::create_dir_all(&dir)?;
+    // Said with the folder: it is the user's own choice of place, and may not take a deck.
+    fs::create_dir_all(&dir).map_err(|e| {
+        Error::msg(format!(
+            "Cannot create the deck in {}: {e}. Choose another location.",
+            root.display()
+        ))
+    })?;
     let source = match template {
         Some(t) => templates::deck_shell(t.html, t.id, title),
         None => html::set_title(DECK_TEMPLATE, title),
@@ -1557,6 +1563,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("deck not found"), "{err}");
+    }
+
+    #[test]
+    fn a_location_that_takes_no_deck_is_named_in_the_error() {
+        let lib = TempLib::new();
+        // A file where the location should be: no folder can be made in it.
+        let taken = lib.0.join("taken");
+        fs::write(&taken, b"a file").unwrap();
+        let error = create(&taken, "Talk", None).unwrap_err().to_string();
+        assert!(
+            error.starts_with(&format!("Cannot create the deck in {}: ", taken.display())),
+            "{error}"
+        );
+        assert!(error.ends_with("Choose another location."), "{error}");
     }
 
     #[test]

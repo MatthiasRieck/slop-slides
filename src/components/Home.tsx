@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
 import { useShellKeys } from "../hooks/useShellKeys";
-import { api, type RecentDeck, type RecentWorkspace } from "../lib/api";
+import { api, errorMessage, type RecentDeck, type RecentWorkspace } from "../lib/api";
 import { type Openable, openableOf } from "../lib/opening";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { basename, cn, dirname, isMac, relativeTime } from "../lib/utils";
@@ -26,8 +26,17 @@ const fieldLabel = "text-xs text-muted-foreground";
  * is missing) without one. False when it did not open.
  */
 async function openDeckFolder(folder?: string | null): Promise<boolean> {
+  const app = useApp.getState();
+  let library: string;
   try {
-    await useApp.getState().openWorkspace(folder ?? (await api.libraryFolder(true)));
+    library = folder ?? (await api.libraryFolder(true));
+  } catch (error) {
+    // The library cannot be used (a drive that is away, say): the settings are where another is chosen.
+    app.showToast("error", errorMessage(error), { label: "Settings", run: () => app.openSettings("general") });
+    return false;
+  }
+  try {
+    await app.openWorkspace(library);
   } catch (error) {
     showError(error);
   }
@@ -37,11 +46,11 @@ async function openDeckFolder(folder?: string | null): Promise<boolean> {
 const openLibrary = () => openDeckFolder();
 
 /**
- * Where the start screen's form creates its deck: the library (`api.libraryFolder`, read again
- * when the settings name another), or the folder `picked` for this deck instead, which
- * `asDefault` makes the library from then on.
+ * Where the start screen creates a deck or imports one: the library (`api.libraryFolder`, read
+ * again when the settings name another), or the folder `picked` instead, which `asDefault` makes
+ * the library from then on.
  */
-function useDeckLocation(enabled: boolean) {
+function useDeckLocation() {
   const saved = useApp((s) => s.settings.libraryFolder);
   const [library, setLibrary] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -49,7 +58,6 @@ function useDeckLocation(enabled: boolean) {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `saved` is why the library is read again
   useEffect(() => {
-    if (!enabled) return;
     let gone = false;
     // Without it (the browser preview), the form leaves the path out; creating a deck says why.
     Promise.resolve()
@@ -61,7 +69,7 @@ function useDeckLocation(enabled: boolean) {
     return () => {
       gone = true;
     };
-  }, [enabled, saved]);
+  }, [saved]);
 
   /** The folder picked, while it is another than the library. */
   const custom = picked !== null && picked !== library ? picked : null;
@@ -69,20 +77,29 @@ function useDeckLocation(enabled: boolean) {
   const change = async () => {
     try {
       const folder = await pickFolder("Choose where to create the deck", custom ?? library);
-      if (folder) setPicked(folder);
+      if (!folder) return;
+      setPicked(folder);
+      // Asked of each folder anew: a tick for the last one says nothing of this one.
+      if (folder !== picked) setAsDefault(false);
     } catch (error) {
       showError(error);
     }
   };
 
-  /** Gets the folder open as the workspace, the library first set to it if asked; false when it did not open. */
+  /**
+   * Gets the folder open as the workspace; false when it did not open. Only a folder that
+   * opened becomes the library, if that was asked: one that cannot be used is not kept.
+   */
   const open = async (): Promise<boolean> => {
+    if (!(await openDeckFolder(custom))) return false;
     if (custom && asDefault) await useApp.getState().updateSettings({ libraryFolder: custom });
-    return openDeckFolder(custom);
+    return true;
   };
 
   return { path: custom ?? library, custom: custom !== null, asDefault, setAsDefault, change, open };
 }
+
+type DeckLocation = ReturnType<typeof useDeckLocation>;
 
 /**
  * Importing a PowerPoint file as a new deck: `importing` names the file while its import runs,
@@ -208,7 +225,8 @@ export function Home() {
   const [recent, setRecent] = useState(lastRecent);
   const decks = recent?.decks ?? null;
   const folders = recent?.folders ?? null;
-  const pptx = usePptxImport(openLibrary);
+  const location = useDeckLocation();
+  const pptx = usePptxImport(location.open);
   useShellKeys();
 
   const refresh = () =>
@@ -258,8 +276,8 @@ export function Home() {
         <div className="mx-auto flex max-w-3xl flex-col gap-8 px-8 py-10">
           <NewDeckForm
             heading="New deck"
-            hint="The deck gets a folder of its own in this location, named after its title."
-            chooseLocation
+            hint="A new deck, also one imported from PowerPoint, gets a folder of its own in this location, named after its title."
+            location={location}
             disabled={pptx.importing !== null}
             autoFocus
           />
@@ -396,8 +414,8 @@ function RecentRow(props: {
 const recentList = "flex flex-col divide-y overflow-hidden rounded-lg border bg-card";
 
 /**
- * Title and style for a new deck, created in the open workspace. With `chooseLocation` (the
- * start screen, where no workspace is open) the form also says where the deck goes, the library
+ * Title and style for a new deck, created in the open workspace. With a `location` (the start
+ * screen, where no workspace is open) the form also says where the deck goes, the library
  * unless another folder is chosen, and opens that folder first; the deck is not created when it
  * does not open. While the deck is being created, or while
  * `disabled`, the form takes no input, so it is not sent twice. Only the start screen's form
@@ -407,7 +425,7 @@ const recentList = "flex flex-col divide-y overflow-hidden rounded-lg border bg-
 export function NewDeckForm(props: {
   heading: string;
   hint?: string;
-  chooseLocation?: boolean;
+  location?: DeckLocation;
   disabled?: boolean;
   autoFocus?: boolean;
 }) {
@@ -419,7 +437,9 @@ export function NewDeckForm(props: {
   const titleId = useId();
   const styleId = useId();
   const defaultId = useId();
-  const location = useDeckLocation(!!props.chooseLocation);
+  const locationId = useId();
+  const pathId = useId();
+  const { location } = props;
   const off = creating || props.disabled;
 
   const create = async (event: React.FormEvent) => {
@@ -428,7 +448,7 @@ export function NewDeckForm(props: {
     busy.current = true;
     setCreating(true);
     try {
-      if (props.chooseLocation && !(await location.open())) return;
+      if (location && !(await location.open())) return;
       await useApp.getState().createDeck(title.trim() || "Untitled deck", template);
     } finally {
       busy.current = false;
@@ -474,11 +494,15 @@ export function NewDeckForm(props: {
             )}
           </Button>
         </div>
-        {props.chooseLocation && (
+        {location && (
           <div className="flex min-w-0 flex-col gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className={cn(fieldLabel, "shrink-0")}>Location</span>
+            {/* biome-ignore lint/a11y/useSemanticElements: a fieldset inside the form's own would not lay out in a row */}
+            <div role="group" aria-labelledby={locationId} className="flex min-w-0 items-center gap-2">
+              <span id={locationId} className={cn(fieldLabel, "shrink-0")}>
+                Location
+              </span>
               <span
+                id={pathId}
                 data-testid="deck-location"
                 title={location.path ?? undefined}
                 className="selectable min-w-0 flex-1 truncate rounded-md border bg-muted px-2 py-1 font-mono text-xs"
@@ -489,7 +513,8 @@ export function NewDeckForm(props: {
                 type="button"
                 variant="outline"
                 size="xs"
-                tooltip="Choose another folder for this deck"
+                aria-describedby={pathId}
+                tooltip="Choose another folder for new decks"
                 onClick={() => void location.change()}
               >
                 <FolderOpen data-icon="inline-start" />

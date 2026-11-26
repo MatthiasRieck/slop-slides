@@ -28,6 +28,7 @@ describe("the browser preview's settings", () => {
       appearance: "dark",
       rewind: "ask",
       providers: { claude: { enabled: true }, codex: { enabled: false }, copilot: { enabled: true } },
+      libraryFolder: null,
     });
     expect(await ask("get_settings")).toEqual(changed);
     expect(emit).toHaveBeenCalledWith(SETTINGS_CHANGED, changed);

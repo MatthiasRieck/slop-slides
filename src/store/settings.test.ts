@@ -21,6 +21,7 @@ describe("the app's settings", () => {
       appearance: "dark",
       rewind: "deck",
       providers: { claude: { enabled: true }, codex: { enabled: false }, copilot: { enabled: true } },
+      libraryFolder: "/Volumes/work/decks",
     };
     hand(handed);
     expect((await freshStore()).getState().settings).toEqual(handed);
@@ -32,6 +33,7 @@ describe("the app's settings", () => {
       appearance: "system",
       rewind: "ask",
       providers: { claude: { enabled: true }, codex: { enabled: true }, copilot: { enabled: true } },
+      libraryFolder: null,
     });
   });
 

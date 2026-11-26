@@ -18,6 +18,15 @@ export async function chooseDeck() {
   if (path && !Array.isArray(path)) await useApp.getState().openDeckFile(path);
 }
 
+/**
+ * Asks for a folder to keep decks in, under `title` and starting at `from`; one can be made in
+ * the dialog. Null when the user cancels.
+ */
+export async function pickFolder(title: string, from?: string | null): Promise<string | null> {
+  const path = await open({ directory: true, title, defaultPath: from ?? undefined, canCreateDirectories: true });
+  return path && !Array.isArray(path) ? path : null;
+}
+
 /** Asks for a PowerPoint file to import; null when the user cancels. */
 export async function pickPptx(): Promise<string | null> {
   const path = await open({

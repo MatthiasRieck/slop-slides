@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import type { RecentDeck, RecentWorkspace } from "../lib/api";
+import { type AppSettings, defaultSettings, patchSettings, type SettingsPatch } from "../lib/settings";
 import { useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -26,12 +27,15 @@ const LIBRARY = "/Users/me/Documents/SlopSlide";
 let recent: RecentWorkspace[];
 let recentDecks: RecentDeck[];
 let importSkipped: string[];
+/** The app's settings, as the backend keeps them. */
+let settings: AppSettings;
 /** Held, the backend answers `create_deck` and `import_pptx` only once it is let go. */
 let hold: Promise<void> | null;
 
 beforeEach(() => {
   localStorage.clear();
   importSkipped = [];
+  settings = defaultSettings();
   hold = null;
   dragDrop = null;
   unlistenDragDrop.mockClear();
@@ -40,8 +44,12 @@ beforeEach(() => {
     { path: "/Users/me/work/q3", name: "q3", openedMs: NOW - 3 * 3_600_000 },
   ];
   recentDecks = [];
-  invoke.mockReset().mockImplementation(async (command: string, args?: { path?: string; id?: string }) => {
+  type Args = { path?: string; id?: string; patch?: SettingsPatch };
+  invoke.mockReset().mockImplementation(async (command: string, args?: Args) => {
     switch (command) {
+      case "update_settings":
+        settings = patchSettings(settings, args?.patch ?? {});
+        return settings;
       case "recent_workspaces":
         return recent;
       case "recent_decks":
@@ -53,7 +61,7 @@ beforeEach(() => {
         recentDecks = recentDecks.filter((d) => d.path !== args?.path);
         return;
       case "library_folder":
-        return LIBRARY;
+        return settings.libraryFolder ?? LIBRARY;
       case "open_workspace":
         return { path: args?.path, name: args?.path?.split("/").pop() };
       case "create_deck":
@@ -79,7 +87,7 @@ beforeEach(() => {
     }
   });
   openDialog.mockReset();
-  useApp.setState({ workspace: null, openedFile: null, deck: null, toasts: [] });
+  useApp.setState({ workspace: null, openedFile: null, deck: null, toasts: [], settings });
 });
 
 const rows = () => screen.queryAllByRole("listitem");
@@ -215,6 +223,124 @@ describe("Home", () => {
     await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
     expect(lastError(useApp.getState())).toBe("not a folder");
     expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
+  });
+
+  describe("where the new deck goes", () => {
+    const PICKED = "/Volumes/work/decks";
+    const location = () => screen.getByTestId("deck-location");
+    const change = () => screen.getByRole("button", { name: "Change…" });
+    const asDefault = () => screen.queryByRole("checkbox", { name: "Use this folder for all new decks" });
+    /** The commands sent so far, by name. */
+    const sent = (command: string) => invoke.mock.calls.filter(([name]) => name === command).map(([, args]) => args);
+
+    it("shows the library as the location, without making the folder", async () => {
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      expect(location().title).toBe(LIBRARY);
+      expect(sent("library_folder")).toEqual([{ create: false }]);
+      // Nothing to make the default while the location is the default.
+      expect(asDefault()).toBeNull();
+    });
+
+    it("makes the library only when a deck is created in it", async () => {
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(createButton()));
+      expect(sent("library_folder")).toContainEqual({ create: true });
+      expect(sent("update_settings")).toEqual([]);
+    });
+
+    it("creates the deck in the folder chosen, for this deck only", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      // The dialog starts where the deck would go, and can make a folder.
+      expect(openDialog).toHaveBeenCalledWith({
+        directory: true,
+        title: "Choose where to create the deck",
+        defaultPath: LIBRARY,
+        canCreateDirectories: true,
+      });
+      expect(location().textContent).toBe(PICKED);
+      expect(asDefault()?.getAttribute("aria-checked")).toBe("false");
+      fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
+      await act(async () => fireEvent.click(createButton()));
+      expect(sent("open_workspace")).toEqual([{ path: PICKED }]);
+      expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: null });
+      expect(sent("update_settings")).toEqual([]);
+      expect(useApp.getState().settings.libraryFolder).toBeNull();
+    });
+
+    it("keeps the folder chosen for all new decks when asked to", async () => {
+      openDialog.mockResolvedValue(PICKED);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      fireEvent.click(asDefault()!);
+      expect(asDefault()?.getAttribute("aria-checked")).toBe("true");
+      // Not kept before the deck is created: the form can still be left as it is.
+      expect(sent("update_settings")).toEqual([]);
+      await act(async () => fireEvent.click(createButton()));
+      expect(sent("update_settings")).toEqual([{ patch: { libraryFolder: PICKED } }]);
+      expect(useApp.getState().settings.libraryFolder).toBe(PICKED);
+      expect(sent("open_workspace")).toEqual([{ path: PICKED }]);
+      expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
+    });
+
+    it("stays where it was when the dialog is cancelled", async () => {
+      openDialog.mockResolvedValue(null);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      expect(location().textContent).toBe(LIBRARY);
+      expect(asDefault()).toBeNull();
+    });
+
+    it("offers no default to keep when the library itself is chosen", async () => {
+      openDialog.mockResolvedValue(LIBRARY);
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+      await act(async () => fireEvent.click(change()));
+      expect(asDefault()).toBeNull();
+    });
+
+    it("follows the folder the settings name, also when they change", async () => {
+      settings = patchSettings(settings, { libraryFolder: "/Users/me/decks" });
+      useApp.setState({ settings });
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe("/Users/me/decks"));
+      // Changed in the settings, here or in another window.
+      settings = patchSettings(settings, { libraryFolder: null });
+      act(() => useApp.setState({ settings }));
+      await waitFor(() => expect(location().textContent).toBe(LIBRARY));
+    });
+
+    it("does not create the deck in a folder that cannot be made", async () => {
+      invoke.mockImplementation(async (command: string, args?: { create?: boolean }) => {
+        if (command !== "library_folder") return [];
+        if (args?.create) throw "Cannot use the folder H:\\SlopSlide: the drive is away. Choose another location.";
+        return "H:\\SlopSlide";
+      });
+      render(<Home />);
+      await waitFor(() => expect(location().textContent).toBe("H:\\SlopSlide"));
+      await act(async () => fireEvent.click(createButton()));
+      expect(lastError(useApp.getState())).toBe(
+        "Cannot use the folder H:\\SlopSlide: the drive is away. Choose another location.",
+      );
+      expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
+      // The form is back, to choose another location.
+      expect(createButton().disabled).toBe(false);
+    });
+
+    it("names the place while it is not known where the library is", async () => {
+      invoke.mockImplementation(async () => {
+        throw "no app";
+      });
+      render(<Home />);
+      await act(async () => {});
+      expect(location().textContent).toBe("SlopSlide library");
+    });
   });
 
   /** The style the new deck's form shows as picked. */

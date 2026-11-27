@@ -17,7 +17,7 @@ const CASES = [
   ["forgetWorkspace", () => api.forgetWorkspace("/ws"), "forget_workspace", { path: "/ws" }],
   ["recentDecks", () => api.recentDecks(), "recent_decks", undefined],
   ["forgetDeck", () => api.forgetDeck("/ws/deck.html"), "forget_deck", { path: "/ws/deck.html" }],
-  ["libraryFolder", () => api.libraryFolder(), "library_folder", undefined],
+  ["libraryFolder", () => api.libraryFolder(), "library_folder", { create: false }],
   ["listDir", () => api.listDir("talks"), "list_dir", { path: "talks" }],
   ["openFile", () => api.openFile("talks/q3.html"), "open_file", { path: "talks/q3.html" }],
   ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
@@ -432,6 +432,11 @@ describe("api", () => {
     await expect(call()).resolves.toBe("result");
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]).toEqual(args === undefined ? [command] : [command, args]);
+  });
+
+  it("libraryFolder asks for the folder to be made only when told to", async () => {
+    await api.libraryFolder(true);
+    expect(invoke).toHaveBeenLastCalledWith("library_folder", { create: true });
   });
 
   it("createDeck passes the chosen template", async () => {

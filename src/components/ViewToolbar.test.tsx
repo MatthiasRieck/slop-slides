@@ -9,7 +9,7 @@ import { useFindShortcut } from "./FindReplace";
 import type { Annotations } from "./PresenterTools";
 import { ViewToolbar } from "./ViewToolbar";
 
-const SECTIONS = ["Mark up", "Review", "Animations", "Timeline", "Find"];
+const SECTIONS = ["Mark up", "Review", "Animations", "Find"];
 const SECTION_WIDTH = 200;
 
 let resize: ResizeObserverCallback | null = null;
@@ -91,7 +91,6 @@ describe("ViewToolbar ribbon", () => {
 
   it("groups its tools in captioned sections, like the edit ribbon", () => {
     render(toolbar());
-    // The Timeline section's toggle is called "Timeline" too, under its caption.
     for (const name of SECTIONS) within(screen.getByRole("group", { name })).getAllByText(name);
     expect(inGroup("Mark up", "Draw on the slide")).toBeTruthy();
     expect(inGroup("Mark up", "Blue")).toBeTruthy();
@@ -261,27 +260,10 @@ describe("ViewToolbar ribbon", () => {
     expect(screen.getByText("No comments yet")).toBeTruthy();
   });
 
-  it("shows or folds the timeline away, leaving playing the deck to the timeline's own bar", () => {
-    useApp.setState({ timelineOpen: false });
+  it("leaves the timeline to the row under the slide", () => {
     render(toolbar());
-    const timeline = () => inGroup("Timeline", /the timeline under the slide$/);
-    expect(timeline().getAttribute("aria-pressed")).toBe("false");
-    fireEvent.click(timeline());
-    expect(useApp.getState().timelineOpen).toBe(true);
-    expect(timeline().getAttribute("aria-label")).toBe("Hide the timeline under the slide");
-    expect(timeline().getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(timeline());
-    expect(useApp.getState().timelineOpen).toBe(false);
-    expect(within(screen.getByRole("group", { name: "Timeline" })).getAllByRole("button")).toHaveLength(1);
-  });
-
-  it("has no timeline to show while every slide is hidden", () => {
-    const deck = deckFor(DECK_HTML);
-    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
-    render(toolbar());
-    const timeline = inGroup("Timeline", /the timeline under the slide$/);
-    expect(isOff(timeline)).toBe(true);
-    expect(tooltipOf(timeline)).toBe("Every slide is hidden: there is nothing to play");
+    expect(screen.queryByRole("group", { name: "Timeline" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /the timeline under the slide$/ })).toBeNull();
   });
 
   it("keeps every tool in place, off while it has nothing to work on", () => {

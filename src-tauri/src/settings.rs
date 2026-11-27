@@ -90,12 +90,15 @@ impl Providers {
 
 /// Everything in `settings.json`. A field the file leaves out has its default, and fields this
 /// version does not know are ignored.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
     pub appearance: Appearance,
     pub rewind: RewindSetting,
     pub providers: Providers,
+    /// The library, where new decks from the start screen go: an absolute path, or None for
+    /// `SlopSlide` in the user's documents (see [`files::library_root`]).
+    pub library_folder: Option<String>,
 }
 
 impl AppSettings {
@@ -105,6 +108,10 @@ impl AppSettings {
         if !Provider::ALL.iter().any(|p| self.providers.enabled(*p)) {
             self.providers = Providers::default();
         }
+        // A file edited by hand may name anything: what is no full path means the default.
+        self.library_folder = self
+            .library_folder
+            .and_then(|folder| library_folder(&folder).ok().flatten());
         self
     }
 }
@@ -116,6 +123,33 @@ pub struct SettingsPatch {
     appearance: Option<Appearance>,
     rewind: Option<RewindSetting>,
     providers: Option<ProvidersPatch>,
+    /// `null` goes back to the default folder, which leaving it out does not.
+    #[serde(deserialize_with = "present")]
+    library_folder: Option<Option<String>>,
+}
+
+/// A field that is there, `null` included: only one left out is None.
+fn present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// `folder` as the settings keep the library: trimmed, None when empty (the default folder),
+/// and an error unless it is a full path, which is all that means the same folder every time.
+fn library_folder(folder: &str) -> Result<Option<String>> {
+    let folder = folder.trim();
+    if folder.is_empty() {
+        return Ok(None);
+    }
+    if !Path::new(folder).is_absolute() {
+        return Err(Error::msg(format!(
+            "The folder for new decks needs its full path, which {folder} is not."
+        )));
+    }
+    Ok(Some(folder.to_string()))
 }
 
 /// The providers a [`SettingsPatch`] changes.
@@ -139,8 +173,18 @@ impl ProvidersPatch {
 
 /// `settings` with `patch` applied; an error when the patch turns off a provider that cannot
 /// be: one of `busy` (those with a turn running), or the last one on.
-fn patched(settings: AppSettings, patch: &SettingsPatch, busy: &[Provider]) -> Result<AppSettings> {
-    let mut next = settings;
+fn patched(
+    settings: &AppSettings,
+    patch: &SettingsPatch,
+    busy: &[Provider],
+) -> Result<AppSettings> {
+    let mut next = settings.clone();
+    if let Some(folder) = &patch.library_folder {
+        next.library_folder = match folder {
+            Some(folder) => library_folder(folder)?,
+            None => None,
+        };
+    }
     if let Some(appearance) = patch.appearance {
         next.appearance = appearance;
     }
@@ -232,7 +276,7 @@ impl Settings {
     }
 
     pub fn get(&self) -> AppSettings {
-        *self.current.lock().unwrap()
+        self.current.lock().unwrap().clone()
     }
 
     /// An error telling the user `provider` is turned off, when it is: it takes no turn then.
@@ -257,14 +301,14 @@ impl Settings {
         announce: impl FnOnce(&AppSettings),
     ) -> Result<AppSettings> {
         let mut current = self.current.lock().unwrap();
-        let next = patched(*current, patch, busy)?;
+        let next = patched(&current, patch, busy)?;
         if let Some(file) = &self.file {
             let mut json = serde_json::to_vec_pretty(&next)
                 .map_err(|e| Error::msg(format!("cannot save the settings: {e}")))?;
             json.push(b'\n');
             files::atomic_write(file, &json)?;
         }
-        *current = next;
+        *current = next.clone();
         announce(&next);
         Ok(next)
     }
@@ -331,6 +375,7 @@ mod tests {
                     "codex": { "enabled": true },
                     "copilot": { "enabled": true },
                 },
+                "libraryFolder": null,
             })
         );
     }
@@ -437,7 +482,7 @@ mod tests {
         let home = TempDir::new("settings");
         let settings = Settings::load(&home);
         let announced = Mutex::new(Vec::new());
-        let announce = |next: &AppSettings| announced.lock().unwrap().push(*next);
+        let announce = |next: &AppSettings| announced.lock().unwrap().push(next.clone());
 
         let next = settings
             .update(
@@ -473,6 +518,7 @@ mod tests {
                     "codex": { "enabled": true },
                     "copilot": { "enabled": false },
                 },
+                "libraryFolder": null,
             })
         );
         // Written whole, through a temporary file that is gone again.
@@ -482,6 +528,77 @@ mod tests {
             .collect();
         assert_eq!(names, [FILE]);
         assert_eq!(Settings::load(&home).get(), next, "the next start reads it");
+    }
+
+    /// A full path on this system.
+    fn full_path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn the_library_folder_is_kept_until_it_is_reset() {
+        let home = TempDir::new("settings");
+        let settings = Settings::load(&home);
+        assert_eq!(settings.get().library_folder, None);
+        let decks = full_path("decks");
+        let padded = format!("  {decks} ");
+        let next = settings
+            .update(&patch(json!({ "libraryFolder": padded })), &[], |_| {})
+            .unwrap();
+        assert_eq!(next.library_folder.as_deref(), Some(decks.as_str()));
+        assert_eq!(saved(&home)["libraryFolder"], json!(decks));
+        assert_eq!(Settings::load(&home).get(), next, "the next start reads it");
+
+        // A change that leaves it out leaves it alone.
+        let next = settings
+            .update(&patch(json!({ "appearance": "dark" })), &[], |_| {})
+            .unwrap();
+        assert_eq!(next.library_folder.as_deref(), Some(decks.as_str()));
+
+        // `null` goes back to the default folder, and so does an empty path.
+        let next = settings
+            .update(&patch(json!({ "libraryFolder": null })), &[], |_| {})
+            .unwrap();
+        assert_eq!(next.library_folder, None);
+        assert_eq!(saved(&home)["libraryFolder"], Value::Null);
+        settings
+            .update(&patch(json!({ "libraryFolder": decks })), &[], |_| {})
+            .unwrap();
+        let next = settings
+            .update(&patch(json!({ "libraryFolder": " " })), &[], |_| {})
+            .unwrap();
+        assert_eq!(next.library_folder, None);
+    }
+
+    #[test]
+    fn a_library_folder_needs_its_full_path() {
+        let home = TempDir::new("settings");
+        let settings = Settings::load(&home);
+        let error = settings
+            .update(
+                &patch(json!({ "libraryFolder": "decks/mine" })),
+                &[],
+                |_| panic!("a refused change is not announced"),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "The folder for new decks needs its full path, which decks/mine is not."
+        );
+        assert_eq!(settings.get().library_folder, None);
+        assert!(!home.join(FILE).exists());
+
+        // A file edited by hand to name one means the default.
+        home.write(
+            FILE,
+            r#"{"appearance": "dark", "libraryFolder": "decks/mine"}"#,
+        );
+        let read = Settings::load(&home).get();
+        assert_eq!(read.library_folder, None);
+        assert_eq!(read.appearance, Appearance::Dark);
     }
 
     #[test]
@@ -600,9 +717,12 @@ mod tests {
     fn a_patch_reads_what_the_frontend_sends() {
         let empty = patch(json!({}));
         assert!(empty.appearance.is_none() && empty.rewind.is_none() && empty.providers.is_none());
+        assert!(empty.library_folder.is_none(), "left out is not null");
+        let reset = patch(json!({ "libraryFolder": null }));
+        assert_eq!(reset.library_folder, Some(None));
         let nulls = patch(json!({ "appearance": null, "providers": { "claude": null } }));
         assert_eq!(
-            patched(AppSettings::default(), &nulls, &[]).unwrap(),
+            patched(&AppSettings::default(), &nulls, &[]).unwrap(),
             AppSettings::default()
         );
         assert!(serde_json::from_value::<SettingsPatch>(json!({ "appearance": "sepia" })).is_err());

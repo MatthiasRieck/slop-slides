@@ -105,7 +105,6 @@ import { LookTools } from "./LookTools";
 import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
 import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 import { QUIET_LABEL } from "./styles";
-import { TimelineTools } from "./TimelineTools";
 import { SLIDE_TOOL, TOOLBAR_POPUP, unlessOff } from "./toolProps";
 
 /** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
@@ -365,7 +364,6 @@ export const EditToolbar = memo(function EditToolbar(props: {
         onSizeMode={props.onSizeMode}
         onKeepRatio={props.onKeepRatio}
       />
-      <TimelineTools collapsed={collapsedFrom <= 6} />
     </div>
   );
 });

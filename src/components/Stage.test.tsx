@@ -165,6 +165,42 @@ describe("Stage", () => {
     expect(screen.queryByRole("button", { name: "Locked" })).toBeNull();
   });
 
+  describe("the timeline's button, on the left of the row under the slide", () => {
+    const toggle = () => screen.getByRole("button", { name: /the timeline under the slide$/ });
+
+    it("shows or folds the timeline away, next to the search, in View and in Edit", () => {
+      useApp.setState({ timelineOpen: false });
+      render(<Stage />);
+      // In the same corner as the search, not in the tools above the slide.
+      expect(toggle().parentElement).toBe(screen.getByRole("button", { name: "Find in the slides" }).parentElement);
+      expect(toggle().closest("[role=toolbar]")).toBeNull();
+      // Named for what it shows either way, its state in whether it is pressed in.
+      expect(toggle().textContent).toBe("Timeline");
+      expect(toggle().getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(toggle());
+      expect(useApp.getState().timelineOpen).toBe(true);
+      expect(toggle().textContent).toBe("Timeline");
+      expect(toggle().getAttribute("aria-pressed")).toBe("true");
+      expect(toggle().getAttribute("aria-label")).toBe("Hide the timeline under the slide");
+      act(() => useApp.getState().setMode("edit"));
+      fireEvent.click(toggle());
+      expect(useApp.getState().timelineOpen).toBe(false);
+    });
+
+    it("has nothing to show for a deck whose slides are all hidden", () => {
+      const deck = deckFor(DECK_HTML);
+      useApp.setState({
+        deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) },
+        timelineOpen: false,
+      });
+      render(<Stage />);
+      expect(isOff(toggle())).toBe(true);
+      expect(tooltipOf(toggle())).toBe("Every slide is hidden: there is nothing to play");
+      fireEvent.click(toggle());
+      expect(useApp.getState().timelineOpen).toBe(false);
+    });
+  });
+
   describe("the search, in View and in Edit", () => {
     const field = () => screen.queryByLabelText("Search slides") as HTMLInputElement | null;
     afterEach(() => act(() => useApp.getState().setMode("view")));
@@ -1352,7 +1388,7 @@ describe("Stage", () => {
       expect(screen.queryByRole("toolbar", { name: "Edit tools" })).toBeNull();
       expect(screen.queryByRole("toolbar", { name: "View tools" })).toBeNull();
       expect(screen.getByRole("status").textContent).toContain("This slide is locked");
-      // The timeline's tools stay, as in either ribbon.
+      // The timeline still opens from the row under the slide.
       expect(screen.getByRole("button", { name: "Show the timeline under the slide" })).toBeTruthy();
       expect(screen.getByText("Locked")).toBeTruthy();
       expect(screen.getByRole("button", { name: /^Layout$/ }).getAttribute("aria-disabled")).toBe("true");
@@ -1453,7 +1489,7 @@ describe("Stage", () => {
       render(<Stage />);
       const ribbon = screen.getByRole("toolbar", { name: "View tools" });
       const sections = [...ribbon.querySelectorAll("fieldset")].map((group) => group.getAttribute("aria-label"));
-      expect(sections).toEqual(["Mark up", "Review", "Animations", "Timeline", "Find"]);
+      expect(sections).toEqual(["Mark up", "Review", "Animations", "Find"]);
       const find = within(ribbon).getByRole("group", { name: "Find" });
       expect(within(find).getByRole("textbox", { name: "Search slides" })).toBeTruthy();
     });

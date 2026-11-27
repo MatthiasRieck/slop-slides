@@ -20,16 +20,34 @@ pub fn app_home() -> Result<PathBuf> {
     Ok(root)
 }
 
-/// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
-pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
-    let base = app
-        .path()
-        .document_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(|e| Error::msg(format!("cannot locate documents folder: {e}")))?;
-    let root = base.join("SlopSlide");
-    fs::create_dir_all(&root)?;
-    Ok(root)
+/// The folder new decks from the start screen go in, the library: `custom` when the settings
+/// name one, or `SlopSlide` in `documents` (the user's documents folder, or their home where
+/// there is none). Not created here: just showing where it is must not touch a drive that may
+/// be slow or away (see [`ensure_dir`]).
+pub fn library_root(custom: Option<&str>, documents: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(custom) = custom.map(str::trim).filter(|c| !c.is_empty()) {
+        return Ok(PathBuf::from(custom));
+    }
+    documents
+        .map(|base| base.join("SlopSlide"))
+        .ok_or_else(|| Error::msg("cannot locate the documents folder"))
+}
+
+/// The library of this app (see [`library_root`]).
+pub fn app_library(app: &AppHandle, custom: Option<&str>) -> Result<PathBuf> {
+    let documents = app.path().document_dir().or_else(|_| app.path().home_dir());
+    library_root(custom, documents.ok())
+}
+
+/// Creates the folder `dir` where it is missing. The error names the folder and says what to
+/// do: it is the user's own choice of place (a network drive that is away, say).
+pub fn ensure_dir(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir).map_err(|e| {
+        Error::msg(format!(
+            "Cannot use the folder {}: {e}. Choose another location.",
+            dir.display()
+        ))
+    })
 }
 
 /// `file` by its canonical path: the same whatever spelling of it is given, and whatever is
@@ -142,6 +160,53 @@ mod tests {
         // Nothing to canonicalize: the path as given.
         let nowhere = Path::new("/no/such/folder/deck.html");
         assert_eq!(canonical_file(nowhere), nowhere);
+    }
+
+    #[test]
+    fn the_library_is_in_the_documents_unless_the_settings_name_a_folder() {
+        let documents = || Some(PathBuf::from("/docs"));
+        assert_eq!(
+            library_root(None, documents()).unwrap(),
+            Path::new("/docs/SlopSlide")
+        );
+        assert_eq!(
+            library_root(Some("/decks"), documents()).unwrap(),
+            Path::new("/decks")
+        );
+        // A folder named but empty is none.
+        assert_eq!(
+            library_root(Some("  "), documents()).unwrap(),
+            Path::new("/docs/SlopSlide")
+        );
+        // The custom folder needs no documents folder; the default does.
+        assert_eq!(
+            library_root(Some("/decks"), None).unwrap(),
+            Path::new("/decks")
+        );
+        assert!(library_root(None, None).is_err());
+    }
+
+    #[test]
+    fn showing_where_the_library_is_does_not_create_it() {
+        let dir = TempDir::new("files");
+        let library = library_root(None, Some(dir.to_path_buf())).unwrap();
+        assert!(!library.exists());
+        ensure_dir(&library).unwrap();
+        assert!(library.is_dir());
+        // Once more is fine.
+        ensure_dir(&library).unwrap();
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_made_is_named_in_the_error() {
+        let dir = TempDir::new("files");
+        fs::write(dir.join("taken"), b"a file").unwrap();
+        let error = ensure_dir(&dir.join("taken").join("decks"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("Cannot use the folder "), "{error}");
+        assert!(error.contains("taken"), "{error}");
+        assert!(error.ends_with("Choose another location."), "{error}");
     }
 
     #[test]

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultSettings } from "../../lib/settings";
 import { useApp } from "../../store";
 import { lastError } from "../../store/errors";
-import { backend, calls, invoke, revealItemInDir, settingsBackend } from "../../test/tauri";
+import { backend, calls, invoke, open as openDialog, revealItemInDir, settingsBackend } from "../../test/tauri";
 import { GeneralSection } from "./GeneralSection";
 
 beforeEach(() => {
@@ -112,8 +112,55 @@ describe("GeneralSection", () => {
       const path = await screen.findByTestId("library-path");
       expect(path.textContent).toBe("/lib");
       expect(path.title).toBe("/lib");
-      expect(path.nextElementSibling).toBe(screen.getByRole("button", { name: /Show in/ }));
-      expect(screen.getByText("New decks from the start screen are kept in the SlopSlide library.")).toBeTruthy();
+      expect(path.nextElementSibling).toBe(screen.getByRole("button", { name: "Change…" }));
+      expect(screen.getByRole("button", { name: /Show in/ })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Folder for new decks" })).toBeTruthy();
+      // Only looked up, not made.
+      expect(calls("library_folder")).toEqual([{ create: false }]);
+      // The default folder is in use: there is none to go back to.
+      expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+    });
+
+    it("moves to the folder chosen, and back to the default one", async () => {
+      let folder: string | null = null;
+      const kept = settingsBackend();
+      backend({
+        ...kept,
+        update_settings: (args) => {
+          const next = kept.update_settings!(args) as { libraryFolder: string | null };
+          folder = next.libraryFolder;
+          return next;
+        },
+        library_folder: () => folder ?? "/lib",
+      });
+      openDialog.mockReset().mockResolvedValue("/Volumes/work/decks");
+      render(<GeneralSection />);
+      await screen.findByText("/lib");
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await screen.findByText("/Volumes/work/decks");
+      expect(openDialog).toHaveBeenCalledWith({
+        directory: true,
+        title: "Choose the folder for new decks",
+        defaultPath: "/lib",
+        canCreateDirectories: true,
+      });
+      expect(patches()).toEqual([{ libraryFolder: "/Volumes/work/decks" }]);
+      expect(useApp.getState().settings.libraryFolder).toBe("/Volumes/work/decks");
+
+      fireEvent.click(screen.getByRole("button", { name: "Use default" }));
+      await screen.findByText("/lib");
+      expect(patches()[1]).toEqual({ libraryFolder: null });
+      expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+    });
+
+    it("stays where it is when the dialog is cancelled", async () => {
+      backend({ ...settingsBackend(), library_folder: () => "/lib" });
+      openDialog.mockReset().mockResolvedValue(null);
+      render(<GeneralSection />);
+      await screen.findByText("/lib");
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await waitFor(() => expect(openDialog).toHaveBeenCalled());
+      expect(patches()).toEqual([]);
     });
 
     it("leaves the path out where there is none to read", async () => {
@@ -130,8 +177,10 @@ describe("GeneralSection", () => {
     it("reveals the folder", async () => {
       backend({ library_folder: () => "/lib" });
       render(<GeneralSection />);
-      fireEvent.click(screen.getByRole("button", { name: /Reveal|Show|Open/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Reveal|Show/ }));
       await waitFor(() => expect(revealItemInDir).toHaveBeenCalledWith("/lib"));
+      // Made where it is missing, to have something to show.
+      expect(calls("library_folder")).toContainEqual({ create: true });
     });
 
     it("reports a folder it cannot find", async () => {
@@ -139,7 +188,7 @@ describe("GeneralSection", () => {
         throw "cannot locate home folder";
       });
       render(<GeneralSection />);
-      fireEvent.click(screen.getByRole("button", { name: /Reveal|Show|Open/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Reveal|Show/ }));
       await waitFor(() => expect(lastError(useApp.getState())).toBe("cannot locate home folder"));
     });
   });

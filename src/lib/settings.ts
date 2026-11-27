@@ -17,6 +17,11 @@ export interface AppSettings {
   rewind: RewindSetting;
   /** Which agents the app offers; at least one is on. */
   providers: Record<Provider, { enabled: boolean }>;
+  /**
+   * The library, the folder new decks from the start screen go in: its full path, or null for
+   * `SlopSlide` in the user's documents. `api.libraryFolder` gives where that is.
+   */
+  libraryFolder: string | null;
 }
 
 /** A change to the settings: only what it names changes. */
@@ -24,6 +29,8 @@ export interface SettingsPatch {
   appearance?: Appearance;
   rewind?: RewindSetting;
   providers?: Partial<Record<Provider, { enabled: boolean }>>;
+  /** Null goes back to the default folder. */
+  libraryFolder?: string | null;
 }
 
 /** One thing the agents need from the computer, and whether it is there (see `api.checkEnvironment`). */
@@ -46,6 +53,7 @@ export function defaultSettings(): AppSettings {
     appearance: "system",
     rewind: "ask",
     providers: { claude: { enabled: true }, codex: { enabled: true }, copilot: { enabled: true } },
+    libraryFolder: null,
   };
 }
 
@@ -60,6 +68,9 @@ export function readSettings(value: unknown): AppSettings {
   if (!isRecord(value)) return settings;
   if (APPEARANCES.includes(value.appearance as Appearance)) settings.appearance = value.appearance as Appearance;
   if (REWIND_SETTINGS.includes(value.rewind as RewindSetting)) settings.rewind = value.rewind as RewindSetting;
+  if (typeof value.libraryFolder === "string" && value.libraryFolder.trim()) {
+    settings.libraryFolder = value.libraryFolder.trim();
+  }
   const providers = isRecord(value.providers) ? value.providers : {};
   for (const id of PROVIDER_IDS) {
     const saved = providers[id];
@@ -75,6 +86,7 @@ export function patchSettings(settings: AppSettings, patch: SettingsPatch): AppS
     appearance: patch.appearance ?? settings.appearance,
     rewind: patch.rewind ?? settings.rewind,
     providers: { ...settings.providers, ...patch.providers },
+    libraryFolder: patch.libraryFolder === undefined ? settings.libraryFolder : patch.libraryFolder,
   };
 }
 

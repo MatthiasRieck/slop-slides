@@ -375,24 +375,23 @@ describe("Sidebar", () => {
   describe("a tab's close button", () => {
     const close = (name: string) => screen.getByRole("button", { name: `Close ${name}` });
 
-    it("sits on the tab's trailing edge, the icon staying where it is", () => {
+    it("takes the icon's place while the tab is hovered or focused, and no room of its own", () => {
       render(<Sidebar />);
-      // After the tab itself, not over its icon: a click meant for the tab stays the tab's.
-      expect(tab("Files").nextElementSibling).toBe(close("Files"));
-      expect(close("Files").className).not.toContain("absolute");
-      const icon = tab("Files").querySelector("svg")!;
-      expect(icon.getAttribute("class")).not.toMatch(/invisible/);
-    });
-
-    it("shows on the active tab, and on the others when hovered or focused", () => {
-      render(<Sidebar />);
-      expect(close("Chat").className).toMatch(/(^| )opacity-100( |$)/);
-      const other = close("Files").className;
-      expect(other).toMatch(/(^| )opacity-0( |$)/);
-      expect(other).toContain("group-hover:opacity-100");
-      expect(other).toContain("group-focus-within:opacity-100");
-      // Never out of the keyboard's reach.
-      expect(other).not.toContain("invisible");
+      for (const name of ["Chat", "Files"]) {
+        const button = close(name).className;
+        // Over the icon, out of the tab's flow: the tab is no wider for it.
+        expect(button).toContain("absolute");
+        expect(button).toMatch(/(^| )opacity-0( |$)/);
+        expect(button).not.toMatch(/(^| )opacity-100( |$)/);
+        expect(button).toContain("group-hover:opacity-100");
+        expect(button).toContain("group-focus-within:opacity-100");
+        // Never out of the keyboard's reach.
+        expect(button).not.toContain("invisible");
+        expect(close(name).parentElement!.className).toContain("relative");
+        const icon = tab(name).querySelector("svg")!.getAttribute("class")!;
+        expect(icon).toContain("group-hover:invisible");
+        expect(icon).toContain("group-focus-within:invisible");
+      }
     });
 
     it("closes the tab on a middle click, and leaves the other buttons' clicks alone", () => {
@@ -487,6 +486,36 @@ describe("Sidebar", () => {
       lay(strip, { width: 200, content: 200 });
       expect(scrollButtons()).toEqual([]);
       expect(strip.dataset.fade).toBeUndefined();
+    });
+
+    it("scrolls sideways only, and with the mouse wheel", () => {
+      render(<Sidebar />);
+      const strip = screen.getByRole("tablist");
+      expect(strip.className).toContain("overflow-x-auto");
+      expect(strip.className).toContain("overflow-y-hidden");
+      const wheel = (init: WheelEventInit) => {
+        const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
+        fireEvent(strip, event);
+        return event.defaultPrevented;
+      };
+
+      // While the tabs fit, the wheel is left alone.
+      lay(strip, { width: 200, content: 200 });
+      expect(wheel({ deltaY: 40 })).toBe(false);
+      expect(strip.scrollLeft).toBe(0);
+
+      lay(strip, { width: 100, content: 300 });
+      expect(wheel({ deltaY: 40 })).toBe(true);
+      expect(strip.scrollLeft).toBe(40);
+      expect(wheel({ deltaY: -30 })).toBe(true);
+      expect(strip.scrollLeft).toBe(10);
+      // A wheel that counts in lines.
+      expect(wheel({ deltaY: 2, deltaMode: WheelEvent.DOM_DELTA_LINE })).toBe(true);
+      expect(strip.scrollLeft).toBe(42);
+      // A sideways turn scrolls by itself; a pinch is not a scroll.
+      expect(wheel({ deltaX: 40, deltaY: 5 })).toBe(false);
+      expect(wheel({ deltaY: 40, ctrlKey: true })).toBe(false);
+      expect(strip.scrollLeft).toBe(42);
     });
 
     it("fades the cut-off ends and scrolls with the buttons, each off at its end", () => {

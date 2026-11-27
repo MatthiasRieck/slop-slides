@@ -11,14 +11,14 @@ import { hasOpenLayer } from "../../lib/layers";
 import { PROVIDERS } from "../../lib/models";
 import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
-import { openSettings, turnedOffProvider, useApp } from "../../store";
+import { commentsToSend, openSettings, turnedOffProvider, useApp } from "../../store";
 import { lastSentText } from "../../store/messages";
 import { EffortPicker, ModelPicker } from "../ModelPicker";
 import { COMPOSER_INPUT_ATTR, PermissionPicker } from "../Permissions";
 import { VoiceInput, type VoiceInputHandle } from "../VoiceInput";
 import { ComposerChips } from "./ComposerChips";
 import { ContextMeter } from "./ContextMeter";
-import { appendDraft } from "./draft";
+import { appendDraft, reviewPrompt } from "./draft";
 import { ImageFan, ImageGrid } from "./ImageAttachments";
 import { InputResizeHandle } from "./InputResizeHandle";
 import { fitInput, showCaret } from "./inputLayout";
@@ -41,7 +41,8 @@ const SEND_TIP = (
  * slide, attachments, the sketch and comments. Enter sends; while the agent works it queues, and
  * with the modifier it steers the turn. A chat whose provider the settings have turned off takes
  * no message: the composer says so, with the way to the settings, and sends nothing. A message sent while an attachment is still being saved
- * waits for it. Escape in the empty input stops the agent's turn, and the up arrow brings back
+ * waits for it. With comments or a sketch going along, an empty message can be sent: it asks the
+ * agent to address them (see `reviewPrompt`). Escape in the empty input stops the agent's turn, and the up arrow brings back
  * the last message sent.
  *
  * The draft is its own (see `useComposerDraft`), so that a key pressed renders the composer and
@@ -73,10 +74,15 @@ export function Composer() {
     return !!selected && !!marks?.length && s.reviewVisible && marks !== s.sketchesSent[selected];
   });
   const sendsSketch = unsentSketch && includeSlide && slideNumber > 0;
+  /** What an empty message says, when the review going along is enough to send it (see `reviewPrompt`). */
+  const commentCount = useApp(commentsToSend);
+  const reviewText = reviewPrompt(commentCount, sendsSketch);
+  /** Whether there is a message to send: the draft, or the review alone. */
+  const sendable = !!draft.trim() || reviewText !== null;
 
   /** Sends the message, or while the agent works queues it; `steer` sends it into the turn. */
   const send = (message: string, steer = false) => {
-    const text = message.trim();
+    const text = message.trim() || reviewText;
     // Unsent, the draft stays for when the provider is back on.
     if (!text || turnedOff) return;
     const options = {
@@ -129,7 +135,7 @@ export function Composer() {
   }, [held, attachments.pending]);
 
   const submit = (steer = false) => {
-    if (turnedOff || dictation.dictating || held || !draft.trim()) return;
+    if (turnedOff || dictation.dictating || held || !sendable) return;
     if (attachments.pending > 0) setHeld({ steer, failures: attachments.failures });
     else send(draft, steer);
   };
@@ -256,7 +262,9 @@ export function Composer() {
                 ? "Listening…"
                 : running
                   ? `Queue a message, or ${STEER_KEY} to steer the agent now…`
-                  : "Ask for slides or changes…"
+                  : reviewText
+                    ? `Send to say "${reviewText}", or write more…`
+                    : "Ask for slides or changes…"
             }
             // Its height is set by hand (see `fitInput`): it neither sizes itself nor takes the room left over.
             className="block max-h-[max(64px,60vh)] min-h-16 flex-none px-3.5 pt-3 pb-0 leading-relaxed placeholder:text-muted-foreground/70"
@@ -298,7 +306,7 @@ export function Composer() {
                   <Paperclip />
                 </InputGroupButton>
               )}
-              {running && !dictation.dictating && draft.trim() && (
+              {running && !dictation.dictating && sendable && (
                 <>
                   <InputGroupButton
                     size="icon-sm"
@@ -342,7 +350,7 @@ export function Composer() {
                   variant="default"
                   size="icon-sm"
                   onClick={() => (dictation.dictating ? voiceInput.current?.finishAndSend() : submit())}
-                  disabled={turnedOff !== null || (!dictation.dictating && (!draft.trim() || held !== null))}
+                  disabled={turnedOff !== null || (!dictation.dictating && (!sendable || held !== null))}
                   aria-label={dictation.dictating ? "Stop and send" : "Send"}
                   aria-busy={held !== null || undefined}
                   tooltip={sendTip}

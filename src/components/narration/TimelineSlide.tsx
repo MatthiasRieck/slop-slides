@@ -29,7 +29,7 @@ function emptyFilm(picture: number): string | undefined {
  * with the handle at its end that changes how long it shows. The strip has the slide's picture
  * once, at its start, `picture` pixels wide, and empty frames of film after it for as long as it
  * shows: one page loaded for a slide, however long its strip. Not even that one unless `pictured`
- * (the strip has room for it, and it is in sight). `filmRef` is what holds the picture, as tall
+ * (it is in sight; a strip narrower than the picture shows the left of it, the rest cut off). `filmRef` is what holds the picture, as tall
  * as one.
  *
  * Rendered again only when something of its own changes: `on` stays the same, so neither the

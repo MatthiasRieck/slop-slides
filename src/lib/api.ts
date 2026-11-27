@@ -487,8 +487,12 @@ export const api = {
   /** Decks opened before, newest first. */
   recentDecks: () => invoke<RecentDeck[]>("recent_decks"),
   forgetDeck: (path: string) => invoke<void>("forget_deck", { path }),
-  /** `~/Documents/SlopSlide`, where decks lived before workspaces. */
-  libraryFolder: () => invoke<string>("library_folder"),
+  /**
+   * The library, where new decks from the start screen go unless another folder is picked: the
+   * folder the settings name, or `SlopSlide` in the user's documents. With `create` it is made
+   * where it is missing (to open it); without, this only says where it is.
+   */
+  libraryFolder: (create = false) => invoke<string>("library_folder", { create }),
   /** One folder of the open workspace (`""` for its root), folders first. */
   listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
   /** A file of the open workspace, with the viewer it opens in. */

@@ -128,7 +128,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   terminal or editor, macOS asks for that app instead). Speech is
   transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
   multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
-- **Folders:** the start screen starts a deck in the library, opens a folder (⌘O), a deck (in
+- **Folders:** the start screen starts a deck in the library (`~/Documents/SlopSlide`) or, with
+  **Change…** beside its **Location**, in any other folder, which **Use this folder for all new
+  decks** makes the library from then on; it opens a folder (⌘O), a deck (in
   the folder it is in), a deck or a folder opened before (**Recent decks**, **Recent folders**),
   or imports a PowerPoint file; a folder, a deck or a PowerPoint file dropped on it opens the
   same way. In a folder, the menu on the file's path at the top left has what is done to the
@@ -165,9 +167,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   list; ⌘, opens the app's settings and ⌘O another folder (Ctrl on Windows and Linux).
 - **Settings:** **Settings** (the gear in the top bar, left of Export, or ⌘,) are the app's, for
   every deck and window, in a dialog with its sections on the left: **General** (its appearance,
-  what undoing an agent's changes does to the chat, where the library is), **Providers**,
+  what undoing an agent's changes does to the chat, the folder new decks go in), **Providers**,
   **Keyboard shortcuts** and **About** (the app's version). Escape or its close button closes
-  it. The appearance, the undo choice and which providers are on are kept in
+  it. The appearance, the undo choice, the folder for new decks and which providers are on are kept in
   `~/.slopslides/settings.json`, and a change shows in every open window at once. **Deck
   settings** (the file menu) are the open deck's: its title, slide size and style; **Done** or
   Escape goes back to the mode they opened from.
@@ -478,7 +480,7 @@ src-tauri/prompts/      the agent's system prompt and design references, compile
 src-tauri/templates/    the built-in templates, one deck.html each (served with the runtime)
 ```
 
-Each deck is a plain folder under `~/Documents/SlopSlide/<deck>/`:
+Each deck is a plain folder, `~/Documents/SlopSlide/<deck>/` unless another location is chosen:
 
 ```
 deck.html        the whole presentation: <section class="slide" id="…"> per slide,

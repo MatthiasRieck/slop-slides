@@ -3,32 +3,103 @@ import { FileUp, Folder, FolderOpen, Library, Plus, Presentation, X } from "luci
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { Button, type ButtonProps } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
 import { useShellKeys } from "../hooks/useShellKeys";
-import { api, type RecentDeck, type RecentWorkspace } from "../lib/api";
+import { api, errorMessage, type RecentDeck, type RecentWorkspace } from "../lib/api";
 import { type Openable, openableOf } from "../lib/opening";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { basename, cn, dirname, isMac, relativeTime } from "../lib/utils";
 import { showError, useApp } from "../store";
-import { chooseDeck, chooseWorkspace, pickPptx } from "./openDialogs";
+import { chooseDeck, chooseWorkspace, pickFolder, pickPptx } from "./openDialogs";
 import { SECTION_HEADING } from "./styles";
 import { TemplateSelect } from "./Templates";
 
 /** The small muted label over a field of the new deck's form. */
 const fieldLabel = "text-xs text-muted-foreground";
 
-/** Opens the SlopSlide library as the workspace; false when it did not open. */
-async function openLibrary(): Promise<boolean> {
+/**
+ * Opens a folder for decks as the workspace: `folder`, or the SlopSlide library (made where it
+ * is missing) without one. False when it did not open.
+ */
+async function openDeckFolder(folder?: string | null): Promise<boolean> {
+  const app = useApp.getState();
+  let library: string;
   try {
-    await useApp.getState().openWorkspace(await api.libraryFolder());
+    library = folder ?? (await api.libraryFolder(true));
+  } catch (error) {
+    // The library cannot be used (a drive that is away, say): the settings are where another is chosen.
+    app.showToast("error", errorMessage(error), { label: "Settings", run: () => app.openSettings("general") });
+    return false;
+  }
+  try {
+    await app.openWorkspace(library);
   } catch (error) {
     showError(error);
   }
   return useApp.getState().workspace !== null;
 }
+
+const openLibrary = () => openDeckFolder();
+
+/**
+ * Where the start screen creates a deck or imports one: the library (`api.libraryFolder`, read
+ * again when the settings name another), or the folder `picked` instead, which `asDefault` makes
+ * the library from then on.
+ */
+function useDeckLocation() {
+  const saved = useApp((s) => s.settings.libraryFolder);
+  const [library, setLibrary] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [asDefault, setAsDefault] = useState(false);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `saved` is why the library is read again
+  useEffect(() => {
+    let gone = false;
+    // Without it (the browser preview), the form leaves the path out; creating a deck says why.
+    Promise.resolve()
+      .then(() => api.libraryFolder())
+      .then(
+        (path) => !gone && typeof path === "string" && setLibrary(path),
+        () => {},
+      );
+    return () => {
+      gone = true;
+    };
+  }, [saved]);
+
+  /** The folder picked, while it is another than the library. */
+  const custom = picked !== null && picked !== library ? picked : null;
+
+  const change = async () => {
+    try {
+      const folder = await pickFolder("Choose where to create the deck", custom ?? library);
+      if (!folder) return;
+      setPicked(folder);
+      // Asked of each folder anew: a tick for the last one says nothing of this one.
+      if (folder !== picked) setAsDefault(false);
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  /**
+   * Gets the folder open as the workspace; false when it did not open. Only a folder that
+   * opened becomes the library, if that was asked: one that cannot be used is not kept.
+   */
+  const open = async (): Promise<boolean> => {
+    if (!(await openDeckFolder(custom))) return false;
+    if (custom && asDefault) await useApp.getState().updateSettings({ libraryFolder: custom });
+    return true;
+  };
+
+  return { path: custom ?? library, custom: custom !== null, asDefault, setAsDefault, change, open };
+}
+
+type DeckLocation = ReturnType<typeof useDeckLocation>;
 
 /**
  * Importing a PowerPoint file as a new deck: `importing` names the file while its import runs,
@@ -154,7 +225,8 @@ export function Home() {
   const [recent, setRecent] = useState(lastRecent);
   const decks = recent?.decks ?? null;
   const folders = recent?.folders ?? null;
-  const pptx = usePptxImport(openLibrary);
+  const location = useDeckLocation();
+  const pptx = usePptxImport(location.open);
   useShellKeys();
 
   const refresh = () =>
@@ -204,8 +276,8 @@ export function Home() {
         <div className="mx-auto flex max-w-3xl flex-col gap-8 px-8 py-10">
           <NewDeckForm
             heading="New deck"
-            hint="New decks start in your SlopSlide library. Open a folder to work on the decks in it."
-            beforeCreate={openLibrary}
+            hint="A new deck, also one imported from PowerPoint, gets a folder of its own in this location, named after its title."
+            location={location}
             disabled={pptx.importing !== null}
             autoFocus
           />
@@ -342,8 +414,10 @@ function RecentRow(props: {
 const recentList = "flex flex-col divide-y overflow-hidden rounded-lg border bg-card";
 
 /**
- * Title and style for a new deck, created in the open workspace. `beforeCreate` gets a
- * workspace open first (false stops the creation). While the deck is being created, or while
+ * Title and style for a new deck, created in the open workspace. With a `location` (the start
+ * screen, where no workspace is open) the form also says where the deck goes, the library
+ * unless another folder is chosen, and opens that folder first; the deck is not created when it
+ * does not open. While the deck is being created, or while
  * `disabled`, the form takes no input, so it is not sent twice. Only the start screen's form
  * takes the focus as it shows (`autoFocus`): in a workspace, the focus stays where it is, in the
  * chat, say.
@@ -351,7 +425,7 @@ const recentList = "flex flex-col divide-y overflow-hidden rounded-lg border bg-
 export function NewDeckForm(props: {
   heading: string;
   hint?: string;
-  beforeCreate?: () => Promise<boolean>;
+  location?: DeckLocation;
   disabled?: boolean;
   autoFocus?: boolean;
 }) {
@@ -362,6 +436,11 @@ export function NewDeckForm(props: {
   const busy = useRef(false);
   const titleId = useId();
   const styleId = useId();
+  const defaultId = useId();
+  const locationId = useId();
+  const pathId = useId();
+  const { location } = props;
+  const off = creating || props.disabled;
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -369,7 +448,7 @@ export function NewDeckForm(props: {
     busy.current = true;
     setCreating(true);
     try {
-      if (props.beforeCreate && !(await props.beforeCreate())) return;
+      if (location && !(await location.open())) return;
       await useApp.getState().createDeck(title.trim() || "Untitled deck", template);
     } finally {
       busy.current = false;
@@ -380,39 +459,83 @@ export function NewDeckForm(props: {
   return (
     <form onSubmit={create} aria-busy={creating || undefined} className="flex flex-col gap-3">
       <h1 className="text-2xl font-semibold tracking-tight">{props.heading}</h1>
-      <fieldset disabled={creating || props.disabled} className="flex min-w-0 items-end gap-2">
-        <Field className="min-w-0 flex-1 gap-1">
-          <FieldLabel htmlFor={titleId} className={fieldLabel}>
-            Title
-          </FieldLabel>
-          <Input
-            id={titleId}
-            autoFocus={props.autoFocus}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Deck title, e.g. Series A pitch"
-            className="h-10 bg-card px-3"
-          />
-        </Field>
-        <Field className="w-auto gap-1">
-          <FieldLabel htmlFor={styleId} className={fieldLabel}>
-            Style
-          </FieldLabel>
-          <TemplateSelect id={styleId} value={template} onChange={setTemplate} disabled={creating || props.disabled} />
-        </Field>
-        <Button type="submit" size="xl" disabled={creating} aria-busy={creating || undefined}>
-          {creating ? (
-            <>
-              <Spinner aria-hidden="true" data-icon="inline-start" />
-              Creating…
-            </>
-          ) : (
-            <>
-              <Plus data-icon="inline-start" />
-              Create deck
-            </>
-          )}
-        </Button>
+      <fieldset disabled={off} className="flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 items-end gap-2">
+          <Field className="min-w-0 flex-1 gap-1">
+            <FieldLabel htmlFor={titleId} className={fieldLabel}>
+              Title
+            </FieldLabel>
+            <Input
+              id={titleId}
+              autoFocus={props.autoFocus}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Deck title, e.g. Series A pitch"
+              className="h-10 bg-card px-3"
+            />
+          </Field>
+          <Field className="w-auto gap-1">
+            <FieldLabel htmlFor={styleId} className={fieldLabel}>
+              Style
+            </FieldLabel>
+            <TemplateSelect id={styleId} value={template} onChange={setTemplate} disabled={off} />
+          </Field>
+          <Button type="submit" size="xl" disabled={creating} aria-busy={creating || undefined}>
+            {creating ? (
+              <>
+                <Spinner aria-hidden="true" data-icon="inline-start" />
+                Creating…
+              </>
+            ) : (
+              <>
+                <Plus data-icon="inline-start" />
+                Create deck
+              </>
+            )}
+          </Button>
+        </div>
+        {location && (
+          <div className="flex min-w-0 flex-col gap-2">
+            {/* biome-ignore lint/a11y/useSemanticElements: a fieldset inside the form's own would not lay out in a row */}
+            <div role="group" aria-labelledby={locationId} className="flex min-w-0 items-center gap-2">
+              <span id={locationId} className={cn(fieldLabel, "shrink-0")}>
+                Location
+              </span>
+              <span
+                id={pathId}
+                data-testid="deck-location"
+                title={location.path ?? undefined}
+                className="selectable min-w-0 flex-1 truncate rounded-md border bg-muted px-2 py-1 font-mono text-xs"
+              >
+                {location.path ?? "SlopSlide library"}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                aria-describedby={pathId}
+                tooltip="Choose another folder for new decks"
+                onClick={() => void location.change()}
+              >
+                <FolderOpen data-icon="inline-start" />
+                Change…
+              </Button>
+            </div>
+            {location.custom && (
+              <Field orientation="horizontal" className="w-auto gap-1.5">
+                <Checkbox
+                  id={defaultId}
+                  checked={location.asDefault}
+                  disabled={off}
+                  onCheckedChange={(checked) => location.setAsDefault(checked === true)}
+                />
+                <FieldLabel htmlFor={defaultId} className="text-xs font-normal">
+                  Use this folder for all new decks
+                </FieldLabel>
+              </Field>
+            )}
+          </div>
+        )}
       </fieldset>
       {props.hint && <p className="text-xs text-muted-foreground">{props.hint}</p>}
     </form>

@@ -6,6 +6,7 @@ use super::{focus, workspace_root};
 use crate::error::{self, Result};
 use crate::files;
 use crate::screens;
+use crate::settings::Settings;
 use crate::watcher::WorkspaceWatcher;
 use crate::windows;
 use crate::workspace::{self, OpenWorkspace};
@@ -148,10 +149,21 @@ pub fn forget_deck(path: String) -> Result<()> {
     workspace::forget_deck(&files::app_home()?, &path)
 }
 
-/// `~/Documents/SlopSlide`, where decks lived before workspaces.
-#[tauri::command]
-pub fn library_folder(app: AppHandle) -> Result<String> {
-    Ok(files::library_root(&app)?.to_string_lossy().into_owned())
+/// The library: the folder new decks from the start screen go in unless the user picks
+/// another, `~/Documents/SlopSlide` or the one the settings name. With `create` it is made
+/// where it is missing, to be opened; without, this only says where it is.
+#[tauri::command(async)]
+pub fn library_folder(
+    app: AppHandle,
+    settings: State<Settings>,
+    create: Option<bool>,
+) -> Result<String> {
+    let custom = settings.get().library_folder;
+    let root = files::app_library(&app, custom.as_deref())?;
+    if create == Some(true) {
+        files::ensure_dir(&root)?;
+    }
+    Ok(root.to_string_lossy().into_owned())
 }
 
 /// One folder of the open workspace (`""` for its root). Off the main thread: the start of

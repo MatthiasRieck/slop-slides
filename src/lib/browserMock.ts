@@ -21,9 +21,9 @@ export function installBrowserMock() {
     async (cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
       switch (cmd) {
-        // The library is the only folder the preview can open.
+        // The library is the only folder the preview can open; one the settings name is only shown.
         case "library_folder":
-          return fromServer("library");
+          return settings.libraryFolder ?? fromServer("library");
         case "recent_workspaces":
         case "recent_decks":
           return [];

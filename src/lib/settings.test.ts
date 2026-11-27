@@ -25,6 +25,16 @@ describe("readSettings", () => {
   });
 });
 
+describe("the folder for new decks", () => {
+  it("is the default one unless the settings name a folder", () => {
+    expect(defaultSettings().libraryFolder).toBeNull();
+    expect(readSettings({ libraryFolder: " H:\\Decks " }).libraryFolder).toBe("H:\\Decks");
+    for (const none of [null, "", "   ", 7, ["/decks"]]) {
+      expect(readSettings({ libraryFolder: none }).libraryFolder).toBeNull();
+    }
+  });
+});
+
 describe("patchSettings", () => {
   it("changes only what the patch names", () => {
     const settings = defaultSettings();
@@ -33,7 +43,13 @@ describe("patchSettings", () => {
       appearance: "system",
       rewind: "deck",
       providers: { claude: { enabled: true }, codex: { enabled: false }, copilot: { enabled: true } },
+      libraryFolder: null,
     });
+    // The folder for new decks: left alone, changed, and put back to the default with null.
+    const moved = patchSettings(settings, { libraryFolder: "/Volumes/work/decks" });
+    expect(moved.libraryFolder).toBe("/Volumes/work/decks");
+    expect(patchSettings(moved, { appearance: "dark" }).libraryFolder).toBe("/Volumes/work/decks");
+    expect(patchSettings(moved, { libraryFolder: null }).libraryFolder).toBeNull();
     // The settings patched are left as they were.
     expect(settings).toEqual(defaultSettings());
   });

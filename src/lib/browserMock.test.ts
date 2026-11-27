@@ -28,9 +28,19 @@ describe("the browser preview's settings", () => {
       appearance: "dark",
       rewind: "ask",
       providers: { claude: { enabled: true }, codex: { enabled: false }, copilot: { enabled: true } },
+      libraryFolder: null,
     });
     expect(await ask("get_settings")).toEqual(changed);
     expect(emit).toHaveBeenCalledWith(SETTINGS_CHANGED, changed);
+  });
+
+  it("name the folder for new decks, which the library then is", async () => {
+    await ask("update_settings", { patch: { libraryFolder: "/Volumes/work/decks" } });
+    expect(await ask("library_folder", { create: false })).toBe("/Volumes/work/decks");
+    expect(emit).toHaveBeenCalledWith(
+      SETTINGS_CHANGED,
+      expect.objectContaining({ libraryFolder: "/Volumes/work/decks" }),
+    );
   });
 
   it("refuse to turn the last provider off, as the app does", async () => {

@@ -1,5 +1,5 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FolderSearch } from "lucide-react";
+import { FolderOpen, FolderSearch } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { api } from "../../lib/api";
 import { APPEARANCES, type Appearance, type RewindSetting } from "../../lib/settings";
 import { revealLabel } from "../../lib/utils";
 import { showError, useApp } from "../../store";
+import { pickFolder } from "../openDialogs";
 
 const APPEARANCE_LABELS: Record<Appearance, string> = { system: "System", light: "Light", dark: "Dark" };
 
@@ -39,14 +40,17 @@ const REWIND_OPTIONS: [RewindSetting, string][] = [
 export function GeneralSection() {
   const appearance = useApp((s) => s.settings.appearance);
   const rewind = useApp((s) => s.settings.rewind);
+  /** The folder the settings name for new decks; null while it is the default one. */
+  const saved = useApp((s) => s.settings.libraryFolder);
   const [library, setLibrary] = useState<string | null>(null);
   const id = useId();
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `saved` is why the library is read again
   useEffect(() => {
     let gone = false;
     // Without it (the browser preview), the section just leaves the path out.
     Promise.resolve()
-      .then(api.libraryFolder)
+      .then(() => api.libraryFolder())
       .then(
         (path) => !gone && typeof path === "string" && setLibrary(path),
         () => {},
@@ -54,13 +58,23 @@ export function GeneralSection() {
     return () => {
       gone = true;
     };
-  }, []);
+  }, [saved]);
 
   const update = useApp.getState().updateSettings;
 
   const revealLibrary = async () => {
     try {
-      await revealItemInDir(library ?? (await api.libraryFolder()));
+      // Made where it is missing: there is nothing to show of a folder that is not there.
+      await revealItemInDir(await api.libraryFolder(true));
+    } catch (error) {
+      showError(error);
+    }
+  };
+
+  const changeLibrary = async () => {
+    try {
+      const folder = await pickFolder("Choose the folder for new decks", library);
+      if (folder) await update({ libraryFolder: folder });
     } catch (error) {
       showError(error);
     }
@@ -124,10 +138,11 @@ export function GeneralSection() {
       <Item>
         <ItemContent>
           <ItemTitle role="heading" aria-level={4}>
-            Library
+            Folder for new decks
           </ItemTitle>
           <ItemDescription className="text-xs">
-            New decks from the start screen are kept in the SlopSlide library.
+            The SlopSlide library: new decks from the start screen are created here, unless you choose another location
+            for one. Decks you already have stay where they are.
           </ItemDescription>
         </ItemContent>
         <ItemFooter className="justify-start">
@@ -140,10 +155,19 @@ export function GeneralSection() {
               {library}
             </span>
           )}
+          <Button variant="outline" size="xs" onClick={() => void changeLibrary()}>
+            <FolderOpen data-icon="inline-start" />
+            Change…
+          </Button>
           <Button variant="outline" size="xs" onClick={() => void revealLibrary()}>
             <FolderSearch data-icon="inline-start" />
             {revealLabel}
           </Button>
+          {saved !== null && (
+            <Button variant="ghost" size="xs" onClick={() => void update({ libraryFolder: null })}>
+              Use default
+            </Button>
+          )}
         </ItemFooter>
       </Item>
     </ItemGroup>

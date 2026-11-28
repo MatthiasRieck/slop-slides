@@ -175,6 +175,7 @@ pub fn run() {
             commands::deck::save_asset,
             commands::clipboard::copy_to_clipboard,
             commands::clipboard::copy_slides,
+            commands::clipboard::copy_slide_screenshot,
             commands::clipboard::paste_slides,
             commands::clipboard::paste_from_clipboard,
             commands::clipboard::read_clipboard_text,

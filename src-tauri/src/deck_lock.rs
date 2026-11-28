@@ -32,7 +32,7 @@ fn slots() -> &'static Mutex<HashMap<PathBuf, Arc<Slot>>> {
 /// Waits for the lock of deck `file` and takes it. It is not reentrant: what runs while it is
 /// held must not take the same deck's lock again.
 pub fn hold(file: &Path) -> Held {
-    let key = file.canonicalize().unwrap_or_else(|_| file.into());
+    let key = crate::files::canonical_file(file);
     let slot = slots()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

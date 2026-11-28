@@ -275,7 +275,6 @@ pub fn rgba_png(
 }
 
 /// Decodes a PNG of any color type into RGBA.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn decode_png(bytes: &[u8]) -> Result<Image> {
     let fail = |e: png::DecodingError| Error::msg(format!("cannot read the screenshot: {e}"));
     let mut decoder = png::Decoder::new(Cursor::new(bytes));

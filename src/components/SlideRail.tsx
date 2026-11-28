@@ -209,6 +209,7 @@ export function SlideRail() {
           addSlide: (after) => void app().addSlide(after),
           duplicate: (slides) => void app().duplicateSlides(slides),
           copy: () => void app().copySlides(),
+          copyScreenshot: (at) => void app().copySlideScreenshot(at),
           cut: () => void app().cutSlides(),
           paste: () => void app().pasteSlides(),
           remove: (slides) => void app().deleteSlides(slides),

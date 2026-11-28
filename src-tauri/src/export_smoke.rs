@@ -211,6 +211,30 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
     })
     .await?;
 
+    // "Copy screenshot": one slide rendered, put on the clipboard and read back from it.
+    step("Slide screenshot", async {
+        let first = shown
+            .first()
+            .ok_or_else(|| Error::msg("the deck shows no slides"))?;
+        let png = render::slide_image(app, &file, first).await?;
+        check_png(&png, canvas)?;
+        let path = out.join("screenshot.png");
+        std::fs::write(&path, &png)?;
+        let image = capture::decode_png(&png)?;
+        crate::clipboard::write_image(&png)?;
+        let (width, height, _) = crate::clipboard::read()?
+            .pixels
+            .ok_or_else(|| Error::msg("the clipboard holds no image after copying one"))?;
+        if (width, height) != (image.width as usize, image.height as usize) {
+            return Err(Error::msg(format!(
+                "copied a {}×{} screenshot, the clipboard holds {width}×{height}",
+                image.width, image.height
+            )));
+        }
+        Ok(path)
+    })
+    .await?;
+
     step("Slide render", async {
         let dir = out.join("rendered");
         for rendered in check_renders(app, &file, &shown, None, &dir, canvas).await? {

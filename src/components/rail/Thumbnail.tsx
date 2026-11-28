@@ -148,7 +148,7 @@ export const Thumbnail = memo(function Thumbnail(props: {
           onContextMenu={(event) => onMenu(event, slide.id)}
           className={cn(
             // No transition on the ring: it would repaint the slide under it for its whole length.
-            "block w-full overflow-hidden rounded-md shadow-thumbnail",
+            "relative block w-full overflow-hidden rounded-md shadow-thumbnail",
             "focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
             // The offset gap keeps the ring visible against dark slides.
             selected
@@ -167,6 +167,10 @@ export const Thumbnail = memo(function Thumbnail(props: {
             lazy
             className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
+          {/* Over the slide, so every press and right-click on it is the button's. The frame takes no
+              pointer input, but WebKit still gave it some right-clicks (scaled down as it is), and
+              showed its own menu there in place of the slide's. */}
+          <span aria-hidden data-thumbnail-cover className="absolute inset-0" />
         </button>
         <RailMark shown={slide.hidden} className="inset-0 flex items-center justify-center text-foreground/80">
           <HiddenMark />

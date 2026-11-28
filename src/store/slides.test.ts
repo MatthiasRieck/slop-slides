@@ -197,6 +197,31 @@ describe("the slide clipboard", () => {
     expect(useApp.getState().selected).toBe("pasted");
   });
 
+  it("copies a screenshot of a slide, or of the one on the stage, and says so", async () => {
+    const useApp = await storeWith(DECK);
+    expect(await useApp.getState().copySlideScreenshot("outro")).toBe(true);
+    expect(toastTexts(useApp.getState(), "success")).toEqual(["Screenshot copied"]);
+    expect(await useApp.getState().copySlideScreenshot()).toBe(true);
+    expect(calls("copy_slide_screenshot")).toEqual([
+      { id: DECK.id, slide: "outro" },
+      { id: DECK.id, slide: "intro" },
+    ]);
+  });
+
+  it("reports a screenshot that could not be copied, and copies none without a slide", async () => {
+    const useApp = await storeWith(DECK);
+    backend({
+      copy_slide_screenshot: () => {
+        throw "the deck has no slide `gone`";
+      },
+    });
+    expect(await useApp.getState().copySlideScreenshot("gone")).toBe(false);
+    expect(lastError(useApp.getState())).toBe("Could not copy the screenshot: the deck has no slide `gone`");
+    useApp.setState({ selected: null });
+    expect(await useApp.getState().copySlideScreenshot()).toBe(false);
+    expect(calls("copy_slide_screenshot")).toHaveLength(1);
+  });
+
   it("copies every picked slide, in deck order whatever order they were picked in", async () => {
     const useApp = await storeWith(DECK);
     useApp.setState({ selected: "outro", railSelected: ["outro", "intro"] });

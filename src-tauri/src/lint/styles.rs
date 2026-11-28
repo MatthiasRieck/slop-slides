@@ -7,8 +7,8 @@ use std::ops::Range;
 use crate::html::{parse_tag, MOVED_ATTR};
 
 use super::css::{
-    animates_reveal, css_id_references, easing_vars, sets_property, steep_tilts,
-    transform_keyframes, untimed_delays, STEEPEST_TILT,
+    animates_reveal, css_id_references, easing_vars, hiding_keyframes, sets_property, steep_tilts,
+    timed_exits, transform_keyframes, untimed_delays, STEEPEST_TILT,
 };
 use super::{in_markup, truncate, Issue, Linter, Severity};
 
@@ -101,6 +101,37 @@ pub(super) fn check_untimed_delays(l: &mut Linter) {
                 start + at,
                 format!(
                     "`{}` delays an animation to time it, but the rule is not under `.active`: the animation starts when the deck loads, so in the show and video exports its delay counts from then, not from when its slide shows. Put it under `.slide.active` (as `.slide.active .word {{ animation: … var(--at) both; }}`), so it starts as the slide shows.",
+                    truncate(selector.trim(), 80)
+                ),
+            );
+        }
+    }
+}
+
+/// Animations timed to their slide that leave what they animate hidden (an element that goes
+/// away at a word of the narration). Presented by hand, the player shows each slide as it ends
+/// up, its timed animations done (see `settle` in `assets/runtime.js`), so such an element is
+/// never seen then: the user is told, as it may hold something they mean to show.
+pub(super) fn check_timed_exits(l: &mut Linter) {
+    let html = l.html;
+    let easings = easing_vars(html);
+    let blocks = style_blocks(l);
+    // Keyframes may be in another block than the rule that uses them.
+    let mut hiding = HashSet::new();
+    for block in &blocks {
+        hiding.extend(hiding_keyframes(&html[block.clone()]));
+    }
+    if hiding.is_empty() {
+        return;
+    }
+    for Range { start, end } in blocks {
+        for (at, selector, name) in timed_exits(&html[start..end], &easings, &hiding) {
+            l.report(
+                "timed-exit",
+                Severity::Warning,
+                start + at,
+                format!(
+                    "`{}` is timed to go away (`@keyframes {name}` ends hidden). It shows and leaves while the show plays and in video exports, but presented by hand a slide shows as it ends up, so this is never seen then. Fine for something only the narrated show needs; otherwise keep it on the slide, or give it a slide of its own.",
                     truncate(selector.trim(), 80)
                 ),
             );

@@ -597,6 +597,140 @@ describe("player: in the presenter", () => {
     expect(early.currentTime).toBe(1500);
   });
 
+  describe("presented by hand", () => {
+    // jsdom runs no animations: fake them, and the document's clock, as a browser has them.
+    const fake = (
+      target: Element,
+      delay: number,
+      endTime: number,
+      startTime: number | null = 1000,
+      name: string | null = "rise",
+    ) => ({
+      animationName: name,
+      effect: { target, getComputedTiming: () => ({ delay, endTime }) },
+      currentTime: 0 as number | null,
+      startTime,
+      playState: "running",
+      play() {
+        this.playState = "running";
+      },
+      pause() {
+        this.playState = "paused";
+      },
+      finish() {
+        this.currentTime = endTime;
+        this.playState = "finished";
+      },
+    });
+    type Fake = ReturnType<typeof fake>;
+    const shown = (at: string, parent: PlayerOptions["parent"], animations: (doc: Document) => Fake[]) => {
+      let all: Fake[] = [];
+      const p = player({
+        at,
+        parent,
+        setup: (window) => {
+          Object.assign(window.document, { timeline: { currentTime: 1000 }, getAnimations: () => all });
+        },
+      });
+      const set = () => {
+        all = animations(p.doc);
+        return all;
+      };
+      const tell = (data: object) => p.window.dispatchEvent(new p.window.MessageEvent("message", { data }));
+      return { p, set, tell };
+    };
+    const INF = Number.POSITIVE_INFINITY;
+    // What a slide timed to its narration has: an entrance, a word, something that leaves again,
+    // a loop that waits for a word, one that carries on across slides, one paused on purpose,
+    // one on another slide, and the slide's fade (a transition).
+    const cast = (doc: Document) => {
+      const [intro, end] = [doc.getElementById("intro")!, doc.getElementById("end")!];
+      const stopped = fake(end, 4000, 4500, null);
+      stopped.playState = "paused";
+      return [
+        fake(intro, 480, 1180),
+        fake(intro, 3200, 3600),
+        fake(intro, 8000, 8400),
+        fake(intro, 5000, INF),
+        fake(intro, 0, INF, 0),
+        fake(intro, 2000, 2400, 0),
+        fake(end, 2000, 2400),
+        fake(end, 2000, 2400, 1000, null),
+        stopped,
+      ];
+    };
+
+    it("shows a slide as it ends up, leaving entrances and loops to run", () => {
+      const { p, set } = shown("", undefined, cast);
+      const [entrance, word, exit, waiting, across, old, elsewhere] = set();
+      p.key("ArrowRight");
+      p.key("ArrowLeft");
+      const state = (a: Fake) => [a.currentTime, a.playState];
+      expect(state(word!)).toEqual([3600, "finished"]);
+      expect(state(exit!)).toEqual([8400, "finished"]);
+      // The loop skips its wait; what is no timed animation of this slide's is left alone.
+      expect(state(waiting!)).toEqual([5000, "running"]);
+      for (const left of [entrance, across, old, elsewhere]) expect(state(left!)).toEqual([0, "running"]);
+    });
+
+    it("leaves transitions and what the deck paused alone", () => {
+      const { p, set } = shown("", undefined, cast);
+      const all = set();
+      p.key("End");
+      const [fade, stopped] = [all[7]!, all[8]!];
+      expect([fade.currentTime, stopped.currentTime, stopped.playState]).toEqual([0, 0, "paused"]);
+      expect(all[6]!.playState).toBe("finished");
+    });
+
+    it("plays the timed animations out while the app plays the show, and settles when it stops", () => {
+      const parent = { postMessage: vi.fn() };
+      const { p, set, tell } = shown("#end", parent, cast);
+      tell({ type: "slop:playing", playing: true });
+      const [entrance, word, exit, waiting] = set();
+      tell({ type: "slop:go", key: "Home" });
+      expect(p.active()).toBe(0);
+      for (const left of [entrance, word, exit, waiting]) expect(left!.playState).toBe("running");
+      expect(word!.currentTime).toBe(0);
+      tell({ type: "slop:clock", slide: "intro", at: 1 });
+      expect([entrance!.currentTime, word!.currentTime]).toEqual([1000, 1000]);
+      // Stopped, everything the clock had rests on its end; the loop runs on.
+      tell({ type: "slop:playing", playing: false });
+      expect([entrance!.playState, word!.playState, exit!.playState]).toEqual(["finished", "finished", "finished"]);
+      expect([waiting!.currentTime, waiting!.playState]).toEqual([5000, "running"]);
+      // Playing again, the clock takes what was settled back to its moment.
+      tell({ type: "slop:playing", playing: true });
+      tell({ type: "slop:clock", slide: "intro", at: 2 });
+      expect(word!.currentTime).toBe(2000);
+      expect(waiting!.currentTime).toBe(2000);
+    });
+
+    it("hands what it settled as the slide showed to the clock when the show plays", () => {
+      const parent = { postMessage: vi.fn() };
+      const { p, set, tell } = shown("#end", parent, cast);
+      const word = set()[1]!;
+      tell({ type: "slop:go", key: "Home" });
+      expect(p.active()).toBe(0);
+      expect(word.playState).toBe("finished");
+      // Its start moved when it was finished: the clock still knows it as the slide's.
+      word.startTime = -2600;
+      tell({ type: "slop:clock", slide: "intro", at: 1.5 });
+      expect(word.currentTime).toBe(1500);
+    });
+
+    it("leaves the editor's previews and captures as they are", () => {
+      for (const at of ["?embed&slide=intro", "?print", "?static&print"]) {
+        const { p, set } = shown(at, at.includes("embed") ? { postMessage: vi.fn() } : undefined, cast);
+        const all = set();
+        p.window.dispatchEvent(
+          new p.window.MessageEvent("message", { data: { type: "slop:playing", playing: false } }),
+        );
+        p.key("ArrowRight");
+        p.key("ArrowLeft");
+        for (const left of all.slice(0, 8)) expect([at, left.currentTime]).toEqual([at, 0]);
+      }
+    });
+  });
+
   it("takes the keys the presenter forwards with Shift, and leaves N and P to its tools", () => {
     const parent = { postMessage: vi.fn() };
     const p = player({ at: "#end", parent });

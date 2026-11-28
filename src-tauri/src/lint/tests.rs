@@ -789,6 +789,65 @@ fn flags_animations_timed_to_a_slide_that_start_with_the_deck() {
 }
 
 #[test]
+fn flags_timed_animations_that_leave_an_element_hidden() {
+    let with = |css: &str| {
+        rules(
+            &deck("<section class=\"slide\" id=\"a\"></section>")
+                .replace("<style>.slide {}</style>", &format!("<style>{css}</style>")),
+        )
+    };
+    let out = "@keyframes out { from { opacity: 1; } to { opacity: 0; } }";
+    for exit in [
+        ".slide.active .hint { animation: out 0.4s ease 6s forwards; }",
+        ".slide.active .hint { animation: in 0.4s 1s both, out .4s var(--gone) both; }",
+        ".slide.active .hint { animation-name: out; animation-delay: 4s; animation-fill-mode: forwards; }",
+    ] {
+        assert_eq!(with(&format!("{out} {exit}")), ["timed-exit"], "{exit}");
+    }
+    // Every way a last frame hides, also when it is not the last one written.
+    for frames in [
+        "0% { opacity: 1 } 100% { visibility: hidden }",
+        "to { display: none; } from { opacity: 1; }",
+        "50%, 100% { scale: 0 }",
+        "to { transform: translateY(20px) scale(0); }",
+    ] {
+        let css = format!(
+            "@keyframes gone {{ {frames} }} .slide.active .x {{ animation: gone 1s 3s both; }}"
+        );
+        assert_eq!(with(&css), ["timed-exit"], "{frames}");
+    }
+    for fine in [
+        // An entrance, however it is timed.
+        "@keyframes in { from { opacity: 0; } to { opacity: 1; } } .slide.active .w { animation: in .4s var(--at) both; }",
+        // An exit that is not timed, one that does not keep its end, and one hidden only midway.
+        ".slide.active .hint { animation: out 0.4s ease 0.3s forwards; }",
+        ".slide.active .hint { animation: out 0.4s ease 6s; }",
+        "@keyframes blink { 50% { opacity: 0; } to { opacity: 0.5; } } .slide.active .x { animation: blink 1s 3s both; }",
+        // Keyframes nothing times, and a rule that starts with the deck (another rule's matter).
+        ".slide.active .hint { animation: other 0.4s ease 6s forwards; }",
+    ] {
+        let css = format!("{out} {fine}");
+        assert!(with(&css).is_empty(), "{fine}: {:?}", with(&css));
+    }
+    // The keyframes may be in another style block than the rule, and the issue is on the rule's line.
+    let source = deck("<section class=\"slide\" id=\"a\"></section>").replace(
+        "<style>.slide {}</style>",
+        &format!("<style>{out}</style>\n<style>\n.slide.active .hint {{ animation: out 1s 5s both; }}</style>"),
+    );
+    let issues = lint(&source, |_| true, &[]);
+    let issue = issues.iter().find(|i| i.rule == "timed-exit").unwrap();
+    assert_eq!(issue.severity, Severity::Warning);
+    assert!(
+        issue.message.contains("`.slide.active .hint`") && issue.message.contains("@keyframes out")
+    );
+    let line = source[..source.find(".slide.active .hint").unwrap()]
+        .matches('\n')
+        .count()
+        + 1;
+    assert_eq!(issue.line, line);
+}
+
+#[test]
 fn flags_valued_hidden_attributes() {
     assert_eq!(
         rules(&deck(

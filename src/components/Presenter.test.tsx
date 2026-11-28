@@ -514,6 +514,23 @@ describe("Presenter", () => {
     const nexts = (post: { mock: { calls: unknown[][] } }) =>
       post.mock.calls.filter(([m]) => (m as { key?: string }).key === "ArrowRight").length;
 
+    it("tells the player when the show plays, so it only then plays out what is timed to the narration", async () => {
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      const told = () =>
+        post.mock.calls
+          .map(([m]) => m as { type: string; playing?: boolean })
+          .filter((m) => m.type === "slop:playing")
+          .map((m) => m.playing);
+      fireEvent.load(frame());
+      expect(told()).toEqual([false]);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.click(screen.getByLabelText("Play"));
+      expect(told()).toEqual([false, true]);
+      fireEvent.click(screen.getByLabelText("Pause"));
+      expect(told()).toEqual([false, true, false]);
+    });
+
     it("shows each slide for the set time, then moves on, stopping after the last", async () => {
       render(<Presenter />);
       const post = vi.spyOn(frame().contentWindow!, "postMessage");

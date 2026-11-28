@@ -253,7 +253,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   shows, in the editor's preview, the show and video exports alike, so its delay is the time
   into that slide. One not under `.active` starts when the deck loads (lint warns when such a
   rule delays an animation); keep that for loops that run whatever slide shows, such as a
-  slowly turning shape. Pin `data-duration` and
+  slowly turning shape. Timed animations (delayed by a second or more) only play out while
+  the show plays by itself and in video exports. Presented by hand, each slide shows as it
+  ends up: every timed animation is on its last frame at once, while entrances and loops
+  that repeat forever still run. So make the end of every timed slide a complete slide, and
+  do not time something to go away again unless only the narrated show needs it (lint warns
+  with `timed-exit`, as the presenter never sees it): keep it, or put it on a slide of its
+  own. Pin `data-duration` and
   `data-narration-start` on the slides you time, and run `narration_timeline` again after
   changing them. For karaoke, light each word a little early (about 0.1 s) and fill it across
   its span (start to end), so long sung words visibly start on time.

@@ -4444,6 +4444,37 @@ describe("slide editor: shapes, styling and media", () => {
       expect(e.commits().at(-1)!.markup).toContain('data-to="a" data-to-at="50% 80%"');
     });
 
+    it("brings a line back with the element it follows when that is dropped on a locked slide", () => {
+      const { e, line, a } = twoLines();
+      const commits = e.commits().length;
+      e.fromParent({ type: "slop:neighbors", cells: [{ slide: "outro", x: 1944, y: 0, locked: true }] });
+      e.down(a);
+      e.move(a, 2100, 100);
+      expect(ends(line)[1]).toEqual([2600, 380]);
+      e.up(a, 2100, 100);
+      expect(a.style.translate).toBe("");
+      expect(ends(line)[1]).toEqual([600, 380]);
+      expect(e.messages("slop:edit-transfer-refused")).toEqual([
+        { type: "slop:edit-transfer-refused", slide: "intro", to: "outro" },
+      ]);
+      expect(e.commits()).toHaveLength(commits);
+    });
+
+    it("hands an element over as it was before the drag, its line not left reaching for the drop", () => {
+      const { e, line, a } = twoLines();
+      e.fromParent({ type: "slop:neighbors", cells: [{ slide: "outro", x: 1944, y: 0, locked: false }] });
+      e.down(a);
+      e.move(a, 2100, 100);
+      e.up(a, 2100, 100);
+      expect(e.$("#a")).toBeNull();
+      const [transfer] = e.messages<{ html: string; x: number; y: number }>("slop:edit-transfer");
+      // Its middle, (600, 350), went 2000 to the right; the other slide starts at 1944.
+      expect(transfer).toMatchObject({ to: "outro", x: 656, y: 350 });
+      expect(transfer!.html).not.toContain("translate");
+      expect(ends(line)[1]).toEqual([600, 380]);
+      expect(e.commits().at(-1)).toMatchObject({ group: expect.stringMatching(/^transfer:/) });
+    });
+
     it("follows only the lines stuck to what a handle resizes", () => {
       const { e, line, other, a, b } = twoLines();
       click(e, a);

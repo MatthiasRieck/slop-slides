@@ -3,6 +3,7 @@ import { editsSaved, queueEdit } from "./editQueue";
 import { showErrorIn } from "./errors";
 import { adoptReview, flushReview } from "./review";
 import { turnRedone, turnUndone } from "./rewind";
+import { stageSlides } from "./slides";
 import type { AppStore, Slice } from "./types";
 
 /** Undo and redo of the open deck. */
@@ -62,7 +63,11 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
       // stage, or the deck's styles. A change to another slide leaves it running.
       const reloads = done.deck.shellHash !== deck.shellHash || (selected !== null && changed.includes(selected));
       app.setState((s) => ({ history: done.status, editReload: reloads ? s.editReload + 1 : s.editReload }));
-      if (changed[0] && !(selected && changed.includes(selected))) app.getState().select(changed[0]);
+      if (changed[0] && !(selected && changed.includes(selected))) {
+        // One of the slides shown side by side: the stage goes to it and keeps showing them all.
+        if (stageSlides(app.getState()).includes(changed[0])) app.getState().activateSlide(changed[0]);
+        else app.getState().select(changed[0]);
+      }
       const entry = done.entry;
       if (entry?.source === "chat" && entry.message) {
         if (back) turnUndone(app, entry);
@@ -79,14 +84,25 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
  * (in a toast, say), as long as it still is the deck's newest change: undoing whatever came after
  * it instead would not be what the button said. `what` names the change in the message shown when
  * it cannot. Resolves to whether it was undone.
+ *
+ * Many changes share a label (every edit of a slide on the stage has the same one). `only` names
+ * the one meant by the deck it was made in and its group in the history: any other change is left
+ * alone. Nothing is said when another deck is open by now, or when the change was taken back
+ * already (it is the one redo would make again).
  */
-export async function undoNewest(app: AppStore, label: string, what: string): Promise<boolean> {
+export async function undoNewest(
+  app: AppStore,
+  label: string,
+  what: string,
+  only?: { deck: string; group: string },
+): Promise<boolean> {
   await editsSaved();
   await refreshHistory(app);
   const { deck, history } = app.getState();
-  if (!deck) return false;
-  if (history?.undo?.label !== label) {
-    showErrorIn(app, `The ${what} cannot be undone: the deck changed since.`);
+  if (!deck || (only && deck.id !== only.deck)) return false;
+  if (history?.undo?.label !== label || (only && history.undo.group !== only.group)) {
+    const undone = only !== undefined && history?.redo?.group === only.group;
+    if (!undone) showErrorIn(app, `The ${what} cannot be undone: the deck changed since.`);
     return false;
   }
   await app.getState().undo();

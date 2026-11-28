@@ -32,8 +32,17 @@
    }. Each is looked up on the slide, then and whenever an animation ends, and the app gets where
    their pins go as { type: "slop:comment-spots", slide, spots: [{ id, x, y, found }] }.
 
+   When several slides are picked, the stage shows them side by side: this preview spans them all,
+   see-through, and the others lie under it as stills. { type: "slop:neighbors", cells: [{ slide,
+   x, y, locked }] } says where each of them is: its top-left corner in this window's pixels, at
+   the slide's size. They stay put when the view pans or zooms. While there are any, the page has
+   `html[data-slop-grid]`, and a click on one (a press on the empty space over it, let go without
+   dragging) posts { type: "slop:activate", slide, to } for the app to make that slide the one
+   previewed here; a drag from there still pans (or, in the editor, draws the marquee).
+
    The slide editor (assets/editor/) runs after this and builds on window.slopPasteboard, which
-   also tells it where the slide is on screen (`origin()`, `scale()`), so it need not measure.
+   also tells it where the slide is on screen (`origin()`, `scale()`), so it need not measure,
+   and which of the other slides lies under a point (`neighborAt(x, y)`, `neighbor(slide)`).
 
    A wheel turn, a pinch and a drag move the view once a frame, however many events a frame
    brings. While such a gesture lasts, the slide keeps the zoom it is laid out at and is scaled
@@ -121,6 +130,10 @@
   var spaceDown = false;
   var pan = null;
   var listeners = [];
+  // The other slides shown beside this one (see { type: "slop:neighbors" }), as { slide, x, y, locked }.
+  var neighbors = [];
+  // A press on the empty space over one of them, until it is let go: { cell, x, y }.
+  var activating = null;
 
   var api = {
     frame: frame,
@@ -142,6 +155,21 @@
     /** Calls `fn` whenever the view moves. */
     onChange: function (fn) {
       listeners.push(fn);
+    },
+    /** The other slide shown under the point (x, y) of this window, as { slide, x, y, locked }, or null. */
+    neighborAt: function (x, y) {
+      for (var i = 0; i < neighbors.length; i++) {
+        var cell = neighbors[i];
+        if (x >= cell.x && x <= cell.x + STAGE_W && y >= cell.y && y <= cell.y + STAGE_H) return cell;
+      }
+      return null;
+    },
+    /** The other slide `id` shown beside this one, as { slide, x, y, locked }, or null. */
+    neighbor: function (id) {
+      for (var i = 0; i < neighbors.length; i++) {
+        if (neighbors[i].slide === id) return neighbors[i];
+      }
+      return null;
     },
     /** Whether keys and Space+drag belong to something else, like text being edited. */
     busy: function () {
@@ -391,6 +419,49 @@
     },
     true,
   );
+
+  // A click on another slide shown beside this one makes it the one previewed. Only the empty
+  // space takes it: not this slide, what hangs over its edge or the editor's handles. Capture
+  // phase on the window, as panning and the editor stop the press and the release further in.
+  if (!show) {
+    window.addEventListener(
+      "pointerdown",
+      function (event) {
+        activating = null;
+        var empty = event.target === root || event.target === document.body || event.target === deck;
+        if (event.button !== 0 || !empty) return;
+        var cell = api.neighborAt(event.clientX, event.clientY);
+        if (cell) activating = { cell: cell, x: event.clientX, y: event.clientY };
+      },
+      true,
+    );
+    window.addEventListener(
+      "pointerup",
+      function (event) {
+        var press = activating;
+        activating = null;
+        if (!press || !api.neighbor(press.cell.slide)) return;
+        if (Math.abs(event.clientX - press.x) >= DRAG_THRESHOLD || Math.abs(event.clientY - press.y) >= DRAG_THRESHOLD) return;
+        window.parent.postMessage({ type: "slop:activate", slide: slide.id, to: press.cell.slide }, "*");
+      },
+      true,
+    );
+    window.addEventListener(
+      "pointercancel",
+      function () {
+        activating = null;
+      },
+      true,
+    );
+    // On macOS a Control-click is a primary press that then asks for the menu: not a click.
+    window.addEventListener(
+      "contextmenu",
+      function () {
+        activating = null;
+      },
+      true,
+    );
+  }
 
   // Something is open in the app over the preview (see { type: "slop:layer" }): Escape closes
   // that first. Capture phase, and before the editor adds its keys, so nothing here acts on it.
@@ -801,10 +872,24 @@
     document.head.appendChild(marks);
   }
 
+  /** Takes the other slides shown beside this one from { type: "slop:neighbors" }. */
+  function setNeighbors(cells) {
+    neighbors = cells
+      .filter(function (cell) {
+        return cell && typeof cell.slide === "string" && cell.slide !== slide.id && Number.isFinite(cell.x) && Number.isFinite(cell.y);
+      })
+      .map(function (cell) {
+        return { slide: cell.slide, x: cell.x, y: cell.y, locked: !!cell.locked };
+      });
+    if (neighbors.length) root.setAttribute("data-slop-grid", "");
+    else root.removeAttribute("data-slop-grid");
+  }
+
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
     if (data.type === "slop:layer") layerOpen = !!data.open;
+    if (data.type === "slop:neighbors" && !show) setNeighbors(Array.isArray(data.cells) ? data.cells : []);
     if (data.type === "slop:search") highlight(data);
     if (data.type === "slop:comment-tool" && !show) setCommenting(data.on);
     if (data.type === "slop:comment-locate" && Array.isArray(data.comments)) {

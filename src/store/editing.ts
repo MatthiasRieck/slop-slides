@@ -93,9 +93,11 @@ export interface EditingSlice {
   /**
    * Saves `markup` as the new version of `slide`, after any edits still being saved. `group` is
    * the editor's name for a run of small edits (arrow-key nudges of the same elements), whose
-   * saves the deck's history keeps as one step to undo.
+   * saves the deck's history keeps as one step to undo. With `when`, it is saved only if that
+   * holds once the edits before it are done. Resolves to whether it was saved; a save that fails
+   * is reported, and loads the slide again as the deck has it.
    */
-  saveSlideEdit: (slide: string, markup: string, group?: string) => Promise<void>;
+  saveSlideEdit: (slide: string, markup: string, group?: string, when?: () => boolean) => Promise<boolean>;
   /**
    * Saves `slide` of the open deck as `change` makes its markup in the file, after any edits still
    * being saved; false (with the error shown) when `change` throws or the save fails.
@@ -275,17 +277,19 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
       }
     }),
 
-  saveSlideEdit: (slide, markup, group) =>
+  saveSlideEdit: (slide, markup, group, when) =>
     queueEdit(async () => {
       const { deck } = get();
       const base = deck?.slides.find((s) => s.id === slide)?.hash;
-      if (!deck || !base) return;
+      if (!deck || !base || (when && !when())) return false;
       try {
         const next = await api.updateSlide(deck.id, slide, markup, base, group);
         if (get().deck?.id === deck.id) showEdited(app, slide, next, true);
+        return true;
       } catch (error) {
         showErrorIn(app, error);
         set((s) => ({ editReload: s.editReload + 1 }));
+        return false;
       }
     }),
 

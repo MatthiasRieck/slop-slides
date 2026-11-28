@@ -68,6 +68,8 @@
   var DROP_WIDTH = 640;
   // Starts a copied element's markup; a JSON header with where it came from follows (see copySelected).
   var CLIP_MARKER = "<!--slopslides:";
+  // Starts the group of the saves that move elements to another slide (see transferSelected).
+  var TRANSFER_GROUP = "transfer:";
   // Text styles a copied element takes along to another slide, where the deck's CSS may differ.
   var LOOK = ["color", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textAlign", "textTransform"];
   // A long pasted text wraps at this share of the slide's width.
@@ -494,6 +496,12 @@
     // The slide's frame marks edit mode, and dims everything outside the slide.
     "[data-slop-frame] { outline: 2px solid var(--slop-accent); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
     " color-mix(in srgb, var(--slop-canvas) 55%, transparent); }" +
+    // Beside other slides (see pasteboard.js) nothing is dimmed: it would dim them too.
+    "html[data-slop-grid] [data-slop-frame] { box-shadow: none; }" +
+    // The other slide a dragged element would be dropped on; one that is locked takes none.
+    "[data-slop-drop] { position: fixed; z-index: 2147483646; pointer-events: none; box-sizing: border-box;" +
+    " outline: 3px solid var(--slop-accent); outline-offset: -3px; background: color-mix(in srgb, var(--slop-accent) 10%, transparent); }" +
+    "[data-slop-drop][data-locked] { outline-color: var(--slop-danger); background: color-mix(in srgb, var(--slop-danger) 10%, transparent); }" +
     // A drawing or shape tool draws wherever the pointer goes.
     "html[data-slop-tool], html[data-slop-tool] * { cursor: crosshair !important; }" +
     "html[data-slop-tool=text], html[data-slop-tool=text] * { cursor: text !important; }" +

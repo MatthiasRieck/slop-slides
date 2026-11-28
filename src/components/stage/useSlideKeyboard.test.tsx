@@ -2,7 +2,8 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { openLayer } from "../../lib/layers";
-import { useApp } from "../../store";
+import { stageSlides, useApp } from "../../store";
+import { DECK_HTML, deckFor } from "../../test/fixtures";
 import { keyForRail, useSketchKeyboard, useSlideKeyboard } from "./useSlideKeyboard";
 
 function Keys(props: { putAway?: () => void }) {
@@ -75,6 +76,71 @@ describe("the stage's keys, by where they are pressed", () => {
     expect(putAway).not.toHaveBeenCalled();
     fireEvent.keyDown(getByText("Plain"), { key: "Escape" });
     expect(putAway).toHaveBeenCalledOnce();
+  });
+
+  describe("with picked slides side by side on the stage", () => {
+    const deleteSlides = vi.fn(async () => {});
+    const shown = () => stageSlides(useApp.getState());
+    const sideBySide = (editing: boolean) => {
+      const utils = render(<Keys />);
+      useApp.setState({
+        deck: deckFor(DECK_HTML),
+        selected: "intro",
+        railSelected: ["intro", "outro"],
+        presenting: false,
+        editing,
+        deleteSlides,
+      });
+      expect(shown()).toEqual(["intro", "outro"]);
+      return utils;
+    };
+    const fromSlide = (container: HTMLElement, key: string) =>
+      act(
+        () =>
+          void window.dispatchEvent(
+            new MessageEvent("message", {
+              data: { type: "slop:key", key },
+              source: container.querySelector("iframe")!.contentWindow,
+            }),
+          ),
+      );
+
+    afterEach(() => {
+      useApp.setState({
+        deck: null,
+        selected: null,
+        railSelected: [],
+        editing: false,
+        deleteSlides: real.deleteSlides,
+      });
+      deleteSlides.mockClear();
+    });
+
+    it("goes to one slide with the arrows, pressed in the app or in the slide", () => {
+      const { container, getByText } = sideBySide(false);
+      fireEvent.keyDown(getByText("Plain"), { key: "ArrowRight" });
+      expect(shown()).toEqual(["#2"]);
+      act(() => useApp.getState().pickSlides(["intro", "#2"]));
+      expect(shown()).toEqual(["intro", "#2"]);
+      fromSlide(container, "ArrowRight");
+      expect(shown()).toEqual(["outro"]);
+    });
+
+    it("shows the current slide alone on Escape", () => {
+      const { container } = sideBySide(false);
+      fromSlide(container, "Escape");
+      expect(useApp.getState()).toMatchObject({ selected: "intro", railSelected: [] });
+      expect(shown()).toEqual(["intro"]);
+    });
+
+    it("deletes none of them while one is edited: Delete is the editor's, wherever it is pressed off the rail", () => {
+      const { container, getByText } = sideBySide(true);
+      fromSlide(container, "Delete");
+      fromSlide(container, "Backspace");
+      fireEvent.keyDown(getByText("Plain"), { key: "Backspace" });
+      expect(deleteSlides).not.toHaveBeenCalled();
+      expect(shown()).toEqual(["intro", "outro"]);
+    });
   });
 
   describe("forwarded by the slide preview", () => {

@@ -15,7 +15,7 @@ import {
 } from "../lib/editTools";
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
-import { deckMode, editingSlide, searchHighlight, useApp } from "../store";
+import { deckMode, editingSlide, searchHighlight, stageSlides, useApp } from "../store";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
@@ -25,7 +25,7 @@ import { DiscardButton } from "./stage/DiscardButton";
 import { toolMessage } from "./stage/editKeys";
 import { slideReport, useEditorMenu, useSlideReport } from "./stage/editorState";
 import { useFrameMessages } from "./stage/messages";
-import { StageArea, StageInk } from "./stage/StageArea";
+import { StageArea, type StageCell, StageInk } from "./stage/StageArea";
 import { StageFooter } from "./stage/StageFooter";
 import { usePasteboard } from "./stage/usePasteboard";
 import { useSlideEditing } from "./stage/useSlideEditing";
@@ -34,7 +34,9 @@ import { ViewToolbar } from "./ViewToolbar";
 
 /**
  * The current slide, fit to the available space with letterboxing, between the tools of the
- * deck's mode and the row under the slide.
+ * deck's mode and the row under the slide. With a few slides picked in the rail, they show side
+ * by side (see `stageSlides`): the current one is worked on as ever, the others are stills, and
+ * a click on one of them makes it the current one.
  *
  * It renders when the deck, the slide shown, the mode or a tool changes. What changes many times
  * a second is not its state, and is read by just what shows it: the slide editor's reports (see
@@ -126,6 +128,14 @@ export function Stage() {
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
   const locked = !!slide?.locked;
+  const shown = useApp(useShallow(stageSlides));
+  const cells = useMemo(
+    () =>
+      (deck?.slides ?? []).flatMap((each, at): StageCell[] =>
+        shown.includes(each.id) ? [{ slide: each, number: at + 1 }] : [],
+      ),
+    [deck?.slides, shown],
+  );
 
   if (!deck) return null;
 
@@ -168,9 +178,11 @@ export function Stage() {
         areaRef={areaRef}
         deckId={deck.id}
         slide={slide}
+        slides={cells}
         size={canvas}
         editing={editing}
         inkRef={inkRef}
+        onNeighbors={pasteboard.setNeighbors}
         onFrameReady={(frame) => {
           pasteboard.onFrameReady(frame);
           editor.onFrameReady(frame);
@@ -201,7 +213,7 @@ export function Stage() {
           />
         )}
       </StageArea>
-      <EditorMenu onAction={editor.runMenuAction} onClose={editor.closeMenu} />
+      <EditorMenu onAction={editor.runMenuAction} onMoveTo={editor.moveToSlide} onClose={editor.closeMenu} />
       {deck.slides.length > 0 && (
         <StageFooter
           index={index}
@@ -221,7 +233,11 @@ export function Stage() {
  * The menu a right-click in the slide editor opened, while it is open. It reads what the editor
  * reported of the selection for itself, so the stage does not render as the editor reports.
  */
-function EditorMenu(props: { onAction: (action: EditMenuAction) => void; onClose: () => void }) {
+function EditorMenu(props: {
+  onAction: (action: EditMenuAction) => void;
+  onMoveTo: (slide: string) => void;
+  onClose: () => void;
+}) {
   const menu = useEditorMenu();
   const running = useApp((s) => s.running);
   const canPasteStyle = useApp((s) => s.copiedStyle !== null);
@@ -229,6 +245,8 @@ function EditorMenu(props: { onAction: (action: EditMenuAction) => void; onClose
   const several = useSlideReport((report) => (report.geometry?.count ?? 0) > 1);
   const group = useSlideReport((report) => !!report.selection?.group);
   const locked = useSlideReport((report) => !!report.selection?.locked);
+  // The other slides shown beside this one, but for the locked ones, which take nothing.
+  const moveTargets = useApp(useShallow(moveTargetsOf));
   if (!menu) return null;
   return (
     <EditContextMenu
@@ -239,11 +257,23 @@ function EditorMenu(props: { onAction: (action: EditMenuAction) => void; onClose
       several={several}
       group={group}
       locked={locked}
+      moveTargets={moveTargets.map((id) => ({ id, number: numberOf(id) }))}
       onAction={props.onAction}
+      onMoveTo={props.onMoveTo}
       onClose={props.onClose}
     />
   );
 }
+
+/** The slides an element of the current one can be moved to: the unlocked ones shown beside it. */
+function moveTargetsOf(state: Parameters<typeof stageSlides>[0]): string[] {
+  const shown = stageSlides(state);
+  const free = (id: string) => !state.deck?.slides.find((slide) => slide.id === id)?.locked;
+  return shown.filter((id) => id !== state.selected && free(id));
+}
+
+/** A slide's number in the open deck. */
+const numberOf = (id: string) => (useApp.getState().deck?.slides.findIndex((slide) => slide.id === id) ?? -1) + 1;
 
 /** The stage's own tools row, for the modes that work on the slide it shows. */
 function ModeBar({ children }: { children: ReactNode }) {

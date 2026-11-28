@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { lastError, toastTexts } from "./errors";
-import { railStateOf } from "./slides";
+import { GRID_MAX, railStateOf, stageSlides } from "./slides";
 import { backend, calls, DECK, freshStore, historyEntry, historyStatus, resetBackend, type TestStore } from "./testing";
 
 beforeEach(resetBackend);
@@ -48,6 +48,80 @@ describe("slide selection", () => {
     expect(useApp.getState().selected).toBe("outro");
     useApp.getState().setDeck(deckFor(DECK_HTML.replace(` id="outro"`, ` id="end"`)));
     expect(useApp.getState().selected).toBe("intro");
+  });
+});
+
+describe("the slides the stage shows side by side", () => {
+  /** A deck of `count` slides, s0, s1, … */
+  const many = (count: number): Deck => {
+    const deck = deckFor(DECK_HTML);
+    return { ...deck, slides: Array.from({ length: count }, (_, i) => ({ ...deck.slides[0]!, id: `s${i}` })) };
+  };
+  const shown = (useApp: TestStore) => stageSlides(useApp.getState());
+
+  it("is just the selected slide until a few are picked", async () => {
+    const useApp = await freshStore();
+    expect(shown(useApp)).toEqual([]);
+    useApp.setState({ deck: many(8), selected: "s3" });
+    expect(shown(useApp)).toEqual(["s3"]);
+    // Picked in any order, they show in the deck's.
+    useApp.getState().pickSlides(["s5", "s3"]);
+    expect(shown(useApp)).toEqual(["s3", "s5"]);
+    useApp.getState().pickSlides(["s5", "s4", "s3", "s2", "s1", "s0"]);
+    expect(shown(useApp)).toHaveLength(GRID_MAX);
+    expect(shown(useApp)).toEqual(["s0", "s1", "s2", "s3", "s4", "s5"]);
+  });
+
+  it("is the selected slide alone with more picked than fit", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(8), selected: "s3" });
+    useApp.getState().pickSlides(["s0", "s1", "s2", "s3", "s4", "s5", "s6"]);
+    expect(useApp.getState().railSelected).toHaveLength(7);
+    expect(shown(useApp)).toEqual(["s3"]);
+  });
+
+  it("is the selected slide alone when that is not one of the picked", async () => {
+    const useApp = await freshStore();
+    // The stage follows the agent to a slide outside the picks (see ./events.ts).
+    useApp.setState({ deck: many(8), selected: "s7", railSelected: ["s1", "s2"] });
+    expect(shown(useApp)).toEqual(["s7"]);
+    // One pick left after the others went from the deck is no grid either.
+    useApp.setState({ selected: "s1", railSelected: ["s1"] });
+    expect(shown(useApp)).toEqual(["s1"]);
+  });
+
+  it("follows the deck as picked slides go from it", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(8), selected: "s3" });
+    useApp.getState().pickSlides(["s1", "s3", "s5"]);
+    expect(shown(useApp)).toEqual(["s1", "s3", "s5"]);
+    const without = (...gone: string[]) => {
+      const deck = useApp.getState().deck!;
+      return { ...deck, slides: deck.slides.filter((slide) => !gone.includes(slide.id)) };
+    };
+    // One of the others went (the agent deleted it): the rest still show.
+    useApp.getState().setDeck(without("s5"));
+    expect(shown(useApp)).toEqual(["s1", "s3"]);
+    // The one worked on went: a slide is shown alone, whichever the stage went to.
+    useApp.getState().setDeck(without("s3"));
+    expect(shown(useApp)).toEqual([useApp.getState().selected]);
+    expect(useApp.getState().selected).not.toBe("s3");
+  });
+
+  it("activateSlide goes to another of them and keeps the picks; select leaves them", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: many(8), selected: "s1" });
+    useApp.getState().pickSlides(["s1", "s2", "s4"]);
+    const rev = useApp.getState().revealRev;
+    useApp.getState().activateSlide("s4");
+    expect(useApp.getState()).toMatchObject({ selected: "s4", railSelected: ["s1", "s2", "s4"], revealRev: rev + 1 });
+    expect(shown(useApp)).toEqual(["s1", "s2", "s4"]);
+    // A plain click in the rail, the arrows and the footer's buttons go to one slide.
+    useApp.getState().select("s2");
+    expect(shown(useApp)).toEqual(["s2"]);
+    useApp.getState().pickSlides(["s1", "s2"]);
+    useApp.getState().selectRelative(1);
+    expect(shown(useApp)).toEqual(["s3"]);
   });
 });
 

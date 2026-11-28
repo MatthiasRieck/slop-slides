@@ -195,7 +195,7 @@
       var at = givenPoint(data) || pastePoint();
       insertImages(data.images, at.x, at.y);
     } else if (data.type === "slop:edit-paste") {
-      pasteElement(data.html, givenPoint(data));
+      pasteElement(data.html, givenPoint(data), data.group);
     } else if (data.type === "slop:edit-paste-text" && typeof data.text === "string") {
       pasteText(data.text, data.style, givenPoint(data));
     } else if (data.type === "slop:edit-replace-image" && typeof data.src === "string") {

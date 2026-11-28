@@ -278,7 +278,8 @@ pub fn slide_source(id: String, slide: String) -> Result<deck::SlideSource> {
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started. `group` names a run of small edits that belong together (the editor's
 /// arrow-key nudges of the same elements): their saves, close together, are one step to undo
-/// instead of each pushing an older version out of the history.
+/// instead of each pushing an older version out of the history. A group starting `transfer:`
+/// spans slides: an element moved from one slide to another is saved to both under it.
 #[tauri::command(async)]
 pub fn update_slide(
     id: String,
@@ -293,10 +294,19 @@ pub fn update_slide(
     Ok(deck)
 }
 
-/// The history's entry for an edit of `slide` on the stage, one of the run `group` if any.
+/// A run of edits that moves elements from one slide to another starts with this.
+const TRANSFER_GROUP: &str = "transfer:";
+
+/// The history's entry for an edit of `slide` on the stage, one of the run `group` if any. A
+/// run belongs to its slide, except a transfer, whose two edits (the element leaves one slide
+/// and lands on another) are one step to undo.
 fn slide_edit(slide: &str, group: Option<&str>) -> Change {
     let change = Change::new(Source::Edit, "Edit slide");
     match group {
+        // The second edit waits for the other slide to load, so no pause splits the two.
+        Some(group) if group.starts_with(TRANSFER_GROUP) => {
+            change.grouped_whole(format!("edit:{group}"))
+        }
         Some(group) => change.grouped(format!("edit:{slide}:{group}")),
         None => change,
     }
@@ -394,5 +404,51 @@ mod tests {
         // The same elements on another slide, or other elements, are another run.
         assert_ne!(slide_edit("plan", Some("nudge:0.2")).group, nudge.group);
         assert_ne!(slide_edit("intro", Some("nudge:1")).group, nudge.group);
+    }
+
+    #[test]
+    fn a_transfer_between_slides_is_one_group_whatever_the_slide() {
+        let from = slide_edit("intro", Some("transfer:k3x"));
+        assert_eq!(from.group.as_deref(), Some("edit:transfer:k3x"));
+        assert_eq!(slide_edit("plan", Some("transfer:k3x")).group, from.group);
+        // Its halves join however long the second takes; a slide's nudges go stale.
+        assert!(from.whole);
+        assert!(!slide_edit("intro", Some("nudge:0.2")).whole);
+        assert_ne!(slide_edit("plan", Some("transfer:p9")).group, from.group);
+        // Only at the start: a nudge group naming it stays with its slide.
+        assert_eq!(
+            slide_edit("intro", Some("nudge:transfer:1"))
+                .group
+                .as_deref(),
+            Some("edit:intro:nudge:transfer:1")
+        );
+    }
+
+    #[test]
+    fn undo_takes_back_both_halves_of_a_transfer_but_one_slides_nudges() {
+        let temp = crate::test_support::TempDir::new("transfer");
+        let home = temp.join("home");
+        let file = temp.write("deck.html", "a:title b:");
+        let save = |slide: &str, group: &str, source: &str| {
+            history::change(&home, &file, slide_edit(slide, Some(group)), || {
+                std::fs::write(&file, source).map_err(Into::into)
+            })
+            .unwrap();
+        };
+        let read = || std::fs::read_to_string(&file).unwrap();
+
+        save("a", "transfer:k3x", "a: b:");
+        save("b", "transfer:k3x", "a: b:title");
+        history::undo(&home, &file).unwrap();
+        assert_eq!(read(), "a:title b:", "the element is back where it was");
+
+        save("a", "nudge:0", "a:title> b:");
+        save("b", "nudge:0", "a:title> b:>");
+        history::undo(&home, &file).unwrap();
+        assert_eq!(
+            read(),
+            "a:title> b:",
+            "each slide's nudges are its own step"
+        );
     }
 }

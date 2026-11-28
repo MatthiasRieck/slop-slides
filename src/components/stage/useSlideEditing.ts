@@ -14,10 +14,21 @@ import {
   parseSelection,
   parseTheme,
 } from "../../lib/editTools";
+import { FRAME_LOAD_LIMIT } from "../../lib/frameLoads";
 import { keepsKey } from "../../lib/keys";
 import { dismissTopLayer } from "../../lib/layers";
 import { noteAssetsWritten } from "../../lib/ownAssets";
-import { editingSlide, reportingErrors, showError, useApp } from "../../store";
+import {
+  editingSlide,
+  editsSaved,
+  reportingErrors,
+  SKETCH_TARGET_ATTR,
+  showError,
+  showInfo,
+  stageSlides,
+  undoNewestChange,
+  useApp,
+} from "../../store";
 import { parseSvgOpen, useSvgEditor } from "../../svgStore";
 import type { EditMenuAction } from "../EditContextMenu";
 import { type EditShortcut, editShortcut, isEditTool, runEditKey, runHistoryKey, toolMessage } from "./editKeys";
@@ -42,6 +53,42 @@ interface MenuPoint {
   y: number;
 }
 
+/** An element on its way from one of the slides shown side by side to another (see `useSlideEditing`). */
+interface Transfer {
+  /** The deck the two slides are in. */
+  deck: string;
+  from: string;
+  to: string;
+  /** The element as the editor copies it, and where on the other slide it goes; null where it was. */
+  html: string;
+  x: number | null;
+  y: number | null;
+  /** What the two saves of the move share, so that one undo takes back both. */
+  group: string;
+  /**
+   * The save of its own slide without it, resolving to whether it was saved; null for a copy
+   * dragged over, which leaves that slide as it was.
+   */
+  removal: Promise<boolean> | null;
+  /**
+   * How far it is. Its own slide is `saving` without it, then the other slide's editor is
+   * `loading`, then that editor has it (`pasted`), then the other slide is saving with it
+   * (`landing`). Then it is `over`, as it is once it was given up.
+   */
+  phase: "saving" | "loading" | "pasted" | "landing" | "over";
+  /** Runs out when the other slide's editor is too long in loading, or in saying what it made of the element. */
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+/** The group the deck's history keeps the saves of `transfer` under (see `slide_edit` in src-tauri/src/commands/deck.rs). */
+const historyGroup = (transfer: Transfer) => `edit:${transfer.group}`;
+
+/** How the deck's history labels a slide edit (see src-tauri/src/commands/deck.rs). */
+const EDIT_SLIDE_LABEL = "Edit slide";
+
+/** A whole number of slide pixels, or null. */
+const pixelOrNull = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : null);
+
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor/):
  * saves the markup it posts, keeps the selection across a reload of the slide, and
@@ -50,6 +97,15 @@ interface MenuPoint {
  * copied there, images (saved as assets) or text from anywhere. The shortcuts on the selection
  * work with the focus in the app as they do in the slide (see `editShortcut`), and the look copied
  * from an element is kept here, so it can be pasted on another slide.
+ *
+ * With several slides side by side, an element dropped on another one moves there
+ * (`slop:edit-transfer`): its own slide is saved without it first, then the other slide becomes
+ * the one worked on, and its editor, once loaded, is handed the element (`slop:edit-paste`). The
+ * other slide's editor is loaded only then, so it knows the element is gone from the first and
+ * keeps its ids. The move is done once the other slide is saved with the element. Until then it
+ * is given up as soon as it cannot get there (the editor does not load or save in time, the save
+ * fails, the user goes elsewhere or undoes, the stage goes away), and the first slide gets the
+ * element back: the save that took it off is undone, and no other change (see `undoNewest`).
  *
  * What the editor reports about itself (its selection, where that is, the layers, …) goes to
  * `useEditorState`, for the controls that show it to read: nothing of it is state of the stage,
@@ -65,6 +121,92 @@ export function useSlideEditing(
   const frame = useRef<HTMLIFrameElement | null>(null);
 
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
+
+  // The element being moved to another slide, until that slide saves with it; and the last save of a slide.
+  const moving = useRef<Transfer | null>(null);
+  const lastSave = useRef<{ group: string | null; saved: Promise<boolean> } | null>(null);
+  const endTransfer = useCallback((transfer: Transfer) => {
+    if (transfer.timer) clearTimeout(transfer.timer);
+    transfer.timer = null;
+    transfer.phase = "over";
+    if (moving.current === transfer) moving.current = null;
+  }, []);
+  /** The element did not get to the other slide: its own slide gets it back. */
+  const failTransfer = useCallback(
+    async (transfer: Transfer) => {
+      if (transfer.phase === "over") return;
+      endTransfer(transfer);
+      if (transfer.removal) {
+        // Its slide was not saved without it, which is reported and loads the slide again as it was: nothing moved.
+        if (!(await transfer.removal)) return;
+        // That save is what is undone, and nothing else: not the change before it, should the user
+        // have undone the save already, nor a change in another deck.
+        const only = { deck: transfer.deck, group: historyGroup(transfer) };
+        if (!(await undoNewestChange(EDIT_SLIDE_LABEL, "move", only))) {
+          if (useApp.getState().deck?.id !== transfer.deck) {
+            showError(
+              "The element did not get to the other slide before its deck closed. Undo in that deck puts it back.",
+            );
+          }
+          return;
+        }
+      }
+      showError("The element could not be moved to the other slide; it is where it was.");
+    },
+    [endTransfer],
+  );
+  /** Gives up on the element if nothing more is heard of it for as long as a slide may take to load. */
+  const awaitTransfer = useCallback(
+    (transfer: Transfer) => {
+      if (transfer.timer) clearTimeout(transfer.timer);
+      transfer.timer = setTimeout(() => void failTransfer(transfer), FRAME_LOAD_LIMIT);
+    },
+    [failTransfer],
+  );
+  /** Moves what the editor took off its slide to the slide it was dropped on. */
+  const startTransfer = useCallback(
+    async (transfer: Transfer) => {
+      // One at a time: while an element is on its way, the next one goes back to its slide. One
+      // the other slide is saving with is as good as there, and ends with that save.
+      const before = moving.current;
+      if (before && before.phase !== "landing") return void failTransfer(transfer);
+      moving.current = transfer;
+      // The other slide's editor must load a deck in which the element is off this one.
+      await editsSaved();
+      const removed = transfer.removal === null || (await transfer.removal);
+      if (transfer.phase !== "saving") return;
+      // The save failed, which is reported and loads the slide again as it was: nothing moved.
+      if (!removed) return endTransfer(transfer);
+      const app = useApp.getState();
+      const target = app.deck?.slides.find((slide) => slide.id === transfer.to);
+      const shown = stageSlides(app).includes(transfer.to) && transfer.to !== transfer.from;
+      if (!shown || !target || target.locked) return void failTransfer(transfer);
+      transfer.phase = "loading";
+      awaitTransfer(transfer);
+      app.activateSlide(transfer.to);
+    },
+    [awaitTransfer, endTransfer, failTransfer],
+  );
+  // A move is given up as soon as it cannot be completed: the stage is on another slide than the
+  // one the move is at (the user went there, or undid the save, which shows its slide), on another
+  // deck, not editing any more, or gone. Once the other slide is saving with the element, that
+  // save alone decides: undoing then would take back a move that was made.
+  useEffect(() => {
+    const giveUp = () => {
+      const transfer = moving.current;
+      if (transfer && transfer.phase !== "landing") void failTransfer(transfer);
+    };
+    const offStore = useApp.subscribe((app) => {
+      const transfer = moving.current;
+      if (!transfer) return;
+      const at = transfer.phase === "saving" ? transfer.from : transfer.to;
+      if (app.deck?.id !== transfer.deck || app.selected !== at || !editingSlide(app)) giveUp();
+    });
+    return () => {
+      offStore();
+      giveUp();
+    };
+  }, [failTransfer]);
 
   /** Pastes from the clipboard: where pastes go, or with `at` (a point in the preview), centered there. */
   const paste = useCallback(async (at?: MenuPoint) => {
@@ -145,7 +287,51 @@ export function useSlideEditing(
           ? { slide: data.slide, path: data.select, also: Array.isArray(data.also) ? data.also : [] }
           : null;
         const group = typeof data.group === "string" ? data.group : undefined;
-        void useApp.getState().saveSlideEdit(data.slide, data.markup, group);
+        const transfer = moving.current;
+        const landing = transfer?.phase === "pasted" && transfer.to === data.slide ? transfer : null;
+        if (landing) {
+          // The slide an element was moved to saves with it: the move is done once that is saved.
+          landing.phase = "landing";
+          if (landing.timer) clearTimeout(landing.timer);
+          landing.timer = null;
+        }
+        // An undo on its way as the element landed took it back to its own slide: it is not saved on this one too.
+        const undone = () => !!landing?.removal && useApp.getState().history?.redo?.group === historyGroup(landing);
+        const save = useApp.getState().saveSlideEdit;
+        const saved = landing
+          ? save(data.slide, data.markup, group, () => !undone())
+          : save(data.slide, data.markup, group);
+        lastSave.current = { group: group ?? null, saved };
+        if (!landing) return;
+        void saved.then((landed) => {
+          if (landed) endTransfer(landing);
+          else void failTransfer(landing);
+        });
+      }),
+      // An element was dropped on another of the slides shown, or sent there from the menu. The
+      // save of its own slide without it, if there was one, came just before.
+      "slop:edit-transfer": aboutSlide((data) => {
+        const deck = useApp.getState().deck?.id;
+        if (!deck || typeof data.to !== "string" || typeof data.html !== "string") return;
+        const group = typeof data.group === "string" ? data.group : "";
+        const last = lastSave.current;
+        void startTransfer({
+          deck,
+          from: data.slide,
+          to: data.to,
+          html: data.html,
+          x: pixelOrNull(data.x),
+          y: pixelOrNull(data.y),
+          group,
+          removal: last && group !== "" && last.group === group ? last.saved : null,
+          phase: "saving",
+          timer: null,
+        });
+      }),
+      "slop:edit-transfer-refused": aboutSlide((data) => {
+        const slides = useApp.getState().deck?.slides ?? [];
+        const number = slides.findIndex((slide) => slide.id === data.to) + 1;
+        showInfo(`Slide ${number > 0 ? `${number} ` : ""}is locked: nothing can be moved onto it.`);
       }),
       "slop:edit-overflow": aboutSlide((data) => {
         if (Array.isArray(data.items)) reportFromEditor(data.slide, "overflow", data.items.map(String));
@@ -246,7 +432,7 @@ export function useSlideEditing(
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPress, true);
     };
-  }, [messages, paste, post]);
+  }, [messages, paste, post, endTransfer, failTransfer, startTransfer]);
 
   // What the editor said is the stage's while it is there.
   useEffect(() => resetEditorState, []);
@@ -280,6 +466,11 @@ export function useSlideEditing(
         post({ type: "slop:edit-keep-ratio", on: keepRatio });
       },
       closeMenu,
+      /** Moves the selection to `slide`, another of the slides shown side by side, where it was on its own. */
+      moveToSlide: (slide: string) => {
+        closeMenu();
+        post({ type: "slop:edit-move-to", to: slide });
+      },
       /** Does what a choice of the open context menu asks for, and closes it. */
       runMenuAction: (action: EditMenuAction) => {
         const opened = useEditorState.getState().menu;
@@ -355,6 +546,15 @@ export function useSlideEditing(
           const also = again.also.length > 0 ? { also: again.also } : {};
           post({ type: "slop:edit-select", path: again.path, ...also });
         }
+        // The editor of the slide an element is moving to is up: it takes the element from here.
+        const transfer = moving.current;
+        const edits = /&edit=/.test(loaded.getAttribute("src") ?? "");
+        if (editing && edits && transfer?.phase === "loading" && transfer.to === selected) {
+          transfer.phase = "pasted";
+          awaitTransfer(transfer);
+          const { html, x, y, group } = transfer;
+          post({ type: "slop:edit-paste", html, x, y, space: "slide", group });
+        }
       },
       // Takes the selection, wires and any panning out of the preview, for a screenshot of just the slide.
       clearSelection: () => {
@@ -363,7 +563,7 @@ export function useSlideEditing(
         post({ type: "slop:edit-select", path: null, quiet: true });
       },
     };
-  }, [paste, post, resetView]);
+  }, [paste, post, resetView, awaitTransfer]);
 }
 
 /**
@@ -386,7 +586,10 @@ function useImageDrops(areaRef: RefObject<HTMLDivElement | null>, frame: RefObje
     const covers = (point: DropPoint) => {
       const { deck, selected } = useApp.getState();
       const editing = editingSlide(useApp.getState());
-      const area = areaRef.current?.getBoundingClientRect();
+      // Of several slides side by side, only the one worked on takes them: its editor is the one there is.
+      const several = stageSlides(useApp.getState()).length > 1;
+      const box = several ? areaRef.current?.querySelector(`[${SKETCH_TARGET_ATTR}]`) : areaRef.current;
+      const area = box?.getBoundingClientRect();
       const inside =
         !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
       return !!deck && editing && !!selected && !!frame.current && inside;

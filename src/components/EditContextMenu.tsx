@@ -7,6 +7,9 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { keepKeys } from "@/hooks/useOverlayLayer";
 import type { EditElement, StackOrder } from "../lib/editTools";
@@ -85,8 +88,9 @@ const isDrawing = (element: EditElement | null) => !!element && /^<svg[\s>]/i.te
  * and `onAction`'s part (the stage hands it back to the slide).
  *
  * It offers only what applies to what was clicked: on an empty spot, pasting there, selecting
- * everything, unlocking, the slide's background and a screenshot of it; on a locked element, little more than
- * unlocking it; on anything else, what can be done to the selection.
+ * everything, unlocking, the slide's background and a screenshot of it; on a locked element,
+ * little more than unlocking it; on anything else, what can be done to the selection. With other
+ * slides shown beside this one, that includes moving the selection to one of them.
  */
 export function EditContextMenu(props: {
   x: number;
@@ -111,7 +115,11 @@ export function EditContextMenu(props: {
   group?: boolean;
   /** The selection is locked. */
   locked?: boolean;
+  /** The other slides shown beside this one that take what is moved to them, by their number in the deck. */
+  moveTargets?: { id: string; number: number }[];
   onAction: (action: EditMenuAction) => void;
+  /** Moves the selection to the slide with this id; it closes the menu, as `onAction` does. */
+  onMoveTo?: (slide: string) => void;
   onClose: () => void;
 }) {
   const { x, y, element, running, onAction, onClose } = props;
@@ -137,6 +145,26 @@ export function EditContextMenu(props: {
     </DropdownMenuItem>
   );
 
+  const targets = props.moveTargets ?? [];
+  const moveTo = targets.length > 0 && (
+    <DropdownMenuSub key="move-to">
+      <DropdownMenuSubTrigger>Move to slide</DropdownMenuSubTrigger>
+      <DropdownMenuSubContent aria-label="Move to slide" onKeyDown={keepKeys()}>
+        {targets.map((target) => (
+          <DropdownMenuItem
+            key={target.id}
+            onClick={() => {
+              picked.current = true;
+              props.onMoveTo?.(target.id);
+            }}
+          >
+            Slide {target.number}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+
   const count = props.elements?.length ?? (element ? 1 : 0);
   const several = !!props.several || count > 1;
   const ask: Item = {
@@ -159,6 +187,7 @@ export function EditContextMenu(props: {
           [button(COPY_STYLE), props.canPasteStyle && button(PASTE_STYLE)],
           ORDER_ITEMS.map((item) => button(item)),
           [several && button(GROUP), props.group && button(UNGROUP), button(LOCK)],
+          [moveTo],
           // Each of several elements, and of what a group holds, flips if it can.
           props.flippable || several || props.group ? FLIP_ITEMS.map((item) => button(item)) : [],
           [button(ask, busy), element.added && !several && button(TIDY, busy)],

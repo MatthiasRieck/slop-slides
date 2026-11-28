@@ -159,4 +159,46 @@ describe("EditContextMenu", () => {
     window.removeEventListener("keydown", onKey);
     expect(onKey).not.toHaveBeenCalled();
   });
+
+  describe("with other slides shown beside this one", () => {
+    const TARGETS = [
+      { id: "plan", number: 2 },
+      { id: "outro", number: 5 },
+    ];
+    const moveTo = () => screen.queryByRole("menuitem", { name: "Move to slide" });
+
+    it("opens the slides the selection can move to, and says which was picked instead of an action", async () => {
+      const onMoveTo = vi.fn();
+      const { onAction, onClose } = menu({ moveTargets: TARGETS, onMoveTo });
+      // The move is one more choice of the menu, which opens the slides.
+      expect(items()).toContain("Move to slide");
+      expect(screen.queryByRole("menuitem", { name: "Slide 2" })).toBeNull();
+      fireEvent.click(moveTo()!);
+      const slides = await screen.findByRole("menu", { name: "Move to slide" });
+      expect(
+        within(slides)
+          .getAllByRole("menuitem")
+          .map((each) => each.textContent),
+      ).toEqual(["Slide 2", "Slide 5"]);
+      fireEvent.click(within(slides).getByRole("menuitem", { name: "Slide 5" }));
+      expect(onMoveTo).toHaveBeenCalledExactlyOnceWith("outro");
+      // Picking a slide is what closes the menu: it is not reported as closed beside that.
+      expect(onAction).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("offers no move without them, on an empty spot or on a locked element", () => {
+      const first = menu();
+      expect(moveTo()).toBeNull();
+      first.unmount();
+      const second = menu({ moveTargets: [] });
+      expect(moveTo()).toBeNull();
+      second.unmount();
+      const third = menu({ moveTargets: TARGETS, element: null });
+      expect(moveTo()).toBeNull();
+      third.unmount();
+      menu({ moveTargets: TARGETS, locked: true });
+      expect(moveTo()).toBeNull();
+    });
+  });
 });

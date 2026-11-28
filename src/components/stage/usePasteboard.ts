@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { zoomBox } from "../../lib/ink";
 import { isMod, keepsKey } from "../../lib/keys";
 import { perFrame } from "../../lib/perFrame";
-import { useApp } from "../../store";
+import { stageSlides, useApp } from "../../store";
+import type { Neighbor } from "./grid";
 import type { FrameMessages } from "./messages";
 import { type PasteboardView, useStageView } from "./stageView";
 
@@ -41,11 +42,25 @@ export function zoomKey(
  * pressed in the app (see `zoomKey`; the preview has the same keys for when the focus is in it)
  * zoom around the middle of the view.
  *
+ * With several slides side by side, the pasteboard lies over the others. It is told where they
+ * are (`slop:neighbors`), and says when one of them was clicked (`slop:activate`), which makes that
+ * the slide worked on.
+ *
  * The view is kept in `useStageView`, once per animation frame however often the pasteboard
  * reports it, for what moves with the slide to read. What this gives back never changes.
  */
 export function usePasteboard(messages: FrameMessages) {
   const frame = useRef<HTMLIFrameElement | null>(null);
+  // The slides beside the one shown, and what the preview was last told of them.
+  const neighbors = useRef<Neighbor[]>([]);
+  const told = useRef("[]");
+  /** Tells the preview where the other slides are, unless it knows; one that just loaded knows of none. */
+  const tellNeighbors = useCallback(() => {
+    const cells = JSON.stringify(neighbors.current);
+    if (cells === told.current) return;
+    told.current = cells;
+    frame.current?.contentWindow?.postMessage({ type: "slop:neighbors", cells: neighbors.current }, "*");
+  }, []);
 
   useEffect(() => {
     const show = perFrame<PasteboardView>((view) => useStageView.setState({ view }));
@@ -57,6 +72,12 @@ export function usePasteboard(messages: FrameMessages) {
       "slop:view": (data) => {
         if (data.slide !== useApp.getState().selected || ![data.x, data.y, data.k].every(Number.isFinite)) return;
         show.push({ slide: data.slide, x: data.x, y: data.y, k: data.k });
+      },
+      // A click on one of the slides beside the one shown: that one is worked on now, the others stay.
+      "slop:activate": (data) => {
+        const app = useApp.getState();
+        if (data.slide !== app.selected || data.to === app.selected) return;
+        if (stageSlides(app).includes(data.to)) app.activateSlide(data.to);
       },
     });
     // A different slide starts centered.
@@ -93,12 +114,25 @@ export function usePasteboard(messages: FrameMessages) {
     zoomBy: useCallback((factor: number) => send({ zoomBy: factor }), [send]),
     /** Zooms to `k` times the size the slide fits the stage at, around the middle of the view. */
     zoomTo: useCallback((k: number) => send({ zoomTo: k }), [send]),
-    onFrameReady: useCallback((loaded: HTMLIFrameElement) => {
-      frame.current = loaded;
-      const { view } = useStageView.getState();
-      if (view && view.slide === useApp.getState().selected) {
-        loaded.contentWindow?.postMessage({ type: "slop:camera", x: view.x, y: view.y, k: view.k }, "*");
-      }
-    }, []),
+    /** Where the slides beside the one shown are in its preview (see `Neighbor`); none when it is alone. */
+    setNeighbors: useCallback(
+      (cells: Neighbor[]) => {
+        neighbors.current = cells;
+        tellNeighbors();
+      },
+      [tellNeighbors],
+    ),
+    onFrameReady: useCallback(
+      (loaded: HTMLIFrameElement) => {
+        frame.current = loaded;
+        const { view } = useStageView.getState();
+        if (view && view.slide === useApp.getState().selected) {
+          loaded.contentWindow?.postMessage({ type: "slop:camera", x: view.x, y: view.y, k: view.k }, "*");
+        }
+        told.current = "[]";
+        tellNeighbors();
+      },
+      [tellNeighbors],
+    ),
   };
 }

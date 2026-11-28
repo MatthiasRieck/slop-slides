@@ -502,13 +502,14 @@
     commit();
   }
 
-  function removeSelected() {
-    var group = movable();
-    if (!group.length) return;
+  /** Removes the selection and saves; `group` is the save's group, if it is one of a run (see commit). */
+  function removeSelected(group) {
+    var list = movable();
+    if (!list.length) return;
     finishEditing();
     select(null);
-    group.forEach(removeElement);
-    commit();
+    list.forEach(removeElement);
+    commit(group);
   }
 
   function removeElement(el) {

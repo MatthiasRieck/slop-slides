@@ -72,6 +72,8 @@ pub struct Change {
     pub label: String,
     /// Consecutive changes with the same group, close together, become one entry.
     pub group: Option<String>,
+    /// The group is one step however far apart its changes are (see `grouped_whole`).
+    pub whole: bool,
     /// The id of the chat message whose agent turn made the change.
     pub message: Option<String>,
 }
@@ -82,6 +84,7 @@ impl Change {
             source,
             label: label.into(),
             group: None,
+            whole: false,
             message: None,
         }
     }
@@ -89,6 +92,14 @@ impl Change {
     pub fn grouped(mut self, group: impl Into<String>) -> Self {
         self.group = Some(group.into());
         self
+    }
+
+    /// Like `grouped`, for a group that is one step to undo whenever its changes come: the
+    /// halves of one action, whose second may take longer than typing pauses do. Another
+    /// change in between still ends it.
+    pub fn grouped_whole(mut self, group: impl Into<String>) -> Self {
+        self.whole = true;
+        self.grouped(group)
     }
 
     pub fn chat(label: &str, message: Option<String>) -> Self {
@@ -275,7 +286,7 @@ impl History {
                 && change.group.is_some()
                 && head.group == change.group
                 && head.source == change.source
-                && time.saturating_sub(head.time) <= COALESCE_MS;
+                && (change.whole || time.saturating_sub(head.time) <= COALESCE_MS);
             if joins {
                 self.dropped.push(std::mem::replace(&mut head.hash, hash));
                 head.time = time;
@@ -694,6 +705,37 @@ mod tests {
         history.save().unwrap();
         deck.change(Change::new(Source::Notes, "Notes").grouped("notes:b"), "n5");
         assert_eq!(deck.journal().entries.len(), 4);
+    }
+
+    #[test]
+    fn a_whole_group_is_one_entry_however_late_its_next_change_comes() {
+        let deck = Deck::new("a:title b:");
+        let stale = || {
+            let mut history = History::load(&deck.home(), &deck.file()).unwrap();
+            history.journal.entries.last_mut().unwrap().time -= COALESCE_MS + 1;
+            history.save().unwrap();
+        };
+        let half = |group: &str| edit("Edit slide").grouped_whole(group);
+        deck.change(half("edit:transfer:x"), "a: b:");
+        stale();
+        deck.change(half("edit:transfer:x"), "a: b:title");
+        assert_eq!(deck.journal().entries.len(), 2);
+        deck.undo();
+        assert_eq!(deck.read(), "a:title b:");
+        deck.redo();
+
+        // Not across another change, though, nor with a group that is not whole.
+        deck.change(half("edit:transfer:y"), "a:title b:");
+        deck.change(edit("Edit slide"), "a:title! b:");
+        deck.change(half("edit:transfer:y"), "a: b:");
+        assert_eq!(deck.journal().entries.len(), 5);
+        deck.undo();
+        assert_eq!(deck.read(), "a:title! b:");
+        deck.redo();
+        deck.change(edit("Edit slide").grouped("edit:a:nudge:0"), "a:> b:");
+        stale();
+        deck.change(edit("Edit slide").grouped("edit:a:nudge:0"), "a:>> b:");
+        assert_eq!(deck.journal().entries.len(), 7);
     }
 
     #[test]

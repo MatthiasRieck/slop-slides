@@ -52,6 +52,18 @@
    delete, copy and duplicate together; their handles make way for a frame around each.
    ⌘D (or { type: "slop:edit-duplicate" } from the app) duplicates the selection, offset so the
    copy shows; Alt-drag leaves the original and drags a copy.
+   When several slides are on the stage (see `slop:neighbors` in pasteboard.js), an element let
+   go over another one moves there: it is cut from this slide, saved as a { type:
+   "slop:edit-commit" } with `group` "transfer:<nonce>", and then posted as { type:
+   "slop:edit-transfer", slide, to, html, x, y, group }, `html` being what a copy posts and (x,
+   y) the middle of where it was dropped, in slide `to`'s pixels. The app saves this slide, shows
+   the other and pastes there with the same group, so one undo takes both back. An Alt-dragged
+   copy goes the same way, with no save here, as this slide stays as it was. A locked slide takes
+   nothing: the elements go back, and { type: "slop:edit-transfer-refused", slide, to } says so.
+   { type: "slop:edit-move-to", to } from the app's menu moves the selection to slide `to` the
+   same way, with x and y null: to where it is on this slide. While a drag is over another
+   slide, that slide is outlined and nothing snaps; a tool does not draw on the empty space over
+   one, and nothing is dimmed around this slide.
    ⌘G (or { type: "slop:edit-group" }) puts the selection in a group: a `<div data-group>` at the
    slide's top level, absolutely positioned around what it holds, which sits in it absolutely
    positioned (an element that was in the layout leaves its placeholder slot behind). A click on
@@ -122,7 +134,9 @@
    - { type: "slop:edit-paste", html, x, y } an element copied here, sized and looking as it did,
      at the coordinates it had on the slide it came from: on another slide in the same place, on
      its own slide a step down and right of the original while that still sits there (and of
-     every copy already at the spot, so each copy shows);
+     every copy already at the spot, so each copy shows); with `space: "slide"` the point is in
+     slide pixels from the slide's top left, and with `group` the save is of that group (both
+     for what `slop:edit-transfer` took off another slide);
    - { type: "slop:edit-paste-text", text, style, x, y } a text box with `text`, centered on the
      pointer when it is over the slide and otherwise in the middle of the view;
    - { type: "slop:edit-paste-images", images: [{ src, w, h }], x, y } images, as dropped ones,

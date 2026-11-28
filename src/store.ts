@@ -7,7 +7,7 @@ import { createComposerSlice } from "./store/composer";
 import { createEditingSlice } from "./store/editing";
 import { reportingErrorsIn, showErrorIn, showInfoIn, showSuccessIn } from "./store/errors";
 import { initEventBridge as bridgeEvents } from "./store/events";
-import { createHistorySlice } from "./store/history";
+import { createHistorySlice, undoNewest } from "./store/history";
 import { createLintSlice } from "./store/lint";
 import { createModelsSlice } from "./store/models";
 import { createNarrationSlice } from "./store/narration";
@@ -24,6 +24,7 @@ import { createWorkspaceSlice, leaveForClose, settleUnsavedEdits as settleDeckEd
 export { SKETCH_TARGET_ATTR } from "./store/capture";
 export { COMPACT_COMMAND } from "./store/chat";
 export { type DeckMode, deckMode, editedSlidesOf, editingSlide } from "./store/editing";
+export { editsSaved } from "./store/editQueue";
 export { lastError, toastTexts } from "./store/errors";
 export { lintKey } from "./store/lint";
 export type {
@@ -50,7 +51,7 @@ export {
 export { commentsInScope, commentsToSend, deckComments, hasComments, hasReview, heldComment } from "./store/review";
 export type { RewindChoice } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
-export { listedSlides, railSelection } from "./store/slides";
+export { GRID_MAX, listedSlides, railSelection, stageSlides } from "./store/slides";
 export type { DesignChange } from "./store/templates";
 export {
   SETTINGS_SECTIONS,
@@ -107,6 +108,14 @@ export const showInfo = (text: string, action?: ToastAction) => showInfoIn(useAp
 
 /** Tells the user that what they asked for is done; `action` is a button in the toast. It goes away by itself. */
 export const showSuccess = (text: string, action?: ToastAction) => showSuccessIn(useApp, text, action);
+
+/**
+ * Takes back the open deck's newest change if its history still labels it `label`; says that the
+ * `what` cannot be undone otherwise. With `only`, just the change of that group in that deck (see
+ * `undoNewest`). Resolves to whether it was.
+ */
+export const undoNewestChange = (label: string, what: string, only?: { deck: string; group: string }) =>
+  undoNewest(useApp, label, what, only);
 
 /** Takes the toast with `id` away. */
 export const dismissToast = (id: number) => useApp.getState().dismissToast(id);

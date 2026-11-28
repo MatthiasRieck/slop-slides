@@ -609,6 +609,20 @@
     return { k: overflow.zoom(slide, rect), left: rect.left, top: rect.top };
   }
 
+  /**
+   * The other slide shown under the point (x, y) of this window, as { slide, x, y, locked }, when
+   * several are on the stage (see pasteboard.js); null on this slide, which may reach over one
+   * when zoomed in, and where there is none.
+   */
+  function neighborAt(x, y) {
+    if (typeof pasteboard.neighborAt !== "function") return null;
+    var at = camera();
+    var w = (slide.offsetWidth || 1920) * at.k;
+    var h = (slide.offsetHeight || 1080) * at.k;
+    if (x >= at.left && x <= at.left + w && y >= at.top && y <= at.top + h) return null;
+    return pasteboard.neighborAt(x, y) || null;
+  }
+
   /** Screen pixels per slide pixel. */
   function zoom() {
     return camera().k;

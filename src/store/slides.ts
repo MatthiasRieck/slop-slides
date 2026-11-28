@@ -34,6 +34,8 @@ export interface SlidesSlice {
    */
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
+  /** Puts another of the slides the stage shows side by side (see `stageSlides`) to work on, keeping the picks. */
+  activateSlide: (slide: string) => void;
   /**
    * Goes `delta` slides on from the selected one. While a search lists only the slides it found,
    * those are the ones it steps through, as they are the ones the rail shows.
@@ -158,6 +160,20 @@ const undoAction = (app: AppStore, label: string, what: string): ToastAction => 
 export function railSelection(state: Pick<AppState, "deck" | "selected" | "railSelected">): string[] {
   const picked = state.railSelected.length > 0 ? state.railSelected : state.selected ? [state.selected] : [];
   return (state.deck?.slides ?? []).map((s) => s.id).filter((id) => picked.includes(id));
+}
+
+/** How many picked slides the stage shows side by side; with more it shows just the selected one. */
+export const GRID_MAX = 6;
+
+/**
+ * The slides the stage shows, in deck order: the picked ones side by side when there are a few
+ * (2 to `GRID_MAX`) and the selected slide is one of them, else just the selected slide.
+ */
+export function stageSlides(state: Pick<AppState, "deck" | "selected" | "railSelected">): string[] {
+  const { selected } = state;
+  if (selected === null) return [];
+  const picked = railSelection(state);
+  return picked.length >= 2 && picked.length <= GRID_MAX && picked.includes(selected) ? picked : [selected];
 }
 
 /** The slide shown on the stage, if any. */
@@ -285,6 +301,8 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   select: (slide) => set((s) => ({ selected: slide, railSelected: unpicked(s), revealRev: s.revealRev + 1 })),
+
+  activateSlide: (slide) => set((s) => ({ selected: slide, revealRev: s.revealRev + 1 })),
 
   selectRelative: (delta) => {
     const { deck, selected } = get();

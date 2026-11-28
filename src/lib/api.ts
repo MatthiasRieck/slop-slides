@@ -190,6 +190,8 @@ export interface HistoryEntry {
   time: number;
   /** The chat message whose agent turn made the change. */
   message?: string;
+  /** The run of changes it is one step to undo of, if it belongs to one (see src-tauri/src/history.rs). */
+  group?: string | null;
 }
 
 /** What undo and redo would do in a deck now. */

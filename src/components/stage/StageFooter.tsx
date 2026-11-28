@@ -28,7 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Slide } from "../../lib/api";
 import { cn } from "../../lib/utils";
-import { useApp } from "../../store";
+import { GRID_MAX, useApp } from "../../store";
 import { LintStatus } from "../LintStatus";
 import { LayoutPicker } from "../Templates";
 import { useSlideReport } from "./editorState";
@@ -37,7 +37,8 @@ import { ZOOM_LEVELS, ZOOM_STEP } from "./usePasteboard";
 
 /**
  * The row under the slide: on the left the search and what shows or folds away the deck's
- * timeline under this row (see NarrationTimeline), in the middle the arrows between slides and
+ * timeline under this row (see NarrationTimeline) and, with more slides picked than the stage
+ * shows side by side, that it shows one, in the middle the arrows between slides and
  * where this one is (a field to jump to another), and on the right the zoom, what is wrong with
  * the slide or special about it (hidden, locked), its layout tools and the lint status.
  *
@@ -61,6 +62,7 @@ export const StageFooter = memo(function StageFooter(props: {
   const overflow = useSlideReport((report) => report.overflow);
   const running = useApp((s) => s.running);
   const locked = !!slide?.locked;
+  const picked = useApp((s) => s.railSelected.length);
   return (
     <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
       <div className="flex items-center gap-1">
@@ -74,6 +76,15 @@ export const StageFooter = memo(function StageFooter(props: {
           <Search />
         </Button>
         <TimelineToggle />
+        {picked > GRID_MAX && (
+          <span
+            data-testid="picked-note"
+            title={`The stage shows up to ${GRID_MAX} picked slides side by side`}
+            className="ml-1 truncate"
+          >
+            {picked} picked – showing one
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <Button

@@ -41,6 +41,9 @@
   var marqueeBox = overlay("data-slop-marquee");
   var readout = overlay("data-slop-readout");
   marqueeBox.style.display = readout.style.display = "none";
+  // Outlines the other slide a drag would drop on.
+  var dropBox = overlay("data-slop-drop");
+  dropBox.style.display = "none";
 
   /** The selected elements, the primary one first. */
   function allSelected() {
@@ -361,9 +364,10 @@
   /**
    * Pastes several copied elements, keeping how they lie to each other: where they were on the
    * slide they came from (a step away while an original still sits there), or with `at`, or
-   * when they do not say where they were, centered on that point or where pastes go.
+   * when they do not say where they were, centered on that point or where pastes go. `group` is
+   * the save's group, if any.
    */
-  function pasteGroup(clip, at) {
+  function pasteGroup(clip, at, group) {
     var boxes = clip.header.group.map(function (item) {
       return item.box && typeof item.box === "object" ? item.box : {};
     });
@@ -404,7 +408,7 @@
       moveTo(el, shift, shift);
     });
     selectMany(els);
-    commit();
+    commit(group);
   }
 
   function moveBy(el, dx, dy) {
@@ -661,8 +665,20 @@
     fitChildren(guides, 0, newDiv);
   }
 
+  /** Outlines the other slide `cell` a drag is over (see neighborAt), or with null, none. */
+  function showDrop(cell) {
+    if (!cell) {
+      dropBox.style.display = "none";
+      return;
+    }
+    mark(dropBox, "data-locked", cell.locked);
+    // The others are drawn at the slide's size, whatever this one is zoomed to.
+    dropBox.style.cssText = "left:" + cell.x + "px;top:" + cell.y + "px;width:" + slideWidth() + "px;height:" + slideHeight() + "px";
+  }
+
   function clearDragMarks() {
     clearGuides();
+    showDrop(null);
     readoutAt = null;
     readout.style.display = "none";
   }
@@ -724,6 +740,7 @@
   /** The first step of a move: the group to move, a copy of it with Alt, and what to snap to. */
   function startMove(event) {
     if (event.altKey) {
+      drag.originals = allSelected();
       duplicateSelected(0);
       drag.el = selected;
     }
@@ -738,8 +755,13 @@
       count: group.length,
       rotation: group.length > 1 ? null : angleOf(group[0]),
     };
-    // A line dragged on its own lets go of what it is not dragged along with.
+    // A line dragged on its own lets go of what it is not dragged along with. Its attributes
+    // as they were are kept, for a drop that is refused (see restick).
+    drag.unstuck = [];
     var lines = group.filter(function (el) {
+      var attrs = Array.prototype.map.call(el.attributes, function (attr) {
+        return { name: attr.name, value: attr.value };
+      });
       ENDS.forEach(function (end) {
         var target = stuckTo(el, end);
         var along = target && group.some(function (other) {
@@ -747,6 +769,7 @@
         });
         if (!along) unstick(el, end);
       });
+      if (el.attributes.length !== attrs.length) drag.unstuck.push({ el: el, attrs: attrs });
       return !!lineOf(el);
     });
     // The other lines stuck to the group follow it, so they are nothing to snap to.
@@ -771,7 +794,11 @@
       if (across) dy = 0;
       else dx = 0;
     }
-    var by = snapMove(dx / drag.zoom, dy / drag.zoom, event);
+    // Over another slide it is on its way there, and this slide's guides are nothing to go by.
+    drag.over = neighborAt(event.clientX, event.clientY);
+    showDrop(drag.over);
+    if (drag.over) clearGuides();
+    var by = drag.over ? { x: dx / drag.zoom, y: dy / drag.zoom } : snapMove(dx / drag.zoom, dy / drag.zoom, event);
     if (event.shiftKey) by = across ? { x: by.x, y: 0 } : { x: 0, y: by.y };
     drag.group.forEach(function (item) {
       moveTo(item.el, item.from.x + by.x, item.from.y + by.y);
@@ -781,6 +808,87 @@
     drag.by = { x: Math.round(first.from.x + by.x) - first.from.x, y: Math.round(first.from.y + by.y) - first.from.y };
     followStuck(drag.followers);
     showReadout(event);
+  }
+
+  /**
+   * A line holds on again to what a drag made it let go of (`was` is of startMove's `unstuck`).
+   * Each attribute is set anew in the order they were in, so the markup is what it was and
+   * nothing is left for the next save.
+   */
+  function restick(was) {
+    was.attrs.forEach(function (attr) {
+      var value = STUCK_ATTRS.indexOf(attr.name) >= 0 ? attr.value : was.el.getAttribute(attr.name);
+      if (value === null) return;
+      was.el.removeAttribute(attr.name);
+      was.el.setAttribute(attr.name, value);
+    });
+  }
+
+  /**
+   * Ends a move let go over another slide (`dropped` is its drag): the elements go to that
+   * slide, centered where they were dropped, or with Alt, the copy that was dragged does. A
+   * locked slide takes nothing, and they are back where they were.
+   */
+  function dropOnNeighbor(dropped) {
+    var cell = dropped.over;
+    var els = dropped.group.map(function (item) {
+      return item.el;
+    });
+    // The other slide is drawn at the slide's size, so a pixel of this window is one of its own.
+    var bounds = boundsOf(els);
+    var view = camera();
+    var within = function (n, max) {
+      return Math.max(0, Math.min(max, Math.round(n)));
+    };
+    var at = {
+      x: within(view.left + ((bounds.left + bounds.right) / 2) * view.k - cell.x, slideWidth()),
+      y: within(view.top + ((bounds.top + bounds.bottom) / 2) * view.k - cell.y, slideHeight()),
+    };
+    // Back where the drag began: the copy says where they were, and the lines stuck to them
+    // are not left reaching for the drop point.
+    dropped.group.forEach(function (item) {
+      moveTo(item.el, item.from.x, item.from.y);
+    });
+    if (cell.locked) dropped.unstuck.forEach(restick);
+    followStuck(dropped.followers);
+    if (cell.locked) {
+      // Nothing is saved: the slide is as it was.
+      if (dropped.originals) els.forEach(removeElement);
+      window.parent.postMessage({ type: "slop:edit-transfer-refused", slide: slide.id, to: cell.slide }, "*");
+    } else {
+      transferSelected(cell.slide, at);
+    }
+    if (dropped.originals) selectMany(dropped.originals);
+  }
+
+  /**
+   * Moves the selection to slide `to`: it is cut from this slide, and the app, once that is
+   * saved, shows that slide and pastes it there, centered on `at` (in that slide's pixels) or
+   * with none, where it was on this one. Both saves are of one group, so one undo takes it back.
+   */
+  function transferSelected(to, at) {
+    var list = inDocumentOrder(movable());
+    if (!list.length) return;
+    var group = TRANSFER_GROUP + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    var html = clipOf(list).html;
+    removeSelected(group);
+    window.parent.postMessage(
+      { type: "slop:edit-transfer", slide: slide.id, to: to, html: html, x: at ? at.x : null, y: at ? at.y : null, group: group },
+      "*",
+    );
+  }
+
+  /** { type: "slop:edit-move-to", to }: the selection goes to slide `to`, where it is on this one. */
+  function moveToSlide(to) {
+    if (!selected || !slide.contains(selected) || !to || to === slide.id) return;
+    finishEditing();
+    saveNudges();
+    var cell = typeof pasteboard.neighbor === "function" ? pasteboard.neighbor(to) : null;
+    if (cell && cell.locked) {
+      window.parent.postMessage({ type: "slop:edit-transfer-refused", slide: slide.id, to: to }, "*");
+      return;
+    }
+    transferSelected(to, null);
   }
 
   /**
@@ -812,6 +920,7 @@
     else if (data.type === "slop:edit-distribute") distributeSelection(String(data.axis));
     else if (data.type === "slop:edit-geometry") setGeometry(data);
     else if (data.type === "slop:edit-tilt") stepTilt(data);
+    else if (data.type === "slop:edit-move-to" && typeof data.to === "string") moveToSlide(data.to);
     else return false;
     return true;
   }

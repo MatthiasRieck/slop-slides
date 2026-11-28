@@ -3,6 +3,7 @@ import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } fro
 import type { Slide } from "../../lib/api";
 import { getSlideClock, onSlideClock, postSlideClock } from "../../lib/slideClock";
 import type { Pixels } from "../../lib/slideSize";
+import { isPasteboardUrl } from "../../lib/utils";
 import { useApp } from "../../store";
 import { SlideFrame, useSlideVersion } from "../SlideFrame";
 
@@ -11,21 +12,31 @@ import { SlideFrame, useSlideVersion } from "../SlideFrame";
  *
  * A slide plays its animations when the user comes to it or asks for them again. The versions the
  * agent writes of it while it works load as stills (see `useAgentStill`).
+ *
+ * Of several slides shown side by side, one is the `active` one, which is all of the above. The
+ * others are stills with no pasteboard, which lie under the active one's: they take no input and
+ * report nothing. A slide stays the same preview as it becomes the active one or stops being it,
+ * so what it shows next loads behind what it shows now.
  */
 export function CurrentSlide(props: {
   deckId: string;
   slide: Slide;
   size: Pixels;
   editing: boolean;
+  /** Whether this is the slide worked on, not one of those shown beside it; true unless given. */
+  active?: boolean;
   /** The panel around the slide; its colors frame the slide and dim what lies outside it in the editor. */
   canvas: RefObject<HTMLElement | null>;
   arena?: { width: number; height: number };
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
+  const active = props.active ?? true;
+  const editing = props.editing && active;
   const editReload = useApp((s) => s.editReload);
   const finalState = useApp((s) => s.finalState);
-  // Loading the slide again is what plays its animations again; the editor shows none to replay.
-  const replay = useApp((s) => (props.editing ? 0 : s.replayRev));
+  // Loading the slide again is what plays its animations again; the editor shows none to replay,
+  // and neither does a still beside the slide worked on.
+  const replay = useApp((s) => (editing || !active ? 0 : s.replayRev));
   const id = props.slide.id;
   // While the timeline plays over the slide, or holds it at a moment, it shows as it is then, its
   // animations kept with the narration, rather than as the editor's still of their last frame, or
@@ -36,7 +47,23 @@ export function CurrentSlide(props: {
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => onSlideClock(() => postSlideClock(frame.current, id, true)), [id]);
-  const loaded = useEditorVersion(props.slide, props.editing && !played, editReload);
+  /** Hands the stage `loaded` as its preview. */
+  const announce = (loaded: HTMLIFrameElement) => {
+    frame.current = loaded;
+    postSlideClock(loaded, id);
+    const canvas = props.canvas.current;
+    if (canvas) loaded.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");
+    props.onFrameReady(loaded);
+  };
+  // The pasteboard this slide loaded last. A slide that is the active one again before the still it
+  // was to show has loaded keeps that pasteboard, and loads nothing: the stage, which has
+  // another slide's preview by then, is handed it again.
+  const board = useRef<HTMLIFrameElement | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only becoming the active one hands the preview over; what it is handed with is as of then.
+  useEffect(() => {
+    if (active && board.current?.isConnected) announce(board.current);
+  }, [active]);
+  const loaded = useEditorVersion(props.slide, editing && !played, editReload);
   const version = replay > 0 ? `${loaded}.r${replay}` : loaded;
   const agentStill = useAgentStill(`${id}.${replay}`, loaded);
   return (
@@ -44,16 +71,17 @@ export function CurrentSlide(props: {
       deckId={props.deckId}
       slideId={id}
       version={version}
-      editKey={props.editing && !played ? String(editReload) : undefined}
-      still={(finalState || agentStill) && !played}
-      arena={props.arena}
+      editKey={editing && !played ? String(editReload) : undefined}
+      still={!active || ((finalState || agentStill) && !played)}
+      arena={active ? props.arena : undefined}
       size={props.size}
       onFrameReady={(loaded) => {
-        frame.current = loaded;
-        postSlideClock(loaded, id);
-        const canvas = props.canvas.current;
-        if (canvas) loaded.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");
-        props.onFrameReady(loaded);
+        const pasteboard = isPasteboardUrl(loaded.getAttribute("src") ?? "");
+        if (pasteboard) board.current = loaded;
+        // A still beside the active slide is not the stage's preview, and neither is the still a
+        // slide showed before it became the active one, should that load only now.
+        if (!active || (props.arena && !pasteboard)) return;
+        announce(loaded);
       }}
     />
   );

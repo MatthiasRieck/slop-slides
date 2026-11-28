@@ -13,7 +13,10 @@
     hoverPick = null;
     if (tool !== "select") {
       event.preventDefault();
-      startCreating(event);
+      // The empty space over another slide is not this slide's to draw on: a click there goes
+      // to that slide (see pasteboard.js), and a drag draws the marquee.
+      if (!slide.contains(event.target) && neighborAt(event.clientX, event.clientY)) startMarquee(event, null, false);
+      else startCreating(event);
       return;
     }
     var el = pickable(event.target, event.clientX, event.clientY);
@@ -203,6 +206,8 @@
     var click = !moved && drag.mode === "move" && extras.length > 0;
     var point = drag.mode === "point";
     var end = point && moved && !drag.insert ? endAt(drag.index, drag.points.length) : null;
+    // Let go over another slide, what was dragged goes there.
+    var dropped = moved && drag.mode === "move" && drag.over && drag.group ? drag : null;
     if (end) {
       if (drag.stick) stick(el, end, drag.stick);
       else unstick(el, end);
@@ -210,6 +215,11 @@
     }
     drag = null;
     clearDragMarks();
+    if (dropped) {
+      dropOnNeighbor(dropped);
+      placeHandles();
+      return;
+    }
     // The handles to add points, away during a drag, are back.
     if (moved || point) placeHandles();
     if (moved) {
@@ -330,18 +340,23 @@
     saveNudges();
     var group = inDocumentOrder(allSelected());
     if (!group.length) return;
+    var clip = clipOf(group);
+    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: clip.html, text: clip.text }, "*");
+    if (cut) removeSelected();
+  }
+
+  /** The elements of `group` as a paste takes them: their markup behind the header, and their text. */
+  function clipOf(group) {
     var headers = group.map(clipHeader);
     var header = headers.length > 1 ? Object.assign({}, headers[0], { group: headers }) : headers[0];
     // `>` only appears inside JSON strings, where `\u003e` stands for it, so `-->` cannot end the comment early.
     var markup = group.map(function (el) {
       return cleanCopy(el).outerHTML;
     }).join("");
-    var html = CLIP_MARKER + JSON.stringify(header).replace(/>/g, "\\u003e") + "-->" + markup;
     var text = group.map(function (el) {
       return (typeof el.innerText === "string" ? el.innerText : el.textContent).trim();
     }).join("\n");
-    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: html, text: text }, "*");
-    if (cut) removeSelected();
+    return { html: CLIP_MARKER + JSON.stringify(header).replace(/>/g, "\\u003e") + "-->" + markup, text: text };
   }
 
   /** What a copy of `el` needs to know of where it came from (see copySelected). */
@@ -396,11 +411,16 @@
     return over ? { x: pointer.x, y: pointer.y } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }
 
-  /** The point (x, y) in this window's pixels the app gave for a paste, or null when it gave none. */
+  /**
+   * The point (x, y) the app gave for a paste, in this window's pixels, or null when it gave
+   * none. With `space: "slide"` it gave the point in slide pixels from the slide's top left.
+   */
   function givenPoint(data) {
-    return data && isFinite(data.x) && isFinite(data.y) && data.x !== null && data.y !== null
-      ? { x: Number(data.x), y: Number(data.y) }
-      : null;
+    if (!data || !isFinite(data.x) || !isFinite(data.y) || data.x === null || data.y === null) return null;
+    var at = { x: Number(data.x), y: Number(data.y) };
+    if (data.space !== "slide") return at;
+    var view = camera();
+    return { x: view.left + at.x * view.k, y: view.top + at.y * view.k };
   }
 
   /** Whether a copied element's header says where its box was on its slide. */
@@ -426,14 +446,15 @@
    * was on the slide it came from, a step down and right of the original when that still sits
    * there (and of every copy already there). With `at` (a point in this window's pixels, from
    * the context menu), centered on that point instead; so is a copy that does not say where it was.
+   * `group` is the save's group, for what came from another slide (see transferSelected).
    */
-  function pasteElement(html, at) {
+  function pasteElement(html, at, group) {
     var clip = parseClip(html);
     if (!clip) return;
     finishEditing();
     saveNudges();
     if (Array.isArray(clip.header.group) && clip.header.group.length === clip.els.length && clip.els.length > 1) {
-      pasteGroup(clip, at);
+      pasteGroup(clip, at, group);
       return;
     }
     var el = document.importNode(clip.el, true);
@@ -453,7 +474,7 @@
     placeFree(el, clip.header, corner);
     cascade(el, inPlace && originalInPlace(clip.header, el) ? DROP_CASCADE : 0);
     select(el);
-    commit();
+    commit(group);
   }
 
   /**

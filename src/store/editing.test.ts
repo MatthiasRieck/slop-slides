@@ -85,7 +85,7 @@ describe("editing slides on the stage", () => {
     const useApp = await freshStore();
     slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
-    await useApp.getState().saveSlideEdit("intro", MOVED);
+    expect(await useApp.getState().saveSlideEdit("intro", MOVED)).toBe(true);
     expect(calls("update_slide")).toEqual([
       { id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" },
     ]);
@@ -186,7 +186,8 @@ describe("editing slides on the stage", () => {
     const useApp = await freshStore();
     slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML, "9"), selected: "intro", editReload: 0 });
-    await useApp.getState().saveSlideEdit("intro", MOVED);
+    // Whoever asked hears that nothing was saved.
+    expect(await useApp.getState().saveSlideEdit("intro", MOVED)).toBe(false);
     expect(lastError(useApp.getState())).toContain("changed");
     expect(useApp.getState().editReload).toBe(1);
     expect(useApp.getState().editedSlides).toEqual([]);
@@ -195,8 +196,30 @@ describe("editing slides on the stage", () => {
   it("ignores edits of slides that are gone", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
-    await useApp.getState().saveSlideEdit("deleted", MOVED);
+    expect(await useApp.getState().saveSlideEdit("deleted", MOVED)).toBe(false);
     expect(calls("update_slide")).toEqual([]);
+  });
+
+  it("saves an edit that has a condition only if that holds when its turn comes", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editReload: 0 });
+    // The edit before it is what decides: asked as the save is queued, the answer would be another.
+    let wanted = true;
+    const first = useApp.getState().saveSlideEdit("intro", MOVED, undefined, () => {
+      wanted = false;
+      return true;
+    });
+    const second = useApp.getState().saveSlideEdit("intro", ORIGINAL, undefined, () => wanted);
+    expect(await first).toBe(true);
+    expect(await second).toBe(false);
+    expect(calls("update_slide")).toHaveLength(1);
+    // Nothing went wrong: there is nothing to report, and the slide stays as it is shown.
+    expect(lastError(useApp.getState())).toBeNull();
+    expect(useApp.getState().editReload).toBe(0);
+    wanted = true;
+    expect(await useApp.getState().saveSlideEdit("intro", ORIGINAL, undefined, () => wanted)).toBe(true);
+    expect(calls("update_slide")).toHaveLength(2);
   });
 
   it("entering edit mode remembers where the deck's history was, after edits still being saved", async () => {

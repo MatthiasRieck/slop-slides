@@ -887,6 +887,139 @@ describe("pasteboard", () => {
     expect(p.doc.documentElement.style.getPropertyValue("--slop-danger")).toBe("rgb(1, 2, 3)");
   });
 
+  describe("beside other slides", () => {
+    interface Cell {
+      slide: string;
+      x: number;
+      y: number;
+      locked: boolean;
+    }
+    interface Board {
+      neighborAt: (x: number, y: number) => Cell | null;
+      neighbor: (slide: string) => Cell | null;
+    }
+    const board = (p: ReturnType<typeof pasteboard>) =>
+      (p.window as unknown as { slopPasteboard: Board }).slopPasteboard;
+    // The slide is 1920×1080 at (320, 180); two others lie right of it and below.
+    const CELLS = [
+      { slide: "outro", x: 2264, y: 180, locked: false },
+      { slide: "plan", x: 320, y: 1284, locked: true },
+    ];
+    const grid = () => {
+      const p = pasteboard();
+      p.fromParent({ type: "slop:neighbors", cells: CELLS });
+      return p;
+    };
+    const press = (p: ReturnType<typeof pasteboard>, target: Element, from: number[], to = from, button = 0) => {
+      p.pointer("pointerdown", target, from[0]!, from[1]!, button);
+      if (to !== from) p.pointer("pointermove", target, to[0]!, to[1]!, button);
+      p.pointer("pointerup", target, to[0]!, to[1]!, button);
+    };
+
+    it("marks the page while the app says other slides are shown", () => {
+      const p = pasteboard();
+      const root = p.doc.documentElement;
+      expect(root.hasAttribute("data-slop-grid")).toBe(false);
+      p.fromParent({ type: "slop:neighbors", cells: CELLS });
+      expect(root.hasAttribute("data-slop-grid")).toBe(true);
+      p.fromParent({ type: "slop:neighbors", cells: [] });
+      expect(root.hasAttribute("data-slop-grid")).toBe(false);
+      // Neither this slide nor a cell without a place counts.
+      p.fromParent({
+        type: "slop:neighbors",
+        cells: [{ slide: "intro", x: 0, y: 0 }, { slide: "outro", x: "1" }, null],
+      });
+      expect(root.hasAttribute("data-slop-grid")).toBe(false);
+      expect(board(p).neighborAt(10, 10)).toBeNull();
+      p.fromParent({ type: "slop:neighbors" });
+      expect(root.hasAttribute("data-slop-grid")).toBe(false);
+    });
+
+    it("only takes them from the app", () => {
+      const p = pasteboard();
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:neighbors", cells: CELLS } }));
+      expect(p.doc.documentElement.hasAttribute("data-slop-grid")).toBe(false);
+    });
+
+    it("tells which other slide lies under a point, at the slide's size", () => {
+      const p = grid();
+      const at = (x: number, y: number) => board(p).neighborAt(x, y)?.slide ?? null;
+      expect(at(2264, 180)).toBe("outro");
+      expect(at(2264 + 1920, 180 + 1080)).toBe("outro");
+      expect(at(2263, 500)).toBeNull();
+      expect(at(2264 + 1921, 500)).toBeNull();
+      expect(at(1000, 700)).toBeNull();
+      expect(board(p).neighborAt(400, 1300)).toEqual({ slide: "plan", x: 320, y: 1284, locked: true });
+      expect(board(p).neighbor("outro")).toEqual({ slide: "outro", x: 2264, y: 180, locked: false });
+      expect(board(p).neighbor("intro")).toBeNull();
+      // They stay where the app put them when the view moves.
+      p.fromParent({ type: "slop:camera", x: 500, y: 0, k: 2 });
+      expect(at(2264, 180)).toBe("outro");
+      expect(at(2263, 500)).toBeNull();
+    });
+
+    it("asks the app for another slide when the empty space over it is clicked", () => {
+      const p = grid();
+      press(p, p.doc.body, [2400, 300]);
+      expect(p.posted("slop:activate")).toEqual([{ type: "slop:activate", slide: "intro", to: "outro" }]);
+      // A locked one too, and a press that barely moves is still a click.
+      press(p, p.doc.documentElement, [400, 1300], [402, 1301]);
+      expect(p.posted("slop:activate").map((m) => m.to)).toEqual(["outro", "plan"]);
+      expect(p.views()).toEqual([]);
+    });
+
+    it("pans on a drag from there, asking for nothing", async () => {
+      const p = grid();
+      press(p, p.doc.body, [2400, 300], [2440, 320]);
+      await p.frame();
+      expect(p.posted("slop:activate")).toEqual([]);
+      expect(p.views().at(-1)).toMatchObject({ x: 40, y: 20 });
+    });
+
+    it("leaves a click anywhere else alone", () => {
+      const p = grid();
+      // Between the slides, on the slide where it reaches over another, and on what hangs over its edge.
+      press(p, p.doc.body, [2250, 300]);
+      press(p, p.$("#intro"), [2400, 300]);
+      press(p, p.$("h1"), [2400, 300]);
+      // Not the primary button.
+      press(p, p.doc.body, [2400, 300], [2400, 300], 1);
+      press(p, p.doc.body, [2400, 300], [2400, 300], 2);
+      expect(p.posted("slop:activate")).toEqual([]);
+    });
+
+    it("leaves a Control-click, which opens the menu on macOS, alone", () => {
+      const p = grid();
+      const at = { clientX: 2400, clientY: 300, button: 0, ctrlKey: true, bubbles: true, cancelable: true };
+      p.doc.body.dispatchEvent(new p.window.PointerEvent("pointerdown", at));
+      p.doc.body.dispatchEvent(new p.window.MouseEvent("contextmenu", at));
+      p.doc.body.dispatchEvent(new p.window.PointerEvent("pointerup", at));
+      expect(p.posted("slop:activate")).toEqual([]);
+      // The next plain click counts again.
+      press(p, p.doc.body, [2400, 300]);
+      expect(p.posted("slop:activate")).toHaveLength(1);
+    });
+
+    it("drops a press whose slide is gone by the time it is let go", () => {
+      const p = grid();
+      p.pointer("pointerdown", p.doc.body, 2400, 300);
+      p.fromParent({ type: "slop:neighbors", cells: [CELLS[1]] });
+      p.pointer("pointerup", p.doc.body, 2400, 300);
+      p.pointer("pointerdown", p.doc.body, 400, 1300);
+      p.pointer("pointercancel", p.doc.body, 400, 1300);
+      p.pointer("pointerup", p.doc.body, 400, 1300);
+      expect(p.posted("slop:activate")).toEqual([]);
+    });
+
+    it("has none in a show", () => {
+      const p = pasteboard({ show: true });
+      p.fromParent({ type: "slop:neighbors", cells: CELLS });
+      expect(p.doc.documentElement.hasAttribute("data-slop-grid")).toBe(false);
+      press(p, p.doc.body, [2400, 300]);
+      expect(p.posted("slop:activate")).toEqual([]);
+    });
+  });
+
   describe("in a show", () => {
     // The window is 2560×1440, so the player fits the slide at 4/3 scale, filling it.
     it("starts with the slide fit to the window, drawing nothing around it", () => {

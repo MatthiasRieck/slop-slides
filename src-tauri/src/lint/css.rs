@@ -209,6 +209,7 @@ pub(super) fn timed_exits<'a>(
         // What the rule sets apart from the shorthand: names, delays and whether it keeps the end.
         let mut names: Vec<&str> = Vec::new();
         let mut kept = false;
+        let mut forever = false;
         let mut exit = None;
         for declaration in body.split(';') {
             let Some((name, value)) = declaration.split_once(':') else {
@@ -218,12 +219,15 @@ pub(super) fn timed_exits<'a>(
             match name.trim().to_ascii_lowercase().as_str() {
                 "animation-name" => names.extend(value.split(',').map(str::trim)),
                 "animation-fill-mode" => kept |= keeps(&css_words(&value.replace(',', " "))),
+                "animation-iteration-count" => forever |= value.contains("infinite"),
                 "animation" => {
                     for one in value.split(',') {
                         let words = css_words(one);
                         let name = words.iter().find_map(|w| hiding.get(w).copied());
                         if let Some(name) = name.filter(|_| {
-                            keeps(&words) && delays_to_time(&format!("animation:{one}"), easings)
+                            keeps(&words)
+                                && !words.contains(&"infinite")
+                                && delays_to_time(&format!("animation:{one}"), easings)
                         }) {
                             exit.get_or_insert(name);
                         }
@@ -240,7 +244,7 @@ pub(super) fn timed_exits<'a>(
                 .starts_with("animation-delay")
                 && delays_to_time(d, easings)
         });
-        if let Some(name) = exit.or(apart.filter(|_| kept && delayed)) {
+        if let Some(name) = exit.or(apart.filter(|_| kept && delayed && !forever)) {
             found.push((at, selector, name));
         }
     }

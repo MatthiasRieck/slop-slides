@@ -823,6 +823,9 @@ fn flags_timed_animations_that_leave_an_element_hidden() {
         ".slide.active .hint { animation: out 0.4s ease 0.3s forwards; }",
         ".slide.active .hint { animation: out 0.4s ease 6s; }",
         "@keyframes blink { 50% { opacity: 0; } to { opacity: 0.5; } } .slide.active .x { animation: blink 1s 3s both; }",
+        // A loop that ends hidden each time round comes back: in the shorthand and set apart.
+        ".slide.active .coin { animation: out 3s linear var(--d) infinite both; }",
+        ".slide.active .coin { animation-name: out; animation-delay: 2s; animation-fill-mode: both; animation-iteration-count: infinite; }",
         // Keyframes nothing times, and a rule that starts with the deck (another rule's matter).
         ".slide.active .hint { animation: other 0.4s ease 6s forwards; }",
     ] {

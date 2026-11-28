@@ -149,7 +149,9 @@ mod tests {
             #[cfg(windows)]
             "child" => {
                 let root = Path::new(&args[3]);
-                std::fs::write(root.join("child.pid"), std::process::id().to_string()).unwrap();
+                // Whole or not at all: the test reads it as soon as it exists.
+                let pid = std::process::id().to_string();
+                crate::files::atomic_write(&root.join("child.pid"), pid.as_bytes()).unwrap();
                 std::thread::sleep(Duration::from_secs(20));
                 std::process::exit(0);
             }

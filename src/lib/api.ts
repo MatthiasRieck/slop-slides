@@ -592,6 +592,8 @@ export const api = {
     invoke<void>("copy_to_clipboard", { html, text, id }),
   /** Puts a whole slide on the system clipboard, to paste into this deck or another one. */
   copySlides: (id: string, slides: string[]) => invoke<void>("copy_slides", { id, slides }),
+  /** Puts a screenshot of slide `slide` of deck `id` on the system clipboard, the slides' canvas width. */
+  copySlideScreenshot: (id: string, slide: string) => invoke<void>("copy_slide_screenshot", { id, slide }),
   /** Inserts the slides on the clipboard after `after`, in their order (with their images); null when there are none. */
   pasteSlides: (id: string, after: string | null) => invoke<RailEdit | null>("paste_slides", { id, after }),
   /** The clipboard's plain text (empty without any), for pasting into text without its formatting. */

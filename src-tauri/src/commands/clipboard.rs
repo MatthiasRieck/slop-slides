@@ -2,7 +2,7 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use tauri::Window;
+use tauri::{AppHandle, Window};
 
 use super::{changing, workspace_root};
 use crate::assets;
@@ -10,6 +10,7 @@ use crate::clipboard;
 use crate::deck::{self, RailEdit};
 use crate::error::Result;
 use crate::history::{Change, Source};
+use crate::render;
 
 /// One clipboard command at a time. Copying slides and pasting pictures run off the main thread
 /// (they read and write whole files), where commands no longer queue up behind each other: a
@@ -38,6 +39,20 @@ pub fn copy_to_clipboard(html: String, text: String, id: Option<String>) -> Resu
 pub fn copy_slides(id: String, slides: Vec<String>) -> Result<()> {
     let _turn = in_turn();
     clipboard::copy_slides(&deck::deck_file(&id)?, &slides)
+}
+
+/// Puts a screenshot of the slide `slide` of deck `id` on the system clipboard, the slides'
+/// canvas width, every animation finished. It is rendered in a hidden window, so whatever the
+/// editor shows (selection, guides, comments) stays out of it.
+#[tauri::command]
+pub async fn copy_slide_screenshot(app: AppHandle, id: String, slide: String) -> Result<()> {
+    let png = render::slide_image(&app, &deck::deck_file(&id)?, &slide).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _turn = in_turn();
+        clipboard::write_image(&png)
+    })
+    .await
+    .map_err(|e| crate::error::Error::msg(format!("could not copy the screenshot: {e}")))?
 }
 
 /// Inserts the slides on the system clipboard into deck `id` after `after`, one after the

@@ -36,6 +36,7 @@ export type EditMenuAction =
   | "unlock"
   | "unlock-all"
   | "background"
+  | "screenshot"
   | StackOrder;
 
 interface Item {
@@ -70,6 +71,7 @@ const LOCK: Item = { action: "lock", label: "Lock", keys: "mod+alt+l" };
 const UNLOCK: Item = { action: "unlock", label: "Unlock", keys: "mod+alt+l" };
 const UNLOCK_ALL: Item = { action: "unlock-all", label: "Unlock all on this slide" };
 const BACKGROUND: Item = { action: "background", label: "Slide background…" };
+const SCREENSHOT: Item = { action: "screenshot", label: "Copy screenshot" };
 const TIDY: Item = { action: "tidy", label: "Tidy this element" };
 const SVG: Item = { action: "svg", label: "Edit in the SVG editor" };
 
@@ -86,9 +88,9 @@ const isDrawing = (element: EditElement | null) => !!element && /^<svg[\s>]/i.te
  * and `onAction`'s part (the stage hands it back to the slide).
  *
  * It offers only what applies to what was clicked: on an empty spot, pasting there, selecting
- * everything, unlocking and the slide's background; on a locked element, little more than
- * unlocking it; on anything else, what can be done to the selection. With other slides shown
- * beside this one, that includes moving the selection to one of them.
+ * everything, unlocking, the slide's background and a screenshot of it; on a locked element,
+ * little more than unlocking it; on anything else, what can be done to the selection. With other
+ * slides shown beside this one, that includes moving the selection to one of them.
  */
 export function EditContextMenu(props: {
   x: number;
@@ -173,7 +175,10 @@ export function EditContextMenu(props: {
 
   /** The menu's sections, each a run of choices; empty ones are left out, with a line between the rest. */
   const sections: ReactNode[][] = !element
-    ? [[button(PASTE), button(SELECT_ALL), props.unlockable && button(UNLOCK_ALL)], [button(BACKGROUND)]]
+    ? [
+        [button(PASTE), button(SELECT_ALL), props.unlockable && button(UNLOCK_ALL)],
+        [button(BACKGROUND), button(SCREENSHOT)],
+      ]
     : props.locked
       ? [[button(UNLOCK), button(COPY)], [button(ask, busy)]]
       : [

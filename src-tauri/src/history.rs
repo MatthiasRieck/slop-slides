@@ -165,7 +165,7 @@ pub struct Status {
 
 /// Where the history of `file` is kept.
 fn dir(home: &Path, file: &Path) -> PathBuf {
-    let path = file.canonicalize().unwrap_or_else(|_| file.into());
+    let path = crate::files::canonical_file(file);
     let key = format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()));
     home.join(HISTORY_DIR).join(&key[..20])
 }

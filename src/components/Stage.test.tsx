@@ -3912,6 +3912,7 @@ describe("Stage", () => {
           "PasteCtrl+V",
           "Select allCtrl+A",
           "Slide background…",
+          "Copy screenshot",
         ]);
         fireEvent.click(item("Select all"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-select-all" }, "*");
@@ -3923,6 +3924,17 @@ describe("Stage", () => {
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: null });
         fireEvent.click(item("Slide background"));
         expect(screen.getByRole("dialog", { name: "Slide background" })).toBeTruthy();
+      });
+
+      it("copies a screenshot of the slide from an empty spot", async () => {
+        const copy = vi.fn().mockResolvedValue(true);
+        const { copySlideScreenshot } = useApp.getState();
+        useApp.setState({ copySlideScreenshot: copy });
+        open(null);
+        fireEvent.click(item("Copy screenshot"));
+        expect(copy).toHaveBeenCalledOnce();
+        expect(screen.queryByRole("menu")).toBeNull();
+        useApp.setState({ copySlideScreenshot });
       });
 
       it("asks the agent about every selected element", () => {
@@ -4017,23 +4029,24 @@ describe("Stage", () => {
 
       it("moves through the items with the arrow keys, without reaching the slide's keys", async () => {
         open();
-        await settle();
         const menu = screen.getByRole("menu");
-        const press = async (key: string) => {
-          fireEvent.keyDown(document.activeElement!, { key });
-          await settle();
-        };
-        expect(document.activeElement).toBe(menu);
-        await press("ArrowDown");
-        expect(document.activeElement).toBe(item("Cut"));
-        await press("ArrowUp");
-        expect(document.activeElement).toBe(item("Tidy this"));
-        await press("Home");
-        expect(document.activeElement).toBe(item("Cut"));
-        await press("End");
-        expect(document.activeElement).toBe(item("Tidy this"));
+        // The menu takes the focus a frame or two after it opens: longer on a busy CI machine
+        // than any fixed wait can be sure of, so each step waits for the focus to get there.
+        const focused = (target: () => Element) =>
+          waitFor(() => expect(document.activeElement).toBe(target()), { timeout: 2000 });
+        const press = (key: string) => fireEvent.keyDown(document.activeElement!, { key });
+        await focused(() => menu);
+        press("ArrowDown");
+        await focused(() => item("Cut"));
+        press("ArrowUp");
+        await focused(() => item("Tidy this"));
+        press("Home");
+        await focused(() => item("Cut"));
+        press("End");
+        await focused(() => item("Tidy this"));
         expect(useApp.getState().selected).toBe("intro");
-        await press("t");
+        press("t");
+        await settle();
         expect(useApp.getState().editTool).toBe("select");
         // Nor do the app's shortcuts with a modifier get a key pressed in the menu.
         const onKey = vi.fn();

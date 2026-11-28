@@ -70,10 +70,16 @@ describe("EditContextMenu", () => {
     expect(screen.getAllByRole("group")).toHaveLength(7);
   });
 
-  it("offers an empty spot pasting, selecting all, unlocking and the slide's background", () => {
+  it("offers an empty spot pasting, selecting all, unlocking, the slide's background and a screenshot", () => {
     menu({ element: null, unlockable: true });
     expect(screen.getByRole("menu", { name: "Slide" })).toBeTruthy();
-    expect(items()).toEqual(["PasteCtrl+V", "Select allCtrl+A", "Unlock all on this slide", "Slide background…"]);
+    expect(items()).toEqual([
+      "PasteCtrl+V",
+      "Select allCtrl+A",
+      "Unlock all on this slide",
+      "Slide background…",
+      "Copy screenshot",
+    ]);
   });
 
   it("offers a locked element little more than unlocking it", () => {

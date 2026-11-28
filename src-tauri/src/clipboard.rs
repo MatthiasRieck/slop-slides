@@ -250,6 +250,23 @@ pub fn write(html: &str, text: &str) -> Result<()> {
         .map_err(|e| Error::msg(format!("could not copy: {e}")))
 }
 
+/// Puts the picture `png` on the system clipboard, to paste into any app.
+pub fn write_image(png: &[u8]) -> Result<()> {
+    let image = image_data(png)?;
+    with_clipboard(|c| c.set_image(image))?
+        .map_err(|e| Error::msg(format!("could not copy the screenshot: {e}")))
+}
+
+/// The pixels of `png` as the clipboard takes them.
+fn image_data(png: &[u8]) -> Result<arboard::ImageData<'static>> {
+    let image = capture::decode_png(png)?;
+    Ok(arboard::ImageData {
+        width: image.width as usize,
+        height: image.height as usize,
+        bytes: image.rgba.into(),
+    })
+}
+
 /// Puts the `slides` of the deck `file` on the system clipboard, in the order given.
 pub fn copy_slides(file: &Path, slides: &[String]) -> Result<()> {
     let (html, text) = slides_clip(file, &deck::read_html(file)?, slides)?;
@@ -636,6 +653,19 @@ mod tests {
         let decoder = png::Decoder::new(std::io::Cursor::new(png));
         let info = decoder.read_info().unwrap();
         assert_eq!((info.info().width, info.info().height), (2, 1));
+    }
+
+    #[test]
+    fn a_screenshot_goes_on_the_clipboard_as_its_pixels() {
+        let png = capture::rgba_png(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+        let image = image_data(&png).unwrap();
+        assert_eq!((image.width, image.height), (2, 1));
+        assert_eq!(&*image.bytes, &[255, 0, 0, 255, 0, 0, 255, 128]);
+    }
+
+    #[test]
+    fn a_malformed_screenshot_is_an_error() {
+        assert!(image_data(b"not a png").is_err());
     }
 
     #[test]

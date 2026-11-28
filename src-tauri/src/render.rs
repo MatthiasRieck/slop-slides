@@ -194,6 +194,30 @@ pub(crate) async fn render(
     rendered
 }
 
+/// A PNG of the slide `id` of the deck `file`, the slides' canvas width, every animation
+/// finished: the picture "Copy screenshot" puts on the clipboard.
+pub(crate) async fn slide_image(app: &AppHandle, file: &Path, id: &str) -> Result<Vec<u8>> {
+    let canvas = html::slide_size(&deck::read_html(file)?).pixels();
+    let width = crate::capture::slide_image_width(Some(canvas.0));
+    let (window, signals) = open(app, file, false)?;
+    let mut helper = Helper {
+        window: &window,
+        signals,
+        task: TASK,
+    };
+    let png = async {
+        helper.answer("ready").await?;
+        let shown = show(&mut helper, id, None)
+            .await?
+            .ok_or_else(|| Error::msg(format!("the deck has no slide `{id}`")))?;
+        let (rect, viewport) = export_window::geometry(&shown)?;
+        export_window::capture(helper.window, rect, viewport, width).await
+    }
+    .await;
+    let _ = window.destroy();
+    png
+}
+
 /// A window out of sight showing the deck `file` (in the open workspace), with its helper
 /// (`assets/render.js`) answering on the returned channel: first `ready`, with how many
 /// slides there are, then where each slide it is asked to [`show`] is.

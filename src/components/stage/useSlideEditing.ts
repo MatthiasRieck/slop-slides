@@ -486,6 +486,7 @@ export function useSlideEditing(
         else if (action === "paste-style")
           post({ type: "slop:edit-paste-style", style: useApp.getState().copiedStyle });
         else if (action === "background") useApp.getState().askForEditPanel("background");
+        else if (action === "screenshot") void useApp.getState().copySlideScreenshot();
         else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
         else if (action === "delete") post({ type: "slop:edit-delete" });
         else if (action === "svg") post({ type: "slop:edit-open-svg" });

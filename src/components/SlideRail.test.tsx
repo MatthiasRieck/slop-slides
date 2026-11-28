@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, onTestFinished as afterThis, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, FindMatch, Section } from "../lib/api";
 import { flushReviewSave, useApp } from "../store";
@@ -1204,6 +1204,7 @@ describe("the menu of a right-click", () => {
       "New slideCtrl+Shift+N",
       "DuplicateCtrl+D",
       "CopyCtrl+C",
+      "Copy screenshot",
       "CutCtrl+X",
       "Paste afterCtrl+V",
       "DeleteBackspace",
@@ -1252,6 +1253,33 @@ describe("the menu of a right-click", () => {
       expect(screen.getByRole("menu")).toBeTruthy();
       unmount();
     }
+  });
+
+  it("copies a screenshot of the slide it was opened on, even among several picked ones", () => {
+    const copySlideScreenshot = vi.fn().mockResolvedValue(true);
+    const before = useApp.getState();
+    afterThis(() => useApp.setState(before, true));
+    useApp.setState({ copySlideScreenshot } as never);
+    render(<SlideRail />);
+    useApp.setState({ selected: "outro", railSelected: ["intro", "outro"] });
+    fireEvent.contextMenu(thumb(1));
+    fireEvent.click(choice("Copy screenshot"));
+    expect(copySlideScreenshot).toHaveBeenCalledWith("intro");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens the slide's menu for a right-click anywhere on its picture, not the frame's own", () => {
+    render(<SlideRail />);
+    const button = thumb(2);
+    const cover = button.querySelector("[data-thumbnail-cover]")!;
+    // The cover lies over the slide's frame, inside the button, so the right-click is the rail's.
+    expect(button.lastElementChild).toBe(cover);
+    expect(cover.className).toContain("inset-0");
+    const event = createEvent.contextMenu(cover, { clientX: 30, clientY: 40 });
+    fireEvent(cover, event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menu", { name: "Slide" })).toBeTruthy();
+    expect(choice("Copy screenshot")).toBeTruthy();
   });
 
   it("opens no menu for a right-click between the rows", () => {
@@ -1314,7 +1342,7 @@ describe("the menu of a right-click", () => {
     expect(invoke).toHaveBeenCalledWith("set_slides_locked", { id: DECK.id, slides: ["intro", "outro"], locked: true });
 
     fireEvent.contextMenu(thumb(3));
-    await act(async () => fireEvent.click(choice(/^Copy/)));
+    await act(async () => fireEvent.click(choice(/^CopyCtrl/)));
     expect(invoke).toHaveBeenCalledWith("copy_slides", { id: DECK.id, slides: ["intro", "outro"] });
 
     // Asked on a slide that is not picked, it is about that one alone.
@@ -1358,7 +1386,8 @@ describe("the menu of a right-click", () => {
     for (const name of [
       /^New slide/,
       /^Duplicate/,
-      /^Copy/,
+      /^CopyCtrl/,
+      /^Copy screenshot/,
       /^Cut/,
       /^Paste/,
       /^Delete/,

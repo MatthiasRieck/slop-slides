@@ -26,6 +26,8 @@ export interface SlideMenuActions {
   addSlide: (after: string) => void;
   duplicate: (slides: string[]) => void;
   copy: () => void;
+  /** Puts a picture of the slide on the clipboard. */
+  copyScreenshot: (slide: string) => void;
   cut: () => void;
   paste: () => void;
   remove: (slides: string[]) => void;
@@ -65,6 +67,7 @@ export function slideMenu(
     { label: "Duplicate", keys: "mod+d", run: () => actions.duplicate(picked) },
     "divider",
     { label: "Copy", keys: "mod+c", run: actions.copy },
+    { label: "Copy screenshot", run: () => actions.copyScreenshot(slide) },
     { label: "Cut", keys: "mod+x", disabledReason: lockedOnly, run: actions.cut },
     { label: "Paste after", keys: "mod+v", run: actions.paste },
     {

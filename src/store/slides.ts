@@ -88,6 +88,11 @@ export interface SlidesSlice {
    * into this deck or another one, and says how many. Resolves to whether they were copied.
    */
   copySlides: () => Promise<boolean>;
+  /**
+   * Puts a screenshot of slide `slide` (the one on the stage when not given) on the system
+   * clipboard, as a picture for any app, and says so. Resolves to whether it did.
+   */
+  copySlideScreenshot: (slide?: string) => Promise<boolean>;
   /** Copies the picked slides, then deletes those of them that are not locked. */
   cutSlides: () => Promise<void>;
   /**
@@ -531,6 +536,20 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
       return true;
     } catch (error) {
       showErrorIn(app, error);
+      return false;
+    }
+  },
+
+  copySlideScreenshot: async (slide) => {
+    const { deck, selected } = get();
+    const id = slide ?? selected;
+    if (!deck || !id) return false;
+    try {
+      await api.copySlideScreenshot(deck.id, id);
+      showSuccessIn(app, "Screenshot copied");
+      return true;
+    } catch (error) {
+      showErrorIn(app, error, "Could not copy the screenshot: ");
       return false;
     }
   },

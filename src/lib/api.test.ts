@@ -140,6 +140,12 @@ const CASES = [
     { html: "<p>Hi</p>", text: "Hi", id: "/w/talk/deck.html" },
   ],
   ["copySlides", () => api.copySlides("talk", ["a", "b"]), "copy_slides", { id: "talk", slides: ["a", "b"] }],
+  [
+    "copySlideScreenshot",
+    () => api.copySlideScreenshot("talk", "a"),
+    "copy_slide_screenshot",
+    { id: "talk", slide: "a" },
+  ],
   ["pasteSlides", () => api.pasteSlides("talk", "a"), "paste_slides", { id: "talk", after: "a" }],
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
   [

@@ -129,7 +129,7 @@ pub(crate) fn reads() -> usize {
 }
 
 fn key(file: &Path) -> PathBuf {
-    file.canonicalize().unwrap_or_else(|_| file.into())
+    crate::files::canonical_file(file)
 }
 
 impl DeckCache {
